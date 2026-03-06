@@ -1,0 +1,21 @@
+# Rust
+/target
+
+# Web frontend
+/web/node_modules
+/web/dist
+/web/bun.lock
+
+# Root dependencies (for Playwright)
+/node_modules
+/bun.lock
+
+# Temporary/test files
+/tmp
+*.png
+*.test.js
+
+# Old Dioxus files (can be removed)
+/.dioxus
+tailwindcss
+assets/tailwind.css

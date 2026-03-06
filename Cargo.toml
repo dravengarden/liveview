@@ -1,0 +1,45 @@
+[package]
+name = "liveview"
+version = "0.1.0"
+edition = "2021"
+description = "Fast live-reloading file previewer for Markdown, images, PDFs and more"
+license = "MIT"
+repository = "https://github.com/USER/lv"
+homepage = "https://github.com/USER/lv"
+keywords = ["markdown", "preview", "live-reload", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
+
+[[bin]]
+name = "lv"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["io"] }
+axum = { version = "0.8", features = ["ws"] }
+comrak = "0.36"
+notify-debouncer-mini = "0.5"
+globset = "0.4"
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+open = "5"
+futures-util = "0.3"
+mime_guess = "2"
+
+# Embedded assets
+include_dir = { version = "0.7", optional = true }
+
+[features]
+default = []
+embedded = ["dep:include_dir"]
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "warn"

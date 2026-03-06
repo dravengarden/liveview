@@ -1,0 +1,34 @@
+{
+  "name": "liveview",
+  "version": "0.1.0",
+  "description": "Fast live-reloading file previewer for Markdown, images, PDFs and more",
+  "keywords": [
+    "markdown",
+    "preview",
+    "live-reload",
+    "cli"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/USER/lv"
+  },
+  "homepage": "https://github.com/USER/lv",
+  "bin": {
+    "lv": "bin.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "bin.js",
+    "install.js"
+  ],
+  "engines": {
+    "node": ">=16"
+  },
+  "dependencies": {
+    "tar": "^7.0.0"
+  }
+}

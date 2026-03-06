@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "liveview"
+version = "0.1.0"
+description = "Fast live-reloading file previewer for Markdown, images, PDFs and more"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+keywords = ["markdown", "preview", "live-reload", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Text Processing :: Markup :: Markdown",
+]
+dependencies = [
+    "requests>=2.20",
+]
+
+[project.urls]
+Homepage = "https://github.com/USER/lv"
+Repository = "https://github.com/USER/lv"
+
+[project.scripts]
+lv = "liveview:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
