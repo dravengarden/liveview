@@ -27,7 +27,8 @@ impl FileType {
     pub fn from_extension(ext: &str) -> Self {
         match ext.to_lowercase().as_str() {
             "md" | "markdown" => FileType::Markdown,
-            "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "avif" | "bmp" | "ico" | "tiff" | "tif" => FileType::Image,
+            "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "avif" | "bmp" | "ico" | "tiff"
+            | "tif" => FileType::Image,
             "pdf" => FileType::Pdf,
             "html" | "htm" => FileType::Html,
             "csv" | "tsv" => FileType::Csv,
@@ -58,6 +59,12 @@ pub struct FileContent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum WsMessage {
-    ContentUpdate { path: String, file_type: FileType, content: String },
-    TreeUpdate { tree: Vec<TreeNode> },
+    ContentUpdate {
+        path: String,
+        file_type: FileType,
+        content: String,
+    },
+    TreeUpdate {
+        tree: Vec<TreeNode>,
+    },
 }

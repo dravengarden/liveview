@@ -1,0 +1,56 @@
+# Example liveview config — virtual mounts.
+#
+# Run from the worktree root:
+#   lv --config examples/liveview.toml
+#
+# A "mount" is a curated reading view over a source directory: it appears as
+# a top-level folder in the sidebar (named `label`, addressed by `slug`),
+# with its own include/exclude globs and an optional recursive `layout`
+# ordering — so you control what shows and in what order, independent of the
+# raw filesystem layout.
+
+[server]
+host        = "127.0.0.1"
+port        = 4159
+debounce_ms = 200
+
+[defaults]
+# Inherited by any mount that doesn't set its own `includes`. Leaving these
+# empty makes liveview fall back to its built-in defaults.
+includes = ["**/*.md", "**/*.markdown", "**/*.png", "**/*.svg", "**/*.html"]
+excludes = ["**/.git/**", "**/node_modules/**", "**/.DS_Store"]
+
+# ───────────────────────────────────────────────────────────────────────
+# View 1 — the bundled demo documents (this examples/ directory).
+# ───────────────────────────────────────────────────────────────────────
+[[mount]]
+label  = "Demo Docs"
+slug   = "demo"
+source = "."
+
+[mount.layout]
+# README first, then the feature pages, then anything else (dir-then-alpha).
+order = [
+    "README.md",
+    "gfm-features.md",
+    "code-and-syntax.md",
+    "mermaid-diagrams.md",
+    "subdir/",
+]
+
+# ───────────────────────────────────────────────────────────────────────
+# View 2 — the columbus harness conventions (sibling tree in the monorepo).
+# ───────────────────────────────────────────────────────────────────────
+# NOTE: `source` is resolved relative to THIS config file's directory
+# (examples/), so reaching the columbus root takes four `../`.
+[[mount]]
+label  = "Conventions"
+slug   = "conventions"
+source = "../../../../conventions"
+
+[mount.layout]
+order = ["commits.md", "code/"]
+
+# Curate one level deeper: inside code/, surface the python guide first.
+[mount.layout.subtree.code]
+order = ["python/"]

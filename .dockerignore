@@ -1,0 +1,16 @@
+# Build artefacts (re-generated inside the Docker image).
+target
+web/node_modules
+web/dist
+
+# Misc.
+.git
+.github
+.idea
+.vscode
+.zed
+.direnv
+
+# Logs / cache
+*.log
+.cache

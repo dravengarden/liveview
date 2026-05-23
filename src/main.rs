@@ -1,4 +1,5 @@
 mod cli;
+mod config;
 mod server;
 mod shared;
 
@@ -12,9 +13,11 @@ use axum::{
 };
 use clap::Parser;
 use cli::Cli;
+use config::{auto_discover, implicit_resolved, Config, Resolved};
 use server::state::{AppState, SharedState};
 use shared::{FileContent, FileType};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 use tokio_util::io::ReaderStream;
@@ -76,108 +79,127 @@ fn main() {
     };
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    rt.block_on(async move {
-        let root = cli.path.canonicalize().unwrap_or_else(|_| {
-            std::env::current_dir().expect("Cannot determine current directory")
-        });
-
-        let include_set =
-            build_globset(&cli.effective_includes()).expect("Invalid include patterns");
-        let exclude_set =
-            build_globset(&cli.effective_excludes()).expect("Invalid exclude patterns");
-
-        let initial_tree = server::tree::build_file_tree(&root, &include_set, &exclude_set);
-
-        let (tx, _rx) = broadcast::channel::<String>(64);
-
-        let state: SharedState = Arc::new(AppState {
-            tx,
-            canonical_root: root.clone(),
-            include_set,
-            exclude_set,
-            file_tree: RwLock::new(initial_tree),
-            rendered_cache: RwLock::new(HashMap::new()),
-        });
-
-        server::watcher::start_watcher(state.clone(), cli.debounce_ms);
-
-        tracing::info!("Watching: {}", root.display());
-
-        let api_router = Router::new()
-            .route("/api/tree", get(api_tree))
-            .route("/api/file", get(api_file))
-            .route("/api/raw", get(api_raw))
-            .route("/ws", get(server::ws::ws_handler))
-            .with_state(state.clone());
-
-        #[cfg(feature = "embedded")]
-        let app = {
-            api_router
-                .route("/", get(embedded_assets::serve_index))
-                .route("/assets/{*path}", get(embedded_assets::serve_assets))
-                .route("/{*path}", get(embedded_assets::serve_root))
-                .fallback(get(embedded_assets::serve_index))
-                .layer(Extension(state))
-        };
-
-        #[cfg(not(feature = "embedded"))]
-        let app = {
-            use tower_http::services::ServeDir;
-            let serve_dir = ServeDir::new("web/dist")
-                .append_index_html_on_directories(true)
-                .fallback(ServeDir::new("web/dist").append_index_html_on_directories(true));
-            api_router
-                .fallback_service(serve_dir)
-                .layer(Extension(state))
-        };
-
-        const DEFAULT_PORT: u16 = 4159;
-        let listener = if let Some(port) = cli.port {
-            let addr = format!("{}:{}", cli.host, port);
-            tokio::net::TcpListener::bind(&addr)
-                .await
-                .unwrap_or_else(|e| panic!("Failed to bind {}:{} - {}", cli.host, port, e))
-        } else {
-            let mut port = DEFAULT_PORT;
-            loop {
-                let addr = format!("{}:{}", cli.host, port);
-                match tokio::net::TcpListener::bind(&addr).await {
-                    Ok(listener) => break listener,
-                    Err(_) => {
-                        tracing::info!("Port {} in use, trying {}", port, port + 1);
-                        port = port.checked_add(1).expect("No available ports found");
-                    }
-                }
-            }
-        };
-
-        let local_addr = listener.local_addr().expect("Failed to get local address");
-        let url = format!("http://{local_addr}");
-
-        if cli.open {
-            let url_clone = url.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                let _ = open::that(&url_clone);
-            });
+    let resolved = match build_resolved(&cli) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("config error: {e}");
+            std::process::exit(2);
         }
+    };
 
-        tracing::info!("Server running at {url}");
-
-        axum::serve(listener, app.into_make_service())
-            .await
-            .expect("Server error");
-    });
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    rt.block_on(run(cli, resolved));
 }
 
-fn build_globset(patterns: &[String]) -> Result<globset::GlobSet, globset::Error> {
-    use globset::{Glob, GlobSetBuilder};
-    let mut builder = GlobSetBuilder::new();
-    for pattern in patterns {
-        builder.add(Glob::new(pattern)?);
+async fn run(cli: Cli, resolved: Resolved) {
+    let host = cli.host.clone().unwrap_or(resolved.host);
+    let port = cli.port.or(resolved.port);
+    let should_open = cli.open || resolved.open;
+
+    let initial_tree = server::tree::build_virtual_tree(&resolved.mounts);
+
+    let (tx, _rx) = broadcast::channel::<String>(64);
+
+    let state: SharedState = Arc::new(AppState {
+        tx,
+        mounts: resolved.mounts,
+        file_tree: RwLock::new(initial_tree),
+        rendered_cache: RwLock::new(HashMap::new()),
+    });
+
+    server::watcher::start_watcher(state.clone(), resolved.debounce_ms);
+
+    for m in &state.mounts {
+        tracing::info!("mount /{:<20}  =>  {}", m.slug, m.source.display());
     }
-    builder.build()
+
+    let api_router = Router::new()
+        .route("/api/tree", get(api_tree))
+        .route("/api/file", get(api_file))
+        .route("/api/raw", get(api_raw))
+        .route("/ws", get(server::ws::ws_handler))
+        .with_state(state.clone());
+
+    #[cfg(feature = "embedded")]
+    let app = {
+        api_router
+            .route("/", get(embedded_assets::serve_index))
+            .route("/assets/{*path}", get(embedded_assets::serve_assets))
+            .route("/{*path}", get(embedded_assets::serve_root))
+            .fallback(get(embedded_assets::serve_index))
+            .layer(Extension(state))
+    };
+
+    #[cfg(not(feature = "embedded"))]
+    let app = {
+        use tower_http::services::ServeDir;
+        let serve_dir = ServeDir::new("web/dist")
+            .append_index_html_on_directories(true)
+            .fallback(ServeDir::new("web/dist").append_index_html_on_directories(true));
+        api_router
+            .fallback_service(serve_dir)
+            .layer(Extension(state))
+    };
+
+    const DEFAULT_PORT: u16 = 4159;
+    let listener = if let Some(port) = port {
+        let addr = format!("{host}:{port}");
+        tokio::net::TcpListener::bind(&addr)
+            .await
+            .unwrap_or_else(|e| panic!("Failed to bind {addr} - {e}"))
+    } else {
+        let mut port = DEFAULT_PORT;
+        loop {
+            let addr = format!("{host}:{port}");
+            match tokio::net::TcpListener::bind(&addr).await {
+                Ok(listener) => break listener,
+                Err(_) => {
+                    tracing::info!("Port {port} in use, trying {}", port + 1);
+                    port = port.checked_add(1).expect("No available ports found");
+                }
+            }
+        }
+    };
+
+    let local_addr = listener.local_addr().expect("Failed to get local address");
+    let url = format!("http://{local_addr}");
+
+    if should_open {
+        let url_clone = url.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let _ = open::that(&url_clone);
+        });
+    }
+
+    tracing::info!("Server running at {url}");
+
+    axum::serve(listener, app.into_make_service())
+        .await
+        .expect("Server error");
+}
+
+fn build_resolved(cli: &Cli) -> Result<Resolved, String> {
+    if let Some(path) = &cli.config {
+        return load_explicit(path);
+    }
+    let cwd = std::env::current_dir().map_err(|e| format!("cwd: {e}"))?;
+    if let Some(path) = auto_discover(&cwd) {
+        tracing::info!("auto-discovered config: {}", path.display());
+        return load_explicit(&path);
+    }
+    tracing::info!("no config found — falling back to implicit single-mount over cwd");
+    implicit_resolved(&cwd)
+}
+
+fn load_explicit(path: &Path) -> Result<Resolved, String> {
+    let cfg = Config::load(path)?;
+    let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let dir = abs
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    cfg.resolve(&dir)
 }
 
 async fn api_tree(State(state): State<SharedState>) -> impl IntoResponse {
@@ -190,28 +212,62 @@ struct FileQuery {
     path: String,
 }
 
+/// Resolve a virtual-path request to an on-disk path under its mount, with
+/// traversal / out-of-mount targets rejected. `Ok(None)` is "file does not
+/// exist" (404); `Err(())` is "outside the mount" (403); `Ok(Some(p))` is
+/// the canonical path safe to read.
+fn resolve_safe(state: &AppState, virtual_path: &str) -> Result<Option<PathBuf>, ()> {
+    let Some(resolution) = state.resolve_path(virtual_path) else {
+        return Ok(None);
+    };
+    let joined = resolution.mount.source.join(resolution.rest);
+    // Canonicalize fully — this is what makes `..` and symlinks safe. A
+    // syntactic `starts_with` check is NOT sufficient because Path::join
+    // doesn't normalise components.
+    let canonical = match joined.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return Ok(None),
+    };
+    if !canonical.starts_with(&resolution.mount.source) {
+        return Err(());
+    }
+    Ok(Some(canonical))
+}
+
 async fn api_file(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
 ) -> impl IntoResponse {
-    let full_path = state.canonical_root.join(&query.path);
-
-    if !full_path.starts_with(&state.canonical_root) {
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({"error": "Access denied"}))).into_response();
-    }
+    let full_path = match resolve_safe(&state, &query.path) {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "File not found"})),
+            )
+                .into_response();
+        }
+        Err(()) => {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({"error": "Access denied"})),
+            )
+                .into_response();
+        }
+    };
 
     let file_type = FileType::from_path(&query.path);
 
-    // For binary files, return metadata only - frontend will use /api/raw
+    // Binary files: return metadata only — frontend will use /api/raw.
     if matches!(file_type, FileType::Image | FileType::Pdf) {
         return Json(FileContent {
             path: query.path,
             file_type,
             content: String::new(),
-        }).into_response();
+        })
+        .into_response();
     }
 
-    // Check cache first
     {
         let cache = state.rendered_cache.read().await;
         if let Some(content) = cache.get(&query.path) {
@@ -219,11 +275,11 @@ async fn api_file(
                 path: query.path,
                 file_type,
                 content: content.clone(),
-            }).into_response();
+            })
+            .into_response();
         }
     }
 
-    // Read and process file
     match tokio::fs::read_to_string(&full_path).await {
         Ok(source) => {
             let content = server::renderer::render_file(&source, &file_type);
@@ -235,22 +291,26 @@ async fn api_file(
                 path: query.path,
                 file_type,
                 content,
-            }).into_response()
+            })
+            .into_response()
         }
-        Err(_) => (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "File not found"}))).into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "File not found"})),
+        )
+            .into_response(),
     }
 }
 
-/// Serve raw file content (for images, PDFs, etc.)
 async fn api_raw(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
 ) -> impl IntoResponse {
-    let full_path = state.canonical_root.join(&query.path);
-
-    if !full_path.starts_with(&state.canonical_root) {
-        return (StatusCode::FORBIDDEN, "Access denied").into_response();
-    }
+    let full_path = match resolve_safe(&state, &query.path) {
+        Ok(Some(p)) => p,
+        Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(()) => return (StatusCode::FORBIDDEN, "Access denied").into_response(),
+    };
 
     let file = match tokio::fs::File::open(&full_path).await {
         Ok(file) => file,
@@ -271,4 +331,154 @@ async fn api_raw(
         .body(body)
         .unwrap()
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{build_globset, MountState};
+    use std::fs;
+    use std::path::PathBuf;
+
+    struct TempDir(PathBuf);
+    impl TempDir {
+        fn new(prefix: &str) -> Self {
+            let mut p = std::env::temp_dir();
+            let suffix = format!(
+                "{prefix}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            p.push(suffix);
+            fs::create_dir_all(&p).unwrap();
+            Self(p)
+        }
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn mk_state(mounts: Vec<MountState>) -> AppState {
+        let (tx, _) = broadcast::channel(8);
+        AppState {
+            tx,
+            mounts,
+            file_tree: RwLock::new(Vec::new()),
+            rendered_cache: RwLock::new(HashMap::new()),
+        }
+    }
+
+    fn mk_mount(slug: &str, source: PathBuf) -> MountState {
+        MountState {
+            label: slug.to_string(),
+            slug: slug.to_string(),
+            source,
+            include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
+            exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+            layout: None,
+        }
+    }
+
+    #[test]
+    fn resolve_splits_on_first_slash() {
+        let tmp = TempDir::new("lv-resolve");
+        let state = mk_state(vec![mk_mount("docs", tmp.path().to_path_buf())]);
+        let r = state.resolve_path("docs/foo/bar.md").unwrap();
+        assert_eq!(r.mount.slug, "docs");
+        assert_eq!(r.rest, "foo/bar.md");
+    }
+
+    #[test]
+    fn resolve_mount_root_no_slash() {
+        let tmp = TempDir::new("lv-resolve");
+        let state = mk_state(vec![mk_mount("docs", tmp.path().to_path_buf())]);
+        let r = state.resolve_path("docs").unwrap();
+        assert_eq!(r.mount.slug, "docs");
+        assert_eq!(r.rest, "");
+    }
+
+    #[test]
+    fn resolve_returns_none_on_unknown_slug() {
+        let tmp = TempDir::new("lv-resolve");
+        let state = mk_state(vec![mk_mount("docs", tmp.path().to_path_buf())]);
+        assert!(state.resolve_path("nope/x.md").is_none());
+    }
+
+    #[test]
+    fn resolve_picks_right_mount_among_many() {
+        let tmp_a = TempDir::new("lv-a");
+        let tmp_b = TempDir::new("lv-b");
+        let state = mk_state(vec![
+            mk_mount("docs", tmp_a.path().to_path_buf()),
+            mk_mount("tasks", tmp_b.path().to_path_buf()),
+        ]);
+        let r = state.resolve_path("tasks/x.md").unwrap();
+        assert_eq!(r.mount.source, tmp_b.path());
+    }
+
+    #[test]
+    fn resolve_safe_unknown_slug_is_not_found() {
+        let tmp = TempDir::new("lv-safe");
+        let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
+        // Ok(None) maps to 404 at the handler layer.
+        assert!(matches!(resolve_safe(&state, "bogus/x.md"), Ok(None)));
+    }
+
+    #[test]
+    fn resolve_safe_missing_file_is_not_found() {
+        let tmp = TempDir::new("lv-safe");
+        let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
+        assert!(matches!(resolve_safe(&state, "docs/missing.md"), Ok(None)));
+    }
+
+    #[test]
+    fn resolve_safe_accepts_legit_file() {
+        let tmp = TempDir::new("lv-safe");
+        fs::write(tmp.path().join("README.md"), b"hi").unwrap();
+        let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
+        let out = resolve_safe(&state, "docs/README.md").unwrap().unwrap();
+        assert!(out.ends_with("README.md"));
+    }
+
+    #[test]
+    fn resolve_safe_rejects_dotdot_escape() {
+        // Two adjacent temp dirs A and B; build mount over A and try to
+        // reach a file in B via `..`. Must return Err (=> 403).
+        let tmp_a = TempDir::new("lv-safe-a");
+        let tmp_b = TempDir::new("lv-safe-b");
+        fs::write(tmp_b.path().join("secret.md"), b"x").unwrap();
+
+        let a_canon = tmp_a.path().canonicalize().unwrap();
+        let state = mk_state(vec![mk_mount("docs", a_canon.clone())]);
+
+        // Path that joins to A but `..`-s out to B once canonicalized.
+        let b_name = tmp_b.path().file_name().unwrap().to_str().unwrap();
+        let virtual_path = format!("docs/../{b_name}/secret.md");
+        assert!(matches!(resolve_safe(&state, &virtual_path), Err(())));
+    }
+
+    #[test]
+    fn resolve_safe_rejects_symlink_escape() {
+        // Plant a symlink inside the mount that points to a file outside
+        // the mount; reading via the symlink should be 403.
+        let tmp_a = TempDir::new("lv-safe-sym-a");
+        let tmp_b = TempDir::new("lv-safe-sym-b");
+        let outside = tmp_b.path().join("outside.md");
+        fs::write(&outside, b"leak").unwrap();
+        let link = tmp_a.path().join("link.md");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let a_canon = tmp_a.path().canonicalize().unwrap();
+        let state = mk_state(vec![mk_mount("docs", a_canon)]);
+        assert!(matches!(resolve_safe(&state, "docs/link.md"), Err(())));
+    }
 }

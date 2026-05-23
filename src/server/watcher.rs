@@ -6,32 +6,36 @@ use tokio::sync::mpsc;
 
 use crate::server::renderer::render_file;
 use crate::server::state::SharedState;
-use crate::server::tree::build_file_tree;
+use crate::server::tree::build_virtual_tree;
 use crate::shared::{FileType, WsMessage};
 
 #[derive(Debug)]
 enum FileEvent {
-    ContentChanged(PathBuf),
+    ContentChanged { mount_idx: usize, path: PathBuf },
     StructureChanged,
 }
 
 pub fn start_watcher(state: SharedState, debounce_ms: u64) {
     let (tx, rx) = mpsc::channel::<FileEvent>(256);
-
-    spawn_notify_thread(state.clone(), tx, debounce_ms);
+    for idx in 0..state.mounts.len() {
+        spawn_notify_thread(state.clone(), idx, tx.clone(), debounce_ms);
+    }
     tokio::spawn(process_events(state, rx));
 }
 
-fn spawn_notify_thread(state: SharedState, tx: mpsc::Sender<FileEvent>, debounce_ms: u64) {
-    let root = state.canonical_root.clone();
-    let include_set = state.include_set.clone();
-    let exclude_set = state.exclude_set.clone();
+fn spawn_notify_thread(
+    state: SharedState,
+    mount_idx: usize,
+    tx: mpsc::Sender<FileEvent>,
+    debounce_ms: u64,
+) {
+    let mount = state.mounts[mount_idx].clone();
+    let source = mount.source.clone();
+    let include_set = mount.include_set.clone();
+    let exclude_set = mount.exclude_set.clone();
 
     std::thread::spawn(move || {
-        let tx_clone = tx.clone();
-        let root_clone = root.clone();
-        let include_clone = include_set.clone();
-        let exclude_clone = exclude_set.clone();
+        let source_for_thread = source.clone();
 
         let mut debouncer = new_debouncer(
             Duration::from_millis(debounce_ms),
@@ -45,21 +49,24 @@ fn spawn_notify_thread(state: SharedState, tx: mpsc::Sender<FileEvent>, debounce
 
                 for event in events {
                     let path = &event.path;
-                    let rel_path = path.strip_prefix(&root_clone).unwrap_or(path);
+                    let rel_path = path.strip_prefix(&source).unwrap_or(path);
 
-                    if exclude_clone.is_match(rel_path) {
+                    if exclude_set.is_match(rel_path) {
                         continue;
                     }
 
-                    if path.is_file() && include_clone.is_match(rel_path) {
-                        let _ = tx_clone.blocking_send(FileEvent::ContentChanged(path.clone()));
+                    if path.is_file() && include_set.is_match(rel_path) {
+                        let _ = tx.blocking_send(FileEvent::ContentChanged {
+                            mount_idx,
+                            path: path.clone(),
+                        });
                     } else {
                         structure_changed = true;
                     }
                 }
 
                 if structure_changed {
-                    let _ = tx_clone.blocking_send(FileEvent::StructureChanged);
+                    let _ = tx.blocking_send(FileEvent::StructureChanged);
                 }
             },
         )
@@ -67,10 +74,10 @@ fn spawn_notify_thread(state: SharedState, tx: mpsc::Sender<FileEvent>, debounce
 
         debouncer
             .watcher()
-            .watch(root.as_path(), RecursiveMode::Recursive)
+            .watch(&source_for_thread, RecursiveMode::Recursive)
             .expect("Failed to start watching");
 
-        // Keep thread alive - debouncer must not be dropped
+        // Keep thread alive — dropping the debouncer stops the watch.
         loop {
             std::thread::park();
         }
@@ -80,8 +87,8 @@ fn spawn_notify_thread(state: SharedState, tx: mpsc::Sender<FileEvent>, debounce
 async fn process_events(state: SharedState, mut rx: mpsc::Receiver<FileEvent>) {
     while let Some(event) = rx.recv().await {
         match event {
-            FileEvent::ContentChanged(path) => {
-                handle_content_change(&state, &path).await;
+            FileEvent::ContentChanged { mount_idx, path } => {
+                handle_content_change(&state, mount_idx, &path).await;
             }
             FileEvent::StructureChanged => {
                 handle_structure_change(&state).await;
@@ -90,19 +97,28 @@ async fn process_events(state: SharedState, mut rx: mpsc::Receiver<FileEvent>) {
     }
 }
 
-async fn handle_content_change(state: &SharedState, path: &PathBuf) {
-    let rel_path = path
-        .strip_prefix(&state.canonical_root)
+async fn handle_content_change(state: &SharedState, mount_idx: usize, path: &PathBuf) {
+    let mount = match state.mounts.get(mount_idx) {
+        Some(m) => m,
+        None => return,
+    };
+    let rel = path
+        .strip_prefix(&mount.source)
         .unwrap_or(path)
         .to_string_lossy()
         .to_string();
+    let virtual_path = if rel.is_empty() {
+        mount.slug.clone()
+    } else {
+        format!("{}/{}", mount.slug, rel)
+    };
 
-    let file_type = FileType::from_path(&rel_path);
+    let file_type = FileType::from_path(&virtual_path);
 
-    // For binary files (images, PDFs), just notify - frontend will use raw endpoint
+    // Binary files: notify only; frontend will refetch via /api/raw.
     if matches!(file_type, FileType::Image | FileType::Pdf) {
         let msg = WsMessage::ContentUpdate {
-            path: rel_path,
+            path: virtual_path,
             file_type,
             content: String::new(),
         };
@@ -120,11 +136,11 @@ async fn handle_content_change(state: &SharedState, path: &PathBuf) {
 
     {
         let mut cache = state.rendered_cache.write().await;
-        cache.insert(rel_path.clone(), content.clone());
+        cache.insert(virtual_path.clone(), content.clone());
     }
 
     let msg = WsMessage::ContentUpdate {
-        path: rel_path,
+        path: virtual_path,
         file_type,
         content,
     };
@@ -134,11 +150,8 @@ async fn handle_content_change(state: &SharedState, path: &PathBuf) {
 }
 
 async fn handle_structure_change(state: &SharedState) {
-    let root = state.canonical_root.clone();
-    let include = state.include_set.clone();
-    let exclude = state.exclude_set.clone();
-
-    let new_tree = tokio::task::spawn_blocking(move || build_file_tree(&root, &include, &exclude))
+    let mounts = state.mounts.clone();
+    let new_tree = tokio::task::spawn_blocking(move || build_virtual_tree(&mounts))
         .await
         .unwrap_or_default();
 
