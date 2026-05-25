@@ -33,8 +33,12 @@ pub struct Config {
     #[serde(default)]
     pub defaults: Defaults,
     /// One entry per `[[book]]` (or the legacy `[[mount]]` alias).
-    #[serde(rename = "book", alias = "mount")]
+    #[serde(default, rename = "book", alias = "mount")]
     pub books: Vec<BookCfg>,
+    /// One entry per `[[shelf]]` — a directory whose immediate subdirectories
+    /// are auto-discovered as `book.toml`-driven books (see `BookManifest`).
+    #[serde(default, rename = "shelf")]
+    pub shelves: Vec<ShelfCfg>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +121,39 @@ pub struct EditionCfg {
     pub excludes: Option<Vec<String>>,
 }
 
+/// A `[[shelf]]` source — a directory whose immediate subdirectories are
+/// scanned for a `book.toml` manifest. Each manifest-bearing subdir becomes a
+/// book rendered as a flat, H1-titled spine (filenames/dirs never surface).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShelfCfg {
+    /// Directory to scan, relative to the config file (or absolute).
+    pub path: PathBuf,
+}
+
+/// `book.toml` — the per-book manifest that lives inside the book directory
+/// (cf. books/ARCHITECTURE.md §5). Unknown sections (`[features]`,
+/// `[provenance]`, `[spoken]`, …) are intentionally ignored here — liveview
+/// only needs the identity, languages, and default edition.
+#[derive(Debug, Deserialize)]
+pub struct BookManifest {
+    /// Defaults to the directory name when omitted.
+    pub slug: Option<String>,
+    pub title: String,
+    pub default_lang: String,
+    /// `[langs.<code>]` → label. The default lang is the base edition; every
+    /// other language is an overlay that falls back to it (resolved server-side
+    /// for raw assets).
+    #[serde(default)]
+    pub langs: HashMap<String, LangManifest>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LangManifest {
+    /// Display name in the switcher; defaults to the language code.
+    pub label: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Layout {
@@ -151,6 +188,10 @@ pub struct BookState {
     pub description: Option<String>,
     pub default_lang: String,
     pub layout: Option<Layout>,
+    /// `true` for a `book.toml`-driven book: the sidebar is a flat list of
+    /// section titles (each chapter's H1), filenames/dirs hidden. `false` for
+    /// a plain `[[book]]`/`[[mount]]` whose sidebar is the filesystem tree.
+    pub manifest: bool,
     /// Always non-empty. First entry is the declaration order; `default_lang`
     /// names which one opens first.
     pub editions: Vec<EditionState>,
@@ -231,8 +272,8 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.books.is_empty() {
-            return Err("config: at least one [[book]] required".to_string());
+        if self.books.is_empty() && self.shelves.is_empty() {
+            return Err("config: at least one [[book]] or [[shelf]] required".to_string());
         }
         let mut seen = HashSet::new();
         for b in &self.books {
@@ -395,8 +436,25 @@ impl Config {
                 description: b.description,
                 default_lang,
                 layout: b.layout,
+                manifest: false,
                 editions,
             });
+        }
+
+        // Auto-discover `book.toml` books under each [[shelf]] root.
+        let mut seen_slugs: HashSet<String> = books.iter().map(|b| b.slug.clone()).collect();
+        for shelf in &self.shelves {
+            let root = if shelf.path.is_absolute() {
+                shelf.path.clone()
+            } else {
+                config_dir.join(&shelf.path)
+            };
+            for book in discover_shelf(&root, &default_includes, &default_excludes)? {
+                if !seen_slugs.insert(book.slug.clone()) {
+                    return Err(format!("duplicate book slug {:?} (from shelf)", book.slug));
+                }
+                books.push(book);
+            }
         }
 
         Ok(Resolved {
@@ -407,6 +465,133 @@ impl Config {
             books,
         })
     }
+}
+
+/// Scan `root`'s immediate subdirectories for `book.toml` manifests, turning
+/// each into a manifest-driven `BookState`. Subdirs without a `book.toml` are
+/// ignored, so a shelf can coexist with non-book content. Results are sorted
+/// by slug for a stable bookshelf order.
+fn discover_shelf(
+    root: &Path,
+    default_includes: &[String],
+    default_excludes: &[String],
+) -> Result<Vec<BookState>, String> {
+    let entries = std::fs::read_dir(root).map_err(|e| format!("shelf {}: {e}", root.display()))?;
+    let mut books = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let manifest_path = dir.join("book.toml");
+        if !manifest_path.is_file() {
+            continue;
+        }
+        books.push(load_book_manifest(
+            &manifest_path,
+            &dir,
+            default_includes,
+            default_excludes,
+        )?);
+    }
+    books.sort_by(|a, b| a.slug.cmp(&b.slug));
+    Ok(books)
+}
+
+/// Parse one `book.toml` and resolve it into a `BookState`. Each `[langs.<code>]`
+/// becomes an edition over `<book_dir>/<code>`; the default language is listed
+/// first (it is the base edition), the rest follow in alphabetical order.
+fn load_book_manifest(
+    manifest_path: &Path,
+    book_dir: &Path,
+    default_includes: &[String],
+    default_excludes: &[String],
+) -> Result<BookState, String> {
+    let raw = std::fs::read_to_string(manifest_path)
+        .map_err(|e| format!("read {}: {e}", manifest_path.display()))?;
+    let manifest: BookManifest =
+        toml::from_str(&raw).map_err(|e| format!("parse {}: {e}", manifest_path.display()))?;
+
+    if manifest.langs.is_empty() {
+        return Err(format!(
+            "{}: needs at least one [langs.<code>]",
+            manifest_path.display()
+        ));
+    }
+    if !manifest.langs.contains_key(&manifest.default_lang) {
+        return Err(format!(
+            "{}: default_lang {:?} has no [langs.{}] entry",
+            manifest_path.display(),
+            manifest.default_lang,
+            manifest.default_lang
+        ));
+    }
+
+    let slug = manifest.slug.clone().unwrap_or_else(|| {
+        book_dir
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(slugify)
+            .unwrap_or_default()
+    });
+    if slug.is_empty() || slug.contains('/') {
+        return Err(format!(
+            "{}: invalid slug {:?}",
+            manifest_path.display(),
+            slug
+        ));
+    }
+
+    let include_set = build_globset(default_includes)
+        .map_err(|e| format!("{}: bad include glob: {e}", manifest_path.display()))?;
+    let exclude_set = build_globset(default_excludes)
+        .map_err(|e| format!("{}: bad exclude glob: {e}", manifest_path.display()))?;
+
+    // Default lang first (the base edition), then the rest alphabetically.
+    let mut langs: Vec<&String> = manifest.langs.keys().collect();
+    langs.sort();
+    langs.sort_by_key(|l| *l != &manifest.default_lang);
+
+    let mut editions = Vec::with_capacity(langs.len());
+    for lang in langs {
+        let abs = book_dir.join(lang);
+        let source = abs.canonicalize().map_err(|e| {
+            format!(
+                "{}: edition dir {} not found: {e}",
+                manifest_path.display(),
+                abs.display()
+            )
+        })?;
+        if !source.is_dir() {
+            return Err(format!(
+                "{}: edition {} is not a directory",
+                manifest_path.display(),
+                source.display()
+            ));
+        }
+        let label = manifest
+            .langs
+            .get(lang)
+            .and_then(|l| l.label.clone())
+            .unwrap_or_else(|| lang.clone());
+        editions.push(EditionState {
+            lang: lang.clone(),
+            label,
+            source,
+            include_set: include_set.clone(),
+            exclude_set: exclude_set.clone(),
+        });
+    }
+
+    Ok(BookState {
+        label: manifest.title,
+        slug,
+        description: None,
+        default_lang: manifest.default_lang,
+        layout: None,
+        manifest: true,
+        editions,
+    })
 }
 
 /// Look for a config file in `dir` using a fixed precedence order. Returns
@@ -468,6 +653,7 @@ pub fn implicit_resolved(dir: &Path) -> Result<Resolved, String> {
             description: None,
             default_lang: "default".to_string(),
             layout: None,
+            manifest: false,
             editions: vec![EditionState {
                 lang: "default".to_string(),
                 label: "default".to_string(),
@@ -611,6 +797,7 @@ mod tests {
         let cfg = Config {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
+            shelves: vec![],
             books: vec![],
         };
         assert!(cfg.validate().is_err());
@@ -621,6 +808,7 @@ mod tests {
         let cfg = Config {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
+            shelves: vec![],
             books: vec![book("Docs", None), book("DOCS", None)],
         };
         let err = cfg.validate().unwrap_err();
@@ -632,6 +820,7 @@ mod tests {
         let cfg = Config {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
+            shelves: vec![],
             books: vec![book("!!!", None)],
         };
         let err = cfg.validate().unwrap_err();
@@ -643,6 +832,7 @@ mod tests {
         let cfg = Config {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
+            shelves: vec![],
             books: vec![book("Docs", Some("foo/bar"))],
         };
         let err = cfg.validate().unwrap_err();
@@ -662,6 +852,7 @@ mod tests {
         let cfg = Config {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
+            shelves: vec![],
             books: vec![b],
         };
         let err = cfg.validate().unwrap_err();
@@ -675,6 +866,7 @@ mod tests {
         let cfg = Config {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
+            shelves: vec![],
             books: vec![b],
         };
         let err = cfg.validate().unwrap_err();
@@ -696,6 +888,7 @@ mod tests {
         let cfg = Config {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
+            shelves: vec![],
             books: vec![b],
         };
         let err = cfg.validate().unwrap_err();
@@ -717,6 +910,7 @@ mod tests {
         let cfg = Config {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
+            shelves: vec![],
             books: vec![b],
         };
         let err = cfg.validate().unwrap_err();

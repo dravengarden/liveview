@@ -263,79 +263,92 @@ struct FileQuery {
 }
 
 /// Resolve a virtual-path request (plus optional `lang`) to an on-disk path
-/// under the chosen edition, with traversal / out-of-edition targets
-/// rejected. `Ok(None)` is "file does not exist / no such edition" (404);
-/// `Err(())` is "outside the edition source" (403); `Ok(Some(p))` is the
-/// canonical path safe to read.
-fn resolve_safe(
+/// using **overlay → base** fallback: try the requested `lang` edition first,
+/// then the book's default (base) edition. Returns the canonical path plus the
+/// language actually served. `Ok(None)` is "not found in any edition" (404);
+/// `Err(())` is "outside an edition source" (403, traversal/symlink escape).
+fn resolve_with_fallback(
     state: &AppState,
     virtual_path: &str,
     lang: Option<&str>,
-) -> Result<Option<PathBuf>, ()> {
-    let Some(resolution) = state.resolve_path(virtual_path, lang) else {
-        return Ok(None);
-    };
-    let joined = resolution.edition.source.join(resolution.rest);
-    // Canonicalize fully — this is what makes `..` and symlinks safe. A
-    // syntactic `starts_with` check is NOT sufficient because Path::join
-    // doesn't normalise components.
-    let canonical = match joined.canonicalize() {
-        Ok(p) => p,
-        Err(_) => return Ok(None),
-    };
-    if !canonical.starts_with(&resolution.edition.source) {
-        return Err(());
+) -> Result<Option<(PathBuf, String)>, ()> {
+    // Candidate editions in priority order: the requested `lang` overlay, then
+    // the book's default (base) edition (`None` ⇒ default). Editions share
+    // structure, so a page/asset absent from the overlay is served from base.
+    let mut candidates: Vec<Option<&str>> = Vec::new();
+    if lang.is_some() {
+        candidates.push(lang);
     }
-    Ok(Some(canonical))
+    candidates.push(None);
+
+    for cand in candidates {
+        let Some(res) = state.resolve_path(virtual_path, cand) else {
+            // Unknown slug, or no such edition for `cand` → try the next one.
+            continue;
+        };
+        let joined = res.edition.source.join(res.rest);
+        // Canonicalize fully — this is what makes `..` and symlinks safe. A
+        // syntactic `starts_with` check is NOT sufficient because Path::join
+        // doesn't normalise components.
+        match joined.canonicalize() {
+            Ok(p) => {
+                if !p.starts_with(&res.edition.source) {
+                    return Err(());
+                }
+                return Ok(Some((p, res.edition.lang.clone())));
+            }
+            // Missing in this edition → fall through to the next candidate.
+            Err(_) => continue,
+        }
+    }
+    Ok(None)
 }
 
 async fn api_file(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
 ) -> impl IntoResponse {
-    let lang = query.lang.as_deref();
-    let full_path = match resolve_safe(&state, &query.path, lang) {
-        Ok(Some(p)) => p,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "File not found"})),
-            )
-                .into_response();
-        }
-        Err(()) => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Access denied"})),
-            )
-                .into_response();
-        }
-    };
+    let (full_path, served_lang) =
+        match resolve_with_fallback(&state, &query.path, query.lang.as_deref()) {
+            Ok(Some(x)) => x,
+            Ok(None) => {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error": "File not found"})),
+                )
+                    .into_response();
+            }
+            Err(()) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({"error": "Access denied"})),
+                )
+                    .into_response();
+            }
+        };
 
     let file_type = FileType::from_path(&query.path);
-    // Cache + responses key on the resolved edition lang, not the raw query
-    // (which may be `None`); fall back to the book's default edition lang.
-    let resolved_lang = state
-        .resolve_path(&query.path, lang)
-        .map(|r| r.edition.lang.clone())
-        .unwrap_or_default();
 
     // Binary files: return metadata only — frontend will use /api/raw.
     if matches!(file_type, FileType::Image | FileType::Pdf) {
         return Json(FileContent {
             path: query.path,
+            lang: served_lang,
             file_type,
             content: String::new(),
         })
         .into_response();
     }
 
-    let key = server::state::cache_key(&resolved_lang, &query.path);
+    // Cache keys on the *served* edition lang, so en-fallback and a real zh
+    // page never collide.
+    let key = server::state::cache_key(&served_lang, &query.path);
     {
         let cache = state.rendered_cache.read().await;
         if let Some(content) = cache.get(&key) {
             return Json(FileContent {
                 path: query.path,
+                lang: served_lang,
                 file_type,
                 content: content.clone(),
             })
@@ -352,6 +365,7 @@ async fn api_file(
             }
             Json(FileContent {
                 path: query.path,
+                lang: served_lang,
                 file_type,
                 content,
             })
@@ -369,8 +383,8 @@ async fn api_raw(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
 ) -> impl IntoResponse {
-    let full_path = match resolve_safe(&state, &query.path, query.lang.as_deref()) {
-        Ok(Some(p)) => p,
+    let full_path = match resolve_with_fallback(&state, &query.path, query.lang.as_deref()) {
+        Ok(Some((p, _served))) => p,
         Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
         Err(()) => return (StatusCode::FORBIDDEN, "Access denied").into_response(),
     };
@@ -446,6 +460,7 @@ mod tests {
             description: None,
             default_lang: "default".to_string(),
             layout: None,
+            manifest: false,
             editions: vec![EditionState {
                 lang: "default".to_string(),
                 label: "default".to_string(),
@@ -491,6 +506,7 @@ mod tests {
             description: None,
             default_lang: "en".to_string(),
             layout: None,
+            manifest: false,
             editions: vec![
                 mk_ed("en", tmp_en.path().to_path_buf()),
                 mk_ed("zh", tmp_zh.path().to_path_buf()),
@@ -521,6 +537,45 @@ mod tests {
     }
 
     #[test]
+    fn resolve_falls_back_to_base_when_overlay_missing() {
+        let tmp_en = TempDir::new("lv-fb-en");
+        let tmp_zh = TempDir::new("lv-fb-zh");
+        fs::write(tmp_en.path().join("a.md"), b"en").unwrap(); // only in base
+        fs::write(tmp_zh.path().join("b.md"), b"zh").unwrap(); // only in overlay
+        let mk_ed = |lang: &str, src: PathBuf| EditionState {
+            lang: lang.to_string(),
+            label: lang.to_string(),
+            source: src,
+            include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
+            exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+        };
+        let book = BookState {
+            label: "Docs".to_string(),
+            slug: "docs".to_string(),
+            description: None,
+            default_lang: "en".to_string(),
+            layout: None,
+            manifest: false,
+            editions: vec![
+                mk_ed("en", tmp_en.path().canonicalize().unwrap()),
+                mk_ed("zh", tmp_zh.path().canonicalize().unwrap()),
+            ],
+        };
+        let state = mk_state(vec![book]);
+
+        // a.md is absent from the zh overlay → served from the en base.
+        let (_p, served) = resolve_with_fallback(&state, "docs/a.md", Some("zh"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(served, "en");
+        // b.md exists in the zh overlay → served from zh.
+        let (_p, served) = resolve_with_fallback(&state, "docs/b.md", Some("zh"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(served, "zh");
+    }
+
+    #[test]
     fn resolve_returns_none_on_unknown_slug() {
         let tmp = TempDir::new("lv-resolve");
         let state = mk_state(vec![mk_mount("docs", tmp.path().to_path_buf())]);
@@ -544,7 +599,10 @@ mod tests {
         let tmp = TempDir::new("lv-safe");
         let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
         // Ok(None) maps to 404 at the handler layer.
-        assert!(matches!(resolve_safe(&state, "bogus/x.md", None), Ok(None)));
+        assert!(matches!(
+            resolve_with_fallback(&state, "bogus/x.md", None),
+            Ok(None)
+        ));
     }
 
     #[test]
@@ -552,7 +610,7 @@ mod tests {
         let tmp = TempDir::new("lv-safe");
         let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
         assert!(matches!(
-            resolve_safe(&state, "docs/missing.md", None),
+            resolve_with_fallback(&state, "docs/missing.md", None),
             Ok(None)
         ));
     }
@@ -562,10 +620,11 @@ mod tests {
         let tmp = TempDir::new("lv-safe");
         fs::write(tmp.path().join("README.md"), b"hi").unwrap();
         let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
-        let out = resolve_safe(&state, "docs/README.md", None)
+        let (out, served) = resolve_with_fallback(&state, "docs/README.md", None)
             .unwrap()
             .unwrap();
         assert!(out.ends_with("README.md"));
+        assert_eq!(served, "default");
     }
 
     #[test]
@@ -582,7 +641,10 @@ mod tests {
         // Path that joins to A but `..`-s out to B once canonicalized.
         let b_name = tmp_b.path().file_name().unwrap().to_str().unwrap();
         let virtual_path = format!("docs/../{b_name}/secret.md");
-        assert!(matches!(resolve_safe(&state, &virtual_path, None), Err(())));
+        assert!(matches!(
+            resolve_with_fallback(&state, &virtual_path, None),
+            Err(())
+        ));
     }
 
     #[test]
@@ -600,7 +662,7 @@ mod tests {
         let a_canon = tmp_a.path().canonicalize().unwrap();
         let state = mk_state(vec![mk_mount("docs", a_canon)]);
         assert!(matches!(
-            resolve_safe(&state, "docs/link.md", None),
+            resolve_with_fallback(&state, "docs/link.md", None),
             Err(())
         ));
     }

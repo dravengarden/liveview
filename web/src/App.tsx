@@ -5,7 +5,7 @@ import {
   Box,
   IconButton,
   Tooltip,
-  Drawer,
+  SwipeableDrawer,
   Alert,
   useMediaQuery,
 } from "@mui/material";
@@ -19,6 +19,16 @@ const DEFAULT_SIDEBAR_WIDTH = 280;
 // Below this width the sidebar becomes an overlay drawer (phones + portrait
 // tablets). MUI's `md` breakpoint.
 const MOBILE_QUERY = "(max-width:899.95px)";
+// Devices with no real hover (touch tablets/phones, incl. wide landscape
+// iPads). The collapsed FloatButton relies on hover to expand from its faint
+// transparent triangle, which never works without a pointer — so on these
+// devices we show the always-visible, tap-friendly MobileMenuButtons instead,
+// regardless of viewport width.
+const TOUCH_QUERY = "(hover: none)";
+// iOS needs the swipe-to-open discovery affordance but not the backdrop
+// transition (perf); the inverse holds elsewhere. MUI's documented split.
+const IS_IOS =
+  typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
 
 function findReadme(nodes: TreeNode[]): string | null {
   for (const node of nodes) {
@@ -246,6 +256,10 @@ export function App(): React.JSX.Element {
   const [currentFileType, setCurrentFileType] = useState<FileType>("markdown");
   const [currentContent, setCurrentContent] = useState<string | null>(null);
   const isMobile = useMediaQuery(MOBILE_QUERY);
+  // `isMobile` (width) drives the Drawer-vs-persistent sidebar layout; `isTouch`
+  // (no hover) drives which floating control we expose when the sidebar is
+  // collapsed. A wide iPad is `!isMobile` but `isTouch`.
+  const isTouch = useMediaQuery(TOUCH_QUERY);
   const [sidebarOpen, setSidebarOpen] = useState(() => !window.matchMedia(MOBILE_QUERY).matches);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -322,42 +336,26 @@ export function App(): React.JSX.Element {
     async (path: string, reqLang: string) => {
       setCurrentPath(path);
       currentPathRef.current = path;
-
-      const slug = path.split("/")[0] ?? "";
-      const book = books.find((b) => b.slug === slug);
-
-      const fetchAt = (l: string): Promise<Response> =>
-        fetch(`/api/file?path=${encodeURIComponent(path)}&lang=${encodeURIComponent(l)}`);
-
       try {
-        let res = await fetchAt(reqLang);
-        let shownLang = reqLang;
-        let notice: UntranslatedNotice | null = null;
-
-        if (!res.ok && book && reqLang !== book.default_lang) {
-          const fallback = await fetchAt(book.default_lang);
-          if (fallback.ok) {
-            res = fallback;
-            shownLang = book.default_lang;
-            notice = { requested: reqLang, shown: book.default_lang };
-          }
-        }
-
+        const res = await fetch(
+          `/api/file?path=${encodeURIComponent(path)}&lang=${encodeURIComponent(reqLang)}`
+        );
         if (!res.ok) {
           console.error("Failed to fetch file:", path, res.status);
           return;
         }
-
         const data = (await res.json()) as FileContent;
-        contentLangRef.current = shownLang;
+        // The server resolves overlay → base and reports the edition it served.
+        // If that differs from what we asked for, the page isn't translated yet.
+        contentLangRef.current = data.lang;
         setCurrentFileType(data.file_type);
         setCurrentContent(data.content);
-        setUntranslated(notice);
+        setUntranslated(data.lang !== reqLang ? { requested: reqLang, shown: data.lang } : null);
       } catch (e) {
         console.error("Failed to fetch file:", e);
       }
     },
-    [books]
+    []
   );
 
   // Open a file in a given edition: sync state, URL hash, and content.
@@ -527,17 +525,22 @@ export function App(): React.JSX.Element {
         ) : (
           <>
             {isMobile ? (
-              <Drawer
-                variant="temporary"
+              <SwipeableDrawer
+                // Swipe-to-dismiss + edge-swipe-to-open are what phone users
+                // reach for; backdrop tap and the in-sidebar ✕ still close it.
                 open={sidebarOpen}
+                onOpen={handleOpenSidebar}
                 onClose={handleCloseSidebar}
+                disableBackdropTransition={!IS_IOS}
+                disableDiscovery={IS_IOS}
+                swipeAreaWidth={24}
                 ModalProps={{ keepMounted: true }}
                 slotProps={{
                   paper: { sx: { width: "min(85vw, 320px)", boxSizing: "border-box" } },
                 }}
               >
                 <Sidebar {...sidebarCommon} width={DEFAULT_SIDEBAR_WIDTH} isMobile />
-              </Drawer>
+              </SwipeableDrawer>
             ) : (
               sidebarOpen && <Sidebar {...sidebarCommon} width={sidebarWidth} />
             )}
@@ -555,27 +558,26 @@ export function App(): React.JSX.Element {
                 pr: "env(safe-area-inset-right, 0px)",
               }}
             >
-              {isMobile
-                ? !sidebarOpen && (
-                    <MobileMenuButtons
-                      onOpenSidebar={handleOpenSidebar}
-                      onOpenSettings={handleOpenSettings}
-                    />
-                  )
-                : showFloatButtons && (
-                    <FloatButton position="left" floatOpacity={menuBarSettings.floatOpacity}>
-                      <Tooltip title={t("app.openSidebar")}>
-                        <IconButton size="small" onClick={handleOpenSidebar}>
-                          <MenuIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title={t("app.settings")}>
-                        <IconButton size="small" onClick={handleOpenSettings}>
-                          <SettingsIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    </FloatButton>
-                  )}
+              {showFloatButtons &&
+                (isMobile || isTouch ? (
+                  <MobileMenuButtons
+                    onOpenSidebar={handleOpenSidebar}
+                    onOpenSettings={handleOpenSettings}
+                  />
+                ) : (
+                  <FloatButton position="left" floatOpacity={menuBarSettings.floatOpacity}>
+                    <Tooltip title={t("app.openSidebar")}>
+                      <IconButton size="small" onClick={handleOpenSidebar}>
+                        <MenuIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title={t("app.settings")}>
+                      <IconButton size="small" onClick={handleOpenSettings}>
+                        <SettingsIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </FloatButton>
+                ))}
 
               <Box sx={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
                 {untranslated && (

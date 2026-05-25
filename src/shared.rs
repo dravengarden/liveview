@@ -52,6 +52,10 @@ impl FileType {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FileContent {
     pub path: String,
+    /// Language edition actually served. May differ from the requested `lang`
+    /// when the page is missing in that edition and the base was used instead
+    /// (overlay → base fallback); the frontend shows an "untranslated" notice.
+    pub lang: String,
     pub file_type: FileType,
     pub content: String,
 }

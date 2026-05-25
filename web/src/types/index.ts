@@ -19,6 +19,9 @@ export type FileType =
 
 export interface FileContent {
   path: string;
+  /** Language edition actually served (may differ from the requested lang when
+   *  the page is missing there and the server fell back to the base edition). */
+  lang: string;
   file_type: FileType;
   content: string;
 }

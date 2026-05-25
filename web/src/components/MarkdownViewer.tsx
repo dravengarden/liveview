@@ -1,6 +1,7 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { Box } from "@mui/material";
 import type { Theme } from "@/types";
+import { ImageLightbox } from "./ImageLightbox";
 
 declare global {
   interface Window {
@@ -39,6 +40,7 @@ export function MarkdownViewer({
 }: MarkdownViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const prevThemeRef = useRef<Theme>(theme);
+  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
 
   const processContent = useCallback((forceRerender = false) => {
     const container = containerRef.current;
@@ -170,45 +172,55 @@ export function MarkdownViewer({
     (e: React.MouseEvent<HTMLDivElement>) => {
       const target = e.target as HTMLElement;
       const anchor = target.closest("a");
-      if (!anchor) return;
 
-      const href = anchor.getAttribute("href");
-      if (!href) return;
+      if (anchor) {
+        const href = anchor.getAttribute("href");
+        if (!href) return;
 
-      if (href.startsWith("http://") || href.startsWith("https://")) {
-        return;
-      }
-
-      e.preventDefault();
-
-      if (href.startsWith("#")) {
-        const id = href.slice(1);
-        const el = document.getElementById(id);
-        el?.scrollIntoView({ behavior: "smooth" });
-        return;
-      }
-
-      if (href.endsWith(".md") || href.endsWith(".markdown")) {
-        const basePath = currentPath?.split("/").slice(0, -1).join("/") ?? "";
-        let resolvedPath: string;
-        if (href.startsWith("/")) {
-          resolvedPath = href.slice(1);
-        } else if (basePath) {
-          // Resolve relative path
-          const parts = `${basePath}/${href}`.split("/");
-          const normalized: string[] = [];
-          for (const part of parts) {
-            if (part === "..") {
-              normalized.pop();
-            } else if (part !== "." && part !== "") {
-              normalized.push(part);
-            }
-          }
-          resolvedPath = normalized.join("/");
-        } else {
-          resolvedPath = href;
+        if (href.startsWith("http://") || href.startsWith("https://")) {
+          return;
         }
-        onNavigate(resolvedPath);
+
+        e.preventDefault();
+
+        if (href.startsWith("#")) {
+          const id = href.slice(1);
+          const el = document.getElementById(id);
+          el?.scrollIntoView({ behavior: "smooth" });
+          return;
+        }
+
+        if (href.endsWith(".md") || href.endsWith(".markdown")) {
+          const basePath = currentPath?.split("/").slice(0, -1).join("/") ?? "";
+          let resolvedPath: string;
+          if (href.startsWith("/")) {
+            resolvedPath = href.slice(1);
+          } else if (basePath) {
+            // Resolve relative path
+            const parts = `${basePath}/${href}`.split("/");
+            const normalized: string[] = [];
+            for (const part of parts) {
+              if (part === "..") {
+                normalized.pop();
+              } else if (part !== "." && part !== "") {
+                normalized.push(part);
+              }
+            }
+            resolvedPath = normalized.join("/");
+          } else {
+            resolvedPath = href;
+          }
+          onNavigate(resolvedPath);
+        }
+        return;
+      }
+
+      // Click on a (non-linked) doc image → open the zoom lightbox. Reuse the
+      // browser-resolved URL the <img> already loaded, so this works no matter
+      // how the src was formed. Skip broken/zero-size images.
+      const img = target.closest("img");
+      if (img instanceof HTMLImageElement && img.naturalWidth > 0) {
+        setLightbox({ src: img.currentSrc || img.src, alt: img.alt });
       }
     },
     [currentPath, onNavigate]
@@ -229,6 +241,7 @@ export function MarkdownViewer({
   }
 
   return (
+    <>
     <Box
       ref={containerRef}
       onClick={handleClick}
@@ -237,6 +250,9 @@ export function MarkdownViewer({
         flex: 1,
         overflow: "auto",
         p: { xs: 2, md: 4 },
+        "& img": {
+          cursor: "zoom-in",
+        },
         "& .copy-btn": {
           position: "absolute",
           top: 8,
@@ -261,5 +277,11 @@ export function MarkdownViewer({
       }}
       dangerouslySetInnerHTML={{ __html: html }}
     />
+      <ImageLightbox
+        src={lightbox?.src ?? null}
+        alt={lightbox?.alt ?? ""}
+        onClose={() => setLightbox(null)}
+      />
+    </>
   );
 }

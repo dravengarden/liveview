@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use globset::GlobSet;
 
@@ -18,17 +18,23 @@ pub fn build_virtual_tree(books: &[BookState]) -> Vec<TreeNode> {
     books
         .iter()
         .map(|b| {
-            let ed = b.default_edition();
-            let mut children = Vec::new();
-            scan_dir(
-                &ed.source,
-                &ed.source,
-                &ed.include_set,
-                &ed.exclude_set,
-                &mut children,
-            );
-            prefix_all(&mut children, &b.slug);
-            order_children(&mut children, b.layout.as_ref());
+            let children = if b.manifest {
+                // book.toml book: a flat spine of section titles — no dirs/files.
+                build_spine(b)
+            } else {
+                let ed = b.default_edition();
+                let mut children = Vec::new();
+                scan_dir(
+                    &ed.source,
+                    &ed.source,
+                    &ed.include_set,
+                    &ed.exclude_set,
+                    &mut children,
+                );
+                prefix_all(&mut children, &b.slug);
+                order_children(&mut children, b.layout.as_ref());
+                children
+            };
             TreeNode {
                 name: b.label.clone(),
                 path: b.slug.clone(),
@@ -37,6 +43,53 @@ pub fn build_virtual_tree(books: &[BookState]) -> Vec<TreeNode> {
             }
         })
         .collect()
+}
+
+/// Sidebar for a `book.toml` book: a flat, ordered list of the base edition's
+/// top-level markdown chapters, each labelled by its H1 (the chapter title).
+/// Non-markdown (e.g. `assets/`) is hidden — readers see titles, not files.
+fn build_spine(book: &BookState) -> Vec<TreeNode> {
+    let ed = book.default_edition();
+    let Ok(entries) = std::fs::read_dir(&ed.source) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && matches!(
+                    p.extension().and_then(|x| x.to_str()),
+                    Some("md" | "markdown")
+                )
+        })
+        .collect();
+    files.sort();
+
+    files
+        .iter()
+        .map(|p| {
+            let name = p.file_name().unwrap_or_default().to_string_lossy();
+            let title = read_h1(p).unwrap_or_else(|| name.to_string());
+            TreeNode {
+                name: title,
+                path: format!("{}/{}", book.slug, name),
+                is_dir: false,
+                children: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+/// First Markdown H1 (`# Title`) in a file, used as the section's sidebar
+/// title. `None` when the file is unreadable or has no H1.
+fn read_h1(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    content.lines().find_map(|line| {
+        line.trim_start()
+            .strip_prefix("# ")
+            .map(|rest| rest.trim().to_string())
+    })
 }
 
 fn scan_dir(
@@ -197,6 +250,7 @@ mod tests {
             description: None,
             default_lang: "default".to_string(),
             layout,
+            manifest: false,
             editions: vec![EditionState {
                 lang: "default".to_string(),
                 label: "default".to_string(),
@@ -205,6 +259,41 @@ mod tests {
                 exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
             }],
         }
+    }
+
+    #[test]
+    fn manifest_book_renders_flat_h1_spine() {
+        let tmp = TempDir::new("lv-spine");
+        tmp.touch("00-intro.md");
+        fs::write(tmp.path().join("00-intro.md"), b"# Introduction\n\nbody").unwrap();
+        fs::write(
+            tmp.path().join("01-basics.md"),
+            b"---\nkey: val\n---\n# The Basics\n",
+        )
+        .unwrap();
+        // A non-markdown sibling dir must NOT surface in the sidebar.
+        fs::create_dir_all(tmp.path().join("assets")).unwrap();
+        fs::write(tmp.path().join("assets/fig.png"), b"").unwrap();
+
+        let mut book = mk_mount("My Book", "mybook", tmp.path(), None);
+        book.manifest = true;
+        let tree = build_virtual_tree(&[book]);
+
+        let top = &tree[0];
+        assert_eq!(top.name, "My Book");
+        assert!(top.is_dir);
+        let kids: Vec<(&str, &str, bool)> = top
+            .children
+            .iter()
+            .map(|n| (n.name.as_str(), n.path.as_str(), n.is_dir))
+            .collect();
+        assert_eq!(
+            kids,
+            vec![
+                ("Introduction", "mybook/00-intro.md", false),
+                ("The Basics", "mybook/01-basics.md", false),
+            ]
+        );
     }
 
     #[test]

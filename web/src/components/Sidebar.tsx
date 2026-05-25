@@ -21,6 +21,7 @@ import {
   UnfoldMore as ExpandAllIcon,
   UnfoldLess as CollapseAllIcon,
   ChevronLeft as ChevronLeftIcon,
+  Close as CloseIcon,
   Settings as SettingsIcon,
   MyLocation as LocateIcon,
   ArrowBack as BackIcon,
@@ -361,7 +362,8 @@ export function Sidebar({
           </Tooltip>
           <Tooltip title={t("sidebar.close")}>
             <IconButton size="small" onClick={onClose}>
-              <ChevronLeftIcon fontSize="small" />
+              {/* ✕ reads as "close overlay" on mobile; ‹ as "collapse" on desktop. */}
+              {isMobile ? <CloseIcon fontSize="small" /> : <ChevronLeftIcon fontSize="small" />}
             </IconButton>
           </Tooltip>
         </Box>
