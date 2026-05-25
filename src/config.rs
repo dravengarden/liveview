@@ -1,9 +1,18 @@
-//! Config file — virtual mounts + global defaults.
+//! Config file — virtual books + global defaults.
 //!
-//! A mount is a (label, source-dir, glob filters) tuple that appears as a
-//! top-level folder in the sidebar. The on-the-wire path of any file under
-//! a mount is `<slug>/<rel-path-under-source>`; the slug is derived from
-//! `label` (lower-kebab) unless explicitly overridden.
+//! A *book* is a curated reading view that appears as a card on the landing
+//! "bookshelf" and as a top-level folder in the sidebar. Each book has one
+//! or more *editions* — one per language — that share the same logical
+//! structure (same chapter/file layout) but live in different source dirs.
+//! Switching language keeps your logical position and swaps the edition.
+//!
+//! The on-the-wire path of any file is `<slug>/<rel-path-under-source>`
+//! (edition-independent); the requested `lang` selects the edition. The slug
+//! is derived from `label` (lower-kebab) unless explicitly overridden.
+//!
+//! A single-language book is the degenerate case: declare `source` directly
+//! on the book and liveview synthesises one implicit edition. `[[mount]]` is
+//! accepted as a legacy alias for `[[book]]`.
 //!
 //! Three on-disk formats are accepted; the format is inferred from the file
 //! extension: `.toml`, `.yaml` / `.yml`, `.json`. The harness side feeds
@@ -23,8 +32,9 @@ pub struct Config {
     pub server: ServerCfg,
     #[serde(default)]
     pub defaults: Defaults,
-    #[serde(rename = "mount")]
-    pub mounts: Vec<MountCfg>,
+    /// One entry per `[[book]]` (or the legacy `[[mount]]` alias).
+    #[serde(rename = "book", alias = "mount")]
+    pub books: Vec<BookCfg>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,13 +83,38 @@ pub struct Defaults {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct MountCfg {
+pub struct BookCfg {
     pub label: String,
     pub slug: Option<String>,
+    /// One-line blurb shown on the landing page card. Optional.
+    pub description: Option<String>,
+    /// Which edition to show first. Defaults to the first edition declared.
+    pub default_lang: Option<String>,
+    /// Shorthand for a single-edition book: the source dir directly. Mutually
+    /// exclusive with `[[book.edition]]`.
+    pub source: Option<PathBuf>,
+    /// Inherited by editions that don't set their own `includes`.
+    pub includes: Option<Vec<String>>,
+    /// Inherited by editions that don't set their own `excludes`.
+    pub excludes: Option<Vec<String>>,
+    /// Shared logical ordering, applied to every edition's tree.
+    pub layout: Option<Layout>,
+    /// One per language. Order is preserved for the language switcher.
+    #[serde(default, rename = "edition")]
+    pub editions: Vec<EditionCfg>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditionCfg {
+    /// BCP-47-ish language code (`en`, `zh`, `ja`, ...). Used in the API
+    /// `lang` param and shown in the switcher unless `label` is set.
+    pub lang: String,
+    /// Display name in the language switcher. Defaults to `lang`.
+    pub label: Option<String>,
     pub source: PathBuf,
     pub includes: Option<Vec<String>>,
     pub excludes: Option<Vec<String>>,
-    pub layout: Option<Layout>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -98,25 +133,51 @@ pub struct Layout {
     pub subtree: HashMap<String, Layout>,
 }
 
-/// Resolved mount — canonical source path + compiled globsets.
+/// Resolved language edition — canonical source path + compiled globsets.
 #[derive(Clone)]
-pub struct MountState {
+pub struct EditionState {
+    pub lang: String,
     pub label: String,
-    pub slug: String,
     pub source: PathBuf,
     pub include_set: GlobSet,
     pub exclude_set: GlobSet,
+}
+
+/// Resolved book — metadata plus one or more editions.
+#[derive(Clone)]
+pub struct BookState {
+    pub label: String,
+    pub slug: String,
+    pub description: Option<String>,
+    pub default_lang: String,
     pub layout: Option<Layout>,
+    /// Always non-empty. First entry is the declaration order; `default_lang`
+    /// names which one opens first.
+    pub editions: Vec<EditionState>,
+}
+
+impl BookState {
+    /// The edition matching `lang`, or `None`.
+    pub fn edition(&self, lang: &str) -> Option<&EditionState> {
+        self.editions.iter().find(|e| e.lang == lang)
+    }
+
+    /// The default edition (by `default_lang`, falling back to the first).
+    pub fn default_edition(&self) -> &EditionState {
+        self.edition(&self.default_lang)
+            .or_else(|| self.editions.first())
+            .expect("book always has at least one edition")
+    }
 }
 
 /// Fully resolved server config: per-process state extracted from `Config`
-/// plus mount-level globsets compiled and source paths canonicalized.
+/// plus per-edition globsets compiled and source paths canonicalized.
 pub struct Resolved {
     pub host: String,
     pub port: Option<u16>,
     pub debounce_ms: u64,
     pub open: bool,
-    pub mounts: Vec<MountState>,
+    pub books: Vec<BookState>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,26 +231,69 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.mounts.is_empty() {
-            return Err("config: at least one [[mount]] required".to_string());
+        if self.books.is_empty() {
+            return Err("config: at least one [[book]] required".to_string());
         }
         let mut seen = HashSet::new();
-        for m in &self.mounts {
-            let slug = m.slug.clone().unwrap_or_else(|| slugify(&m.label));
+        for b in &self.books {
+            let slug = b.slug.clone().unwrap_or_else(|| slugify(&b.label));
             if slug.is_empty() {
                 return Err(format!(
-                    "mount {:?}: label produced empty slug — set `slug = \"...\"` explicitly",
-                    m.label
+                    "book {:?}: label produced empty slug — set `slug = \"...\"` explicitly",
+                    b.label
                 ));
             }
             if slug.contains('/') {
                 return Err(format!(
-                    "mount {:?}: slug {:?} must not contain '/'",
-                    m.label, slug
+                    "book {:?}: slug {:?} must not contain '/'",
+                    b.label, slug
                 ));
             }
             if !seen.insert(slug.clone()) {
-                return Err(format!("duplicate mount slug {:?}", slug));
+                return Err(format!("duplicate book slug {:?}", slug));
+            }
+
+            // Exactly one of `source` (shorthand) / `[[book.edition]]`.
+            match (b.source.is_some(), b.editions.is_empty()) {
+                (true, false) => {
+                    return Err(format!(
+                        "book {:?}: set EITHER `source` (single edition) OR \
+                         [[book.edition]] entries, not both",
+                        b.label
+                    ));
+                }
+                (false, true) => {
+                    return Err(format!(
+                        "book {:?}: needs a `source` or at least one [[book.edition]]",
+                        b.label
+                    ));
+                }
+                _ => {}
+            }
+
+            // Edition language codes must be unique and non-empty.
+            let mut langs = HashSet::new();
+            for e in &b.editions {
+                if e.lang.is_empty() {
+                    return Err(format!("book {:?}: edition with empty `lang`", b.label));
+                }
+                if !langs.insert(e.lang.clone()) {
+                    return Err(format!(
+                        "book {:?}: duplicate edition lang {:?}",
+                        b.label, e.lang
+                    ));
+                }
+            }
+
+            // `default_lang`, if set, must name a real edition (or, for a
+            // shorthand book, it labels the synthesised edition — any value ok).
+            if let (Some(dl), false) = (b.default_lang.as_deref(), b.editions.is_empty()) {
+                if !b.editions.iter().any(|e| e.lang == dl) {
+                    return Err(format!(
+                        "book {:?}: default_lang {:?} is not one of its editions",
+                        b.label, dl
+                    ));
+                }
             }
         }
         Ok(())
@@ -210,46 +314,88 @@ impl Config {
             self.defaults.excludes.clone()
         };
 
-        let mut mounts = Vec::with_capacity(self.mounts.len());
-        for m in self.mounts {
-            let abs_source = if m.source.is_absolute() {
-                m.source.clone()
+        let mut books = Vec::with_capacity(self.books.len());
+        for b in self.books {
+            let slug = b.slug.clone().unwrap_or_else(|| slugify(&b.label));
+
+            // Normalise to a list of (lang, label, source, includes, excludes).
+            // A shorthand `source` becomes a single edition whose lang is
+            // `default_lang` (or "default").
+            let raw_editions: Vec<EditionCfg> = if let Some(source) = b.source {
+                vec![EditionCfg {
+                    lang: b
+                        .default_lang
+                        .clone()
+                        .unwrap_or_else(|| "default".to_string()),
+                    label: None,
+                    source,
+                    includes: None,
+                    excludes: None,
+                }]
             } else {
-                config_dir.join(&m.source)
+                b.editions
             };
-            let source = abs_source.canonicalize().map_err(|e| {
-                format!(
-                    "mount {:?}: source {} not found: {e}",
-                    m.label,
-                    abs_source.display()
-                )
-            })?;
-            if !source.is_dir() {
-                return Err(format!(
-                    "mount {:?}: source {} is not a directory",
-                    m.label,
-                    source.display()
-                ));
+
+            let mut editions = Vec::with_capacity(raw_editions.len());
+            for e in raw_editions {
+                let abs_source = if e.source.is_absolute() {
+                    e.source.clone()
+                } else {
+                    config_dir.join(&e.source)
+                };
+                let source = abs_source.canonicalize().map_err(|err| {
+                    format!(
+                        "book {:?} ({}): source {} not found: {err}",
+                        b.label,
+                        e.lang,
+                        abs_source.display()
+                    )
+                })?;
+                if !source.is_dir() {
+                    return Err(format!(
+                        "book {:?} ({}): source {} is not a directory",
+                        b.label,
+                        e.lang,
+                        source.display()
+                    ));
+                }
+
+                // includes: edition → book → built-in default.
+                let includes = e
+                    .includes
+                    .or_else(|| b.includes.clone())
+                    .unwrap_or_else(|| default_includes.clone());
+                // excludes stack: built-in/default → book → edition.
+                let mut excludes = default_excludes.clone();
+                if let Some(extra) = &b.excludes {
+                    excludes.extend(extra.iter().cloned());
+                }
+                if let Some(extra) = e.excludes {
+                    excludes.extend(extra);
+                }
+                let include_set = build_globset(&includes)
+                    .map_err(|err| format!("book {:?}: bad include glob: {err}", b.label))?;
+                let exclude_set = build_globset(&excludes)
+                    .map_err(|err| format!("book {:?}: bad exclude glob: {err}", b.label))?;
+
+                editions.push(EditionState {
+                    label: e.label.unwrap_or_else(|| e.lang.clone()),
+                    lang: e.lang,
+                    source,
+                    include_set,
+                    exclude_set,
+                });
             }
 
-            let includes = m.includes.unwrap_or_else(|| default_includes.clone());
-            let mut excludes = default_excludes.clone();
-            if let Some(extra) = m.excludes {
-                excludes.extend(extra);
-            }
-            let include_set = build_globset(&includes)
-                .map_err(|e| format!("mount {:?}: bad include glob: {e}", m.label))?;
-            let exclude_set = build_globset(&excludes)
-                .map_err(|e| format!("mount {:?}: bad exclude glob: {e}", m.label))?;
-            let slug = m.slug.clone().unwrap_or_else(|| slugify(&m.label));
+            let default_lang = b.default_lang.unwrap_or_else(|| editions[0].lang.clone());
 
-            mounts.push(MountState {
-                label: m.label,
+            books.push(BookState {
+                label: b.label,
                 slug,
-                source,
-                include_set,
-                exclude_set,
-                layout: m.layout,
+                description: b.description,
+                default_lang,
+                layout: b.layout,
+                editions,
             });
         }
 
@@ -258,7 +404,7 @@ impl Config {
             port: self.server.port,
             debounce_ms: self.server.debounce_ms,
             open: self.server.open,
-            mounts,
+            books,
         })
     }
 }
@@ -281,8 +427,9 @@ pub fn auto_discover(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Implicit config — single mount over `dir` using built-in defaults. Used
-/// when no `--config` is given and no `liveview.*` is auto-discovered.
+/// Implicit config — a single-edition book over `dir` using built-in
+/// defaults. Used when no `--config` is given and no `liveview.*` is
+/// auto-discovered.
 pub fn implicit_resolved(dir: &Path) -> Result<Resolved, String> {
     let source = dir
         .canonicalize()
@@ -315,13 +462,19 @@ pub fn implicit_resolved(dir: &Path) -> Result<Resolved, String> {
         port: None,
         debounce_ms: default_debounce(),
         open: false,
-        mounts: vec![MountState {
+        books: vec![BookState {
             label,
             slug,
-            source,
-            include_set,
-            exclude_set,
+            description: None,
+            default_lang: "default".to_string(),
             layout: None,
+            editions: vec![EditionState {
+                lang: "default".to_string(),
+                label: "default".to_string(),
+                source,
+                include_set,
+                exclude_set,
+            }],
         }],
     })
 }
@@ -439,30 +592,36 @@ mod tests {
         assert!(Format::from_path(Path::new("noext")).is_err());
     }
 
+    fn book(label: &str, slug: Option<&str>) -> BookCfg {
+        BookCfg {
+            label: label.to_string(),
+            slug: slug.map(str::to_string),
+            description: None,
+            default_lang: None,
+            source: Some(PathBuf::from(".")),
+            includes: None,
+            excludes: None,
+            layout: None,
+            editions: vec![],
+        }
+    }
+
     #[test]
-    fn validate_rejects_empty_mounts() {
+    fn validate_rejects_empty_books() {
         let cfg = Config {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
-            mounts: vec![],
+            books: vec![],
         };
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn validate_rejects_dup_slug() {
-        let mk = |label: &str| MountCfg {
-            label: label.to_string(),
-            slug: None,
-            source: PathBuf::from("."),
-            includes: None,
-            excludes: None,
-            layout: None,
-        };
         let cfg = Config {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
-            mounts: vec![mk("Docs"), mk("DOCS")],
+            books: vec![book("Docs", None), book("DOCS", None)],
         };
         let err = cfg.validate().unwrap_err();
         assert!(err.contains("duplicate"), "got: {err}");
@@ -473,14 +632,7 @@ mod tests {
         let cfg = Config {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
-            mounts: vec![MountCfg {
-                label: "!!!".to_string(),
-                slug: None,
-                source: PathBuf::from("."),
-                includes: None,
-                excludes: None,
-                layout: None,
-            }],
+            books: vec![book("!!!", None)],
         };
         let err = cfg.validate().unwrap_err();
         assert!(err.contains("empty slug"), "got: {err}");
@@ -491,40 +643,107 @@ mod tests {
         let cfg = Config {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
-            mounts: vec![MountCfg {
-                label: "Docs".to_string(),
-                slug: Some("foo/bar".to_string()),
-                source: PathBuf::from("."),
-                includes: None,
-                excludes: None,
-                layout: None,
-            }],
+            books: vec![book("Docs", Some("foo/bar"))],
         };
         let err = cfg.validate().unwrap_err();
         assert!(err.contains("must not contain '/'"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_source_and_editions_together() {
+        let mut b = book("Docs", None);
+        b.editions = vec![EditionCfg {
+            lang: "en".to_string(),
+            label: None,
+            source: PathBuf::from("en"),
+            includes: None,
+            excludes: None,
+        }];
+        let cfg = Config {
+            server: ServerCfg::default(),
+            defaults: Defaults::default(),
+            books: vec![b],
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("not both"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_book_without_source_or_edition() {
+        let mut b = book("Docs", None);
+        b.source = None;
+        let cfg = Config {
+            server: ServerCfg::default(),
+            defaults: Defaults::default(),
+            books: vec![b],
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("at least one"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_dup_edition_lang() {
+        let mut b = book("Docs", None);
+        b.source = None;
+        let ed = |lang: &str| EditionCfg {
+            lang: lang.to_string(),
+            label: None,
+            source: PathBuf::from(lang),
+            includes: None,
+            excludes: None,
+        };
+        b.editions = vec![ed("en"), ed("en")];
+        let cfg = Config {
+            server: ServerCfg::default(),
+            defaults: Defaults::default(),
+            books: vec![b],
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("duplicate edition lang"), "got: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_unknown_default_lang() {
+        let mut b = book("Docs", None);
+        b.source = None;
+        b.default_lang = Some("zh".to_string());
+        b.editions = vec![EditionCfg {
+            lang: "en".to_string(),
+            label: None,
+            source: PathBuf::from("en"),
+            includes: None,
+            excludes: None,
+        }];
+        let cfg = Config {
+            server: ServerCfg::default(),
+            defaults: Defaults::default(),
+            books: vec![b],
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("default_lang"), "got: {err}");
     }
 
     const TOML_SAMPLE: &str = r#"
         [server]
         port = 4160
 
-        [[mount]]
+        [[book]]
         label = "Docs"
         source = "docs"
 
-        [[mount]]
+        [[book]]
         label = "Tasks"
         source = "tasks/active"
         excludes = ["**/.scratch/**"]
 
-        [mount.layout]
+        [book.layout]
         order = ["README.md", "active/"]
     "#;
 
     const YAML_SAMPLE: &str = r#"
 server:
   port: 4160
-mount:
+book:
   - label: Docs
     source: docs
   - label: Tasks
@@ -537,7 +756,7 @@ mount:
 
     const JSON_SAMPLE: &str = r#"{
         "server": { "port": 4160 },
-        "mount": [
+        "book": [
             { "label": "Docs", "source": "docs" },
             {
                 "label": "Tasks",
@@ -551,17 +770,60 @@ mount:
     fn assert_sample_shape(cfg: &Config) {
         assert_eq!(cfg.server.port, Some(4160));
         assert_eq!(cfg.server.host, "127.0.0.1");
-        assert_eq!(cfg.mounts.len(), 2);
-        assert_eq!(cfg.mounts[0].label, "Docs");
-        assert_eq!(cfg.mounts[1].label, "Tasks");
+        assert_eq!(cfg.books.len(), 2);
+        assert_eq!(cfg.books[0].label, "Docs");
+        assert_eq!(cfg.books[1].label, "Tasks");
         assert_eq!(
-            cfg.mounts[1].excludes.as_deref().unwrap(),
+            cfg.books[1].excludes.as_deref().unwrap(),
             &["**/.scratch/**"]
         );
         assert_eq!(
-            cfg.mounts[1].layout.as_ref().unwrap().order,
+            cfg.books[1].layout.as_ref().unwrap().order,
             vec!["README.md".to_string(), "active/".to_string()]
         );
+    }
+
+    #[test]
+    fn parse_accepts_mount_alias() {
+        let raw = r#"
+            [[mount]]
+            label = "Docs"
+            source = "docs"
+        "#;
+        let cfg = Config::parse(raw, Format::Toml).unwrap();
+        assert_eq!(cfg.books.len(), 1);
+        assert_eq!(cfg.books[0].label, "Docs");
+    }
+
+    #[test]
+    fn parse_multi_edition_book() {
+        let raw = r#"
+            [[book]]
+            label = "Solidity for Polyglots"
+            slug = "solidity"
+            default_lang = "en"
+
+            [[book.edition]]
+            lang = "en"
+            label = "English"
+            source = "."
+
+            [[book.edition]]
+            lang = "zh"
+            label = "中文"
+            source = "i18n/zh"
+
+            [book.layout]
+            order = ["README.md"]
+        "#;
+        let cfg = Config::parse(raw, Format::Toml).unwrap();
+        assert_eq!(cfg.books.len(), 1);
+        let b = &cfg.books[0];
+        assert_eq!(b.default_lang.as_deref(), Some("en"));
+        assert_eq!(b.editions.len(), 2);
+        assert_eq!(b.editions[0].lang, "en");
+        assert_eq!(b.editions[1].lang, "zh");
+        assert_eq!(b.editions[1].label.as_deref(), Some("中文"));
     }
 
     #[test]

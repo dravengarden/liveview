@@ -1,13 +1,15 @@
-# Example liveview config — virtual mounts.
+# Example liveview config — virtual books.
 #
 # Run from the worktree root:
 #   lv --config examples/liveview.toml
 #
-# A "mount" is a curated reading view over a source directory: it appears as
-# a top-level folder in the sidebar (named `label`, addressed by `slug`),
-# with its own include/exclude globs and an optional recursive `layout`
-# ordering — so you control what shows and in what order, independent of the
-# raw filesystem layout.
+# A "book" is a curated reading view over one or more source directories: it
+# appears as a card on the landing "bookshelf" and as a top-level folder in
+# the sidebar (named `label`, addressed by `slug`). A book with several
+# language editions ([[book.edition]]) gets an in-book language switcher;
+# editions share the same logical structure, so switching keeps your place.
+#
+# `[[mount]]` is still accepted as a legacy alias for `[[book]]`.
 
 [server]
 host        = "127.0.0.1"
@@ -15,20 +17,25 @@ port        = 4159
 debounce_ms = 200
 
 [defaults]
-# Inherited by any mount that doesn't set its own `includes`. Leaving these
-# empty makes liveview fall back to its built-in defaults.
+# Inherited by any book/edition that doesn't set its own `includes`. Leaving
+# these empty makes liveview fall back to its built-in defaults.
 includes = ["**/*.md", "**/*.markdown", "**/*.png", "**/*.svg", "**/*.html"]
 excludes = ["**/.git/**", "**/node_modules/**", "**/.DS_Store"]
 
 # ───────────────────────────────────────────────────────────────────────
-# View 1 — the bundled demo documents (this examples/ directory).
+# Book 1 — the bundled demo documents (this examples/ directory). Single
+# edition: declare `source` directly (shorthand for a one-language book).
 # ───────────────────────────────────────────────────────────────────────
-[[mount]]
-label  = "Demo Docs"
-slug   = "demo"
-source = "."
+[[book]]
+label       = "Demo Docs"
+slug        = "demo"
+source      = "."
+# Shown on the landing-page ("bookshelf") card for this book.
+description = "GFM, code highlighting, mermaid & math — liveview's own demo pages."
+# Keep the separate multi-language demo book out of this one.
+excludes    = ["i18n-demo/**"]
 
-[mount.layout]
+[book.layout]
 # README first, then the feature pages, then anything else (dir-then-alpha).
 order = [
     "README.md",
@@ -39,18 +46,42 @@ order = [
 ]
 
 # ───────────────────────────────────────────────────────────────────────
-# View 2 — the columbus harness conventions (sibling tree in the monorepo).
+# Book 2 — a multi-language book. Two editions sharing one structure; the
+# sidebar shows a language switcher (English / 中文).
 # ───────────────────────────────────────────────────────────────────────
+[[book]]
+label        = "i18n Demo"
+slug         = "i18n-demo"
+description  = "A tiny two-edition book — switch languages in the sidebar."
+default_lang = "en"
+
+[[book.edition]]
+lang   = "en"
+label  = "English"
+source = "i18n-demo/en"
+
+[[book.edition]]
+lang   = "zh"
+label  = "中文"
+source = "i18n-demo/zh"
+
+[book.layout]
+order = ["README.md", "chapter.md"]
+
+# ───────────────────────────────────────────────────────────────────────
+# Book 3 — the columbus harness conventions (sibling tree in the monorepo).
 # NOTE: `source` is resolved relative to THIS config file's directory
 # (examples/), so reaching the columbus root takes four `../`.
-[[mount]]
-label  = "Conventions"
-slug   = "conventions"
-source = "../../../../conventions"
+# ───────────────────────────────────────────────────────────────────────
+[[book]]
+label       = "Conventions"
+slug        = "conventions"
+source      = "../../../../conventions"
+description = "The columbus harness conventions — commits, code style, testing."
 
-[mount.layout]
+[book.layout]
 order = ["commits.md", "code/"]
 
 # Curate one level deeper: inside code/, surface the python guide first.
-[mount.layout.subtree.code]
+[book.layout.subtree.code]
 order = ["python/"]

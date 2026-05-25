@@ -5,34 +5,47 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::server::renderer::render_file;
-use crate::server::state::SharedState;
+use crate::server::state::{cache_key, SharedState};
 use crate::server::tree::build_virtual_tree;
 use crate::shared::{FileType, WsMessage};
 
 #[derive(Debug)]
 enum FileEvent {
-    ContentChanged { mount_idx: usize, path: PathBuf },
+    ContentChanged {
+        book_idx: usize,
+        edition_idx: usize,
+        path: PathBuf,
+    },
     StructureChanged,
 }
 
 pub fn start_watcher(state: SharedState, debounce_ms: u64) {
     let (tx, rx) = mpsc::channel::<FileEvent>(256);
-    for idx in 0..state.mounts.len() {
-        spawn_notify_thread(state.clone(), idx, tx.clone(), debounce_ms);
+    for (book_idx, book) in state.books.iter().enumerate() {
+        for edition_idx in 0..book.editions.len() {
+            spawn_notify_thread(
+                state.clone(),
+                book_idx,
+                edition_idx,
+                tx.clone(),
+                debounce_ms,
+            );
+        }
     }
     tokio::spawn(process_events(state, rx));
 }
 
 fn spawn_notify_thread(
     state: SharedState,
-    mount_idx: usize,
+    book_idx: usize,
+    edition_idx: usize,
     tx: mpsc::Sender<FileEvent>,
     debounce_ms: u64,
 ) {
-    let mount = state.mounts[mount_idx].clone();
-    let source = mount.source.clone();
-    let include_set = mount.include_set.clone();
-    let exclude_set = mount.exclude_set.clone();
+    let edition = state.books[book_idx].editions[edition_idx].clone();
+    let source = edition.source.clone();
+    let include_set = edition.include_set.clone();
+    let exclude_set = edition.exclude_set.clone();
 
     std::thread::spawn(move || {
         let source_for_thread = source.clone();
@@ -57,7 +70,8 @@ fn spawn_notify_thread(
 
                     if path.is_file() && include_set.is_match(rel_path) {
                         let _ = tx.blocking_send(FileEvent::ContentChanged {
-                            mount_idx,
+                            book_idx,
+                            edition_idx,
                             path: path.clone(),
                         });
                     } else {
@@ -87,8 +101,12 @@ fn spawn_notify_thread(
 async fn process_events(state: SharedState, mut rx: mpsc::Receiver<FileEvent>) {
     while let Some(event) = rx.recv().await {
         match event {
-            FileEvent::ContentChanged { mount_idx, path } => {
-                handle_content_change(&state, mount_idx, &path).await;
+            FileEvent::ContentChanged {
+                book_idx,
+                edition_idx,
+                path,
+            } => {
+                handle_content_change(&state, book_idx, edition_idx, &path).await;
             }
             FileEvent::StructureChanged => {
                 handle_structure_change(&state).await;
@@ -97,21 +115,29 @@ async fn process_events(state: SharedState, mut rx: mpsc::Receiver<FileEvent>) {
     }
 }
 
-async fn handle_content_change(state: &SharedState, mount_idx: usize, path: &PathBuf) {
-    let mount = match state.mounts.get(mount_idx) {
-        Some(m) => m,
-        None => return,
+async fn handle_content_change(
+    state: &SharedState,
+    book_idx: usize,
+    edition_idx: usize,
+    path: &PathBuf,
+) {
+    let Some(book) = state.books.get(book_idx) else {
+        return;
+    };
+    let Some(edition) = book.editions.get(edition_idx) else {
+        return;
     };
     let rel = path
-        .strip_prefix(&mount.source)
+        .strip_prefix(&edition.source)
         .unwrap_or(path)
         .to_string_lossy()
         .to_string();
     let virtual_path = if rel.is_empty() {
-        mount.slug.clone()
+        book.slug.clone()
     } else {
-        format!("{}/{}", mount.slug, rel)
+        format!("{}/{}", book.slug, rel)
     };
+    let lang = edition.lang.clone();
 
     let file_type = FileType::from_path(&virtual_path);
 
@@ -119,6 +145,7 @@ async fn handle_content_change(state: &SharedState, mount_idx: usize, path: &Pat
     if matches!(file_type, FileType::Image | FileType::Pdf) {
         let msg = WsMessage::ContentUpdate {
             path: virtual_path,
+            lang,
             file_type,
             content: String::new(),
         };
@@ -136,11 +163,12 @@ async fn handle_content_change(state: &SharedState, mount_idx: usize, path: &Pat
 
     {
         let mut cache = state.rendered_cache.write().await;
-        cache.insert(virtual_path.clone(), content.clone());
+        cache.insert(cache_key(&lang, &virtual_path), content.clone());
     }
 
     let msg = WsMessage::ContentUpdate {
         path: virtual_path,
+        lang,
         file_type,
         content,
     };
@@ -150,8 +178,8 @@ async fn handle_content_change(state: &SharedState, mount_idx: usize, path: &Pat
 }
 
 async fn handle_structure_change(state: &SharedState) {
-    let mounts = state.mounts.clone();
-    let new_tree = tokio::task::spawn_blocking(move || build_virtual_tree(&mounts))
+    let books = state.books.clone();
+    let new_tree = tokio::task::spawn_blocking(move || build_virtual_tree(&books))
         .await
         .unwrap_or_default();
 

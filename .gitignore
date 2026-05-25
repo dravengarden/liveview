@@ -15,6 +15,12 @@
 *.png
 *.test.js
 
+# ...but the PWA app icons are committed build inputs, not screenshots.
+!web/public/icon-192.png
+!web/public/icon-512.png
+!web/public/maskable-512.png
+!web/public/apple-touch-icon.png
+
 # Old Dioxus files (can be removed)
 /.dioxus
 tailwindcss

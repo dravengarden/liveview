@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback } from "react";
 import type { WsMessage, TreeNode, FileType } from "@/types";
 
 interface UseWebSocketOptions {
-  onContentUpdate: (path: string, fileType: FileType, content: string) => void;
+  onContentUpdate: (path: string, lang: string, fileType: FileType, content: string) => void;
   onTreeUpdate: (tree: TreeNode[]) => void;
 }
 
@@ -22,7 +22,7 @@ export function useWebSocket({ onContentUpdate, onTreeUpdate }: UseWebSocketOpti
       try {
         const msg = JSON.parse(event.data) as WsMessage;
         if (msg.type === "ContentUpdate") {
-          onContentUpdate(msg.path, msg.file_type, msg.content);
+          onContentUpdate(msg.path, msg.lang, msg.file_type, msg.content);
         } else if (msg.type === "TreeUpdate") {
           onTreeUpdate(msg.tree);
         }

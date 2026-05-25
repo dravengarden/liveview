@@ -3,30 +3,35 @@ use std::path::Path;
 
 use globset::GlobSet;
 
-use crate::config::{Layout, MountState};
+use crate::config::{BookState, Layout};
 use crate::shared::TreeNode;
 
-/// Build the full sidebar tree across every mount. Each mount becomes a
-/// top-level `is_dir` node whose `name` is the mount label and `path` is
-/// the mount slug; descendants carry slug-prefixed paths
+/// Build the full sidebar forest across every book. Each book becomes a
+/// top-level `is_dir` node whose `name` is the book label and `path` is the
+/// book slug; descendants carry slug-prefixed paths
 /// (`<slug>/<rel-under-source>`).
-pub fn build_virtual_tree(mounts: &[MountState]) -> Vec<TreeNode> {
-    mounts
+///
+/// The tree is built from each book's *default* edition. Editions mirror the
+/// same logical structure, so the tree is language-independent — switching
+/// language only changes which edition's content is fetched.
+pub fn build_virtual_tree(books: &[BookState]) -> Vec<TreeNode> {
+    books
         .iter()
-        .map(|m| {
+        .map(|b| {
+            let ed = b.default_edition();
             let mut children = Vec::new();
             scan_dir(
-                &m.source,
-                &m.source,
-                &m.include_set,
-                &m.exclude_set,
+                &ed.source,
+                &ed.source,
+                &ed.include_set,
+                &ed.exclude_set,
                 &mut children,
             );
-            prefix_all(&mut children, &m.slug);
-            order_children(&mut children, m.layout.as_ref());
+            prefix_all(&mut children, &b.slug);
+            order_children(&mut children, b.layout.as_ref());
             TreeNode {
-                name: m.label.clone(),
-                path: m.slug.clone(),
+                name: b.label.clone(),
+                path: b.slug.clone(),
                 is_dir: true,
                 children,
             }
@@ -148,7 +153,7 @@ fn matches_layout(pattern: &str, name: &str, is_dir: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{build_globset, Layout, MountState};
+    use crate::config::{build_globset, BookState, EditionState, Layout};
     use std::fs;
     use std::path::PathBuf;
 
@@ -185,14 +190,20 @@ mod tests {
         }
     }
 
-    fn mk_mount(label: &str, slug: &str, source: &Path, layout: Option<Layout>) -> MountState {
-        MountState {
+    fn mk_mount(label: &str, slug: &str, source: &Path, layout: Option<Layout>) -> BookState {
+        BookState {
             label: label.to_string(),
             slug: slug.to_string(),
-            source: source.to_path_buf(),
-            include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
-            exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+            description: None,
+            default_lang: "default".to_string(),
             layout,
+            editions: vec![EditionState {
+                lang: "default".to_string(),
+                label: "default".to_string(),
+                source: source.to_path_buf(),
+                include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
+                exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+            }],
         }
     }
 

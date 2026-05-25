@@ -1,32 +1,24 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { ThemeProvider, CssBaseline, Box, IconButton, Tooltip } from "@mui/material";
+import {
+  ThemeProvider,
+  CssBaseline,
+  Box,
+  IconButton,
+  Tooltip,
+  Drawer,
+  Alert,
+  useMediaQuery,
+} from "@mui/material";
 import { Menu as MenuIcon, Settings as SettingsIcon } from "@mui/icons-material";
-import { Sidebar, SettingsDialog, ContentViewer } from "@/components";
-import { useWebSocket, useTheme, useSettings } from "@/hooks";
-import type { TreeNode, FileType, FileContent } from "@/types";
+import { Sidebar, SettingsDialog, ContentViewer, Landing } from "@/components";
+import { useWebSocket, useTheme, useSettings, useFont } from "@/hooks";
+import { useI18n } from "@/i18n";
+import type { TreeNode, FileType, FileContent, Book } from "@/types";
 
 const DEFAULT_SIDEBAR_WIDTH = 280;
-
-function getFileExtension(filename: string): string {
-  const lastDot = filename.lastIndexOf(".");
-  return lastDot > 0 ? filename.slice(lastDot + 1).toLowerCase() : "";
-}
-
-function filterTreeByExtensions(nodes: TreeNode[], enabledExtensions: Set<string>): TreeNode[] {
-  return nodes
-    .map((node) => {
-      if (node.is_dir) {
-        const filteredChildren = filterTreeByExtensions(node.children, enabledExtensions);
-        if (filteredChildren.length > 0) {
-          return { ...node, children: filteredChildren };
-        }
-        return null;
-      }
-      const ext = getFileExtension(node.name);
-      return enabledExtensions.has(ext) ? node : null;
-    })
-    .filter((node): node is TreeNode => node !== null);
-}
+// Below this width the sidebar becomes an overlay drawer (phones + portrait
+// tablets). MUI's `md` breakpoint.
+const MOBILE_QUERY = "(max-width:899.95px)";
 
 function findReadme(nodes: TreeNode[]): string | null {
   for (const node of nodes) {
@@ -45,27 +37,69 @@ function findReadme(nodes: TreeNode[]): string | null {
   return null;
 }
 
-function getPathFromHash(): string | null {
-  const hash = window.location.hash;
-  if (hash.startsWith("#")) {
-    return decodeURIComponent(hash.slice(1)) || null;
+function findFirstFile(nodes: TreeNode[]): string | null {
+  for (const node of nodes) {
+    if (!node.is_dir) {
+      return node.path;
+    }
+  }
+  for (const node of nodes) {
+    if (node.is_dir) {
+      const found = findFirstFile(node.children);
+      if (found !== null) {
+        return found;
+      }
+    }
   }
   return null;
 }
 
-function pushPathToHash(path: string | null): void {
-  if (path) {
-    window.history.pushState(null, "", `#${encodeURIComponent(path)}`);
-  } else {
-    window.history.pushState(null, "", window.location.pathname);
-  }
+interface HashState {
+  path: string | null;
+  lang: string | null;
 }
 
-function replacePathToHash(path: string | null): void {
-  if (path) {
-    window.history.replaceState(null, "", `#${encodeURIComponent(path)}`);
+// Hash scheme: `#<encoded-path>` for a file, optionally `&lang=<code>` to pin
+// a non-default language edition. `encodeURIComponent` escapes `&`/`=`, so the
+// path segment can never collide with the `&lang=` separator.
+function getHashState(): HashState {
+  const hash = window.location.hash;
+  if (!hash.startsWith("#")) {
+    return { path: null, lang: null };
+  }
+  const body = hash.slice(1);
+  if (!body) {
+    return { path: null, lang: null };
+  }
+  const parts = body.split("&");
+  const path = decodeURIComponent(parts[0] ?? "") || null;
+  let lang: string | null = null;
+  for (const seg of parts.slice(1)) {
+    if (seg.startsWith("lang=")) {
+      lang = decodeURIComponent(seg.slice(5)) || null;
+    }
+  }
+  return { path, lang };
+}
+
+function buildHash(path: string | null, lang: string | null): string {
+  if (!path) {
+    return "";
+  }
+  let h = `#${encodeURIComponent(path)}`;
+  if (lang) {
+    h += `&lang=${encodeURIComponent(lang)}`;
+  }
+  return h;
+}
+
+function writeHash(path: string | null, lang: string | null, replace: boolean): void {
+  const h = buildHash(path, lang);
+  const url = h || window.location.pathname;
+  if (replace) {
+    window.history.replaceState(null, "", url);
   } else {
-    window.history.replaceState(null, "", window.location.pathname);
+    window.history.pushState(null, "", url);
   }
 }
 
@@ -77,9 +111,39 @@ interface FloatButtonProps {
 
 function FloatButton({ position, floatOpacity, children }: FloatButtonProps): React.JSX.Element {
   const isLeft = position === "left";
+  // Drive expand/collapse from state instead of pure CSS `:hover`. On iOS
+  // there is no real pointer, so `:hover` sticks after the first tap and the
+  // box can never fold back into the transparent triangle. State plus an
+  // outside-tap listener makes the triangle reachable on touch, while mouse
+  // enter/leave preserves the original desktop hover behaviour.
+  const [expanded, setExpanded] = useState(false);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!expanded) return undefined;
+    const handleOutside = (e: Event): void => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) {
+        setExpanded(false);
+      }
+    };
+    document.addEventListener("pointerdown", handleOutside);
+    return () => {
+      document.removeEventListener("pointerdown", handleOutside);
+    };
+  }, [expanded]);
 
   return (
     <Box
+      ref={boxRef}
+      onMouseEnter={() => {
+        setExpanded(true);
+      }}
+      onMouseLeave={() => {
+        setExpanded(false);
+      }}
+      onClick={() => {
+        setExpanded((v) => !v);
+      }}
       sx={{
         position: "absolute",
         top: 12,
@@ -88,89 +152,159 @@ function FloatButton({ position, floatOpacity, children }: FloatButtonProps): Re
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        bgcolor: "rgba(128, 128, 128, 0.15)",
         borderRadius: isLeft ? "0 4px 4px 0" : "4px 0 0 4px",
-        opacity: floatOpacity,
         transition: "all 0.2s ease",
-        width: 20,
         height: 36,
         cursor: "pointer",
-        "&:hover": {
-          opacity: 1,
-          bgcolor: "background.paper",
-          boxShadow: isLeft ? "2px 0 8px rgba(0,0,0,0.1)" : "-2px 0 8px rgba(0,0,0,0.1)",
-          width: "auto",
-          px: 0.5,
-          "& .float-arrow": {
-            display: "none",
-          },
-          "& .float-buttons": {
-            display: "flex",
-          },
-        },
+        ...(expanded
+          ? {
+              opacity: 1,
+              bgcolor: "background.paper",
+              boxShadow: isLeft ? "2px 0 8px rgba(0,0,0,0.1)" : "-2px 0 8px rgba(0,0,0,0.1)",
+              width: "auto",
+              px: 0.5,
+            }
+          : {
+              opacity: floatOpacity,
+              bgcolor: "rgba(128, 128, 128, 0.15)",
+              width: 20,
+            }),
       }}
     >
-      <Box
-        className="float-arrow"
-        sx={{
-          width: 0,
-          height: 0,
-          borderTop: "5px solid transparent",
-          borderBottom: "5px solid transparent",
-          ...(isLeft
-            ? { borderLeft: "6px solid rgba(128, 128, 128, 0.5)" }
-            : { borderRight: "6px solid rgba(128, 128, 128, 0.5)" }),
-        }}
-      />
-      <Box
-        className="float-buttons"
-        sx={{
-          display: "none",
-          alignItems: "center",
-          gap: 0,
-        }}
-      >
-        {children}
-      </Box>
+      {expanded ? (
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0 }}>{children}</Box>
+      ) : (
+        <Box
+          sx={{
+            width: 0,
+            height: 0,
+            borderTop: "5px solid transparent",
+            borderBottom: "5px solid transparent",
+            ...(isLeft
+              ? { borderLeft: "6px solid rgba(128, 128, 128, 0.5)" }
+              : { borderRight: "6px solid rgba(128, 128, 128, 0.5)" }),
+          }}
+        />
+      )}
     </Box>
   );
 }
 
+interface MobileMenuButtonsProps {
+  onOpenSidebar: () => void;
+  onOpenSettings: () => void;
+}
+
+// Always-visible, tap-friendly controls for touch devices (the desktop
+// hover-to-expand FloatButton doesn't work without a pointer). Sits below
+// the iPhone status-bar / notch via the safe-area inset.
+function MobileMenuButtons({
+  onOpenSidebar,
+  onOpenSettings,
+}: MobileMenuButtonsProps): React.JSX.Element {
+  const { t } = useI18n();
+  return (
+    <Box
+      sx={{
+        position: "absolute",
+        top: "calc(env(safe-area-inset-top, 0px) + 8px)",
+        left: "calc(env(safe-area-inset-left, 0px) + 8px)",
+        zIndex: 1200,
+        display: "flex",
+        gap: 0.5,
+        bgcolor: "background.paper",
+        border: 1,
+        borderColor: "divider",
+        borderRadius: 2,
+        boxShadow: 2,
+      }}
+    >
+      <IconButton aria-label={t("app.openSidebar")} onClick={onOpenSidebar} sx={{ p: 1.25 }}>
+        <MenuIcon />
+      </IconButton>
+      <IconButton aria-label={t("app.settings")} onClick={onOpenSettings} sx={{ p: 1.25 }}>
+        <SettingsIcon />
+      </IconButton>
+    </Box>
+  );
+}
+
+/** A page missing in the selected edition; we render `shown` content instead. */
+interface UntranslatedNotice {
+  requested: string;
+  shown: string;
+}
+
 export function App(): React.JSX.Element {
   const [tree, setTree] = useState<TreeNode[]>([]);
+  const [books, setBooks] = useState<Book[]>([]);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
+  // `lang` is the *selected* edition; `untranslated` records when a page is
+  // missing there and we fell back to another edition's content.
+  const [lang, setLang] = useState<string>("");
+  const [untranslated, setUntranslated] = useState<UntranslatedNotice | null>(null);
   const [currentFileType, setCurrentFileType] = useState<FileType>("markdown");
   const [currentContent, setCurrentContent] = useState<string | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const isMobile = useMediaQuery(MOBILE_QUERY);
+  const [sidebarOpen, setSidebarOpen] = useState(() => !window.matchMedia(MOBILE_QUERY).matches);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const initializedRef = useRef(false);
+  // Refs for matching live WebSocket updates against what's currently shown
+  // (the shown edition may differ from `lang` when falling back).
+  const currentPathRef = useRef<string | null>(null);
+  const contentLangRef = useRef<string>("");
 
+  const { t, lang: uiLang } = useI18n();
   const { theme, muiTheme, setTheme } = useTheme();
-  const {
-    menuBarSettings,
-    setFloatOpacity,
-    extensionSettings,
-    toggleExtensionGroup,
-    enableAllExtensions,
-    disableAllExtensions,
-    enabledExtensions,
-  } = useSettings();
+  const { menuBarSettings, setFloatOpacity } = useSettings();
+  const { fontId, setFont } = useFont();
 
-  const filteredTree = useMemo(
-    () => filterTreeByExtensions(tree, enabledExtensions),
-    [tree, enabledExtensions]
+  // Collapse the sidebar when shrinking to a phone/tablet width, reopen it
+  // when growing back to desktop (also handles device rotation).
+  useEffect(() => {
+    setSidebarOpen(!isMobile);
+  }, [isMobile]);
+
+  // The active book is the first path segment; null ⇒ the landing bookshelf.
+  const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;
+  const activeTree = useMemo(
+    () => (activeSlug ? tree.filter((n) => n.path === activeSlug) : []),
+    [tree, activeSlug]
+  );
+  const activeBook = books.find((b) => b.slug === activeSlug) ?? null;
+  const bookLabel = activeBook?.label ?? activeSlug ?? "";
+  const bookLangs = activeBook?.langs ?? [];
+
+  // Initial edition for a book: prefer the UI locale if the book offers it
+  // (axis A ↔ B default link), else the book's declared default.
+  const pickInitialLang = useCallback(
+    (book: Book): string =>
+      book.langs.some((l) => l.lang === uiLang) ? uiLang : book.default_lang,
+    [uiLang]
   );
 
-  const handleContentUpdate = useCallback((path: string, fileType: FileType, content: string) => {
-    setCurrentPath((current) => {
-      if (current === path) {
+  // Fetch the book list once, for the landing page + language switcher.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/books");
+        setBooks((await res.json()) as Book[]);
+      } catch (e) {
+        console.error("Failed to fetch books:", e);
+      }
+    })();
+  }, []);
+
+  const handleContentUpdate = useCallback(
+    (path: string, msgLang: string, fileType: FileType, content: string) => {
+      if (path === currentPathRef.current && msgLang === contentLangRef.current) {
         setCurrentFileType(fileType);
         setCurrentContent(content);
       }
-      return current;
-    });
-  }, []);
+    },
+    []
+  );
 
   const handleTreeUpdate = useCallback((newTree: TreeNode[]) => {
     setTree(newTree);
@@ -181,70 +315,165 @@ export function App(): React.JSX.Element {
     onTreeUpdate: handleTreeUpdate,
   });
 
-  const loadFile = useCallback(async (path: string) => {
-    setCurrentPath(path);
-    try {
-      const response = await fetch(`/api/file?path=${encodeURIComponent(path)}`);
-      const data = (await response.json()) as FileContent;
-      setCurrentFileType(data.file_type);
-      setCurrentContent(data.content);
-    } catch (e) {
-      console.error("Failed to fetch file:", e);
-    }
-  }, []);
+  // Fetch + render a file in `reqLang`. If the page is missing in that edition
+  // (404) we transparently fall back to the book's default edition and surface
+  // an "untranslated" notice. `reqLang` stays the selected edition regardless.
+  const loadFile = useCallback(
+    async (path: string, reqLang: string) => {
+      setCurrentPath(path);
+      currentPathRef.current = path;
 
-  const handleSelect = useCallback(
-    async (path: string) => {
-      pushPathToHash(path);
-      await loadFile(path);
+      const slug = path.split("/")[0] ?? "";
+      const book = books.find((b) => b.slug === slug);
+
+      const fetchAt = (l: string): Promise<Response> =>
+        fetch(`/api/file?path=${encodeURIComponent(path)}&lang=${encodeURIComponent(l)}`);
+
+      try {
+        let res = await fetchAt(reqLang);
+        let shownLang = reqLang;
+        let notice: UntranslatedNotice | null = null;
+
+        if (!res.ok && book && reqLang !== book.default_lang) {
+          const fallback = await fetchAt(book.default_lang);
+          if (fallback.ok) {
+            res = fallback;
+            shownLang = book.default_lang;
+            notice = { requested: reqLang, shown: book.default_lang };
+          }
+        }
+
+        if (!res.ok) {
+          console.error("Failed to fetch file:", path, res.status);
+          return;
+        }
+
+        const data = (await res.json()) as FileContent;
+        contentLangRef.current = shownLang;
+        setCurrentFileType(data.file_type);
+        setCurrentContent(data.content);
+        setUntranslated(notice);
+      } catch (e) {
+        console.error("Failed to fetch file:", e);
+      }
     },
-    [loadFile]
+    [books]
   );
 
-  useEffect(() => {
-    if (currentPath) {
-      document.title = currentPath;
-    } else {
-      document.title = "Markdown Live";
-    }
-  }, [currentPath]);
+  // Open a file in a given edition: sync state, URL hash, and content.
+  const openFile = useCallback(
+    async (path: string, langArg: string) => {
+      const slug = path.split("/")[0] ?? "";
+      const book = books.find((b) => b.slug === slug);
+      const langForHash = book && langArg !== book.default_lang ? langArg : null;
+
+      setLang(langArg);
+      writeHash(path, langForHash, false);
+      // On mobile the drawer overlays the content — close it so the file shows.
+      if (isMobile) {
+        setSidebarOpen(false);
+      }
+      await loadFile(path, langArg);
+    },
+    [books, isMobile, loadFile]
+  );
+
+  // Sidebar / markdown-link navigation stays within the current edition.
+  const handleSelect = useCallback(
+    (path: string) => {
+      void openFile(path, lang);
+    },
+    [openFile, lang]
+  );
+
+  // Switch the active book to another language edition, keeping the page.
+  const switchLang = useCallback(
+    (newLang: string) => {
+      if (currentPath) {
+        void openFile(currentPath, newLang);
+      }
+    },
+    [currentPath, openFile]
+  );
+
+  // Enter a book from the landing page: open its README, else its first doc.
+  const enterBook = useCallback(
+    (slug: string) => {
+      const book = books.find((b) => b.slug === slug);
+      const node = tree.find((n) => n.path === slug);
+      if (!book || !node) return;
+      const entry = findReadme([node]) ?? findFirstFile([node]);
+      if (entry) {
+        void openFile(entry, pickInitialLang(book));
+      }
+    },
+    [books, tree, openFile, pickInitialLang]
+  );
+
+  // Return to the landing bookshelf.
+  const backToLanding = useCallback(() => {
+    writeHash(null, null, false);
+    setCurrentPath(null);
+    currentPathRef.current = null;
+    setCurrentContent(null);
+    setUntranslated(null);
+  }, []);
 
   useEffect(() => {
+    document.title = currentPath ?? "liveview";
+  }, [currentPath]);
+
+  // Resolve which edition a hash deep-link should open: explicit `&lang=` wins,
+  // else fall back to the book's preferred initial edition.
+  const langForHashEntry = useCallback(
+    (path: string, hashLang: string | null): string => {
+      if (hashLang) return hashLang;
+      const slug = path.split("/")[0] ?? "";
+      const book = books.find((b) => b.slug === slug);
+      return book ? pickInitialLang(book) : "";
+    },
+    [books, pickInitialLang]
+  );
+
+  // Fetch the tree once, then restore any deep link from the hash. Waits for
+  // `books` so deep-link language/fallback resolution works.
+  useEffect(() => {
+    if (initializedRef.current || books.length === 0) return;
     const fetchTree = async (): Promise<void> => {
       try {
         const response = await fetch("/api/tree");
         const data = (await response.json()) as TreeNode[];
         setTree(data);
 
-        if (!initializedRef.current) {
-          initializedRef.current = true;
-          // First try to restore path from URL hash
-          const hashPath = getPathFromHash();
-          if (hashPath) {
-            replacePathToHash(hashPath);
-            void loadFile(hashPath);
-          } else {
-            // Otherwise find and select README
-            const readme = findReadme(data);
-            if (readme !== null) {
-              replacePathToHash(readme);
-              void loadFile(readme);
-            }
-          }
+        initializedRef.current = true;
+        const { path, lang: hashLang } = getHashState();
+        if (path) {
+          const entryLang = langForHashEntry(path, hashLang);
+          setLang(entryLang);
+          writeHash(path, hashLang, true);
+          void loadFile(path, entryLang);
         }
       } catch (e) {
         console.error("Failed to fetch tree:", e);
       }
     };
     void fetchTree();
-  }, [loadFile]);
+  }, [books, loadFile, langForHashEntry]);
 
-  // Handle browser back/forward navigation
+  // Handle browser back/forward navigation.
   useEffect(() => {
     const handlePopState = (): void => {
-      const hashPath = getPathFromHash();
-      if (hashPath) {
-        void loadFile(hashPath);
+      const { path, lang: hashLang } = getHashState();
+      if (path) {
+        const entryLang = langForHashEntry(path, hashLang);
+        setLang(entryLang);
+        void loadFile(path, entryLang);
+      } else {
+        // back/forward to an empty hash returns to the landing bookshelf
+        setCurrentPath(null);
+        currentPathRef.current = null;
+        setCurrentContent(null);
+        setUntranslated(null);
       }
     };
 
@@ -252,14 +481,7 @@ export function App(): React.JSX.Element {
     return () => {
       window.removeEventListener("popstate", handlePopState);
     };
-  }, [loadFile]);
-
-  const handleNavigate = useCallback(
-    (path: string) => {
-      void handleSelect(path);
-    },
-    [handleSelect]
-  );
+  }, [loadFile, langForHashEntry]);
 
   const handleCloseSidebar = useCallback(() => {
     setSidebarOpen(false);
@@ -279,69 +501,112 @@ export function App(): React.JSX.Element {
 
   const showFloatButtons = !sidebarOpen;
 
+  const langLabel = (code: string): string =>
+    bookLangs.find((l) => l.lang === code)?.label ?? code;
+
+  const sidebarCommon = {
+    tree: activeTree,
+    currentPath,
+    bookLabel,
+    langs: bookLangs,
+    currentLang: lang,
+    onSwitchLang: switchLang,
+    onSelect: handleSelect,
+    onClose: handleCloseSidebar,
+    onOpenSettings: handleOpenSettings,
+    onBackToLanding: backToLanding,
+    onWidthChange: setSidebarWidth,
+  };
+
   return (
     <ThemeProvider theme={muiTheme}>
       <CssBaseline />
-      <Box sx={{ display: "flex", height: "100vh", overflow: "hidden" }}>
-        {sidebarOpen && (
-          <Sidebar
-            tree={filteredTree}
-            currentPath={currentPath}
-            width={sidebarWidth}
-            onSelect={handleSelect}
-            onClose={handleCloseSidebar}
-            onOpenSettings={handleOpenSettings}
-            onWidthChange={setSidebarWidth}
-          />
+      <Box sx={{ display: "flex", height: "100dvh", overflow: "hidden" }}>
+        {activeSlug === null ? (
+          <Landing books={books} onOpen={enterBook} onOpenSettings={handleOpenSettings} />
+        ) : (
+          <>
+            {isMobile ? (
+              <Drawer
+                variant="temporary"
+                open={sidebarOpen}
+                onClose={handleCloseSidebar}
+                ModalProps={{ keepMounted: true }}
+                slotProps={{
+                  paper: { sx: { width: "min(85vw, 320px)", boxSizing: "border-box" } },
+                }}
+              >
+                <Sidebar {...sidebarCommon} width={DEFAULT_SIDEBAR_WIDTH} isMobile />
+              </Drawer>
+            ) : (
+              sidebarOpen && <Sidebar {...sidebarCommon} width={sidebarWidth} />
+            )}
+
+            <Box
+              sx={{
+                flex: 1,
+                display: "flex",
+                flexDirection: "column",
+                overflow: "hidden",
+                bgcolor: "background.default",
+                position: "relative",
+                // Keep content clear of the side notch in landscape on iPhone.
+                pl: "env(safe-area-inset-left, 0px)",
+                pr: "env(safe-area-inset-right, 0px)",
+              }}
+            >
+              {isMobile
+                ? !sidebarOpen && (
+                    <MobileMenuButtons
+                      onOpenSidebar={handleOpenSidebar}
+                      onOpenSettings={handleOpenSettings}
+                    />
+                  )
+                : showFloatButtons && (
+                    <FloatButton position="left" floatOpacity={menuBarSettings.floatOpacity}>
+                      <Tooltip title={t("app.openSidebar")}>
+                        <IconButton size="small" onClick={handleOpenSidebar}>
+                          <MenuIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title={t("app.settings")}>
+                        <IconButton size="small" onClick={handleOpenSettings}>
+                          <SettingsIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </FloatButton>
+                  )}
+
+              <Box sx={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+                {untranslated && (
+                  <Alert severity="info" square sx={{ py: 0.25 }}>
+                    {t("content.untranslated", {
+                      lang: langLabel(untranslated.requested),
+                      fallback: langLabel(untranslated.shown),
+                    })}
+                  </Alert>
+                )}
+                <ContentViewer
+                  content={currentContent}
+                  fileType={currentFileType}
+                  currentPath={currentPath}
+                  theme={theme}
+                  onNavigate={handleSelect}
+                />
+              </Box>
+            </Box>
+          </>
         )}
-
-        <Box
-          sx={{
-            flex: 1,
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-            bgcolor: "background.default",
-            position: "relative",
-          }}
-        >
-          {showFloatButtons && (
-            <FloatButton position="left" floatOpacity={menuBarSettings.floatOpacity}>
-              <Tooltip title="Open sidebar">
-                <IconButton size="small" onClick={handleOpenSidebar}>
-                  <MenuIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Settings">
-                <IconButton size="small" onClick={handleOpenSettings}>
-                  <SettingsIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-            </FloatButton>
-          )}
-
-          <Box sx={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-            <ContentViewer
-              content={currentContent}
-              fileType={currentFileType}
-              currentPath={currentPath}
-              theme={theme}
-              onNavigate={handleNavigate}
-            />
-          </Box>
-        </Box>
 
         <SettingsDialog
           open={settingsOpen}
           theme={theme}
+          fontId={fontId}
           menuBarSettings={menuBarSettings}
-          extensionSettings={extensionSettings}
           onClose={handleCloseSettings}
           onThemeChange={setTheme}
+          onFontChange={setFont}
           onFloatOpacityChange={setFloatOpacity}
-          onToggleExtensionGroup={toggleExtensionGroup}
-          onEnableAllExtensions={enableAllExtensions}
-          onDisableAllExtensions={disableAllExtensions}
         />
       </Box>
     </ThemeProvider>

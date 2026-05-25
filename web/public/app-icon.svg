@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Full-bleed background so the icon works as a maskable PWA icon and as
+       an opaque iOS apple-touch-icon. -->
+  <rect width="512" height="512" fill="#0d1117"/>
+  <!-- The favicon glyph (32x32) scaled to ~60% and centered, keeping it well
+       inside the maskable safe zone. -->
+  <g transform="translate(102.4,102.4) scale(9.6)">
+    <rect x="6" y="8" width="12" height="16" rx="2" fill="none" stroke="#8b949e" stroke-width="1.5"/>
+    <rect x="14" y="12" width="12" height="12" rx="2" fill="#ffffff"/>
+  </g>
+</svg>

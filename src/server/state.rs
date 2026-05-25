@@ -2,32 +2,55 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
-use crate::config::MountState;
+use crate::config::{BookState, EditionState};
 use crate::shared::TreeNode;
 
 pub struct AppState {
     pub tx: broadcast::Sender<String>,
-    /// One entry per `[[mount]]` declared in the config. Always at least one
-    /// (the implicit fallback config supplies a single mount over cwd).
-    pub mounts: Vec<MountState>,
+    /// One entry per `[[book]]` declared in the config. Always at least one
+    /// (the implicit fallback config supplies a single book over cwd).
+    pub books: Vec<BookState>,
+    /// Sidebar forest, built from each book's default edition. Editions share
+    /// structure, so this is language-independent.
     pub file_tree: RwLock<Vec<TreeNode>>,
+    /// Rendered-HTML cache keyed by `"<lang>\u{0}<virtual_path>"`.
     pub rendered_cache: RwLock<HashMap<String, String>>,
 }
 
 pub type SharedState = Arc<AppState>;
 
-pub struct MountResolution<'a> {
-    pub mount: &'a MountState,
+pub struct Resolution<'a> {
+    pub edition: &'a EditionState,
     pub rest: &'a str,
 }
 
+/// Cache key combining language edition + virtual path — distinct editions of
+/// the same logical path render to different HTML.
+pub fn cache_key(lang: &str, virtual_path: &str) -> String {
+    format!("{lang}\u{0}{virtual_path}")
+}
+
 impl AppState {
-    /// Resolve a wire-side virtual path (`<slug>` or `<slug>/<rest>`) to its
-    /// backing mount + the rest relative to the mount's source. Returns
-    /// `None` if no mount claims the slug.
-    pub fn resolve_path<'a>(&'a self, virtual_path: &'a str) -> Option<MountResolution<'a>> {
+    pub fn book(&self, slug: &str) -> Option<&BookState> {
+        self.books.iter().find(|b| b.slug == slug)
+    }
+
+    /// Resolve a wire-side virtual path (`<slug>` or `<slug>/<rest>`) plus an
+    /// optional `lang` to the backing edition + the rest relative to that
+    /// edition's source. `lang = None` uses the book's default edition; a
+    /// requested `lang` with no matching edition returns `None` (→ 404, which
+    /// the frontend treats as "untranslated, fall back to default").
+    pub fn resolve_path<'a>(
+        &'a self,
+        virtual_path: &'a str,
+        lang: Option<&str>,
+    ) -> Option<Resolution<'a>> {
         let (slug, rest) = virtual_path.split_once('/').unwrap_or((virtual_path, ""));
-        let mount = self.mounts.iter().find(|m| m.slug == slug)?;
-        Some(MountResolution { mount, rest })
+        let book = self.book(slug)?;
+        let edition = match lang {
+            Some(l) => book.edition(l)?,
+            None => book.default_edition(),
+        };
+        Some(Resolution { edition, rest })
     }
 }

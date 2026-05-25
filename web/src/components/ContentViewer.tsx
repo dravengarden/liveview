@@ -1,6 +1,7 @@
 import { Box, Typography } from "@mui/material";
 import { Description as FileIcon } from "@mui/icons-material";
 import type { Theme, FileType } from "@/types";
+import { useI18n } from "@/i18n";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { ImageViewer } from "./viewers/ImageViewer";
 import { PdfViewer } from "./viewers/PdfViewer";
@@ -26,6 +27,7 @@ export function ContentViewer({
   theme,
   onNavigate,
 }: ContentViewerProps): React.JSX.Element {
+  const { t } = useI18n();
   if (!currentPath) {
     return (
       <Box
@@ -39,7 +41,7 @@ export function ContentViewer({
         }}
       >
         <FileIcon sx={{ fontSize: 64, mb: 2, opacity: 0.5 }} />
-        <Typography variant="body1">Select a file from the sidebar</Typography>
+        <Typography variant="body1">{t("content.selectFile")}</Typography>
       </Box>
     );
   }
@@ -92,9 +94,7 @@ export function ContentViewer({
           }}
         >
           <FileIcon sx={{ fontSize: 64, mb: 2, opacity: 0.5 }} />
-          <Typography variant="body1">
-            Unsupported file type: {fileType}
-          </Typography>
+          <Typography variant="body1">{t("content.unsupported", { type: fileType })}</Typography>
         </Box>
       );
   }

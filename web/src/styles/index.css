@@ -3,6 +3,9 @@
 
 :root {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  /* Reading-surface font; useFont overrides this with the selected preset's
+     stack and lazy-loads its faces. */
+  --lv-reading-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 * {
@@ -12,6 +15,25 @@
 body {
   margin: 0;
   padding: 0;
+}
+
+/* Mobile: keep wide content (tables, code, images) inside the viewport
+   instead of forcing the whole page to scroll sideways. */
+@media (max-width: 900px) {
+  .markdown-body table {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+  }
+
+  .markdown-body pre {
+    overflow-x: auto;
+  }
+
+  .markdown-body img {
+    max-width: 100%;
+    height: auto;
+  }
 }
 
 /* Dark theme overrides for markdown */

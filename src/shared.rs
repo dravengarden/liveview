@@ -61,6 +61,9 @@ pub struct FileContent {
 pub enum WsMessage {
     ContentUpdate {
         path: String,
+        /// Language edition the changed file belongs to. The frontend only
+        /// applies the update if it is currently viewing this (path, lang).
+        lang: String,
         file_type: FileType,
         content: String,
     },

@@ -6,24 +6,24 @@ import {
   Typography,
   Box,
   Slider,
-  Chip,
-  Button,
+  ToggleButton,
+  ToggleButtonGroup,
 } from "@mui/material";
 import { Close as CloseIcon, Check as CheckIcon } from "@mui/icons-material";
-import type { Theme, MenuBarSettings, ExtensionSettings } from "@/types";
-import { THEME_OPTIONS, EXTENSION_GROUPS } from "@/types";
+import type { Theme, MenuBarSettings } from "@/types";
+import { THEME_OPTIONS } from "@/types";
+import { FONT_PRESETS } from "@/fonts";
+import { useI18n } from "@/i18n";
 
 interface SettingsDialogProps {
   open: boolean;
   theme: Theme;
+  fontId: string;
   menuBarSettings: MenuBarSettings;
-  extensionSettings: ExtensionSettings;
   onClose: () => void;
   onThemeChange: (theme: Theme) => void;
+  onFontChange: (id: string) => void;
   onFloatOpacityChange: (opacity: number) => void;
-  onToggleExtensionGroup: (groupName: string) => void;
-  onEnableAllExtensions: () => void;
-  onDisableAllExtensions: () => void;
 }
 
 interface ThemeColors {
@@ -61,18 +61,17 @@ export function SettingsDialog({
   open,
   theme,
   menuBarSettings,
-  extensionSettings,
+  fontId,
   onClose,
   onThemeChange,
+  onFontChange,
   onFloatOpacityChange,
-  onToggleExtensionGroup,
-  onEnableAllExtensions,
-  onDisableAllExtensions,
 }: SettingsDialogProps): React.JSX.Element {
+  const { t, lang, setLang } = useI18n();
   return (
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        Settings
+        {t("settings.title")}
         <IconButton size="small" onClick={onClose} edge="end">
           <CloseIcon fontSize="small" />
         </IconButton>
@@ -80,7 +79,26 @@ export function SettingsDialog({
       <DialogContent sx={{ p: 2 }}>
         <Box sx={{ mb: 3 }}>
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, mb: 1.5, display: "block" }}>
-            THEME
+            {t("settings.language")}
+          </Typography>
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={lang}
+            onChange={(_, value: string | null) => {
+              if (value === "en" || value === "zh") {
+                setLang(value);
+              }
+            }}
+          >
+            <ToggleButton value="en">English</ToggleButton>
+            <ToggleButton value="zh">中文</ToggleButton>
+          </ToggleButtonGroup>
+        </Box>
+
+        <Box sx={{ mb: 3 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, mb: 1.5, display: "block" }}>
+            {t("settings.theme")}
           </Typography>
           <Box
             sx={{
@@ -180,35 +198,48 @@ export function SettingsDialog({
         </Box>
 
         <Box sx={{ mb: 3 }}>
-          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 1.5 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500 }}>
-              FILE TYPES
-            </Typography>
-            <Box sx={{ display: "flex", gap: 0.5 }}>
-              <Button size="small" onClick={onEnableAllExtensions} sx={{ minWidth: 0, px: 1, fontSize: "0.7rem" }}>
-                All
-              </Button>
-              <Button size="small" onClick={onDisableAllExtensions} sx={{ minWidth: 0, px: 1, fontSize: "0.7rem" }}>
-                None
-              </Button>
-            </Box>
-          </Box>
-          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.75 }}>
-            {EXTENSION_GROUPS.map((group) => {
-              const isEnabled = extensionSettings.enabledGroups.includes(group.name);
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, mb: 1.5, display: "block" }}>
+            {t("settings.font")}
+          </Typography>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 0.75 }}>
+            {FONT_PRESETS.map((preset) => {
+              const isSelected = fontId === preset.id;
               return (
-                <Chip
-                  key={group.name}
-                  label={group.name}
-                  size="small"
-                  onClick={() => onToggleExtensionGroup(group.name)}
-                  color={isEnabled ? "primary" : "default"}
-                  variant={isEnabled ? "filled" : "outlined"}
+                <Box
+                  key={preset.id}
+                  onClick={() => onFontChange(preset.id)}
                   sx={{
-                    transition: "all 0.15s ease",
                     cursor: "pointer",
+                    borderRadius: 1,
+                    border: 2,
+                    borderColor: isSelected ? "primary.main" : "divider",
+                    px: 1.5,
+                    py: 1,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 1,
+                    transition: "border-color 0.15s ease",
+                    "&:hover": {
+                      borderColor: isSelected ? "primary.main" : "text.secondary",
+                    },
                   }}
-                />
+                >
+                  <Box sx={{ minWidth: 0 }}>
+                    {/* Preview rendered in the preset's own font (loads lazily
+                        once selected; shows the fallback stack until then). */}
+                    <Typography
+                      sx={{ fontFamily: preset.stack, fontSize: "1.05rem", lineHeight: 1.3 }}
+                      noWrap
+                    >
+                      {preset.label} · 阅读 Aa
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" noWrap>
+                      {preset.note}
+                    </Typography>
+                  </Box>
+                  {isSelected && <CheckIcon fontSize="small" color="primary" />}
+                </Box>
               );
             })}
           </Box>
@@ -216,7 +247,7 @@ export function SettingsDialog({
 
         <Box>
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, mb: 1, display: "block" }}>
-            MENU BAR OPACITY
+            {t("settings.opacity")}
           </Typography>
           <Box sx={{ px: 1 }}>
             <Slider

@@ -23,8 +23,23 @@ export interface FileContent {
   content: string;
 }
 
+/** A language edition of a book, for the in-book language switcher. */
+export interface LangInfo {
+  lang: string;
+  label: string;
+}
+
+/** A book as shown on the landing "bookshelf". */
+export interface Book {
+  label: string;
+  slug: string;
+  description?: string | null;
+  default_lang: string;
+  langs: LangInfo[];
+}
+
 export type WsMessage =
-  | { type: "ContentUpdate"; path: string; file_type: FileType; content: string }
+  | { type: "ContentUpdate"; path: string; lang: string; file_type: FileType; content: string }
   | { type: "TreeUpdate"; tree: TreeNode[] };
 
 export type Theme =
@@ -60,25 +75,3 @@ export const THEME_OPTIONS: ThemeOption[] = [
 export interface MenuBarSettings {
   floatOpacity: number;
 }
-
-export interface ExtensionGroup {
-  name: string;
-  extensions: string[];
-}
-
-export const EXTENSION_GROUPS: ExtensionGroup[] = [
-  { name: "Markdown", extensions: ["md", "markdown"] },
-  { name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "svg", "webp", "avif", "bmp", "ico", "tiff", "tif"] },
-  { name: "PDF", extensions: ["pdf"] },
-  { name: "HTML", extensions: ["html", "htm"] },
-  { name: "Data", extensions: ["csv", "tsv", "json", "jsonc", "json5"] },
-  { name: "Excalidraw", extensions: ["excalidraw"] },
-  { name: "LaTeX", extensions: ["tex", "latex"] },
-  { name: "Typst", extensions: ["typ", "typst"] },
-];
-
-export interface ExtensionSettings {
-  enabledGroups: string[];
-}
-
-export const ALL_EXTENSION_GROUP_NAMES = EXTENSION_GROUPS.map(g => g.name);

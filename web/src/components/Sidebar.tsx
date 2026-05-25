@@ -8,6 +8,9 @@ import {
   IconButton,
   Collapse,
   Tooltip,
+  Typography,
+  ToggleButton,
+  ToggleButtonGroup,
 } from "@mui/material";
 import {
   Folder as FolderIcon,
@@ -20,8 +23,10 @@ import {
   ChevronLeft as ChevronLeftIcon,
   Settings as SettingsIcon,
   MyLocation as LocateIcon,
+  ArrowBack as BackIcon,
 } from "@mui/icons-material";
-import type { TreeNode } from "@/types";
+import type { LangInfo, TreeNode } from "@/types";
+import { useI18n } from "@/i18n";
 
 interface TreeItemProps {
   node: TreeNode;
@@ -59,8 +64,9 @@ function TreeItem({
         selected={isSelected}
         sx={{
           pl: 1 + level * 2,
-          py: 0.5,
-          minHeight: 32,
+          // Taller, finger-friendly rows on touch screens; compact on desktop.
+          py: { xs: 0.75, md: 0.5 },
+          minHeight: { xs: 44, md: 32 },
           "&.Mui-selected": {
             bgcolor: "action.selected",
           },
@@ -160,9 +166,15 @@ interface SidebarProps {
   tree: TreeNode[];
   currentPath: string | null;
   width: number;
+  isMobile?: boolean;
+  bookLabel?: string;
+  langs?: LangInfo[];
+  currentLang?: string;
+  onSwitchLang?: (lang: string) => void;
   onSelect: (path: string) => void;
   onClose: () => void;
   onOpenSettings: () => void;
+  onBackToLanding: () => void;
   onWidthChange: (width: number) => void;
 }
 
@@ -170,11 +182,18 @@ export function Sidebar({
   tree,
   currentPath,
   width,
+  isMobile = false,
+  bookLabel,
+  langs = [],
+  currentLang,
+  onSwitchLang,
   onSelect,
   onClose,
   onOpenSettings,
+  onBackToLanding,
   onWidthChange,
 }: SidebarProps): React.JSX.Element {
+  const { t } = useI18n();
   const allDirPaths = useMemo(() => collectAllDirPaths(tree), [tree]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
   const resizeRef = useRef<HTMLDivElement>(null);
@@ -276,13 +295,14 @@ export function Sidebar({
   return (
     <Box
       sx={{
-        width,
-        minWidth: width,
-        height: "100vh",
+        // In the mobile Drawer the paper sets the width and height; fill it.
+        width: isMobile ? "100%" : width,
+        minWidth: isMobile ? 0 : width,
+        height: isMobile ? "100%" : "100dvh",
         display: "flex",
         flexDirection: "column",
         bgcolor: "background.paper",
-        borderRight: 1,
+        borderRight: isMobile ? 0 : 1,
         borderColor: "divider",
         position: "relative",
       }}
@@ -294,12 +314,31 @@ export function Sidebar({
           justifyContent: "space-between",
           px: 1,
           py: 0.5,
+          // Clear the iPhone status bar / notch when shown as a drawer.
+          pt: isMobile ? "calc(env(safe-area-inset-top, 0px) + 4px)" : 0.5,
           borderBottom: 1,
           borderColor: "divider",
         }}
       >
-        <Box>
-          <Tooltip title={isAllExpanded ? "Collapse all" : "Expand all"}>
+        <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, flex: 1 }}>
+          <Tooltip title={t("sidebar.back")}>
+            <IconButton size="small" onClick={onBackToLanding}>
+              <BackIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+          {bookLabel && (
+            <Typography
+              variant="subtitle2"
+              noWrap
+              title={bookLabel}
+              sx={{ ml: 0.5, fontWeight: 600, minWidth: 0 }}
+            >
+              {bookLabel}
+            </Typography>
+          )}
+        </Box>
+        <Box sx={{ display: "flex", flexShrink: 0 }}>
+          <Tooltip title={t(isAllExpanded ? "sidebar.collapseAll" : "sidebar.expandAll")}>
             <IconButton size="small" onClick={handleToggleAll}>
               {isAllExpanded ? (
                 <CollapseAllIcon fontSize="small" />
@@ -308,27 +347,60 @@ export function Sidebar({
               )}
             </IconButton>
           </Tooltip>
-          <Tooltip title="Reveal current file">
+          <Tooltip title={t("sidebar.reveal")}>
             <span>
               <IconButton size="small" onClick={handleRevealCurrentFile} disabled={!currentPath}>
                 <LocateIcon fontSize="small" />
               </IconButton>
             </span>
           </Tooltip>
-        </Box>
-        <Box>
-          <Tooltip title="Settings">
+          <Tooltip title={t("sidebar.settings")}>
             <IconButton size="small" onClick={onOpenSettings}>
               <SettingsIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Close sidebar">
+          <Tooltip title={t("sidebar.close")}>
             <IconButton size="small" onClick={onClose}>
               <ChevronLeftIcon fontSize="small" />
             </IconButton>
           </Tooltip>
         </Box>
       </Box>
+
+      {langs.length > 1 && (
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            px: 1,
+            py: 0.75,
+            borderBottom: 1,
+            borderColor: "divider",
+          }}
+        >
+          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+            {t("sidebar.language")}
+          </Typography>
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={currentLang ?? null}
+            onChange={(_, value: string | null) => {
+              if (value && onSwitchLang) {
+                onSwitchLang(value);
+              }
+            }}
+            sx={{ flexWrap: "wrap" }}
+          >
+            {langs.map((l) => (
+              <ToggleButton key={l.lang} value={l.lang} sx={{ px: 1, py: 0.25, textTransform: "none" }}>
+                {l.label}
+              </ToggleButton>
+            ))}
+          </ToggleButtonGroup>
+        </Box>
+      )}
 
       <Box ref={listContainerRef} sx={{ flex: 1, overflow: "auto" }}>
         <List dense disablePadding>
@@ -346,21 +418,23 @@ export function Sidebar({
         </List>
       </Box>
 
-      <Box
-        ref={resizeRef}
-        onMouseDown={handleResizeStart}
-        sx={{
-          position: "absolute",
-          right: 0,
-          top: 0,
-          bottom: 0,
-          width: 4,
-          cursor: "col-resize",
-          "&:hover": {
-            bgcolor: "primary.main",
-          },
-        }}
-      />
+      {!isMobile && (
+        <Box
+          ref={resizeRef}
+          onMouseDown={handleResizeStart}
+          sx={{
+            position: "absolute",
+            right: 0,
+            top: 0,
+            bottom: 0,
+            width: 4,
+            cursor: "col-resize",
+            "&:hover": {
+              bgcolor: "primary.main",
+            },
+          }}
+        />
+      )}
     </Box>
   );
 }

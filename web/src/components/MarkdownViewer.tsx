@@ -236,7 +236,7 @@ export function MarkdownViewer({
       sx={{
         flex: 1,
         overflow: "auto",
-        p: 4,
+        p: { xs: 2, md: 4 },
         "& .copy-btn": {
           position: "absolute",
           top: 8,

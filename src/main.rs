@@ -96,24 +96,32 @@ async fn run(cli: Cli, resolved: Resolved) {
     let port = cli.port.or(resolved.port);
     let should_open = cli.open || resolved.open;
 
-    let initial_tree = server::tree::build_virtual_tree(&resolved.mounts);
+    let initial_tree = server::tree::build_virtual_tree(&resolved.books);
 
     let (tx, _rx) = broadcast::channel::<String>(64);
 
     let state: SharedState = Arc::new(AppState {
         tx,
-        mounts: resolved.mounts,
+        books: resolved.books,
         file_tree: RwLock::new(initial_tree),
         rendered_cache: RwLock::new(HashMap::new()),
     });
 
     server::watcher::start_watcher(state.clone(), resolved.debounce_ms);
 
-    for m in &state.mounts {
-        tracing::info!("mount /{:<20}  =>  {}", m.slug, m.source.display());
+    for b in &state.books {
+        for e in &b.editions {
+            tracing::info!(
+                "book /{:<16} [{:<6}]  =>  {}",
+                b.slug,
+                e.lang,
+                e.source.display()
+            );
+        }
     }
 
     let api_router = Router::new()
+        .route("/api/books", get(api_books))
         .route("/api/tree", get(api_tree))
         .route("/api/file", get(api_file))
         .route("/api/raw", get(api_raw))
@@ -207,20 +215,67 @@ async fn api_tree(State(state): State<SharedState>) -> impl IntoResponse {
     axum::Json(tree.clone())
 }
 
+#[derive(serde::Serialize)]
+struct LangInfo {
+    lang: String,
+    label: String,
+}
+
+#[derive(serde::Serialize)]
+struct BookInfo {
+    label: String,
+    slug: String,
+    description: Option<String>,
+    default_lang: String,
+    langs: Vec<LangInfo>,
+}
+
+/// Lightweight list of books for the landing page ("bookshelf"): the curated
+/// label, its slug (entry path), an optional blurb, and the available
+/// language editions for the in-book language switcher.
+async fn api_books(State(state): State<SharedState>) -> impl IntoResponse {
+    let books: Vec<BookInfo> = state
+        .books
+        .iter()
+        .map(|b| BookInfo {
+            label: b.label.clone(),
+            slug: b.slug.clone(),
+            description: b.description.clone(),
+            default_lang: b.default_lang.clone(),
+            langs: b
+                .editions
+                .iter()
+                .map(|e| LangInfo {
+                    lang: e.lang.clone(),
+                    label: e.label.clone(),
+                })
+                .collect(),
+        })
+        .collect();
+    axum::Json(books)
+}
+
 #[derive(serde::Deserialize)]
 struct FileQuery {
     path: String,
+    /// Language edition to read. Omitted ⇒ the book's default edition.
+    lang: Option<String>,
 }
 
-/// Resolve a virtual-path request to an on-disk path under its mount, with
-/// traversal / out-of-mount targets rejected. `Ok(None)` is "file does not
-/// exist" (404); `Err(())` is "outside the mount" (403); `Ok(Some(p))` is
-/// the canonical path safe to read.
-fn resolve_safe(state: &AppState, virtual_path: &str) -> Result<Option<PathBuf>, ()> {
-    let Some(resolution) = state.resolve_path(virtual_path) else {
+/// Resolve a virtual-path request (plus optional `lang`) to an on-disk path
+/// under the chosen edition, with traversal / out-of-edition targets
+/// rejected. `Ok(None)` is "file does not exist / no such edition" (404);
+/// `Err(())` is "outside the edition source" (403); `Ok(Some(p))` is the
+/// canonical path safe to read.
+fn resolve_safe(
+    state: &AppState,
+    virtual_path: &str,
+    lang: Option<&str>,
+) -> Result<Option<PathBuf>, ()> {
+    let Some(resolution) = state.resolve_path(virtual_path, lang) else {
         return Ok(None);
     };
-    let joined = resolution.mount.source.join(resolution.rest);
+    let joined = resolution.edition.source.join(resolution.rest);
     // Canonicalize fully — this is what makes `..` and symlinks safe. A
     // syntactic `starts_with` check is NOT sufficient because Path::join
     // doesn't normalise components.
@@ -228,7 +283,7 @@ fn resolve_safe(state: &AppState, virtual_path: &str) -> Result<Option<PathBuf>,
         Ok(p) => p,
         Err(_) => return Ok(None),
     };
-    if !canonical.starts_with(&resolution.mount.source) {
+    if !canonical.starts_with(&resolution.edition.source) {
         return Err(());
     }
     Ok(Some(canonical))
@@ -238,7 +293,8 @@ async fn api_file(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
 ) -> impl IntoResponse {
-    let full_path = match resolve_safe(&state, &query.path) {
+    let lang = query.lang.as_deref();
+    let full_path = match resolve_safe(&state, &query.path, lang) {
         Ok(Some(p)) => p,
         Ok(None) => {
             return (
@@ -257,6 +313,12 @@ async fn api_file(
     };
 
     let file_type = FileType::from_path(&query.path);
+    // Cache + responses key on the resolved edition lang, not the raw query
+    // (which may be `None`); fall back to the book's default edition lang.
+    let resolved_lang = state
+        .resolve_path(&query.path, lang)
+        .map(|r| r.edition.lang.clone())
+        .unwrap_or_default();
 
     // Binary files: return metadata only — frontend will use /api/raw.
     if matches!(file_type, FileType::Image | FileType::Pdf) {
@@ -268,9 +330,10 @@ async fn api_file(
         .into_response();
     }
 
+    let key = server::state::cache_key(&resolved_lang, &query.path);
     {
         let cache = state.rendered_cache.read().await;
-        if let Some(content) = cache.get(&query.path) {
+        if let Some(content) = cache.get(&key) {
             return Json(FileContent {
                 path: query.path,
                 file_type,
@@ -285,7 +348,7 @@ async fn api_file(
             let content = server::renderer::render_file(&source, &file_type);
             {
                 let mut cache = state.rendered_cache.write().await;
-                cache.insert(query.path.clone(), content.clone());
+                cache.insert(key, content.clone());
             }
             Json(FileContent {
                 path: query.path,
@@ -306,7 +369,7 @@ async fn api_raw(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
 ) -> impl IntoResponse {
-    let full_path = match resolve_safe(&state, &query.path) {
+    let full_path = match resolve_safe(&state, &query.path, query.lang.as_deref()) {
         Ok(Some(p)) => p,
         Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
         Err(()) => return (StatusCode::FORBIDDEN, "Access denied").into_response(),
@@ -336,7 +399,7 @@ async fn api_raw(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{build_globset, MountState};
+    use crate::config::{build_globset, BookState, EditionState};
     use std::fs;
     use std::path::PathBuf;
 
@@ -366,24 +429,30 @@ mod tests {
         }
     }
 
-    fn mk_state(mounts: Vec<MountState>) -> AppState {
+    fn mk_state(books: Vec<BookState>) -> AppState {
         let (tx, _) = broadcast::channel(8);
         AppState {
             tx,
-            mounts,
+            books,
             file_tree: RwLock::new(Vec::new()),
             rendered_cache: RwLock::new(HashMap::new()),
         }
     }
 
-    fn mk_mount(slug: &str, source: PathBuf) -> MountState {
-        MountState {
+    fn mk_mount(slug: &str, source: PathBuf) -> BookState {
+        BookState {
             label: slug.to_string(),
             slug: slug.to_string(),
-            source,
-            include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
-            exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+            description: None,
+            default_lang: "default".to_string(),
             layout: None,
+            editions: vec![EditionState {
+                lang: "default".to_string(),
+                label: "default".to_string(),
+                source,
+                include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
+                exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+            }],
         }
     }
 
@@ -391,8 +460,8 @@ mod tests {
     fn resolve_splits_on_first_slash() {
         let tmp = TempDir::new("lv-resolve");
         let state = mk_state(vec![mk_mount("docs", tmp.path().to_path_buf())]);
-        let r = state.resolve_path("docs/foo/bar.md").unwrap();
-        assert_eq!(r.mount.slug, "docs");
+        let r = state.resolve_path("docs/foo/bar.md", None).unwrap();
+        assert_eq!(r.edition.source, tmp.path());
         assert_eq!(r.rest, "foo/bar.md");
     }
 
@@ -400,16 +469,62 @@ mod tests {
     fn resolve_mount_root_no_slash() {
         let tmp = TempDir::new("lv-resolve");
         let state = mk_state(vec![mk_mount("docs", tmp.path().to_path_buf())]);
-        let r = state.resolve_path("docs").unwrap();
-        assert_eq!(r.mount.slug, "docs");
+        let r = state.resolve_path("docs", None).unwrap();
+        assert_eq!(r.edition.source, tmp.path());
         assert_eq!(r.rest, "");
+    }
+
+    #[test]
+    fn resolve_picks_edition_by_lang() {
+        let tmp_en = TempDir::new("lv-en");
+        let tmp_zh = TempDir::new("lv-zh");
+        let mk_ed = |lang: &str, source: PathBuf| EditionState {
+            lang: lang.to_string(),
+            label: lang.to_string(),
+            source,
+            include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
+            exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+        };
+        let book = BookState {
+            label: "Docs".to_string(),
+            slug: "docs".to_string(),
+            description: None,
+            default_lang: "en".to_string(),
+            layout: None,
+            editions: vec![
+                mk_ed("en", tmp_en.path().to_path_buf()),
+                mk_ed("zh", tmp_zh.path().to_path_buf()),
+            ],
+        };
+        let state = mk_state(vec![book]);
+
+        // Explicit lang selects that edition.
+        assert_eq!(
+            state
+                .resolve_path("docs/x.md", Some("zh"))
+                .unwrap()
+                .edition
+                .source,
+            tmp_zh.path()
+        );
+        // No lang falls back to the default edition.
+        assert_eq!(
+            state
+                .resolve_path("docs/x.md", None)
+                .unwrap()
+                .edition
+                .source,
+            tmp_en.path()
+        );
+        // A lang the book doesn't offer resolves to None (→ 404 → frontend fallback).
+        assert!(state.resolve_path("docs/x.md", Some("ja")).is_none());
     }
 
     #[test]
     fn resolve_returns_none_on_unknown_slug() {
         let tmp = TempDir::new("lv-resolve");
         let state = mk_state(vec![mk_mount("docs", tmp.path().to_path_buf())]);
-        assert!(state.resolve_path("nope/x.md").is_none());
+        assert!(state.resolve_path("nope/x.md", None).is_none());
     }
 
     #[test]
@@ -420,8 +535,8 @@ mod tests {
             mk_mount("docs", tmp_a.path().to_path_buf()),
             mk_mount("tasks", tmp_b.path().to_path_buf()),
         ]);
-        let r = state.resolve_path("tasks/x.md").unwrap();
-        assert_eq!(r.mount.source, tmp_b.path());
+        let r = state.resolve_path("tasks/x.md", None).unwrap();
+        assert_eq!(r.edition.source, tmp_b.path());
     }
 
     #[test]
@@ -429,14 +544,17 @@ mod tests {
         let tmp = TempDir::new("lv-safe");
         let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
         // Ok(None) maps to 404 at the handler layer.
-        assert!(matches!(resolve_safe(&state, "bogus/x.md"), Ok(None)));
+        assert!(matches!(resolve_safe(&state, "bogus/x.md", None), Ok(None)));
     }
 
     #[test]
     fn resolve_safe_missing_file_is_not_found() {
         let tmp = TempDir::new("lv-safe");
         let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
-        assert!(matches!(resolve_safe(&state, "docs/missing.md"), Ok(None)));
+        assert!(matches!(
+            resolve_safe(&state, "docs/missing.md", None),
+            Ok(None)
+        ));
     }
 
     #[test]
@@ -444,7 +562,9 @@ mod tests {
         let tmp = TempDir::new("lv-safe");
         fs::write(tmp.path().join("README.md"), b"hi").unwrap();
         let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
-        let out = resolve_safe(&state, "docs/README.md").unwrap().unwrap();
+        let out = resolve_safe(&state, "docs/README.md", None)
+            .unwrap()
+            .unwrap();
         assert!(out.ends_with("README.md"));
     }
 
@@ -462,7 +582,7 @@ mod tests {
         // Path that joins to A but `..`-s out to B once canonicalized.
         let b_name = tmp_b.path().file_name().unwrap().to_str().unwrap();
         let virtual_path = format!("docs/../{b_name}/secret.md");
-        assert!(matches!(resolve_safe(&state, &virtual_path), Err(())));
+        assert!(matches!(resolve_safe(&state, &virtual_path, None), Err(())));
     }
 
     #[test]
@@ -479,6 +599,9 @@ mod tests {
 
         let a_canon = tmp_a.path().canonicalize().unwrap();
         let state = mk_state(vec![mk_mount("docs", a_canon)]);
-        assert!(matches!(resolve_safe(&state, "docs/link.md"), Err(())));
+        assert!(matches!(
+            resolve_safe(&state, "docs/link.md", None),
+            Err(())
+        ));
     }
 }
