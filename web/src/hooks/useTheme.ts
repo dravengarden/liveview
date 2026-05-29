@@ -100,6 +100,14 @@ function isDarkTheme(theme: Theme): boolean {
   return !theme.includes("light");
 }
 
+// Keep the iOS standalone status bar (and Android's) in sync with the active
+// theme. With apple-mobile-web-app-status-bar-style="default", iOS paints the
+// status bar background with this colour and auto-picks a contrasting glyph
+// colour, so light themes get dark icons and vice versa.
+function applyThemeColor(color: string): void {
+  globalThis.document.querySelector('meta[name="theme-color"]')?.setAttribute("content", color);
+}
+
 interface ThemeColors {
   primary: string;
   bgDefault: string;
@@ -226,6 +234,9 @@ export function useTheme(): UseThemeResult {
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
+    // bgPaper is the mobile top nav-bar surface, so the status bar reads as a
+    // seamless extension of it.
+    applyThemeColor(getThemeColors(theme).bgPaper);
   }, [theme]);
 
   const muiTheme = useMemo(() => {

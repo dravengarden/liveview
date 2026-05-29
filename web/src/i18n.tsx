@@ -18,9 +18,11 @@ type Dict = Record<string, string>;
 const STRINGS: Record<Language, Dict> = {
   en: {
     "landing.title": "Bookshelf",
+    "landing.home": "Back to bookshelf",
     "landing.subtitle": "Pick one to start reading · {n} total",
     "landing.empty": "Nothing to read yet",
     "landing.noMounts": "No [[book]] in the liveview config — add one and it appears here.",
+    "landing.continue": "Continue: {chapter}",
     "sidebar.back": "Back to bookshelf",
     "sidebar.expandAll": "Expand all",
     "sidebar.collapseAll": "Collapse all",
@@ -42,12 +44,17 @@ const STRINGS: Record<Language, Dict> = {
     "settings.contentWidth": "CONTENT WIDTH",
     "settings.contentWidthFull": "Full width",
     "settings.lineHeight": "LINE HEIGHT",
+    "settings.navBar": "NAV BAR (MOBILE)",
+    "settings.navBarTop": "Top",
+    "settings.navBarBottom": "Bottom",
   },
   zh: {
     "landing.title": "书架",
+    "landing.home": "返回书架",
     "landing.subtitle": "选择一本开始阅读 · 共 {n} 本",
     "landing.empty": "暂无可阅读的内容",
     "landing.noMounts": "liveview 配置里没有 [[book]]——添加后会出现在这里。",
+    "landing.continue": "继续：{chapter}",
     "sidebar.back": "返回书架",
     "sidebar.expandAll": "全部展开",
     "sidebar.collapseAll": "全部折叠",
@@ -69,6 +76,9 @@ const STRINGS: Record<Language, Dict> = {
     "settings.contentWidth": "内容宽度",
     "settings.contentWidthFull": "整页",
     "settings.lineHeight": "行距",
+    "settings.navBar": "导航栏（移动端）",
+    "settings.navBarTop": "顶部",
+    "settings.navBarBottom": "底部",
   },
 };
 

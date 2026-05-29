@@ -38,6 +38,17 @@ export interface ProgressEntry {
   updated_at: number;
 }
 
+/** A book's "continue reading" state for the landing page: which chapter the
+ *  reader last opened, a human label for it, and how far into it (0..1). */
+export interface ReadingProgress {
+  /** Virtual doc path (`<slug>/<chapter>`) to resume. */
+  path: string;
+  /** Display title of that chapter (current UI edition, falling back to name). */
+  chapterLabel: string;
+  /** Scroll position within the chapter, 0..1. */
+  scroll: number;
+}
+
 /** A language edition of a book, for the in-book language switcher. */
 export interface LangInfo {
   lang: string;
@@ -87,6 +98,10 @@ export const THEME_OPTIONS: ThemeOption[] = [
   { value: "gruvbox-dark", label: "Gruvbox Dark" },
 ];
 
+/** Where the mobile/touch navigation bar sits. Defaults to the bottom (thumb
+ *  reach); the top option suits readers who prefer it out of the way. */
+export type NavBarPosition = "top" | "bottom";
+
 export interface MenuBarSettings {
   floatOpacity: number;
   /** Max width of the markdown reading area in px. Smaller = bigger left/right
@@ -94,6 +109,9 @@ export interface MenuBarSettings {
   contentMaxWidth: number;
   /** Line height applied to markdown body content. */
   lineHeight: number;
+  /** Mobile/touch nav-bar edge: bottom (default) or top. Ignored on desktop,
+   *  which uses the hover-to-expand side float button. */
+  navBarPosition: NavBarPosition;
 }
 
 export const CONTENT_WIDTH_MIN = 640;

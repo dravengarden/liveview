@@ -10,7 +10,7 @@ import {
   ToggleButtonGroup,
 } from "@mui/material";
 import { Close as CloseIcon, Check as CheckIcon } from "@mui/icons-material";
-import type { Theme, MenuBarSettings } from "@/types";
+import type { Theme, MenuBarSettings, NavBarPosition } from "@/types";
 import {
   THEME_OPTIONS,
   CONTENT_WIDTH_MIN,
@@ -34,6 +34,7 @@ interface SettingsDialogProps {
   onFloatOpacityChange: (opacity: number) => void;
   onContentMaxWidthChange: (width: number) => void;
   onLineHeightChange: (lh: number) => void;
+  onNavBarPositionChange: (pos: NavBarPosition) => void;
 }
 
 interface ThemeColors {
@@ -78,6 +79,7 @@ export function SettingsDialog({
   onFloatOpacityChange,
   onContentMaxWidthChange,
   onLineHeightChange,
+  onNavBarPositionChange,
 }: SettingsDialogProps): React.JSX.Element {
   const { t, lang, setLang } = useI18n();
   return (
@@ -302,6 +304,25 @@ export function SettingsDialog({
               valueLabelFormat={(v) => (v as number).toFixed(1)}
             />
           </Box>
+        </Box>
+
+        <Box sx={{ mb: 3 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, mb: 1.5, display: "block" }}>
+            {t("settings.navBar")}
+          </Typography>
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={menuBarSettings.navBarPosition}
+            onChange={(_, value: string | null) => {
+              if (value === "top" || value === "bottom") {
+                onNavBarPositionChange(value);
+              }
+            }}
+          >
+            <ToggleButton value="bottom">{t("settings.navBarBottom")}</ToggleButton>
+            <ToggleButton value="top">{t("settings.navBarTop")}</ToggleButton>
+          </ToggleButtonGroup>
         </Box>
 
         <Box>

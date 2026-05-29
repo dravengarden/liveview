@@ -54,3 +54,13 @@ make install
 - Use TypeScript strict mode
 - Run `make check` before committing
 - Run `make fmt` to format code
+
+## Portal UI (when hosted by atlantis)
+
+liveview is hosted by the **atlantis** portal in a keep-alive iframe (it also
+runs standalone). The shared cross-app UI primitives — launcher placement,
+theme, selected states, mobile, cross-origin gotchas — are a **living guide** in
+the columbus monorepo at `conventions/ui.md` (SDK mechanics:
+`interface/app-shell/`). Read it before changing liveview's chrome/launcher, and
+when you discover a better pattern or a sharp edge, update that guide (it's
+shared across all the portal apps, not just liveview).

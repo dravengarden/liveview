@@ -10,11 +10,17 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!-- PWA / installable web app -->
     <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- theme-color is rewritten at runtime by useTheme to the active theme's
+         surface colour; this static value is only the pre-hydration default.
+         status-bar-style is "default" (not "black-translucent") so iOS paints
+         the status bar with theme-color and auto-picks a contrasting text
+         colour — black-translucent would force permanently-white glyphs that
+         vanish on light themes. -->
     <meta name="theme-color" content="#0d1117" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="LiveView" />
     <!-- Syntax highlighting -->
     <script src="/highlight.min.js"></script>

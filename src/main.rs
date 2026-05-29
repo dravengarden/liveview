@@ -130,6 +130,7 @@ async fn run(cli: Cli, resolved: Resolved) {
         .route("/api/file", get(api_file))
         .route("/api/raw", get(api_raw))
         .route("/api/progress", get(api_progress_get).put(api_progress_put))
+        .route("/api/progress/recent", get(api_progress_recent))
         .route("/ws", get(server::ws::ws_handler))
         .with_state(state.clone());
 
@@ -244,6 +245,21 @@ async fn api_progress_get(
         Ok(rows) => Json(rows).into_response(),
         Err(e) => {
             tracing::warn!(error = %e, "progress read failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+/// The latest-read chapter per book (newest first), for the landing page's
+/// "continue reading" indicators. `[]` when progress is disabled.
+async fn api_progress_recent(State(state): State<SharedState>) -> impl IntoResponse {
+    let Some(store) = &state.progress else {
+        return Json(Vec::<ProgressEntry>::new()).into_response();
+    };
+    match store.recent_per_book().await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "progress recent read failed");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
