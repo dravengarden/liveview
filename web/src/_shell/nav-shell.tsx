@@ -113,9 +113,14 @@ export function NavShell(props: NavShellProps): ReactNode {
           gap: 0.5,
           px: 0.5,
           minHeight: 48,
-          borderBottom: 1,
-          borderColor: "divider",
           bgcolor: "background.paper",
+          // Material elevation instead of a flat 1px rule: the bar reads as a
+          // surface floating just above the content, and the shadow falls onto
+          // the reading column below. position+zIndex so the shadow paints over
+          // the content (a flex sibling would otherwise sit at the same layer).
+          position: "relative",
+          zIndex: (theme) => theme.zIndex.appBar,
+          boxShadow: 3,
           // Clear the iPhone status bar / notch.
           pt: "env(safe-area-inset-top, 0px)",
         }}
