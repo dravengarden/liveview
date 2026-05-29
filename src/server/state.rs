@@ -20,6 +20,11 @@ pub struct AppState {
     /// (`--state-dir` / `$STATE_DIRECTORY`), in which case progress is disabled
     /// and the API degrades to read-empty / write-noop.
     pub progress: Option<ProgressStore>,
+    /// The `edge-tts` executable used for lazy audiobook synthesis. Must be on
+    /// the service's PATH (packaged into the unit for deploy).
+    pub tts_cmd: String,
+    /// Default edge-tts voice; a book's `[spoken].voice` overrides it.
+    pub tts_voice: String,
 }
 
 pub type SharedState = Arc<AppState>;

@@ -24,6 +24,7 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
 axum = { version = "0.8", features = ["ws"] }
 comrak = "0.36"
+regex = "1"
 notify-debouncer-mini = "0.5"
 globset = "0.4"
 tower-http = { version = "0.6", features = ["cors", "fs"] }

@@ -18,6 +18,11 @@
       pkgs = import nixpkgs { inherit system; };
       lib = pkgs.lib;
 
+      # edge-tts CLI for the audiobook track: `lv` shells out to it to
+      # synthesize chapter narration. Baked onto the binary's PATH (below) so
+      # the deployed unit needs no extra wiring, and present in the dev shell.
+      edgeTts = pkgs.python3Packages.edge-tts;
+
       # ── deno: pinned to the latest upstream release ───────────────────
       # nixpkgs trails upstream (nixos-unstable is on 2.7.x); we want the
       # newest deno, so wrap the official prebuilt x86_64-linux binary
@@ -102,7 +107,7 @@
 
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-vPIulbS6RxRbiUAGVXcH8uc4AkIHkq2A4JGDSfta7c8=";
+        outputHash = "sha256-aoaQF1ntlaVm1JEfw1QXgTEzEllCmN3UC2VpIgNpjrA=";
       };
 
       # ── lv: axum daemon, embeds the SPA via include_dir! ──────────────
@@ -126,15 +131,24 @@
         };
 
         # sqlx's sqlite driver links libsqlite3 (via libsqlite3-sys), found at
-        # build time through pkg-config.
-        nativeBuildInputs = [ pkgs.pkg-config ];
+        # build time through pkg-config. makeWrapper puts edge-tts on PATH.
+        nativeBuildInputs = [
+          pkgs.pkg-config
+          pkgs.makeWrapper
+        ];
         buildInputs = [ pkgs.sqlite ];
+
+        # The audiobook player shells out to `edge-tts`; bake it onto PATH so
+        # the deployed binary is self-contained (no unit-level PATH wiring).
+        postInstall = ''
+          wrapProgram $out/bin/lv --prefix PATH : ${lib.makeBinPath [ edgeTts ]}
+        '';
 
         # Vendor via fetchCargoVendor (cargo's own downloader → sparse index
         # + static.crates.io), NOT importCargoLock: this box's omega proxy
         # 403s the crates.io API download endpoint that importCargoLock uses,
         # while static.crates.io returns 200.
-        cargoHash = "sha256-HXI94NMd1vLlAIb6Dmei5z7szPM/woSMwqJrLFlSv0g=";
+        cargoHash = "sha256-6sK3Yzkg9am+BdNDOoDX9RZwi6DFhFCCTg86Iu7MIJ8=";
 
         # include_dir!("$CARGO_MANIFEST_DIR/web/dist") is a compile-time
         # lookup — drop the prebuilt SPA there before cargo runs.
@@ -170,10 +184,15 @@
         packages = [
           pkgs.cargo
           pkgs.rustc
+          # clippy + rustfmt match this rustc, so `make check` (cargo clippy /
+          # cargo fmt) doesn't fall back to a mismatched rustup toolchain.
+          pkgs.clippy
+          pkgs.rustfmt
           deno
           pkgs.nodejs
           pkgs.pkg-config
           pkgs.sqlite
+          edgeTts
         ];
       };
     };

@@ -9,8 +9,13 @@ import {
   Alert,
   useMediaQuery,
 } from "@mui/material";
-import { Menu as MenuIcon, Settings as SettingsIcon } from "@mui/icons-material";
-import { Sidebar, SettingsDialog, ContentViewer, Landing } from "@/components";
+import {
+  Menu as MenuIcon,
+  Settings as SettingsIcon,
+  Headphones as HeadphonesIcon,
+  MenuBook as MenuBookIcon,
+} from "@mui/icons-material";
+import { Sidebar, SettingsDialog, ContentViewer, AudiobookPlayer, Landing } from "@/components";
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
 import type { TreeNode, FileType, FileContent, Book } from "@/types";
@@ -271,6 +276,7 @@ export function App(): React.JSX.Element {
   const [sidebarOpen, setSidebarOpen] = useState(() => !window.matchMedia(MOBILE_QUERY).matches);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [audiobookOpen, setAudiobookOpen] = useState(false);
   const initializedRef = useRef(false);
   // Refs for matching live WebSocket updates against what's currently shown
   // (the shown edition may differ from `lang` when falling back).
@@ -436,6 +442,16 @@ export function App(): React.JSX.Element {
     document.title = currentPath ?? "liveview";
   }, [currentPath]);
 
+  // The audiobook player is markdown-only; leave it when a non-markdown file or
+  // the landing page is shown.
+  useEffect(() => {
+    if (currentFileType !== "markdown" || !currentPath) {
+      setAudiobookOpen(false);
+    }
+  }, [currentFileType, currentPath]);
+
+  const canAudiobook = Boolean(activeBook?.audio) && currentFileType === "markdown" && Boolean(currentPath);
+
   // Resolve which edition a hash deep-link should open: explicit `&lang=` wins,
   // else fall back to the book's preferred initial edition.
   const langForHashEntry = useCallback(
@@ -599,6 +615,25 @@ export function App(): React.JSX.Element {
                   </FloatButton>
                 ))}
 
+              {canAudiobook && (
+                <FloatButton position="right" floatOpacity={menuBarSettings.floatOpacity}>
+                  <Tooltip title={audiobookOpen ? t("audiobook.close") : t("audiobook.open")}>
+                    <IconButton
+                      size="small"
+                      onClick={() => {
+                        setAudiobookOpen((v) => !v);
+                      }}
+                    >
+                      {audiobookOpen ? (
+                        <MenuBookIcon fontSize="small" />
+                      ) : (
+                        <HeadphonesIcon fontSize="small" />
+                      )}
+                    </IconButton>
+                  </Tooltip>
+                </FloatButton>
+              )}
+
               <Box sx={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
                 {untranslated && (
                   <Alert severity="info" square sx={{ py: 0.25 }}>
@@ -608,17 +643,26 @@ export function App(): React.JSX.Element {
                     })}
                   </Alert>
                 )}
-                <ContentViewer
-                  content={currentContent}
-                  fileType={currentFileType}
-                  currentPath={currentPath}
-                  theme={theme}
-                  onNavigate={handleSelect}
-                  contentMaxWidth={menuBarSettings.contentMaxWidth}
-                  lineHeight={menuBarSettings.lineHeight}
-                  savedScroll={savedScroll}
-                  onSaveScroll={saveProgress}
-                />
+                {audiobookOpen && currentPath ? (
+                  <AudiobookPlayer
+                    currentPath={currentPath}
+                    lang={lang}
+                    contentMaxWidth={menuBarSettings.contentMaxWidth}
+                    lineHeight={menuBarSettings.lineHeight}
+                  />
+                ) : (
+                  <ContentViewer
+                    content={currentContent}
+                    fileType={currentFileType}
+                    currentPath={currentPath}
+                    theme={theme}
+                    onNavigate={handleSelect}
+                    contentMaxWidth={menuBarSettings.contentMaxWidth}
+                    lineHeight={menuBarSettings.lineHeight}
+                    savedScroll={savedScroll}
+                    onSaveScroll={saveProgress}
+                  />
+                )}
               </Box>
             </Box>
           </>

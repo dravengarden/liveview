@@ -79,7 +79,9 @@ fn build_spine(book: &BookState) -> Vec<TreeNode> {
             let titles: std::collections::HashMap<String, String> = book
                 .editions
                 .iter()
-                .filter_map(|e| read_h1(&e.source.join(name.as_ref())).map(|h1| (e.lang.clone(), h1)))
+                .filter_map(|e| {
+                    read_h1(&e.source.join(name.as_ref())).map(|h1| (e.lang.clone(), h1))
+                })
                 .collect();
             TreeNode {
                 name: title,
@@ -271,6 +273,9 @@ mod tests {
                 include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
                 exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
             }],
+            audio_enabled: false,
+            spoken_skip: Vec::new(),
+            voice: None,
         }
     }
 
@@ -342,6 +347,9 @@ mod tests {
                     exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
                 },
             ],
+            audio_enabled: false,
+            spoken_skip: Vec::new(),
+            voice: None,
         };
 
         let tree = build_virtual_tree(&[book]);

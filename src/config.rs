@@ -132,9 +132,9 @@ pub struct ShelfCfg {
 }
 
 /// `book.toml` — the per-book manifest that lives inside the book directory
-/// (cf. books/ARCHITECTURE.md §5). Unknown sections (`[features]`,
-/// `[provenance]`, `[spoken]`, …) are intentionally ignored here — liveview
-/// only needs the identity, languages, and default edition.
+/// (cf. books/ARCHITECTURE.md §5). Sections liveview doesn't consume
+/// (`[provenance]`, …) are ignored; `[features]`/`[spoken]` drive the audiobook
+/// track.
 #[derive(Debug, Deserialize)]
 pub struct BookManifest {
     /// Defaults to the directory name when omitted.
@@ -146,6 +146,29 @@ pub struct BookManifest {
     /// for raw assets).
     #[serde(default)]
     pub langs: HashMap<String, LangManifest>,
+    #[serde(default)]
+    pub features: Features,
+    #[serde(default)]
+    pub spoken: SpokenCfg,
+}
+
+/// `[features]` — capability flags. Only `audio` is consumed by liveview (it
+/// gates the audiobook player affordance).
+#[derive(Debug, Default, Deserialize)]
+pub struct Features {
+    #[serde(default)]
+    pub audio: bool,
+}
+
+/// `[spoken]` — audiobook narration hints (books/ARCHITECTURE.md §7).
+#[derive(Debug, Default, Deserialize)]
+pub struct SpokenCfg {
+    /// Chapter stems (spine ids) to omit from narration entirely (TOC, index,
+    /// bibliography, …).
+    #[serde(default)]
+    pub skip: Vec<String>,
+    /// Override the edge-tts voice for this book (default: the server's voice).
+    pub voice: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,6 +218,12 @@ pub struct BookState {
     /// Always non-empty. First entry is the declaration order; `default_lang`
     /// names which one opens first.
     pub editions: Vec<EditionState>,
+    /// `[features].audio` — whether this book offers an audiobook track.
+    pub audio_enabled: bool,
+    /// `[spoken].skip` — chapter stems excluded from narration.
+    pub spoken_skip: Vec<String>,
+    /// `[spoken].voice` — per-book edge-tts voice override.
+    pub voice: Option<String>,
 }
 
 impl BookState {
@@ -438,6 +467,9 @@ impl Config {
                 layout: b.layout,
                 manifest: false,
                 editions,
+                audio_enabled: false,
+                spoken_skip: Vec::new(),
+                voice: None,
             });
         }
 
@@ -591,6 +623,9 @@ fn load_book_manifest(
         layout: None,
         manifest: true,
         editions,
+        audio_enabled: manifest.features.audio,
+        spoken_skip: manifest.spoken.skip,
+        voice: manifest.spoken.voice,
     })
 }
 
@@ -661,6 +696,9 @@ pub fn implicit_resolved(dir: &Path) -> Result<Resolved, String> {
                 include_set,
                 exclude_set,
             }],
+            audio_enabled: false,
+            spoken_skip: Vec::new(),
+            voice: None,
         }],
     })
 }

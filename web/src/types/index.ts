@@ -51,6 +51,22 @@ export interface Book {
   description?: string | null;
   default_lang: string;
   langs: LangInfo[];
+  /** `[features].audio` — whether to offer the audiobook read-along player. */
+  audio: boolean;
+}
+
+/** Read-along narration text: the chapter stripped to speakable sentences.
+ *  Sentence index = the `data-sent` anchor and the {@link Mark} index. */
+export interface SpokenContent {
+  lang: string;
+  sentences: string[];
+}
+
+/** One sentence's time range into the concatenated chapter audio (ms). */
+export interface Mark {
+  idx: number;
+  start_ms: number;
+  end_ms: number;
 }
 
 export type WsMessage =

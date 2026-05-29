@@ -109,6 +109,14 @@ async fn run(cli: Cli, resolved: Resolved) {
         file_tree: RwLock::new(initial_tree),
         rendered_cache: RwLock::new(HashMap::new()),
         progress,
+        tts_cmd: cli
+            .edge_tts_cmd
+            .clone()
+            .unwrap_or_else(|| "edge-tts".to_owned()),
+        tts_voice: cli
+            .tts_voice
+            .clone()
+            .unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_owned()),
     });
 
     server::watcher::start_watcher(state.clone(), resolved.debounce_ms);
@@ -129,6 +137,9 @@ async fn run(cli: Cli, resolved: Resolved) {
         .route("/api/tree", get(api_tree))
         .route("/api/file", get(api_file))
         .route("/api/raw", get(api_raw))
+        .route("/api/spoken", get(api_spoken))
+        .route("/api/audio", get(api_audio))
+        .route("/api/marks", get(api_marks))
         .route("/api/progress", get(api_progress_get).put(api_progress_put))
         .route("/ws", get(server::ws::ws_handler))
         .with_state(state.clone());
@@ -280,7 +291,9 @@ async fn api_progress_put(
 async fn open_progress_store(cli: &Cli) -> Option<ProgressStore> {
     let dir = cli.state_dir.clone().or_else(|| {
         std::env::var_os("STATE_DIRECTORY").and_then(|v| {
-            std::env::split_paths(&v).next().filter(|p| !p.as_os_str().is_empty())
+            std::env::split_paths(&v)
+                .next()
+                .filter(|p| !p.as_os_str().is_empty())
         })
     })?;
     if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -313,6 +326,8 @@ struct BookInfo {
     description: Option<String>,
     default_lang: String,
     langs: Vec<LangInfo>,
+    /// `[features].audio` — whether the audiobook player should be offered.
+    audio: bool,
 }
 
 /// Lightweight list of books for the landing page ("bookshelf"): the curated
@@ -335,6 +350,7 @@ async fn api_books(State(state): State<SharedState>) -> impl IntoResponse {
                     label: e.label.clone(),
                 })
                 .collect(),
+            audio: b.audio_enabled,
         })
         .collect();
     axum::Json(books)
@@ -464,6 +480,142 @@ async fn api_file(
     }
 }
 
+#[derive(serde::Serialize)]
+struct SpokenContent {
+    /// Edition actually served (overlay → base fallback).
+    lang: String,
+    /// Ordered speakable sentences. Index = the `data-sent` anchor the player
+    /// highlights and the marks.json index — one shared segmentation.
+    sentences: Vec<String>,
+}
+
+/// Read-along narration text: the chapter stripped to speakable sentences (no
+/// code/math/tables/figures). Same overlay → base resolution as /api/file.
+/// Chapters listed in the book's `[spoken].skip` have no narration → 404.
+async fn api_spoken(
+    State(state): State<SharedState>,
+    Query(query): Query<FileQuery>,
+) -> impl IntoResponse {
+    if !matches!(FileType::from_path(&query.path), FileType::Markdown) {
+        return (StatusCode::BAD_REQUEST, "not a markdown chapter").into_response();
+    }
+    let (slug, file) = query
+        .path
+        .split_once('/')
+        .unwrap_or((query.path.as_str(), ""));
+    let stem = Path::new(file)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if let Some(book) = state.book(slug) {
+        if book.spoken_skip.iter().any(|s| s == stem) {
+            return (StatusCode::NOT_FOUND, "chapter skipped for narration").into_response();
+        }
+    }
+
+    let (full_path, served_lang) =
+        match resolve_with_fallback(&state, &query.path, query.lang.as_deref()) {
+            Ok(Some(x)) => x,
+            Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+            Err(()) => return (StatusCode::FORBIDDEN, "Access denied").into_response(),
+        };
+
+    match tokio::fs::read_to_string(&full_path).await {
+        Ok(source) => Json(SpokenContent {
+            lang: served_lang,
+            sentences: server::spoken::spoken_sentences(&source),
+        })
+        .into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "File not found").into_response(),
+    }
+}
+
+/// Gate + resolve + lazily synthesize a chapter's audio. Returns the cached
+/// `(mp3, marks.json)` paths, or an error response (404 unknown/disabled/
+/// skipped, 403 traversal, 500 synth failure). Honors `[features].audio` and
+/// `[spoken].skip`; caches under the *served* edition.
+async fn prepare_audio(
+    state: &AppState,
+    query: &FileQuery,
+) -> Result<(PathBuf, PathBuf), (StatusCode, String)> {
+    let (slug, file) = query
+        .path
+        .split_once('/')
+        .unwrap_or((query.path.as_str(), ""));
+    let stem = Path::new(file)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let book = state
+        .book(slug)
+        .ok_or((StatusCode::NOT_FOUND, "unknown book".to_owned()))?;
+    if !book.audio_enabled {
+        return Err((
+            StatusCode::NOT_FOUND,
+            "audio not enabled for this book".to_owned(),
+        ));
+    }
+    if book.spoken_skip.iter().any(|s| s == stem) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            "chapter skipped for narration".to_owned(),
+        ));
+    }
+
+    let (md_path, served_lang) =
+        match resolve_with_fallback(state, &query.path, query.lang.as_deref()) {
+            Ok(Some(x)) => x,
+            Ok(None) => return Err((StatusCode::NOT_FOUND, "File not found".to_owned())),
+            Err(()) => return Err((StatusCode::FORBIDDEN, "Access denied".to_owned())),
+        };
+    let edition = book.edition(&served_lang).ok_or((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "served edition missing".to_owned(),
+    ))?;
+    let source = tokio::fs::read_to_string(&md_path)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, format!("read chapter: {e}")))?;
+    let sentences = server::spoken::spoken_sentences(&source);
+    let voice = book.voice.as_deref().unwrap_or(&state.tts_voice);
+    server::audio::ensure_audio(&edition.source, stem, &sentences, voice, &state.tts_cmd)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+/// Chapter narration audio (lazy-synth-on-first-play, then cached). MP3.
+async fn api_audio(
+    State(state): State<SharedState>,
+    Query(query): Query<FileQuery>,
+) -> impl IntoResponse {
+    match prepare_audio(&state, &query).await {
+        Ok((mp3, _)) => match tokio::fs::File::open(&mp3).await {
+            Ok(file) => Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "audio/mpeg")
+                .header(header::CACHE_CONTROL, "public, max-age=3600")
+                .body(Body::from_stream(ReaderStream::new(file)))
+                .unwrap()
+                .into_response(),
+            Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "open audio").into_response(),
+        },
+        Err((code, msg)) => (code, msg).into_response(),
+    }
+}
+
+/// Per-sentence time marks for the chapter audio (drives read-along highlight).
+async fn api_marks(
+    State(state): State<SharedState>,
+    Query(query): Query<FileQuery>,
+) -> impl IntoResponse {
+    match prepare_audio(&state, &query).await {
+        Ok((_, marks)) => match tokio::fs::read(&marks).await {
+            Ok(bytes) => ([(header::CONTENT_TYPE, "application/json")], bytes).into_response(),
+            Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "read marks").into_response(),
+        },
+        Err((code, msg)) => (code, msg).into_response(),
+    }
+}
+
 async fn api_raw(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
@@ -536,6 +688,8 @@ mod tests {
             file_tree: RwLock::new(Vec::new()),
             rendered_cache: RwLock::new(HashMap::new()),
             progress: None,
+            tts_cmd: "edge-tts".to_string(),
+            tts_voice: "zh-CN-XiaoxiaoNeural".to_string(),
         }
     }
 
@@ -554,6 +708,9 @@ mod tests {
                 include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
                 exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
             }],
+            audio_enabled: false,
+            spoken_skip: Vec::new(),
+            voice: None,
         }
     }
 
@@ -597,6 +754,9 @@ mod tests {
                 mk_ed("en", tmp_en.path().to_path_buf()),
                 mk_ed("zh", tmp_zh.path().to_path_buf()),
             ],
+            audio_enabled: false,
+            spoken_skip: Vec::new(),
+            voice: None,
         };
         let state = mk_state(vec![book]);
 
@@ -646,6 +806,9 @@ mod tests {
                 mk_ed("en", tmp_en.path().canonicalize().unwrap()),
                 mk_ed("zh", tmp_zh.path().canonicalize().unwrap()),
             ],
+            audio_enabled: false,
+            spoken_skip: Vec::new(),
+            voice: None,
         };
         let state = mk_state(vec![book]);
 

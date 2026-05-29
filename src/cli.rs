@@ -41,6 +41,16 @@ pub struct Cli {
     #[arg(long)]
     pub state_dir: Option<PathBuf>,
 
+    /// `edge-tts` executable for audiobook synthesis (default: `edge-tts` on
+    /// PATH). The audiobook player lazily shells out to it per sentence.
+    #[arg(long)]
+    pub edge_tts_cmd: Option<String>,
+
+    /// Default edge-tts voice (default: `zh-CN-XiaoxiaoNeural`). A book's
+    /// `[spoken].voice` in book.toml overrides this.
+    #[arg(long)]
+    pub tts_voice: Option<String>,
+
     /// Verbose tracing (`debug` level instead of `info`).
     #[arg(short, long)]
     pub verbose: bool,
