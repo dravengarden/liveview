@@ -334,6 +334,16 @@ export function ImageLightbox({
           WebkitUserSelect: "none",
           cursor: "zoom-out",
           willChange: "transform",
+          // The backdrop is always near-black (independent of theme), so the
+          // same light plate the inline figures get in dark mode (see
+          // markdown.css) is applied here unconditionally: white-bg diagrams
+          // would glare and transparent line art would vanish on black. Photos
+          // just gain a thin frame. (Per-figure theming — plate only diagrams,
+          // not photos — is the diagram-polish follow-up.)
+          backgroundColor: "#ffffff",
+          padding: "0.5rem",
+          borderRadius: "6px",
+          boxSizing: "border-box",
         }}
       />
 
