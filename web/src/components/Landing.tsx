@@ -12,6 +12,7 @@ import {
 import {
   AutoStories as ShelfIcon,
   MenuBook as BookIcon,
+  Article as DocsIcon,
   Settings as SettingsIcon,
 } from "@mui/icons-material";
 import type { Book, ReadingProgress } from "@/types";
@@ -146,11 +147,14 @@ export function Landing({
                       flexWrap: { xs: "wrap", sm: "nowrap" },
                     }}
                   >
-                    <BookIcon
-                      fontSize="small"
-                      color="primary"
-                      sx={{ mt: 0.3, flexShrink: 0 }}
-                    />
+                    {/* Icon by kind: a book.toml-driven title is a "book";
+                        a plain [[book]]/[[mount]] is a raw "docs" tree, which
+                        gets a document icon rather than a misleading book. */}
+                    {b.manifest ? (
+                      <BookIcon fontSize="small" color="primary" sx={{ mt: 0.3, flexShrink: 0 }} />
+                    ) : (
+                      <DocsIcon fontSize="small" color="primary" sx={{ mt: 0.3, flexShrink: 0 }} />
+                    )}
                     <Box sx={{ minWidth: 0, flex: 1 }}>
                       <Typography variant="subtitle1" fontWeight={600} noWrap title={b.label}>
                         {b.label}
