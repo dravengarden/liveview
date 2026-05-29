@@ -3,7 +3,7 @@ import {
   CONTENT_WIDTH_DEFAULT,
   LINE_HEIGHT_DEFAULT,
 } from "@/types";
-import type { MenuBarSettings, NavBarPosition } from "@/types";
+import type { MenuBarSettings } from "@/types";
 
 const SETTINGS_KEY = "lv-settings";
 
@@ -11,7 +11,6 @@ const DEFAULT_SETTINGS: MenuBarSettings = {
   floatOpacity: 0.3,
   contentMaxWidth: CONTENT_WIDTH_DEFAULT,
   lineHeight: LINE_HEIGHT_DEFAULT,
-  navBarPosition: "bottom",
 };
 
 function getStoredSettings(): MenuBarSettings {
@@ -23,10 +22,6 @@ function getStoredSettings(): MenuBarSettings {
         floatOpacity: parsed.floatOpacity ?? DEFAULT_SETTINGS.floatOpacity,
         contentMaxWidth: parsed.contentMaxWidth ?? DEFAULT_SETTINGS.contentMaxWidth,
         lineHeight: parsed.lineHeight ?? DEFAULT_SETTINGS.lineHeight,
-        navBarPosition:
-          parsed.navBarPosition === "top" || parsed.navBarPosition === "bottom"
-            ? parsed.navBarPosition
-            : DEFAULT_SETTINGS.navBarPosition,
       };
     }
   } catch {
@@ -40,7 +35,6 @@ interface UseSettingsResult {
   setFloatOpacity: (opacity: number) => void;
   setContentMaxWidth: (width: number) => void;
   setLineHeight: (lh: number) => void;
-  setNavBarPosition: (pos: NavBarPosition) => void;
 }
 
 export function useSettings(): UseSettingsResult {
@@ -72,18 +66,10 @@ export function useSettings(): UseSettingsResult {
     [persist]
   );
 
-  const setNavBarPosition = useCallback(
-    (pos: NavBarPosition) => {
-      persist({ ...getStoredSettings(), navBarPosition: pos });
-    },
-    [persist]
-  );
-
   return {
     menuBarSettings,
     setFloatOpacity,
     setContentMaxWidth,
     setLineHeight,
-    setNavBarPosition,
   };
 }

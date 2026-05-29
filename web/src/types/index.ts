@@ -118,10 +118,6 @@ export const THEME_OPTIONS: ThemeOption[] = [
   { value: "gruvbox-dark", label: "Gruvbox Dark" },
 ];
 
-/** Where the mobile/touch navigation bar sits. Defaults to the bottom (thumb
- *  reach); the top option suits readers who prefer it out of the way. */
-export type NavBarPosition = "top" | "bottom";
-
 export interface MenuBarSettings {
   floatOpacity: number;
   /** Max width of the markdown reading area in px. Smaller = bigger left/right
@@ -129,9 +125,6 @@ export interface MenuBarSettings {
   contentMaxWidth: number;
   /** Line height applied to markdown body content. */
   lineHeight: number;
-  /** Mobile/touch nav-bar edge: bottom (default) or top. Ignored on desktop,
-   *  which uses the hover-to-expand side float button. */
-  navBarPosition: NavBarPosition;
 }
 
 export const CONTENT_WIDTH_MIN = 640;

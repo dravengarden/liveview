@@ -50,9 +50,6 @@ const STRINGS: Record<Language, Dict> = {
     "settings.contentWidth": "CONTENT WIDTH",
     "settings.contentWidthFull": "Full width",
     "settings.lineHeight": "LINE HEIGHT",
-    "settings.navBar": "NAV BAR (MOBILE)",
-    "settings.navBarTop": "Top",
-    "settings.navBarBottom": "Bottom",
   },
   zh: {
     "landing.title": "书架",
@@ -88,9 +85,6 @@ const STRINGS: Record<Language, Dict> = {
     "settings.contentWidth": "内容宽度",
     "settings.contentWidthFull": "整页",
     "settings.lineHeight": "行距",
-    "settings.navBar": "导航栏（移动端）",
-    "settings.navBarTop": "顶部",
-    "settings.navBarBottom": "底部",
   },
 };
 
