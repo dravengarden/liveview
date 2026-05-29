@@ -32,14 +32,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: vx.x.x # latest stable
 
       - name: Build frontend
         run: |
           cd web
-          bun install
-          bun run build
+          deno install --allow-scripts
+          deno task build
 
       - name: Setup Rust
         uses: dtolnay/rust-action@stable
@@ -99,14 +101,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: vx.x.x # latest stable
 
       - name: Build frontend
         run: |
           cd web
-          bun install
-          bun run build
+          deno install --allow-scripts
+          deno task build
 
       - name: Setup Rust
         uses: dtolnay/rust-action@stable
@@ -127,7 +131,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 'latest'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Update version

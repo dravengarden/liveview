@@ -1,10 +1,10 @@
 # liveview flake — pure-Nix build of the `lv` binary: the React/MUI SPA
-# (bun + vite) and the axum daemon that embeds it via include_dir!.
+# (deno + vite) and the axum daemon that embeds it via include_dir!.
 #
-# `nix build` produces a binary equivalent to `bun run build` followed by
+# `nix build` produces a binary equivalent to `deno task build` followed by
 # `cargo build --release --features embedded`, with no external build
 # orchestration (no docker compile sandbox). Mirrors heimdall's flake; the
-# bun build runs in a fixed-output derivation so `bun install` gets network
+# web build runs in a fixed-output derivation so `deno install` gets network
 # (the box's omega TUN proxies the sandbox egress, same as heimdall-ui).
 {
   description = "liveview — live-reloading docs previewer (axum + embedded React SPA)";
@@ -18,8 +18,37 @@
       pkgs = import nixpkgs { inherit system; };
       lib = pkgs.lib;
 
-      # ── liveview-web: bun install + vite build → dist/ ────────────────
-      # Single fixed-output derivation: `bun install` needs the npm
+      # ── deno: pinned to the latest upstream release ───────────────────
+      # nixpkgs trails upstream (nixos-unstable is on 2.7.x); we want the
+      # newest deno, so wrap the official prebuilt x86_64-linux binary
+      # (autoPatchelf'd against glibc/libstdc++) instead of nixpkgs' source
+      # build. Bump `version` + re-prefetch `hash` to upgrade.
+      deno = pkgs.stdenv.mkDerivation rec {
+        pname = "deno";
+        version = "2.8.1";
+        src = pkgs.fetchurl {
+          url = "https://github.com/denoland/deno/releases/download/v${version}/deno-x86_64-unknown-linux-gnu.zip";
+          hash = "sha256-LXu2GVImrIMuC/cQmhFfCvZe5prHl6S73lsnoGzCQtk=";
+        };
+        nativeBuildInputs = [
+          pkgs.unzip
+          pkgs.autoPatchelfHook
+        ];
+        buildInputs = [
+          pkgs.stdenv.cc.cc.lib # libstdc++ / libgcc_s
+          pkgs.glibc
+        ];
+        sourceRoot = ".";
+        installPhase = ''
+          runHook preInstall
+          install -Dm755 deno $out/bin/deno
+          runHook postInstall
+        '';
+        meta.mainProgram = "deno";
+      };
+
+      # ── liveview-web: deno install + vite build → dist/ ───────────────
+      # Single fixed-output derivation: `deno install` needs the npm
       # registry (FODs are allowed network), then an offline vite build.
       liveview-web = pkgs.stdenv.mkDerivation {
         pname = "liveview-web";
@@ -38,10 +67,11 @@
             ]);
         };
 
-        # nodejs because vite.js starts with `#!/usr/bin/env node` — bun
-        # honors the shebang on posix_spawn. cacert for npm registry TLS.
+        # nodejs because some npm postinstall scripts (esbuild, which vite
+        # pulls in) run `node install.js` — deno's `--allow-scripts` execs
+        # them via node. cacert for npm registry TLS.
         nativeBuildInputs = [
-          pkgs.bun
+          deno
           pkgs.nodejs
           pkgs.cacert
         ];
@@ -49,12 +79,15 @@
         buildPhase = ''
           runHook preBuild
           export HOME=$TMPDIR
-          bun install --frozen-lockfile --no-progress
+          # --allow-scripts so esbuild's lifecycle script links its native
+          # binary; deno blocks npm lifecycle scripts by default. No
+          # --frozen: deno.lock is gitignored (not in the flake source),
+          # the outputHash is what pins reproducibility here.
+          deno install --allow-scripts
           # Invoke vite directly: the package.json `build` script is
           # `tsc && vite build`; the embedded bundle only needs vite's
-          # esbuild output, and `bun run build` trips bun's posix_spawn
-          # script resolver (see heimdall-ui).
-          bun ./node_modules/vite/bin/vite.js build
+          # esbuild output, so skip the tsc type-check pass.
+          deno run -A ./node_modules/vite/bin/vite.js build
           runHook postBuild
         '';
 
@@ -69,7 +102,7 @@
 
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-MC0GLl/BR4zoif5KNSKxSrTbJ6+D3soaKY/mAsnY0/M=";
+        outputHash = "sha256-ErngQuRpD5eBzScFOn91NkGGHxEsoC8UkQHQfd/qYIs=";
       };
 
       # ── lv: axum daemon, embeds the SPA via include_dir! ──────────────
@@ -132,7 +165,7 @@
         packages = [
           pkgs.cargo
           pkgs.rustc
-          pkgs.bun
+          deno
           pkgs.nodejs
         ];
       };

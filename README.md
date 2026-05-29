@@ -13,7 +13,7 @@ A fast, live-reloading file previewer for your terminal. Watch Markdown, images,
 
 ### From Source
 
-Requires [Rust](https://rustup.rs) and [Bun](https://bun.sh).
+Requires [Rust](https://rustup.rs) and [Deno](https://deno.com).
 
 ```bash
 git clone https://github.com/user/markdown-live-renderer

@@ -2,22 +2,25 @@
 
 ## Package Manager
 
-Use **bun** for all JavaScript/TypeScript operations:
+Use **deno** (2.x) for all JavaScript/TypeScript operations. The `web/`
+SPA keeps a `package.json` (npm deps + scripts); deno reads both and
+materializes a `node_modules/` for Vite.
 
 ```bash
-# Install dependencies
-bun install
+# Install dependencies (--allow-scripts lets esbuild's lifecycle script
+# link its native binary; deno blocks npm lifecycle scripts by default)
+deno install --allow-scripts
 
-# Run scripts
-bun run dev
-bun run build
-bun run typecheck
+# Run package.json scripts via deno task
+deno task dev
+deno task build
+deno task typecheck
 
-# Run TypeScript files directly
-bun run script.ts
+# Run a TypeScript file directly
+deno run -A script.ts
 
 # Run tests with Playwright
-bun run playwright test
+deno run -A npm:playwright test
 ```
 
 ## Development

@@ -8,14 +8,14 @@ dev:
 	@$(MAKE) -j2 dev-web dev-server
 
 dev-web:
-	cd web && bun run dev
+	cd web && deno task dev
 
 dev-server:
 	cargo run -- --port 4159
 
 # Build frontend SPA
 build-web:
-	cd web && bun install && bun run build
+	cd web && deno install --allow-scripts && deno task build
 
 # Build release binary with embedded SPA
 build: build-web
@@ -30,12 +30,12 @@ uninstall:
 
 fmt:
 	cargo fmt
-	cd web && bun run typecheck || true
+	cd web && deno task typecheck || true
 
 check:
 	cargo fmt --check
 	cargo clippy -- -D warnings
-	cd web && bun run typecheck
+	cd web && deno task typecheck
 
 clean:
 	cargo clean

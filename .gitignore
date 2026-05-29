@@ -4,11 +4,11 @@
 # Web frontend
 /web/node_modules
 /web/dist
-/web/bun.lock
+/web/deno.lock
 
 # Root dependencies (for Playwright)
 /node_modules
-/bun.lock
+/deno.lock
 
 # Temporary/test files
 /tmp
