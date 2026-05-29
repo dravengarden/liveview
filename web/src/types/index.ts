@@ -3,6 +3,10 @@ export interface TreeNode {
   path: string;
   is_dir: boolean;
   children: TreeNode[];
+  /** Per-language sidebar titles (lang code → title) for `book.toml` spine
+   *  chapters whose H1 differs by edition. The sidebar shows
+   *  `titles[currentLang] ?? name`. Absent for plain file-tree nodes. */
+  titles?: Record<string, string> | null;
 }
 
 export type FileType =

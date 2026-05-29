@@ -40,6 +40,7 @@ pub fn build_virtual_tree(books: &[BookState]) -> Vec<TreeNode> {
                 path: b.slug.clone(),
                 is_dir: true,
                 children,
+                titles: None,
             }
         })
         .collect()
@@ -71,11 +72,21 @@ fn build_spine(book: &BookState) -> Vec<TreeNode> {
         .map(|p| {
             let name = p.file_name().unwrap_or_default().to_string_lossy();
             let title = read_h1(p).unwrap_or_else(|| name.to_string());
+            // Each edition holds the same chapter filename; its H1 is that
+            // edition's title. Collect them so the sidebar can switch titles
+            // with the language. Editions missing the page are simply absent
+            // (the sidebar falls back to `name`, like the content fallback).
+            let titles: std::collections::HashMap<String, String> = book
+                .editions
+                .iter()
+                .filter_map(|e| read_h1(&e.source.join(name.as_ref())).map(|h1| (e.lang.clone(), h1)))
+                .collect();
             TreeNode {
                 name: title,
                 path: format!("{}/{}", book.slug, name),
                 is_dir: false,
                 children: Vec::new(),
+                titles: (!titles.is_empty()).then_some(titles),
             }
         })
         .collect()
@@ -123,6 +134,7 @@ fn scan_dir(
                     path: rel_path.to_string_lossy().to_string(),
                     is_dir: true,
                     children,
+                    titles: None,
                 });
             }
         } else if include_set.is_match(rel_path) {
@@ -131,6 +143,7 @@ fn scan_dir(
                 path: rel_path.to_string_lossy().to_string(),
                 is_dir: false,
                 children: vec![],
+                titles: None,
             });
         }
     }
@@ -294,6 +307,57 @@ mod tests {
                 ("The Basics", "mybook/01-basics.md", false),
             ]
         );
+    }
+
+    #[test]
+    fn manifest_spine_carries_per_language_titles() {
+        // zh is the default edition; en is an overlay missing one chapter.
+        let zh = TempDir::new("lv-spine-zh");
+        fs::write(zh.path().join("01-intro.md"), "# 介绍\n").unwrap();
+        fs::write(zh.path().join("02-types.md"), "# 类型\n").unwrap();
+        let en = TempDir::new("lv-spine-en");
+        fs::write(en.path().join("01-intro.md"), "# Introduction\n").unwrap();
+        // 02-types.md intentionally absent in `en` (untranslated chapter).
+
+        let book = BookState {
+            label: "Book".to_string(),
+            slug: "book".to_string(),
+            description: None,
+            default_lang: "zh".to_string(),
+            layout: None,
+            manifest: true,
+            editions: vec![
+                EditionState {
+                    lang: "zh".to_string(),
+                    label: "中文".to_string(),
+                    source: zh.path().to_path_buf(),
+                    include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
+                    exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+                },
+                EditionState {
+                    lang: "en".to_string(),
+                    label: "English".to_string(),
+                    source: en.path().to_path_buf(),
+                    include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
+                    exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+                },
+            ],
+        };
+
+        let tree = build_virtual_tree(&[book]);
+        let kids = &tree[0].children;
+
+        // Default `name` is the zh (default edition) title.
+        assert_eq!(kids[0].name, "介绍");
+        let t0 = kids[0].titles.as_ref().unwrap();
+        assert_eq!(t0.get("zh").map(String::as_str), Some("介绍"));
+        assert_eq!(t0.get("en").map(String::as_str), Some("Introduction"));
+
+        // Chapter missing in `en`: only zh title present, sidebar falls back to `name`.
+        assert_eq!(kids[1].name, "类型");
+        let t1 = kids[1].titles.as_ref().unwrap();
+        assert_eq!(t1.get("zh").map(String::as_str), Some("类型"));
+        assert_eq!(t1.get("en"), None);
     }
 
     #[test]

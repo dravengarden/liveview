@@ -33,6 +33,7 @@ interface TreeItemProps {
   node: TreeNode;
   level: number;
   currentPath: string | null;
+  currentLang: string | undefined;
   expandedPaths: Set<string>;
   onSelect: (path: string) => void;
   onToggle: (path: string) => void;
@@ -42,12 +43,18 @@ function TreeItem({
   node,
   level,
   currentPath,
+  currentLang,
   expandedPaths,
   onSelect,
   onToggle,
 }: TreeItemProps): React.JSX.Element {
   const isExpanded = expandedPaths.has(node.path);
   const isSelected = currentPath === node.path;
+  // Book-spine chapters carry per-language titles; show the current edition's,
+  // falling back to `name` (the default edition's title) for untranslated
+  // chapters and for plain file-tree nodes that have no `titles`.
+  const label =
+    (currentLang && node.titles?.[currentLang]) || node.name;
 
   const handleClick = useCallback(() => {
     if (node.is_dir) {
@@ -96,7 +103,7 @@ function TreeItem({
           )}
         </ListItemIcon>
         <ListItemText
-          primary={node.name}
+          primary={label}
           primaryTypographyProps={{
             variant: "body2",
             noWrap: true,
@@ -112,6 +119,7 @@ function TreeItem({
                 node={child}
                 level={level + 1}
                 currentPath={currentPath}
+                currentLang={currentLang}
                 expandedPaths={expandedPaths}
                 onSelect={onSelect}
                 onToggle={onToggle}
@@ -412,6 +420,7 @@ export function Sidebar({
               node={node}
               level={0}
               currentPath={currentPath}
+              currentLang={currentLang}
               expandedPaths={expandedPaths}
               onSelect={onSelect}
               onToggle={handleToggle}

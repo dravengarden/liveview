@@ -6,6 +6,14 @@ pub struct TreeNode {
     pub path: String,
     pub is_dir: bool,
     pub children: Vec<TreeNode>,
+    /// Per-language display titles (lang code → title), set only for
+    /// `book.toml` spine chapters whose title is each edition's H1 and thus
+    /// varies by language. The sidebar picks `titles[currentLang]`, falling
+    /// back to `name` (the default edition's title) when an edition lacks the
+    /// page. `None`/omitted for plain file-tree nodes, whose `name` is the
+    /// language-independent filename.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub titles: Option<std::collections::HashMap<String, String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
