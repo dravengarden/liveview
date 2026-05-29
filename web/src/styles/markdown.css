@@ -1127,3 +1127,43 @@
   min-height: 52px;
 }
 
+/* Zoomable image affordance. MarkdownViewer wraps every (non-linked) doc image
+   in .lv-zoom-wrap and appends a magnifier badge; the wrapper owns the click
+   listener that opens the lightbox. */
+.markdown-body .lv-zoom-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+  cursor: zoom-in;
+}
+
+.markdown-body .lv-zoom-badge {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background-color: rgba(0, 0, 0, 0.55);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='16.5' y1='16.5' x2='21' y2='21'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 16px 16px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.markdown-body .lv-zoom-wrap:hover .lv-zoom-badge {
+  opacity: 0.9;
+}
+
+/* Touch devices have no hover — keep a gentle persistent hint that the image
+   is tappable. */
+@media (hover: none) {
+  .markdown-body .lv-zoom-badge {
+    opacity: 0.5;
+  }
+}
+

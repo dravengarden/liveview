@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
-interface ImageLightboxProps {
-  /** Image URL to display. `null` keeps the lightbox closed. */
-  src: string | null;
+interface GalleryImage {
+  src: string;
   alt: string;
+}
+
+interface ImageLightboxProps {
+  /** All zoomable images in the current document, in reading order. */
+  images: GalleryImage[];
+  /** Index of the open image, or `null` to keep the lightbox closed. */
+  index: number | null;
+  /** Request a different image (prev/next, swipe, arrow keys). */
+  onIndex: (index: number) => void;
   onClose: () => void;
 }
 
@@ -12,26 +20,35 @@ const MIN_SCALE = 1;
 const MAX_SCALE = 6;
 // Vertical drag (at 1x) past this many px releases into a dismiss.
 const DISMISS_THRESHOLD = 110;
+// Horizontal drag (at 1x) past this many px flips to the prev/next image.
+const SWIPE_NAV_THRESHOLD = 70;
 // Pointer travel below this (px) counts as a tap, not a drag.
 const TAP_SLOP = 8;
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_SCALE = 2.5;
 
 /**
- * Fullscreen image preview with zoom + pan, driven by pointer events so the
+ * Fullscreen image gallery with zoom + pan, driven by pointer events so the
  * same code path serves mouse, touch, and pen:
  *
- *   - wheel / pinch        → zoom toward the cursor / pinch midpoint
- *   - double click / tap   → toggle between fit and DOUBLE_TAP_SCALE
- *   - drag (zoomed in)     → pan
- *   - drag down (at fit)   → swipe-to-dismiss, backdrop fades with distance
- *   - backdrop tap / Esc / ✕ → close
+ *   - wheel / pinch         → zoom toward the cursor / pinch midpoint
+ *   - double click / tap    → toggle between fit and DOUBLE_TAP_SCALE
+ *   - drag (zoomed in)      → pan
+ *   - drag sideways (at fit)→ previous / next image
+ *   - drag down (at fit)    → swipe-to-dismiss, backdrop fades with distance
+ *   - ← / → arrows          → previous / next image
+ *   - backdrop tap / Esc / ✕→ close
  *
  * The live transform is mutated on refs and written straight to the element's
  * style during a gesture (no React re-render per frame); React state only
- * gates mount/unmount via `src`.
+ * gates which image is shown via `index`.
  */
-export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps): React.JSX.Element | null {
+export function ImageLightbox({
+  images,
+  index,
+  onIndex,
+  onClose,
+}: ImageLightboxProps): React.JSX.Element | null {
   const overlayRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
 
@@ -48,6 +65,19 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps): React.
     pinchScale: 1,
     lastTapTime: 0,
   });
+
+  const open = index !== null && index >= 0 && index < images.length;
+  const current = open ? images[index] : undefined;
+  const src = current?.src ?? null;
+  const canPrev = open && index > 0;
+  const canNext = open && index < images.length - 1;
+
+  const goPrev = useCallback(() => {
+    if (index !== null && index > 0) onIndex(index - 1);
+  }, [index, onIndex]);
+  const goNext = useCallback(() => {
+    if (index !== null && index < images.length - 1) onIndex(index + 1);
+  }, [index, images.length, onIndex]);
 
   const applyTransform = useCallback((animate = false) => {
     const img = imgRef.current;
@@ -72,25 +102,27 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps): React.
     [applyTransform, setBackdrop],
   );
 
-  // New image → reset view.
+  // New image (open or navigation) → reset the view.
   useEffect(() => {
     if (src) reset();
   }, [src, reset]);
 
-  // Lock body scroll + Esc-to-close while open.
+  // Lock body scroll + key shortcuts while open.
   useEffect(() => {
-    if (!src) return undefined;
+    if (!open) return undefined;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowLeft") goPrev();
+      else if (e.key === "ArrowRight") goNext();
     };
     window.addEventListener("keydown", onKey);
     return () => {
       document.body.style.overflow = prevOverflow;
       window.removeEventListener("keydown", onKey);
     };
-  }, [src, onClose]);
+  }, [open, onClose, goPrev, goNext]);
 
   const clamp = (s: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
 
@@ -121,14 +153,14 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps): React.
   // Wheel zoom (passive:false so we can preventDefault the page scroll).
   useEffect(() => {
     const img = imgRef.current;
-    if (!img || !src) return undefined;
+    if (!img || !open) return undefined;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       zoomAt(e.deltaY < 0 ? 1.18 : 1 / 1.18, e.clientX, e.clientY);
     };
     img.addEventListener("wheel", onWheel, { passive: false });
     return () => img.removeEventListener("wheel", onWheel);
-  }, [src, zoomAt]);
+  }, [open, src, zoomAt]);
 
   const onPointerDown = useCallback((e: React.PointerEvent<HTMLImageElement>) => {
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -175,12 +207,13 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps): React.
         tf.current.y += dy;
         applyTransform();
       } else {
-        // Swipe-to-dismiss: follow the finger, fade the backdrop.
-        const totalY = e.clientY - st.startY;
-        tf.current.y = totalY;
-        tf.current.x = (e.clientX - st.startX) * 0.4;
+        // At fit: follow the finger on both axes. The release handler decides
+        // whether the dominant axis means navigate (horizontal) or dismiss
+        // (vertical). Only vertical travel fades the backdrop.
+        tf.current.x = e.clientX - st.startX;
+        tf.current.y = e.clientY - st.startY;
         applyTransform();
-        setBackdrop(0.92 * (1 - Math.min(1, Math.abs(totalY) / 400)));
+        setBackdrop(0.92 * (1 - Math.min(1, Math.abs(tf.current.y) / 400)));
       }
     },
     [zoomAt, applyTransform, setBackdrop],
@@ -192,10 +225,24 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps): React.
       if (pointers.current.size > 0) return; // still pinching
       const st = g.current;
 
-      // Dismiss when a fit-scale drag travelled far enough.
-      if (tf.current.scale <= 1 && Math.abs(tf.current.y) > DISMISS_THRESHOLD) {
-        onClose();
-        return;
+      if (tf.current.scale <= 1) {
+        const { x, y } = tf.current;
+        // Horizontal swipe wins when it dominates → previous / next image.
+        if (Math.abs(x) > Math.abs(y) && Math.abs(x) > SWIPE_NAV_THRESHOLD) {
+          const moved = x > 0 ? canPrev : canNext;
+          if (moved) {
+            if (x > 0) goPrev();
+            else goNext();
+            return; // index change resets the view
+          }
+          reset(true); // at an end — rubber-band back
+          return;
+        }
+        // Vertical drag far enough → dismiss.
+        if (Math.abs(y) > DISMISS_THRESHOLD) {
+          onClose();
+          return;
+        }
       }
 
       if (st.moved < TAP_SLOP) {
@@ -212,19 +259,19 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps): React.
         return;
       }
 
-      // A short drag that didn't dismiss → snap back to fit.
+      // A short drag that didn't dismiss / navigate → snap back to fit.
       if (tf.current.scale <= 1) reset(true);
     },
-    [onClose, reset, zoomAt],
+    [onClose, reset, zoomAt, canPrev, canNext, goPrev, goNext],
   );
 
-  if (!src) return null;
+  if (!open || !current) return null;
 
   return createPortal(
     <div
       ref={overlayRef}
       onClick={(e) => {
-        // Clicks landing on the backdrop (not the image) close.
+        // Clicks landing on the backdrop (not the image / controls) close.
         if (e.target === overlayRef.current) onClose();
       }}
       style={{
@@ -242,35 +289,37 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps): React.
         paddingBottom: "env(safe-area-inset-bottom, 0px)",
       }}
     >
-      <button
-        type="button"
-        aria-label="Close"
-        onClick={onClose}
-        style={{
-          position: "absolute",
-          top: "calc(env(safe-area-inset-top, 0px) + 12px)",
-          right: "12px",
-          width: 44,
-          height: 44,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: 26,
-          lineHeight: 1,
-          color: "#fff",
-          background: "rgba(0, 0, 0, 0.35)",
-          border: "none",
-          borderRadius: "50%",
-          cursor: "pointer",
-          zIndex: 1,
-        }}
-      >
+      <button type="button" aria-label="Close" onClick={onClose} style={closeBtnStyle}>
         ✕
       </button>
+
+      {images.length > 1 ? (
+        <>
+          <button
+            type="button"
+            aria-label="Previous image"
+            onClick={goPrev}
+            disabled={!canPrev}
+            style={navBtnStyle("left", canPrev)}
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            aria-label="Next image"
+            onClick={goNext}
+            disabled={!canNext}
+            style={navBtnStyle("right", canNext)}
+          >
+            ›
+          </button>
+        </>
+      ) : null}
+
       <img
         ref={imgRef}
-        src={src}
-        alt={alt}
+        src={current.src}
+        alt={current.alt}
         draggable={false}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -287,7 +336,80 @@ export function ImageLightbox({ src, alt, onClose }: ImageLightboxProps): React.
           willChange: "transform",
         }}
       />
+
+      {(current.alt || images.length > 1) ? (
+        <div style={captionStyle}>
+          {current.alt ? <span>{current.alt}</span> : null}
+          {images.length > 1 ? (
+            <span style={{ opacity: 0.7 }}>
+              {index + 1} / {images.length}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
     </div>,
     document.body,
   );
 }
+
+const closeBtnStyle: React.CSSProperties = {
+  position: "absolute",
+  top: "calc(env(safe-area-inset-top, 0px) + 12px)",
+  right: "12px",
+  width: 44,
+  height: 44,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontSize: 26,
+  lineHeight: 1,
+  color: "#fff",
+  background: "rgba(0, 0, 0, 0.35)",
+  border: "none",
+  borderRadius: "50%",
+  cursor: "pointer",
+  zIndex: 1,
+};
+
+function navBtnStyle(side: "left" | "right", enabled: boolean): React.CSSProperties {
+  return {
+    position: "absolute",
+    top: "50%",
+    transform: "translateY(-50%)",
+    [side]: "12px",
+    width: 48,
+    height: 48,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 34,
+    lineHeight: 1,
+    color: "#fff",
+    background: "rgba(0, 0, 0, 0.35)",
+    border: "none",
+    borderRadius: "50%",
+    cursor: enabled ? "pointer" : "default",
+    opacity: enabled ? 1 : 0.25,
+    zIndex: 1,
+  };
+}
+
+const captionStyle: React.CSSProperties = {
+  position: "absolute",
+  left: "50%",
+  bottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)",
+  transform: "translateX(-50%)",
+  maxWidth: "min(90%, 720px)",
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "6px 14px",
+  borderRadius: 999,
+  background: "rgba(0, 0, 0, 0.5)",
+  color: "#fff",
+  fontSize: 13,
+  lineHeight: 1.4,
+  textAlign: "center",
+  pointerEvents: "none",
+  zIndex: 1,
+};

@@ -9,9 +9,13 @@ declare global {
       highlightElement: (el: Element) => void;
     };
     mermaid?: {
-      initialize: (config: { theme: string; startOnLoad: boolean }) => void;
+      initialize: (config: Record<string, unknown>) => void;
       run: (config: { nodes: NodeListOf<Element> }) => Promise<void>;
+      /** Present only after the vendored ELK layout loader registers itself. */
+      registerLayoutLoaders?: (loaders: unknown) => void;
     };
+    /** Default export of @mermaid-js/layout-elk, exposed by the vendored UMD. */
+    "mermaid-layout-elk"?: unknown;
     katex?: {
       renderToString: (
         tex: string,
@@ -40,6 +44,40 @@ function isDarkTheme(theme: Theme): boolean {
   return !theme.includes("light");
 }
 
+// Font stack for mermaid SVG labels. Why: mermaid's built-in default is
+// "trebuchet ms", which has NO CJK glyphs — Chinese/Japanese labels render as
+// tofu. We start from the reader's selected reading font (--lv-reading-font,
+// which already chains a Noto SC face when a preset is loaded) and append
+// platform CJK fallbacks so labels stay legible even before any @fontsource
+// face is lazily fetched. var() resolves inside inline SVG in all evergreen
+// browsers, so the font also tracks live font-preset changes.
+const MERMAID_FONT_FAMILY =
+  'var(--lv-reading-font), "Noto Sans SC", "PingFang SC", ' +
+  '"Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif';
+
+// Shared init config for both the first render and the theme re-render path.
+// Why these knobs: markdownAutoWrap + flowchart.wrappingWidth make long node
+// labels fold instead of overflowing the diagram; useMaxWidth keeps the SVG
+// inside the reading column; the slightly larger node/rank spacing relieves the
+// "too crowded" complaint without changing the diagram source.
+function mermaidConfig(theme: string): Record<string, unknown> {
+  return {
+    theme,
+    startOnLoad: false,
+    fontFamily: MERMAID_FONT_FAMILY,
+    markdownAutoWrap: true,
+    flowchart: {
+      useMaxWidth: true,
+      wrappingWidth: 220,
+      nodeSpacing: 55,
+      rankSpacing: 60,
+      padding: 12,
+      curve: "basis",
+    },
+    sequence: { useMaxWidth: true, wrap: true },
+  };
+}
+
 export function MarkdownViewer({
   html,
   currentPath,
@@ -55,7 +93,9 @@ export function MarkdownViewer({
   // Suppresses the scroll handler while we programmatically restore position,
   // so restoring doesn't immediately overwrite the saved value with itself.
   const restoringRef = useRef(false);
-  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
+  // Ordered list of zoomable images in the doc + which one the lightbox shows.
+  const [images, setImages] = useState<{ src: string; alt: string }[]>([]);
+  const [lbIndex, setLbIndex] = useState<number | null>(null);
 
   const processContent = useCallback((forceRerender = false) => {
     const container = containerRef.current;
@@ -91,10 +131,7 @@ export function MarkdownViewer({
       'pre[lang="mermaid"], code.language-mermaid'
     );
     if (mermaidBlocks.length > 0 && window.mermaid) {
-      window.mermaid.initialize({
-        theme: mermaidTheme,
-        startOnLoad: false,
-      });
+      window.mermaid.initialize(mermaidConfig(mermaidTheme));
 
       mermaidBlocks.forEach((block) => {
         const code = block.tagName === "CODE" ? block.textContent : block.querySelector("code")?.textContent;
@@ -114,10 +151,7 @@ export function MarkdownViewer({
 
     // Re-render existing mermaid diagrams when theme changes
     if (forceRerender && window.mermaid) {
-      window.mermaid.initialize({
-        theme: mermaidTheme,
-        startOnLoad: false,
-      });
+      window.mermaid.initialize(mermaidConfig(mermaidTheme));
 
       const processedMermaids = container.querySelectorAll<HTMLElement>(".mermaid[data-processed]");
       processedMermaids.forEach((el) => {
@@ -182,6 +216,51 @@ export function MarkdownViewer({
     prevThemeRef.current = theme;
     processContent(themeChanged);
   }, [html, theme, processContent]);
+
+  // Make every (non-linked) doc image a zoomable, tappable target and collect
+  // them into an ordered gallery for the lightbox. The open listener is bound
+  // to a wrapper element directly, NOT delegated from the container: iOS Safari
+  // only dispatches `click` on elements that are themselves interactive (a
+  // `cursor: zoom-in` rule is not enough), so container-level delegation
+  // silently no-ops on iPhone/iPad — which is the whole "doesn't work on
+  // mobile" bug. The wrapper also anchors the magnifier affordance badge.
+  useEffect(() => {
+    const container = containerRef.current;
+    const body = container?.querySelector<HTMLElement>(".markdown-body");
+    if (!body) {
+      setImages([]);
+      return undefined;
+    }
+    const imgs = [...body.querySelectorAll<HTMLImageElement>("img")].filter(
+      (img) => !img.closest("a") && !img.classList.contains("emoji") && !img.closest("g-emoji"),
+    );
+    const gallery: { src: string; alt: string }[] = [];
+    const cleanups: (() => void)[] = [];
+    imgs.forEach((img) => {
+      const idx = gallery.length;
+      gallery.push({ src: img.currentSrc || img.src, alt: img.alt });
+      let wrap = img.parentElement;
+      if (!(wrap instanceof HTMLElement) || !wrap.classList.contains("lv-zoom-wrap")) {
+        const span = document.createElement("span");
+        span.className = "lv-zoom-wrap";
+        img.replaceWith(span);
+        span.appendChild(img);
+        const badge = document.createElement("span");
+        badge.className = "lv-zoom-badge";
+        badge.setAttribute("aria-hidden", "true");
+        span.appendChild(badge);
+        wrap = span;
+      }
+      const target = wrap;
+      const onOpen = (): void => setLbIndex(idx);
+      target.addEventListener("click", onOpen);
+      cleanups.push(() => target.removeEventListener("click", onOpen));
+    });
+    setImages(gallery);
+    return () => {
+      for (const c of cleanups) c();
+    };
+  }, [html]);
 
   // Persist scroll position (as a 0..1 ratio, robust to reflow) while reading.
   // Upstream debounces the network write; here we just report on each scroll.
@@ -265,14 +344,8 @@ export function MarkdownViewer({
         }
         return;
       }
-
-      // Click on a (non-linked) doc image → open the zoom lightbox. Reuse the
-      // browser-resolved URL the <img> already loaded, so this works no matter
-      // how the src was formed. Skip broken/zero-size images.
-      const img = target.closest("img");
-      if (img instanceof HTMLImageElement && img.naturalWidth > 0) {
-        setLightbox({ src: img.currentSrc || img.src, alt: img.alt });
-      }
+      // Image taps are handled by per-image listeners wired in the effect
+      // above (so they fire reliably on iOS); nothing to do here.
     },
     [currentPath, onNavigate]
   );
@@ -345,9 +418,10 @@ export function MarkdownViewer({
       />
     </Box>
       <ImageLightbox
-        src={lightbox?.src ?? null}
-        alt={lightbox?.alt ?? ""}
-        onClose={() => setLightbox(null)}
+        images={images}
+        index={lbIndex}
+        onIndex={setLbIndex}
+        onClose={() => setLbIndex(null)}
       />
     </>
   );
