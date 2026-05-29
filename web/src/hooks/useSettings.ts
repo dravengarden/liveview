@@ -8,7 +8,6 @@ import type { MenuBarSettings } from "@/types";
 const SETTINGS_KEY = "lv-settings";
 
 const DEFAULT_SETTINGS: MenuBarSettings = {
-  floatOpacity: 0.3,
   contentMaxWidth: CONTENT_WIDTH_DEFAULT,
   lineHeight: LINE_HEIGHT_DEFAULT,
 };
@@ -19,7 +18,6 @@ function getStoredSettings(): MenuBarSettings {
     if (stored) {
       const parsed = JSON.parse(stored) as Partial<MenuBarSettings>;
       return {
-        floatOpacity: parsed.floatOpacity ?? DEFAULT_SETTINGS.floatOpacity,
         contentMaxWidth: parsed.contentMaxWidth ?? DEFAULT_SETTINGS.contentMaxWidth,
         lineHeight: parsed.lineHeight ?? DEFAULT_SETTINGS.lineHeight,
       };
@@ -32,7 +30,6 @@ function getStoredSettings(): MenuBarSettings {
 
 interface UseSettingsResult {
   menuBarSettings: MenuBarSettings;
-  setFloatOpacity: (opacity: number) => void;
   setContentMaxWidth: (width: number) => void;
   setLineHeight: (lh: number) => void;
 }
@@ -44,13 +41,6 @@ export function useSettings(): UseSettingsResult {
     setMenuBarSettings(next);
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
   }, []);
-
-  const setFloatOpacity = useCallback(
-    (opacity: number) => {
-      persist({ ...getStoredSettings(), floatOpacity: opacity });
-    },
-    [persist]
-  );
 
   const setContentMaxWidth = useCallback(
     (width: number) => {
@@ -68,7 +58,6 @@ export function useSettings(): UseSettingsResult {
 
   return {
     menuBarSettings,
-    setFloatOpacity,
     setContentMaxWidth,
     setLineHeight,
   };

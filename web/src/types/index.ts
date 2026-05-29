@@ -119,7 +119,6 @@ export const THEME_OPTIONS: ThemeOption[] = [
 ];
 
 export interface MenuBarSettings {
-  floatOpacity: number;
   /** Max width of the markdown reading area in px. Smaller = bigger left/right
    *  margin (WeChat-style 页边距). 0 means "no limit" — use the viewport. */
   contentMaxWidth: number;
@@ -135,4 +134,4 @@ export const CONTENT_WIDTH_DEFAULT = 960;
 export const LINE_HEIGHT_MIN = 1.3;
 export const LINE_HEIGHT_MAX = 2.2;
 export const LINE_HEIGHT_STEP = 0.1;
-export const LINE_HEIGHT_DEFAULT = 1.5;
+export const LINE_HEIGHT_DEFAULT = 1.8;
