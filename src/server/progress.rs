@@ -65,6 +65,28 @@ impl ProgressStore {
         .await
     }
 
+    /// The most-recently-read chapter of every book that has any progress,
+    /// newest first — one row per book (its first path segment). Powers the
+    /// landing "continue reading" indicators. The table is per-reader and tiny,
+    /// so we fetch all rows ordered by recency and keep the first per book in
+    /// Rust rather than reconstructing the slug in SQL (paths may be a bare
+    /// `<slug>` with no `/`, which `substr`/`instr` would mishandle).
+    pub async fn recent_per_book(&self) -> Result<Vec<ProgressEntry>, sqlx::Error> {
+        let rows = sqlx::query_as::<_, ProgressEntry>(
+            "SELECT path, scroll, updated_at FROM progress ORDER BY updated_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut seen = std::collections::HashSet::new();
+        Ok(rows
+            .into_iter()
+            .filter(|r| {
+                let slug = r.path.split('/').next().unwrap_or("").to_string();
+                seen.insert(slug)
+            })
+            .collect())
+    }
+
     /// Insert or update one document's scroll ratio, stamping the current time.
     pub async fn upsert(&self, path: &str, scroll: f64) -> Result<(), sqlx::Error> {
         sqlx::query(

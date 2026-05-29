@@ -7,6 +7,9 @@ export interface UseProgress {
   /** Fetch a book's saved positions into the cache; returns the most-recently
    *  read entry (for "resume last chapter"), or null. */
   loadBook: (slug: string) => Promise<ProgressEntry | null>;
+  /** Fetch the latest-read chapter of every book (newest first), for the
+   *  landing "continue reading" indicators. Also seeds the scroll cache. */
+  loadRecent: () => Promise<ProgressEntry[]>;
   /** Cached scroll ratio for a doc path, or undefined if none. */
   savedScroll: (path: string) => number | undefined;
   /** Record a doc's scroll ratio; persists to the backend, debounced per path. */
@@ -34,6 +37,18 @@ export function useProgress(): UseProgress {
     }
   }, []);
 
+  const loadRecent = useCallback(async (): Promise<ProgressEntry[]> => {
+    try {
+      const res = await fetch("/api/progress/recent");
+      if (!res.ok) return [];
+      const rows = (await res.json()) as ProgressEntry[];
+      for (const r of rows) ratios.current.set(r.path, r.scroll);
+      return rows;
+    } catch {
+      return [];
+    }
+  }, []);
+
   const savedScroll = useCallback((path: string): number | undefined => ratios.current.get(path), []);
 
   const save = useCallback((path: string, scroll: number) => {
@@ -55,5 +70,5 @@ export function useProgress(): UseProgress {
     );
   }, []);
 
-  return { loadBook, savedScroll, save };
+  return { loadBook, loadRecent, savedScroll, save };
 }

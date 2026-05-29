@@ -18,7 +18,15 @@ import {
 import { Sidebar, SettingsDialog, ContentViewer, AudiobookPlayer, Landing } from "@/components";
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
-import type { TreeNode, FileType, FileContent, Book } from "@/types";
+import { PortalLauncherButton, PortalProvider } from "./_shell";
+import type {
+  TreeNode,
+  FileType,
+  FileContent,
+  Book,
+  ProgressEntry,
+  ReadingProgress,
+} from "@/types";
 
 const DEFAULT_SIDEBAR_WIDTH = 280;
 // Below this width the sidebar becomes an overlay drawer (phones + portrait
@@ -58,6 +66,17 @@ function hasFilePath(nodes: TreeNode[], target: string): boolean {
     if (node.is_dir && hasFilePath(node.children, target)) return true;
   }
   return false;
+}
+
+function findNode(nodes: TreeNode[], target: string): TreeNode | null {
+  for (const node of nodes) {
+    if (node.path === target) return node;
+    if (node.is_dir) {
+      const found = findNode(node.children, target);
+      if (found !== null) return found;
+    }
+  }
+  return null;
 }
 
 function findFirstFile(nodes: TreeNode[]): string | null {
@@ -213,41 +232,53 @@ function FloatButton({ position, floatOpacity, children }: FloatButtonProps): Re
   );
 }
 
-interface MobileMenuButtonsProps {
+interface MobileNavBarProps {
+  position: "top" | "bottom";
   onOpenSidebar: () => void;
   onOpenSettings: () => void;
 }
 
-// Always-visible, tap-friendly controls for touch devices (the desktop
-// hover-to-expand FloatButton doesn't work without a pointer). Sits below
-// the iPhone status-bar / notch via the safe-area inset.
-function MobileMenuButtons({
+// Fixed (non-floating), full-width navigation bar for touch devices — the
+// desktop hover-to-expand FloatButton needs a pointer that phones/tablets
+// lack. It's a flex item in the content column (not an overlay), so it sits
+// flush at the bottom (default) or top edge without covering the text. Layout:
+// the sidebar-expand control on the left; settings then the portal launcher on
+// the right (portal rightmost). Top/bottom edge safe-area insets clear the
+// notch / home indicator; the parent already insets the side notches.
+function MobileNavBar({
+  position,
   onOpenSidebar,
   onOpenSettings,
-}: MobileMenuButtonsProps): React.JSX.Element {
+}: MobileNavBarProps): React.JSX.Element {
   const { t } = useI18n();
+  const isTop = position === "top";
   return (
     <Box
+      component="nav"
       sx={{
-        position: "absolute",
-        top: "calc(env(safe-area-inset-top, 0px) + 8px)",
-        left: "calc(env(safe-area-inset-left, 0px) + 8px)",
-        zIndex: 1200,
+        flexShrink: 0,
         display: "flex",
-        gap: 0.5,
+        alignItems: "center",
+        justifyContent: "space-between",
+        px: 1,
         bgcolor: "background.paper",
-        border: 1,
         borderColor: "divider",
-        borderRadius: 2,
-        boxShadow: 2,
+        ...(isTop
+          ? { borderBottom: 1, pt: "calc(env(safe-area-inset-top, 0px) + 4px)", pb: 0.5 }
+          : { borderTop: 1, pb: "calc(env(safe-area-inset-bottom, 0px) + 4px)", pt: 0.5 }),
       }}
     >
-      <IconButton aria-label={t("app.openSidebar")} onClick={onOpenSidebar} sx={{ p: 1.25 }}>
+      {/* Left: expand the sidebar. */}
+      <IconButton aria-label={t("app.openSidebar")} onClick={onOpenSidebar} sx={{ p: 1 }}>
         <MenuIcon />
       </IconButton>
-      <IconButton aria-label={t("app.settings")} onClick={onOpenSettings} sx={{ p: 1.25 }}>
-        <SettingsIcon />
-      </IconButton>
+      {/* Right: settings, then the portal launcher (self-hides when not hosted). */}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+        <IconButton aria-label={t("app.settings")} onClick={onOpenSettings} sx={{ p: 1 }}>
+          <SettingsIcon />
+        </IconButton>
+        <PortalLauncherButton />
+      </Box>
     </Box>
   );
 }
@@ -283,11 +314,16 @@ export function App(): React.JSX.Element {
   const currentPathRef = useRef<string | null>(null);
   const contentLangRef = useRef<string>("");
 
-  const { loadBook, savedScroll, save: saveProgress } = useProgress();
+  const { loadBook, loadRecent, savedScroll, save: saveProgress } = useProgress();
+  // Latest-read chapter per book (newest first), for the landing "continue
+  // reading" indicators. Refetched whenever the bookshelf is shown so it
+  // reflects progress made since the last visit.
+  const [recentProgress, setRecentProgress] = useState<ProgressEntry[]>([]);
 
   const { t, lang: uiLang } = useI18n();
   const { theme, muiTheme, setTheme } = useTheme();
-  const { menuBarSettings, setFloatOpacity, setContentMaxWidth, setLineHeight } = useSettings();
+  const { menuBarSettings, setFloatOpacity, setContentMaxWidth, setLineHeight, setNavBarPosition } =
+    useSettings();
   const { fontId, setFont } = useFont();
 
   // Collapse the sidebar when shrinking to a phone/tablet width, reopen it
@@ -325,6 +361,32 @@ export function App(): React.JSX.Element {
       }
     })();
   }, []);
+
+  // Refresh the landing's reading-progress whenever the bookshelf is shown
+  // (initial load and every return from a book).
+  useEffect(() => {
+    if (activeSlug !== null) return;
+    void (async () => {
+      setRecentProgress(await loadRecent());
+    })();
+  }, [activeSlug, loadRecent]);
+
+  // Resolve each book's latest-read chapter into a display-ready entry: chapter
+  // title (current UI edition, falling back to the node name, then the file
+  // name) plus the in-chapter scroll ratio. Keyed by book slug for the landing.
+  const progressBySlug = useMemo(() => {
+    const out: Record<string, ReadingProgress> = {};
+    for (const r of recentProgress) {
+      const slug = r.path.split("/")[0] ?? "";
+      const node = findNode(tree, r.path);
+      const chapterLabel =
+        (node && ((uiLang && node.titles?.[uiLang]) || node.name)) ||
+        r.path.split("/").pop() ||
+        r.path;
+      out[slug] = { path: r.path, chapterLabel, scroll: r.scroll };
+    }
+    return out;
+  }, [recentProgress, tree, uiLang]);
 
   const handleContentUpdate = useCallback(
     (path: string, msgLang: string, fileType: FileType, content: string) => {
@@ -533,6 +595,9 @@ export function App(): React.JSX.Element {
     setSettingsOpen(false);
   }, []);
 
+  // Touch devices (phones + hover-less tablets) use the fixed MobileNavBar;
+  // pointer desktops use the hover-to-expand side FloatButton.
+  const isMobileNav = isMobile || isTouch;
   const showFloatButtons = !sidebarOpen;
 
   const langLabel = (code: string): string =>
@@ -555,9 +620,16 @@ export function App(): React.JSX.Element {
   return (
     <ThemeProvider theme={muiTheme}>
       <CssBaseline />
+      <PortalProvider appId="liveview">
       <Box sx={{ display: "flex", height: "100dvh", overflow: "hidden" }}>
         {activeSlug === null ? (
-          <Landing books={books} onOpen={enterBook} onOpenSettings={handleOpenSettings} />
+          <Landing
+            books={books}
+            progress={progressBySlug}
+            onOpen={enterBook}
+            onHome={backToLanding}
+            onOpenSettings={handleOpenSettings}
+          />
         ) : (
           <>
             {isMobile ? (
@@ -594,26 +666,32 @@ export function App(): React.JSX.Element {
                 pr: "env(safe-area-inset-right, 0px)",
               }}
             >
-              {showFloatButtons &&
-                (isMobile || isTouch ? (
-                  <MobileMenuButtons
-                    onOpenSidebar={handleOpenSidebar}
-                    onOpenSettings={handleOpenSettings}
-                  />
-                ) : (
-                  <FloatButton position="left" floatOpacity={menuBarSettings.floatOpacity}>
-                    <Tooltip title={t("app.openSidebar")}>
-                      <IconButton size="small" onClick={handleOpenSidebar}>
-                        <MenuIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title={t("app.settings")}>
-                      <IconButton size="small" onClick={handleOpenSettings}>
-                        <SettingsIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  </FloatButton>
-                ))}
+              {/* Desktop (pointer) only: the hover-to-expand side float button.
+                  Touch devices get the fixed MobileNavBar below instead. */}
+              {!isMobileNav && showFloatButtons && (
+                <FloatButton position="left" floatOpacity={menuBarSettings.floatOpacity}>
+                  {/* Portal launcher; self-hides when not hosted. */}
+                  <PortalLauncherButton size="small" />
+                  <Tooltip title={t("app.openSidebar")}>
+                    <IconButton size="small" onClick={handleOpenSidebar}>
+                      <MenuIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title={t("app.settings")}>
+                    <IconButton size="small" onClick={handleOpenSettings}>
+                      <SettingsIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </FloatButton>
+              )}
+
+              {isMobileNav && menuBarSettings.navBarPosition === "top" && (
+                <MobileNavBar
+                  position="top"
+                  onOpenSidebar={handleOpenSidebar}
+                  onOpenSettings={handleOpenSettings}
+                />
+              )}
 
               {canAudiobook && (
                 <FloatButton position="right" floatOpacity={menuBarSettings.floatOpacity}>
@@ -664,6 +742,14 @@ export function App(): React.JSX.Element {
                   />
                 )}
               </Box>
+
+              {isMobileNav && menuBarSettings.navBarPosition === "bottom" && (
+                <MobileNavBar
+                  position="bottom"
+                  onOpenSidebar={handleOpenSidebar}
+                  onOpenSettings={handleOpenSettings}
+                />
+              )}
             </Box>
           </>
         )}
@@ -679,8 +765,10 @@ export function App(): React.JSX.Element {
           onFloatOpacityChange={setFloatOpacity}
           onContentMaxWidthChange={setContentMaxWidth}
           onLineHeightChange={setLineHeight}
+          onNavBarPositionChange={setNavBarPosition}
         />
       </Box>
+      </PortalProvider>
     </ThemeProvider>
   );
 }
