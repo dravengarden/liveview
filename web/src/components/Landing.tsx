@@ -15,6 +15,7 @@ import {
 } from "@mui/icons-material";
 import type { Book } from "@/types";
 import { useI18n } from "@/i18n";
+import { PortalLauncherButton } from "../_shell";
 
 interface LandingProps {
   books: Book[];
@@ -39,6 +40,11 @@ export function Landing({ books, onOpen, onOpenSettings }: LandingProps): React.
         py: { xs: 4, md: 6 },
       }}
     >
+      {/* Portal launcher (top-left); self-hides when not hosted. */}
+      <Box sx={{ position: "absolute", top: 12, left: 12 }}>
+        <PortalLauncherButton />
+      </Box>
+
       <Tooltip title={t("app.settings")}>
         <IconButton
           aria-label={t("app.settings")}

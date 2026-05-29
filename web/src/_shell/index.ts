@@ -12,8 +12,8 @@
 // source under columbus/interface/app-shell/.
 
 export {
-  AppGridButton,
-  type AppGridButtonProps,
+  PortalLauncherButton,
+  type PortalLauncherButtonProps,
 } from "./app-grid-button";
 export {
   type NavigateOptions,

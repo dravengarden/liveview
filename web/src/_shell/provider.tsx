@@ -22,7 +22,6 @@ import {
   type ReactNode,
 } from "react";
 
-import { AppGridButton } from "./app-grid-button";
 import {
   type AppMeta,
   type BusEvent,
@@ -194,10 +193,7 @@ export function PortalProvider({
     [hosted, mode, catalog, visibility, send],
   );
 
-  return (
-    <PortalContext.Provider value={api}>
-      {children}
-      {hosted ? <AppGridButton onClick={api.openLauncher} /> : null}
-    </PortalContext.Provider>
-  );
+  // No chrome is injected here. The app places <PortalLauncherButton/> in its
+  // own header where it fits; that button self-hides when not hosted.
+  return <PortalContext.Provider value={api}>{children}</PortalContext.Provider>;
 }

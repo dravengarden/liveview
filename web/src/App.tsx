@@ -13,7 +13,7 @@ import { Menu as MenuIcon, Settings as SettingsIcon } from "@mui/icons-material"
 import { Sidebar, SettingsDialog, ContentViewer, Landing } from "@/components";
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
-import { PortalProvider } from "./_shell";
+import { PortalLauncherButton, PortalProvider } from "./_shell";
 import type { TreeNode, FileType, FileContent, Book } from "@/types";
 
 const DEFAULT_SIDEBAR_WIDTH = 280;
@@ -238,6 +238,7 @@ function MobileMenuButtons({
         boxShadow: 2,
       }}
     >
+      <PortalLauncherButton />
       <IconButton aria-label={t("app.openSidebar")} onClick={onOpenSidebar} sx={{ p: 1.25 }}>
         <MenuIcon />
       </IconButton>
@@ -588,6 +589,8 @@ export function App(): React.JSX.Element {
                   />
                 ) : (
                   <FloatButton position="left" floatOpacity={menuBarSettings.floatOpacity}>
+                    {/* Portal launcher; self-hides when not hosted. */}
+                    <PortalLauncherButton size="small" />
                     <Tooltip title={t("app.openSidebar")}>
                       <IconButton size="small" onClick={handleOpenSidebar}>
                         <MenuIcon fontSize="small" />

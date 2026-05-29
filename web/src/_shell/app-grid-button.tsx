@@ -4,38 +4,43 @@
 // ║  Edit there, then re-run `harness shell sync` to propagate.      ║
 // ╚════════════════════════════════════════════════════════════════╝
 
-// The 9-grid launcher button. Rendered by PortalProvider ONLY when hosted, so
-// a standalone app shows nothing. It's just the trigger — clicking it asks the
-// portal to draw its own launcher overlay (which can break out of the iframe);
-// the app never needs to know the full catalog to render this.
+// The launcher TRIGGER an app places in its own header (top-left, by
+// convention) so it sits natively in the app's chrome — not a floating overlay.
+//
+// It self-hides when the app isn't hosted, so a standalone app shows nothing:
+// drop it into your toolbar unconditionally and it only appears inside the
+// portal. Clicking it merely asks the portal to raise the launcher — the popup
+// UI and all navigation are the portal's job; the app only triggers it.
 
 import AppsIcon from "@mui/icons-material/Apps";
-import { Fab, Tooltip } from "@mui/material";
+import { IconButton, Tooltip } from "@mui/material";
 
-export interface AppGridButtonProps {
-  onClick: () => void;
+import { usePortal } from "./provider";
+
+export interface PortalLauncherButtonProps {
+  /** Pass edge="start" when it's the first item in a toolbar (tighter inset). */
+  edge?: "start" | "end" | false;
+  /** Override the icon button size to match the host app's toolbar. */
+  size?: "small" | "medium" | "large";
 }
 
-export function AppGridButton({ onClick }: AppGridButtonProps): React.ReactNode {
+export function PortalLauncherButton({
+  edge = false,
+  size = "medium",
+}: PortalLauncherButtonProps): React.ReactNode {
+  const { hosted, openLauncher } = usePortal();
+  if (!hosted) return null;
   return (
-    <Tooltip title="Apps" placement="left">
-      <Fab
-        size="small"
-        color="default"
+    <Tooltip title="Apps">
+      <IconButton
+        color="inherit"
+        edge={edge}
+        size={size}
         aria-label="open app launcher"
-        onClick={onClick}
-        sx={{
-          position: "fixed",
-          top: 12,
-          right: 12,
-          // Above app chrome but below modal dialogs (MUI modal = 1300).
-          zIndex: 1250,
-          opacity: 0.85,
-          "&:hover": { opacity: 1 },
-        }}
+        onClick={openLauncher}
       >
-        <AppsIcon />
-      </Fab>
+        <AppsIcon fontSize={size === "small" ? "small" : "medium"} />
+      </IconButton>
     </Tooltip>
   );
 }
