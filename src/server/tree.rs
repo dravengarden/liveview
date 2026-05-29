@@ -46,52 +46,82 @@ pub fn build_virtual_tree(books: &[BookState]) -> Vec<TreeNode> {
         .collect()
 }
 
-/// Sidebar for a `book.toml` book: a flat, ordered list of the base edition's
-/// top-level markdown chapters, each labelled by its H1 (the chapter title).
-/// Non-markdown (e.g. `assets/`) is hidden — readers see titles, not files.
+/// Sidebar for a `book.toml` book: an ordered spine of the base edition's
+/// markdown chapters, each labelled by its H1 (the chapter title). Chapters
+/// may be grouped in subdirectories — those become collapsible group nodes
+/// (labelled by the directory name) so a book can have a nested structure.
+/// Non-markdown files and markdown-free dirs (e.g. `assets/`, `audio/`) are
+/// hidden — readers see titled sections, not files.
 fn build_spine(book: &BookState) -> Vec<TreeNode> {
     let ed = book.default_edition();
-    let Ok(entries) = std::fs::read_dir(&ed.source) else {
+    build_spine_dir(book, &ed.source, &ed.source)
+}
+
+/// Recursively build a book's spine rooted at `dir` (relative to the edition
+/// `root`). Markdown files become H1-titled, language-aware chapter nodes;
+/// subdirectories that contain at least one markdown chapter (at any depth)
+/// become group nodes. A dir with no markdown under it is dropped, so asset
+/// directories never surface. Siblings are sorted by filename — the book
+/// convention for chapter ordering (numeric `NN-` prefixes sort naturally).
+fn build_spine_dir(book: &BookState, root: &Path, dir: &Path) -> Vec<TreeNode> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut files: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_file()
-                && matches!(
-                    p.extension().and_then(|x| x.to_str()),
-                    Some("md" | "markdown")
-                )
-        })
-        .collect();
-    files.sort();
+    let mut paths: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+    paths.sort();
 
-    files
-        .iter()
-        .map(|p| {
-            let name = p.file_name().unwrap_or_default().to_string_lossy();
-            let title = read_h1(p).unwrap_or_else(|| name.to_string());
-            // Each edition holds the same chapter filename; its H1 is that
-            // edition's title. Collect them so the sidebar can switch titles
-            // with the language. Editions missing the page are simply absent
-            // (the sidebar falls back to `name`, like the content fallback).
+    let mut nodes = Vec::new();
+    for path in paths {
+        let Ok(rel) = path.strip_prefix(root) else {
+            continue;
+        };
+        if path.is_dir() {
+            let children = build_spine_dir(book, root, &path);
+            if children.is_empty() {
+                continue;
+            }
+            // Group nodes are language-independent (editions share the dir
+            // layout), so they carry the raw dir name and no per-language title.
+            nodes.push(TreeNode {
+                name: path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
+                path: format!("{}/{}", book.slug, rel.to_string_lossy()),
+                is_dir: true,
+                children,
+                titles: None,
+            });
+        } else if matches!(
+            path.extension().and_then(|x| x.to_str()),
+            Some("md" | "markdown")
+        ) {
+            let title = read_h1(&path).unwrap_or_else(|| {
+                path.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            });
+            // Each edition holds the same chapter at the same relative path; its
+            // H1 is that edition's title. Collect them so the sidebar can switch
+            // titles with the language. Editions missing the page are simply
+            // absent (the sidebar falls back to `name`, like the content fallback).
             let titles: std::collections::HashMap<String, String> = book
                 .editions
                 .iter()
-                .filter_map(|e| {
-                    read_h1(&e.source.join(name.as_ref())).map(|h1| (e.lang.clone(), h1))
-                })
+                .filter_map(|e| read_h1(&e.source.join(rel)).map(|h1| (e.lang.clone(), h1)))
                 .collect();
-            TreeNode {
+            nodes.push(TreeNode {
                 name: title,
-                path: format!("{}/{}", book.slug, name),
+                path: format!("{}/{}", book.slug, rel.to_string_lossy()),
                 is_dir: false,
                 children: Vec::new(),
                 titles: (!titles.is_empty()).then_some(titles),
-            }
-        })
-        .collect()
+            });
+        }
+    }
+    nodes
 }
 
 /// First Markdown H1 (`# Title`) in a file, used as the section's sidebar
@@ -310,6 +340,53 @@ mod tests {
             vec![
                 ("Introduction", "mybook/00-intro.md", false),
                 ("The Basics", "mybook/01-basics.md", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn manifest_book_supports_nested_chapter_dirs() {
+        let tmp = TempDir::new("lv-spine-nested");
+        // A top-level chapter, plus a grouped part with its own chapters.
+        fs::write(tmp.path().join("00-intro.md"), b"# Introduction\n").unwrap();
+        fs::create_dir_all(tmp.path().join("01-part-one")).unwrap();
+        fs::write(
+            tmp.path().join("01-part-one/01-accounts.md"),
+            b"# Accounts\n",
+        )
+        .unwrap();
+        fs::write(tmp.path().join("01-part-one/02-state.md"), b"# State\n").unwrap();
+        // A markdown-free dir must NOT surface as a group.
+        fs::create_dir_all(tmp.path().join("assets")).unwrap();
+        fs::write(tmp.path().join("assets/fig.png"), b"").unwrap();
+
+        let mut book = mk_mount("My Book", "mybook", tmp.path(), None);
+        book.manifest = true;
+        let tree = build_virtual_tree(&[book]);
+
+        let kids = &tree[0].children;
+        // Filename order: 00-intro.md, then the 01-part-one group; assets dropped.
+        assert_eq!(kids.len(), 2);
+        assert_eq!(
+            (kids[0].name.as_str(), kids[0].is_dir),
+            ("Introduction", false)
+        );
+        assert_eq!(
+            (kids[1].name.as_str(), kids[1].is_dir),
+            ("01-part-one", true)
+        );
+        assert_eq!(kids[1].path, "mybook/01-part-one");
+
+        let inner: Vec<(&str, &str)> = kids[1]
+            .children
+            .iter()
+            .map(|n| (n.name.as_str(), n.path.as_str()))
+            .collect();
+        assert_eq!(
+            inner,
+            vec![
+                ("Accounts", "mybook/01-part-one/01-accounts.md"),
+                ("State", "mybook/01-part-one/02-state.md"),
             ]
         );
     }

@@ -29,9 +29,50 @@ import {
 import type { LangInfo, TreeNode } from "@/types";
 import { useI18n } from "@/i18n";
 
+/** A single-line label that reveals its full text in a tooltip only when it is
+ *  actually truncated (ellipsized). Re-measures on container resize, so it
+ *  reacts to the draggable sidebar width. */
+function TruncatedLabel({ text }: { text: string }): React.JSX.Element {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [overflowed, setOverflowed] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const measure = (): void => setOverflowed(el.scrollWidth > el.clientWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [text]);
+
+  const label = (
+    <Typography
+      ref={ref}
+      variant="body2"
+      noWrap
+      sx={{ display: "block", minWidth: 0 }}
+    >
+      {text}
+    </Typography>
+  );
+
+  // Mount the Tooltip only when truncated, so non-clipped rows don't pop a
+  // redundant tooltip on hover.
+  return overflowed ? (
+    <Tooltip title={text} placement="right" enterDelay={400}>
+      {label}
+    </Tooltip>
+  ) : (
+    label
+  );
+}
+
 interface TreeItemProps {
   node: TreeNode;
   level: number;
+  /** "book" mode hides file icons and the root folder; see {@link Sidebar}. */
+  bookMode: boolean;
   currentPath: string | null;
   currentLang: string | undefined;
   expandedPaths: Set<string>;
@@ -42,6 +83,7 @@ interface TreeItemProps {
 function TreeItem({
   node,
   level,
+  bookMode,
   currentPath,
   currentLang,
   expandedPaths,
@@ -80,6 +122,8 @@ function TreeItem({
           },
         }}
       >
+        {/* Expand/collapse affordance: a chevron for dirs, an aligning spacer
+            for files so their labels line up with sibling group names. */}
         {node.is_dir ? (
           <ListItemIcon sx={{ minWidth: 24 }}>
             {isExpanded ? (
@@ -91,24 +135,22 @@ function TreeItem({
         ) : (
           <ListItemIcon sx={{ minWidth: 24 }} />
         )}
-        <ListItemIcon sx={{ minWidth: 28 }}>
-          {node.is_dir ? (
-            isExpanded ? (
-              <FolderOpenIcon fontSize="small" color="primary" />
+        {/* Book mode is a clean reading spine — no folder/file icons. Docs mode
+            keeps the filesystem-tree icons. */}
+        {!bookMode && (
+          <ListItemIcon sx={{ minWidth: 28 }}>
+            {node.is_dir ? (
+              isExpanded ? (
+                <FolderOpenIcon fontSize="small" color="primary" />
+              ) : (
+                <FolderIcon fontSize="small" color="primary" />
+              )
             ) : (
-              <FolderIcon fontSize="small" color="primary" />
-            )
-          ) : (
-            <FileIcon fontSize="small" color="action" />
-          )}
-        </ListItemIcon>
-        <ListItemText
-          primary={label}
-          primaryTypographyProps={{
-            variant: "body2",
-            noWrap: true,
-          }}
-        />
+              <FileIcon fontSize="small" color="action" />
+            )}
+          </ListItemIcon>
+        )}
+        <ListItemText disableTypography primary={<TruncatedLabel text={label} />} />
       </ListItemButton>
       {node.is_dir && node.children.length > 0 && (
         <Collapse in={isExpanded} timeout="auto" unmountOnExit>
@@ -118,6 +160,7 @@ function TreeItem({
                 key={child.path}
                 node={child}
                 level={level + 1}
+                bookMode={bookMode}
                 currentPath={currentPath}
                 currentLang={currentLang}
                 expandedPaths={expandedPaths}
@@ -176,6 +219,10 @@ interface SidebarProps {
   currentPath: string | null;
   width: number;
   isMobile?: boolean;
+  /** "book" mode (book.toml-driven) renders a clean titled spine — no file
+   *  icons, root folder already dropped upstream. "docs" mode renders the raw
+   *  filesystem tree with folder/file icons. */
+  bookMode?: boolean;
   bookLabel?: string;
   langs?: LangInfo[];
   currentLang?: string;
@@ -192,6 +239,7 @@ export function Sidebar({
   currentPath,
   width,
   isMobile = false,
+  bookMode = false,
   bookLabel,
   langs = [],
   currentLang,
@@ -419,6 +467,7 @@ export function Sidebar({
               key={node.path}
               node={node}
               level={0}
+              bookMode={bookMode}
               currentPath={currentPath}
               currentLang={currentLang}
               expandedPaths={expandedPaths}

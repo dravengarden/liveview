@@ -32,12 +32,6 @@ const DEFAULT_SIDEBAR_WIDTH = 280;
 // Below this width the sidebar becomes an overlay drawer (phones + portrait
 // tablets). MUI's `md` breakpoint.
 const MOBILE_QUERY = "(max-width:899.95px)";
-// Devices with no real hover (touch tablets/phones, incl. wide landscape
-// iPads). The collapsed FloatButton relies on hover to expand from its faint
-// transparent triangle, which never works without a pointer — so on these
-// devices we show the always-visible, tap-friendly MobileMenuButtons instead,
-// regardless of viewport width.
-const TOUCH_QUERY = "(hover: none)";
 // iOS needs the swipe-to-open discovery affordance but not the backdrop
 // transition (perf); the inverse holds elsewhere. MUI's documented split.
 const IS_IOS =
@@ -232,24 +226,26 @@ function FloatButton({ position, floatOpacity, children }: FloatButtonProps): Re
   );
 }
 
-interface MobileNavBarProps {
+interface ReaderNavBarProps {
   position: "top" | "bottom";
   onOpenSidebar: () => void;
   onOpenSettings: () => void;
 }
 
-// Fixed (non-floating), full-width navigation bar for touch devices — the
-// desktop hover-to-expand FloatButton needs a pointer that phones/tablets
-// lack. It's a flex item in the content column (not an overlay), so it sits
-// flush at the bottom (default) or top edge without covering the text. Layout:
-// the sidebar-expand control on the left; settings then the portal launcher on
-// the right (portal rightmost). Top/bottom edge safe-area insets clear the
-// notch / home indicator; the parent already insets the side notches.
-function MobileNavBar({
+// Fixed (non-floating), full-width navigation bar for the reader chrome — used
+// on every form factor when the sidebar's own header isn't carrying these
+// controls (mobile drawer, or a collapsed desktop sidebar). It's a flex item in
+// the content column (not an overlay), so it sits flush at the bottom (default)
+// or top edge without ever covering the text — a floating overlay here hurt
+// reading (conventions/ui.md §7). Layout: the sidebar-expand control on the
+// left; settings then the portal launcher on the right (portal rightmost).
+// Top/bottom edge safe-area insets clear the notch / home indicator; the parent
+// already insets the side notches.
+function ReaderNavBar({
   position,
   onOpenSidebar,
   onOpenSettings,
-}: MobileNavBarProps): React.JSX.Element {
+}: ReaderNavBarProps): React.JSX.Element {
   const { t } = useI18n();
   const isTop = position === "top";
   return (
@@ -299,11 +295,8 @@ export function App(): React.JSX.Element {
   const [untranslated, setUntranslated] = useState<UntranslatedNotice | null>(null);
   const [currentFileType, setCurrentFileType] = useState<FileType>("markdown");
   const [currentContent, setCurrentContent] = useState<string | null>(null);
+  // `isMobile` (width) drives the Drawer-vs-persistent sidebar layout.
   const isMobile = useMediaQuery(MOBILE_QUERY);
-  // `isMobile` (width) drives the Drawer-vs-persistent sidebar layout; `isTouch`
-  // (no hover) drives which floating control we expose when the sidebar is
-  // collapsed. A wide iPad is `!isMobile` but `isTouch`.
-  const isTouch = useMediaQuery(TOUCH_QUERY);
   const [sidebarOpen, setSidebarOpen] = useState(() => !window.matchMedia(MOBILE_QUERY).matches);
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -334,11 +327,20 @@ export function App(): React.JSX.Element {
 
   // The active book is the first path segment; null ⇒ the landing bookshelf.
   const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;
-  const activeTree = useMemo(
-    () => (activeSlug ? tree.filter((n) => n.path === activeSlug) : []),
-    [tree, activeSlug]
-  );
   const activeBook = books.find((b) => b.slug === activeSlug) ?? null;
+  // "book" mode (book.toml-driven) renders a clean titled spine; "docs" mode
+  // renders the raw filesystem tree. The flag also drives whether the root
+  // folder node is shown (see below) and the per-row styling in the sidebar.
+  const bookMode = activeBook?.manifest ?? false;
+  const activeTree = useMemo(() => {
+    if (!activeSlug) return [];
+    const root = tree.find((n) => n.path === activeSlug);
+    if (!root) return [];
+    // Book mode: the book label already sits in the sidebar header, so the
+    // single root folder ("第一层 dir") is redundant — surface its
+    // chapters/sections directly. Docs mode keeps the root for context.
+    return bookMode ? root.children : [root];
+  }, [tree, activeSlug, bookMode]);
   const bookLabel = activeBook?.label ?? activeSlug ?? "";
   const bookLangs = activeBook?.langs ?? [];
 
@@ -595,10 +597,12 @@ export function App(): React.JSX.Element {
     setSettingsOpen(false);
   }, []);
 
-  // Touch devices (phones + hover-less tablets) use the fixed MobileNavBar;
-  // pointer desktops use the hover-to-expand side FloatButton.
-  const isMobileNav = isMobile || isTouch;
-  const showFloatButtons = !sidebarOpen;
+  // The reader chrome controls (sidebar toggle, settings, launcher) live in a
+  // fixed edge nav bar — never a floating overlay over the text (that hurt
+  // reading; see conventions/ui.md §7). The bar shows whenever those controls
+  // aren't already in the sidebar header: on mobile (the sidebar is a drawer)
+  // and on desktop whenever the persistent sidebar is collapsed.
+  const showNavBar = isMobile || !sidebarOpen;
 
   const langLabel = (code: string): string =>
     bookLangs.find((l) => l.lang === code)?.label ?? code;
@@ -606,6 +610,7 @@ export function App(): React.JSX.Element {
   const sidebarCommon = {
     tree: activeTree,
     currentPath,
+    bookMode,
     bookLabel,
     langs: bookLangs,
     currentLang: lang,
@@ -666,27 +671,8 @@ export function App(): React.JSX.Element {
                 pr: "env(safe-area-inset-right, 0px)",
               }}
             >
-              {/* Desktop (pointer) only: the hover-to-expand side float button.
-                  Touch devices get the fixed MobileNavBar below instead. */}
-              {!isMobileNav && showFloatButtons && (
-                <FloatButton position="left" floatOpacity={menuBarSettings.floatOpacity}>
-                  {/* Portal launcher; self-hides when not hosted. */}
-                  <PortalLauncherButton size="small" />
-                  <Tooltip title={t("app.openSidebar")}>
-                    <IconButton size="small" onClick={handleOpenSidebar}>
-                      <MenuIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title={t("app.settings")}>
-                    <IconButton size="small" onClick={handleOpenSettings}>
-                      <SettingsIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                </FloatButton>
-              )}
-
-              {isMobileNav && menuBarSettings.navBarPosition === "top" && (
-                <MobileNavBar
+              {showNavBar && menuBarSettings.navBarPosition === "top" && (
+                <ReaderNavBar
                   position="top"
                   onOpenSidebar={handleOpenSidebar}
                   onOpenSettings={handleOpenSettings}
@@ -743,8 +729,8 @@ export function App(): React.JSX.Element {
                 )}
               </Box>
 
-              {isMobileNav && menuBarSettings.navBarPosition === "bottom" && (
-                <MobileNavBar
+              {showNavBar && menuBarSettings.navBarPosition === "bottom" && (
+                <ReaderNavBar
                   position="bottom"
                   onOpenSidebar={handleOpenSidebar}
                   onOpenSettings={handleOpenSettings}

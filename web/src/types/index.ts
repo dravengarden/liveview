@@ -64,6 +64,10 @@ export interface Book {
   langs: LangInfo[];
   /** `[features].audio` — whether to offer the audiobook read-along player. */
   audio: boolean;
+  /** `true` for a `book.toml`-driven book → "book" mode: the sidebar is a
+   *  clean, titled spine (no root folder, no file icons). `false` for a plain
+   *  `[[book]]`/`[[mount]]` → "docs" mode: the raw filesystem tree. */
+  manifest: boolean;
 }
 
 /** Read-along narration text: the chapter stripped to speakable sentences.

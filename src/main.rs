@@ -344,6 +344,11 @@ struct BookInfo {
     langs: Vec<LangInfo>,
     /// `[features].audio` — whether the audiobook player should be offered.
     audio: bool,
+    /// `true` for a `book.toml`-driven book (the sidebar is a clean, titled
+    /// spine — "book" mode); `false` for a plain `[[book]]`/`[[mount]]` whose
+    /// sidebar is the raw filesystem tree ("docs" mode). The frontend renders
+    /// the two modes differently.
+    manifest: bool,
 }
 
 /// Lightweight list of books for the landing page ("bookshelf"): the curated
@@ -367,6 +372,7 @@ async fn api_books(State(state): State<SharedState>) -> impl IntoResponse {
                 })
                 .collect(),
             audio: b.audio_enabled,
+            manifest: b.manifest,
         })
         .collect();
     axum::Json(books)
