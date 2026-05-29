@@ -13,6 +13,7 @@ import { Menu as MenuIcon, Settings as SettingsIcon } from "@mui/icons-material"
 import { Sidebar, SettingsDialog, ContentViewer, Landing } from "@/components";
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
+import { PortalProvider } from "./_shell";
 import type { TreeNode, FileType, FileContent, Book } from "@/types";
 
 const DEFAULT_SIDEBAR_WIDTH = 280;
@@ -539,6 +540,7 @@ export function App(): React.JSX.Element {
   return (
     <ThemeProvider theme={muiTheme}>
       <CssBaseline />
+      <PortalProvider appId="liveview">
       <Box sx={{ display: "flex", height: "100dvh", overflow: "hidden" }}>
         {activeSlug === null ? (
           <Landing books={books} onOpen={enterBook} onOpenSettings={handleOpenSettings} />
@@ -637,6 +639,7 @@ export function App(): React.JSX.Element {
           onLineHeightChange={setLineHeight}
         />
       </Box>
+      </PortalProvider>
     </ThemeProvider>
   );
 }
