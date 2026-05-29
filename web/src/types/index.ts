@@ -88,17 +88,10 @@ export type WsMessage =
   | { type: "ContentUpdate"; path: string; lang: string; file_type: FileType; content: string }
   | { type: "TreeUpdate"; tree: TreeNode[] };
 
-export type Theme =
-  | "light"
-  | "dark"
-  | "solarized-light"
-  | "solarized-dark"
-  | "dracula"
-  | "nord"
-  | "monokai"
-  | "one-dark"
-  | "gruvbox-light"
-  | "gruvbox-dark";
+// Reading-oriented themes only (Day / Sepia / Dark / Night). The old
+// code-editor schemes (solarized, dracula, nord, monokai, one-dark, gruvbox)
+// were dropped — they read as IDE chrome, not a book.
+export type Theme = "light" | "sepia" | "dark" | "night";
 
 export interface ThemeOption {
   value: Theme;
@@ -107,15 +100,9 @@ export interface ThemeOption {
 
 export const THEME_OPTIONS: ThemeOption[] = [
   { value: "light", label: "Light" },
+  { value: "sepia", label: "Sepia" },
   { value: "dark", label: "Dark" },
-  { value: "solarized-light", label: "Solarized Light" },
-  { value: "solarized-dark", label: "Solarized Dark" },
-  { value: "dracula", label: "Dracula" },
-  { value: "nord", label: "Nord" },
-  { value: "monokai", label: "Monokai" },
-  { value: "one-dark", label: "One Dark" },
-  { value: "gruvbox-light", label: "Gruvbox Light" },
-  { value: "gruvbox-dark", label: "Gruvbox Dark" },
+  { value: "night", label: "Night" },
 ];
 
 export interface MenuBarSettings {

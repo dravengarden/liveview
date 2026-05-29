@@ -133,12 +133,13 @@
    Per-figure theming (vectorize diagrams to currentColor SVG / author dual
    images) is the diagram-polish follow-up; this is the floor under it.
 
-   The gate mirrors the JS isDarkTheme() (= !theme.includes("light")), so any
-   future dark theme is covered automatically. Escape hatches:
+   The gate keys on data-color-scheme (set by useTheme alongside data-theme),
+   so it tracks the light/dark flag directly rather than guessing from theme
+   names — sepia is a light theme, dark and night are dark. Escape hatches:
      - class `no-plate`     figure that already carries its own dark background
      - `foo.png#only-dark`  author-supplied dark variant: shown only in dark and
        never plated; pair with `foo.png#only-light` for the light one. */
-html[data-theme]:not([data-theme*="light"]) .markdown-body
+[data-color-scheme="dark"] .markdown-body
   img:not(.emoji):not(.no-plate):not([src$="#only-dark"]) {
   background-color: #ffffff;
   padding: 0.5rem;
@@ -147,8 +148,8 @@ html[data-theme]:not([data-theme*="light"]) .markdown-body
 }
 
 /* Light/dark dual-image switch (opt-in, mirrors MkDocs Material's #only-*). */
-html[data-theme]:not([data-theme*="light"]) .markdown-body img[src$="#only-light"],
-html[data-theme*="light"] .markdown-body img[src$="#only-dark"] {
+[data-color-scheme="dark"] .markdown-body img[src$="#only-light"],
+[data-color-scheme="light"] .markdown-body img[src$="#only-dark"] {
   display: none;
 }
 

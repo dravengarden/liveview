@@ -4,89 +4,7 @@ import type { Theme } from "@/types";
 
 const THEME_KEY = "lv-theme";
 
-// Solarized colors
-const solarized = {
-  base03: "#002b36",
-  base02: "#073642",
-  base01: "#586e75",
-  base00: "#657b83",
-  base0: "#839496",
-  base1: "#93a1a1",
-  base2: "#eee8d5",
-  base3: "#fdf6e3",
-  blue: "#268bd2",
-};
-
-// Dracula colors
-const dracula = {
-  background: "#282a36",
-  currentLine: "#44475a",
-  foreground: "#f8f8f2",
-  comment: "#6272a4",
-  cyan: "#8be9fd",
-  purple: "#bd93f9",
-};
-
-// Nord colors
-const nord = {
-  polarNight0: "#2e3440",
-  polarNight1: "#3b4252",
-  polarNight2: "#434c5e",
-  snowStorm0: "#d8dee9",
-  snowStorm1: "#e5e9f0",
-  snowStorm2: "#eceff4",
-  frost0: "#8fbcbb",
-  frost1: "#88c0d0",
-  frost2: "#81a1c1",
-  frost3: "#5e81ac",
-};
-
-// Monokai colors
-const monokai = {
-  background: "#272822",
-  foreground: "#f8f8f2",
-  comment: "#75715e",
-  yellow: "#e6db74",
-  orange: "#fd971f",
-  pink: "#f92672",
-};
-
-// One Dark colors
-const oneDark = {
-  background: "#282c34",
-  gutterBg: "#21252b",
-  foreground: "#abb2bf",
-  comment: "#5c6370",
-  cyan: "#56b6c2",
-  blue: "#61afef",
-};
-
-// Gruvbox colors
-const gruvbox = {
-  darkBg: "#282828",
-  darkBg1: "#3c3836",
-  darkFg: "#ebdbb2",
-  darkGray: "#928374",
-  lightBg: "#fbf1c7",
-  lightBg1: "#ebdbb2",
-  lightFg: "#3c3836",
-  lightGray: "#928374",
-  orange: "#d65d0e",
-  blue: "#458588",
-};
-
-const VALID_THEMES: Theme[] = [
-  "light",
-  "dark",
-  "solarized-light",
-  "solarized-dark",
-  "dracula",
-  "nord",
-  "monokai",
-  "one-dark",
-  "gruvbox-light",
-  "gruvbox-dark",
-];
+const VALID_THEMES: Theme[] = ["light", "sepia", "dark", "night"];
 
 function getStoredTheme(): Theme {
   const stored = localStorage.getItem(THEME_KEY);
@@ -96,8 +14,12 @@ function getStoredTheme(): Theme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+// Explicit, not name-based: "sepia" is a light theme yet has no "light" in its
+// name, so a substring test would misclassify it (and would mis-gate the
+// dark-mode image plate in markdown.css). Keep this in sync with the dark
+// `data-color-scheme` the effect sets below.
 function isDarkTheme(theme: Theme): boolean {
-  return !theme.includes("light");
+  return theme === "dark" || theme === "night";
 }
 
 // Keep the iOS standalone status bar (and Android's) in sync with the active
@@ -128,6 +50,17 @@ function getThemeColors(theme: Theme): ThemeColors {
         textSecondary: "#656d76",
         divider: "#d0d7de",
       };
+    case "sepia":
+      // Warm cream for long-form reading (~25% lower radiance than white).
+      // Brown text on cream keeps ~7:1 contrast without the glare of black.
+      return {
+        primary: "#9a5b3d",
+        bgDefault: "#f4ecd8",
+        bgPaper: "#ece0c8",
+        textPrimary: "#5b4636",
+        textSecondary: "#7d6b58",
+        divider: "#ddd0b8",
+      };
     case "dark":
       return {
         primary: "#58a6ff",
@@ -137,77 +70,16 @@ function getThemeColors(theme: Theme): ThemeColors {
         textSecondary: "#8b949e",
         divider: "#30363d",
       };
-    case "solarized-light":
+    case "night":
+      // Warm, low-blue-light dark for night reading; off-white (not pure
+      // white) text to avoid halation, amber accent instead of cool blue.
       return {
-        primary: solarized.blue,
-        bgDefault: solarized.base3,
-        bgPaper: solarized.base2,
-        textPrimary: solarized.base00,
-        textSecondary: solarized.base1,
-        divider: solarized.base1,
-      };
-    case "solarized-dark":
-      return {
-        primary: solarized.blue,
-        bgDefault: solarized.base03,
-        bgPaper: solarized.base02,
-        textPrimary: solarized.base0,
-        textSecondary: solarized.base01,
-        divider: solarized.base01,
-      };
-    case "dracula":
-      return {
-        primary: dracula.purple,
-        bgDefault: dracula.background,
-        bgPaper: dracula.currentLine,
-        textPrimary: dracula.foreground,
-        textSecondary: dracula.comment,
-        divider: dracula.comment,
-      };
-    case "nord":
-      return {
-        primary: nord.frost1,
-        bgDefault: nord.polarNight0,
-        bgPaper: nord.polarNight1,
-        textPrimary: nord.snowStorm2,
-        textSecondary: nord.snowStorm0,
-        divider: nord.polarNight2,
-      };
-    case "monokai":
-      return {
-        primary: monokai.orange,
-        bgDefault: monokai.background,
-        bgPaper: "#3e3d32",
-        textPrimary: monokai.foreground,
-        textSecondary: monokai.comment,
-        divider: "#49483e",
-      };
-    case "one-dark":
-      return {
-        primary: oneDark.blue,
-        bgDefault: oneDark.background,
-        bgPaper: oneDark.gutterBg,
-        textPrimary: oneDark.foreground,
-        textSecondary: oneDark.comment,
-        divider: "#3e4451",
-      };
-    case "gruvbox-light":
-      return {
-        primary: gruvbox.orange,
-        bgDefault: gruvbox.lightBg,
-        bgPaper: gruvbox.lightBg1,
-        textPrimary: gruvbox.lightFg,
-        textSecondary: gruvbox.lightGray,
-        divider: "#d5c4a1",
-      };
-    case "gruvbox-dark":
-      return {
-        primary: gruvbox.orange,
-        bgDefault: gruvbox.darkBg,
-        bgPaper: gruvbox.darkBg1,
-        textPrimary: gruvbox.darkFg,
-        textSecondary: gruvbox.darkGray,
-        divider: "#504945",
+        primary: "#d9a066",
+        bgDefault: "#1b1714",
+        bgPaper: "#241f1a",
+        textPrimary: "#d6cbbd",
+        textSecondary: "#9a8f80",
+        divider: "#3a322b",
       };
   }
 }
@@ -226,6 +98,13 @@ export function useTheme(): UseThemeResult {
     setThemeState(newTheme);
     localStorage.setItem(THEME_KEY, newTheme);
     document.documentElement.setAttribute("data-theme", newTheme);
+    // A theme-agnostic light/dark flag for CSS that only cares about the
+    // scheme (e.g. the dark-mode image plate in markdown.css), so such rules
+    // never have to enumerate theme names.
+    document.documentElement.setAttribute(
+      "data-color-scheme",
+      isDarkTheme(newTheme) ? "dark" : "light"
+    );
   }, []);
 
   const toggleTheme = useCallback(() => {
@@ -234,6 +113,10 @@ export function useTheme(): UseThemeResult {
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.setAttribute(
+      "data-color-scheme",
+      isDarkTheme(theme) ? "dark" : "light"
+    );
     // bgPaper is the mobile top nav-bar surface, so the status bar reads as a
     // seamless extension of it.
     applyThemeColor(getThemeColors(theme).bgPaper);

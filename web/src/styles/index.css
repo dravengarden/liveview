@@ -211,806 +211,202 @@ body {
   color: #ffa657;
 }
 
-/* ========== Solarized Light Theme ========== */
-[data-theme="solarized-light"] .markdown-body {
+/* ========== Sepia Theme (warm cream, long-form reading) ========== */
+[data-theme="sepia"] .markdown-body {
   color-scheme: light;
-  color: #657b83;
-  background-color: #fdf6e3;
+  color: #5b4636;
+  background-color: #f4ecd8;
 }
 
-[data-theme="solarized-light"] .markdown-body a {
-  color: #268bd2;
+[data-theme="sepia"] .markdown-body a {
+  color: #9a5b3d;
 }
 
-[data-theme="solarized-light"] .markdown-body h1,
-[data-theme="solarized-light"] .markdown-body h2 {
-  border-bottom-color: #eee8d5;
+[data-theme="sepia"] .markdown-body h1,
+[data-theme="sepia"] .markdown-body h2 {
+  border-bottom-color: #ddd0b8;
 }
 
-[data-theme="solarized-light"] .markdown-body h6 {
-  color: #93a1a1;
+[data-theme="sepia"] .markdown-body h6 {
+  color: #7d6b58;
 }
 
-[data-theme="solarized-light"] .markdown-body hr {
-  background-color: #eee8d5;
-  border-bottom-color: #eee8d5;
+[data-theme="sepia"] .markdown-body hr {
+  background-color: #ddd0b8;
+  border-bottom-color: #ddd0b8;
 }
 
-[data-theme="solarized-light"] .markdown-body blockquote {
-  color: #93a1a1;
-  border-left-color: #eee8d5;
+[data-theme="sepia"] .markdown-body blockquote {
+  color: #7d6b58;
+  border-left-color: #c8b89a;
 }
 
-[data-theme="solarized-light"] .markdown-body table th,
-[data-theme="solarized-light"] .markdown-body table td {
-  border-color: #eee8d5;
+[data-theme="sepia"] .markdown-body table th,
+[data-theme="sepia"] .markdown-body table td {
+  border-color: #ddd0b8;
 }
 
-[data-theme="solarized-light"] .markdown-body table tr {
-  background-color: #fdf6e3;
-  border-top-color: #eee8d5;
+[data-theme="sepia"] .markdown-body table tr {
+  background-color: #f4ecd8;
+  border-top-color: #ddd0b8;
 }
 
-[data-theme="solarized-light"] .markdown-body table tr:nth-child(2n) {
-  background-color: #eee8d5;
+[data-theme="sepia"] .markdown-body table tr:nth-child(2n) {
+  background-color: #ece0c8;
 }
 
-[data-theme="solarized-light"] .markdown-body code,
-[data-theme="solarized-light"] .markdown-body tt {
-  background-color: #eee8d5;
+[data-theme="sepia"] .markdown-body code,
+[data-theme="sepia"] .markdown-body tt {
+  background-color: #e6d8bd;
 }
 
-[data-theme="solarized-light"] .markdown-body .highlight pre,
-[data-theme="solarized-light"] .markdown-body pre {
-  color: #657b83;
-  background-color: #eee8d5;
+[data-theme="sepia"] .markdown-body .highlight pre,
+[data-theme="sepia"] .markdown-body pre {
+  color: #5b4636;
+  background-color: #ece0c8;
 }
 
-[data-theme="solarized-light"] .markdown-body kbd {
-  color: #657b83;
-  background-color: #eee8d5;
-  border-color: #93a1a1;
-  box-shadow: inset 0 -1px 0 #93a1a1;
+[data-theme="sepia"] .markdown-body kbd {
+  color: #5b4636;
+  background-color: #ece0c8;
+  border-color: #c8b89a;
+  box-shadow: inset 0 -1px 0 #c8b89a;
 }
 
-/* Solarized Light syntax highlighting */
-[data-theme="solarized-light"] .hljs {
-  color: #657b83;
-  background: #eee8d5;
+/* Sepia syntax highlighting (warm, low-contrast accents) */
+[data-theme="sepia"] .hljs {
+  color: #5b4636;
+  background: #ece0c8;
 }
 
-[data-theme="solarized-light"] .hljs-comment,
-[data-theme="solarized-light"] .hljs-quote {
-  color: #93a1a1;
+[data-theme="sepia"] .hljs-comment,
+[data-theme="sepia"] .hljs-quote {
+  color: #9d8a73;
 }
 
-[data-theme="solarized-light"] .hljs-keyword,
-[data-theme="solarized-light"] .hljs-selector-tag {
-  color: #859900;
-}
-
-[data-theme="solarized-light"] .hljs-string,
-[data-theme="solarized-light"] .hljs-title,
-[data-theme="solarized-light"] .hljs-name {
-  color: #2aa198;
-}
-
-[data-theme="solarized-light"] .hljs-type,
-[data-theme="solarized-light"] .hljs-built_in,
-[data-theme="solarized-light"] .hljs-class .hljs-title {
-  color: #b58900;
-}
-
-[data-theme="solarized-light"] .hljs-attribute,
-[data-theme="solarized-light"] .hljs-variable {
-  color: #268bd2;
-}
-
-[data-theme="solarized-light"] .hljs-number,
-[data-theme="solarized-light"] .hljs-literal {
-  color: #d33682;
-}
-
-[data-theme="solarized-light"] .hljs-symbol,
-[data-theme="solarized-light"] .hljs-bullet {
-  color: #cb4b16;
-}
-
-/* ========== Solarized Dark Theme ========== */
-[data-theme="solarized-dark"] .markdown-body {
-  color-scheme: dark;
-  color: #839496;
-  background-color: #002b36;
-}
-
-[data-theme="solarized-dark"] .markdown-body a {
-  color: #268bd2;
-}
-
-[data-theme="solarized-dark"] .markdown-body h1,
-[data-theme="solarized-dark"] .markdown-body h2 {
-  border-bottom-color: #073642;
-}
-
-[data-theme="solarized-dark"] .markdown-body h6 {
-  color: #586e75;
-}
-
-[data-theme="solarized-dark"] .markdown-body hr {
-  background-color: #073642;
-  border-bottom-color: #073642;
-}
-
-[data-theme="solarized-dark"] .markdown-body blockquote {
-  color: #586e75;
-  border-left-color: #073642;
-}
-
-[data-theme="solarized-dark"] .markdown-body table th,
-[data-theme="solarized-dark"] .markdown-body table td {
-  border-color: #073642;
-}
-
-[data-theme="solarized-dark"] .markdown-body table tr {
-  background-color: #002b36;
-  border-top-color: #073642;
-}
-
-[data-theme="solarized-dark"] .markdown-body table tr:nth-child(2n) {
-  background-color: #073642;
-}
-
-[data-theme="solarized-dark"] .markdown-body code,
-[data-theme="solarized-dark"] .markdown-body tt {
-  background-color: #073642;
-}
-
-[data-theme="solarized-dark"] .markdown-body .highlight pre,
-[data-theme="solarized-dark"] .markdown-body pre {
-  color: #839496;
-  background-color: #073642;
-}
-
-[data-theme="solarized-dark"] .markdown-body kbd {
-  color: #839496;
-  background-color: #073642;
-  border-color: #586e75;
-  box-shadow: inset 0 -1px 0 #586e75;
-}
-
-/* Solarized Dark syntax highlighting */
-[data-theme="solarized-dark"] .hljs {
-  color: #839496;
-  background: #073642;
-}
-
-[data-theme="solarized-dark"] .hljs-comment,
-[data-theme="solarized-dark"] .hljs-quote {
-  color: #586e75;
-}
-
-[data-theme="solarized-dark"] .hljs-keyword,
-[data-theme="solarized-dark"] .hljs-selector-tag {
-  color: #859900;
-}
-
-[data-theme="solarized-dark"] .hljs-string,
-[data-theme="solarized-dark"] .hljs-title,
-[data-theme="solarized-dark"] .hljs-name {
-  color: #2aa198;
-}
-
-[data-theme="solarized-dark"] .hljs-type,
-[data-theme="solarized-dark"] .hljs-built_in,
-[data-theme="solarized-dark"] .hljs-class .hljs-title {
-  color: #b58900;
-}
-
-[data-theme="solarized-dark"] .hljs-attribute,
-[data-theme="solarized-dark"] .hljs-variable {
-  color: #268bd2;
-}
-
-[data-theme="solarized-dark"] .hljs-number,
-[data-theme="solarized-dark"] .hljs-literal {
-  color: #d33682;
-}
-
-[data-theme="solarized-dark"] .hljs-symbol,
-[data-theme="solarized-dark"] .hljs-bullet {
-  color: #cb4b16;
-}
-
-/* ========== Dracula Theme ========== */
-[data-theme="dracula"] .markdown-body {
-  color-scheme: dark;
-  color: #f8f8f2;
-  background-color: #282a36;
-}
-
-[data-theme="dracula"] .markdown-body a {
-  color: #8be9fd;
-}
-
-[data-theme="dracula"] .markdown-body h1,
-[data-theme="dracula"] .markdown-body h2 {
-  border-bottom-color: #44475a;
-}
-
-[data-theme="dracula"] .markdown-body h6 {
-  color: #6272a4;
-}
-
-[data-theme="dracula"] .markdown-body hr {
-  background-color: #44475a;
-  border-bottom-color: #44475a;
-}
-
-[data-theme="dracula"] .markdown-body blockquote {
-  color: #6272a4;
-  border-left-color: #bd93f9;
-}
-
-[data-theme="dracula"] .markdown-body table th,
-[data-theme="dracula"] .markdown-body table td {
-  border-color: #44475a;
-}
-
-[data-theme="dracula"] .markdown-body table tr {
-  background-color: #282a36;
-  border-top-color: #44475a;
-}
-
-[data-theme="dracula"] .markdown-body table tr:nth-child(2n) {
-  background-color: #44475a;
-}
-
-[data-theme="dracula"] .markdown-body code,
-[data-theme="dracula"] .markdown-body tt {
-  background-color: #44475a;
-}
-
-[data-theme="dracula"] .markdown-body .highlight pre,
-[data-theme="dracula"] .markdown-body pre {
-  color: #f8f8f2;
-  background-color: #44475a;
-}
-
-[data-theme="dracula"] .markdown-body kbd {
-  color: #f8f8f2;
-  background-color: #44475a;
-  border-color: #6272a4;
-  box-shadow: inset 0 -1px 0 #6272a4;
-}
-
-[data-theme="dracula"] .hljs {
-  color: #f8f8f2;
-  background: #44475a;
-}
-
-[data-theme="dracula"] .hljs-comment,
-[data-theme="dracula"] .hljs-quote {
-  color: #6272a4;
-}
-
-[data-theme="dracula"] .hljs-keyword,
-[data-theme="dracula"] .hljs-selector-tag {
-  color: #ff79c6;
-}
-
-[data-theme="dracula"] .hljs-string,
-[data-theme="dracula"] .hljs-title,
-[data-theme="dracula"] .hljs-name {
-  color: #f1fa8c;
-}
-
-[data-theme="dracula"] .hljs-type,
-[data-theme="dracula"] .hljs-built_in,
-[data-theme="dracula"] .hljs-class .hljs-title {
-  color: #8be9fd;
-}
-
-[data-theme="dracula"] .hljs-attribute,
-[data-theme="dracula"] .hljs-variable {
-  color: #50fa7b;
-}
-
-[data-theme="dracula"] .hljs-number,
-[data-theme="dracula"] .hljs-literal {
-  color: #bd93f9;
-}
-
-/* ========== Nord Theme ========== */
-[data-theme="nord"] .markdown-body {
-  color-scheme: dark;
-  color: #eceff4;
-  background-color: #2e3440;
-}
-
-[data-theme="nord"] .markdown-body a {
-  color: #88c0d0;
-}
-
-[data-theme="nord"] .markdown-body h1,
-[data-theme="nord"] .markdown-body h2 {
-  border-bottom-color: #3b4252;
-}
-
-[data-theme="nord"] .markdown-body h6 {
-  color: #d8dee9;
-}
-
-[data-theme="nord"] .markdown-body hr {
-  background-color: #3b4252;
-  border-bottom-color: #3b4252;
-}
-
-[data-theme="nord"] .markdown-body blockquote {
-  color: #d8dee9;
-  border-left-color: #81a1c1;
-}
-
-[data-theme="nord"] .markdown-body table th,
-[data-theme="nord"] .markdown-body table td {
-  border-color: #3b4252;
-}
-
-[data-theme="nord"] .markdown-body table tr {
-  background-color: #2e3440;
-  border-top-color: #3b4252;
-}
-
-[data-theme="nord"] .markdown-body table tr:nth-child(2n) {
-  background-color: #3b4252;
-}
-
-[data-theme="nord"] .markdown-body code,
-[data-theme="nord"] .markdown-body tt {
-  background-color: #3b4252;
-}
-
-[data-theme="nord"] .markdown-body .highlight pre,
-[data-theme="nord"] .markdown-body pre {
-  color: #eceff4;
-  background-color: #3b4252;
-}
-
-[data-theme="nord"] .markdown-body kbd {
-  color: #eceff4;
-  background-color: #3b4252;
-  border-color: #434c5e;
-  box-shadow: inset 0 -1px 0 #434c5e;
-}
-
-[data-theme="nord"] .hljs {
-  color: #eceff4;
-  background: #3b4252;
-}
-
-[data-theme="nord"] .hljs-comment,
-[data-theme="nord"] .hljs-quote {
-  color: #616e88;
-}
-
-[data-theme="nord"] .hljs-keyword,
-[data-theme="nord"] .hljs-selector-tag {
-  color: #81a1c1;
-}
-
-[data-theme="nord"] .hljs-string,
-[data-theme="nord"] .hljs-title,
-[data-theme="nord"] .hljs-name {
-  color: #a3be8c;
-}
-
-[data-theme="nord"] .hljs-type,
-[data-theme="nord"] .hljs-built_in,
-[data-theme="nord"] .hljs-class .hljs-title {
-  color: #8fbcbb;
-}
-
-[data-theme="nord"] .hljs-attribute,
-[data-theme="nord"] .hljs-variable {
-  color: #88c0d0;
-}
-
-[data-theme="nord"] .hljs-number,
-[data-theme="nord"] .hljs-literal {
-  color: #b48ead;
-}
-
-/* ========== Monokai Theme ========== */
-[data-theme="monokai"] .markdown-body {
-  color-scheme: dark;
-  color: #f8f8f2;
-  background-color: #272822;
-}
-
-[data-theme="monokai"] .markdown-body a {
-  color: #66d9ef;
-}
-
-[data-theme="monokai"] .markdown-body h1,
-[data-theme="monokai"] .markdown-body h2 {
-  border-bottom-color: #49483e;
-}
-
-[data-theme="monokai"] .markdown-body h6 {
-  color: #75715e;
-}
-
-[data-theme="monokai"] .markdown-body hr {
-  background-color: #49483e;
-  border-bottom-color: #49483e;
-}
-
-[data-theme="monokai"] .markdown-body blockquote {
-  color: #75715e;
-  border-left-color: #fd971f;
-}
-
-[data-theme="monokai"] .markdown-body table th,
-[data-theme="monokai"] .markdown-body table td {
-  border-color: #49483e;
-}
-
-[data-theme="monokai"] .markdown-body table tr {
-  background-color: #272822;
-  border-top-color: #49483e;
-}
-
-[data-theme="monokai"] .markdown-body table tr:nth-child(2n) {
-  background-color: #3e3d32;
-}
-
-[data-theme="monokai"] .markdown-body code,
-[data-theme="monokai"] .markdown-body tt {
-  background-color: #3e3d32;
-}
-
-[data-theme="monokai"] .markdown-body .highlight pre,
-[data-theme="monokai"] .markdown-body pre {
-  color: #f8f8f2;
-  background-color: #3e3d32;
-}
-
-[data-theme="monokai"] .markdown-body kbd {
-  color: #f8f8f2;
-  background-color: #3e3d32;
-  border-color: #49483e;
-  box-shadow: inset 0 -1px 0 #49483e;
-}
-
-[data-theme="monokai"] .hljs {
-  color: #f8f8f2;
-  background: #3e3d32;
-}
-
-[data-theme="monokai"] .hljs-comment,
-[data-theme="monokai"] .hljs-quote {
-  color: #75715e;
-}
-
-[data-theme="monokai"] .hljs-keyword,
-[data-theme="monokai"] .hljs-selector-tag {
-  color: #f92672;
-}
-
-[data-theme="monokai"] .hljs-string,
-[data-theme="monokai"] .hljs-title,
-[data-theme="monokai"] .hljs-name {
-  color: #e6db74;
-}
-
-[data-theme="monokai"] .hljs-type,
-[data-theme="monokai"] .hljs-built_in,
-[data-theme="monokai"] .hljs-class .hljs-title {
-  color: #66d9ef;
-}
-
-[data-theme="monokai"] .hljs-attribute,
-[data-theme="monokai"] .hljs-variable {
-  color: #a6e22e;
-}
-
-[data-theme="monokai"] .hljs-number,
-[data-theme="monokai"] .hljs-literal {
-  color: #ae81ff;
-}
-
-/* ========== One Dark Theme ========== */
-[data-theme="one-dark"] .markdown-body {
-  color-scheme: dark;
-  color: #abb2bf;
-  background-color: #282c34;
-}
-
-[data-theme="one-dark"] .markdown-body a {
-  color: #61afef;
-}
-
-[data-theme="one-dark"] .markdown-body h1,
-[data-theme="one-dark"] .markdown-body h2 {
-  border-bottom-color: #3e4451;
-}
-
-[data-theme="one-dark"] .markdown-body h6 {
-  color: #5c6370;
-}
-
-[data-theme="one-dark"] .markdown-body hr {
-  background-color: #3e4451;
-  border-bottom-color: #3e4451;
-}
-
-[data-theme="one-dark"] .markdown-body blockquote {
-  color: #5c6370;
-  border-left-color: #61afef;
-}
-
-[data-theme="one-dark"] .markdown-body table th,
-[data-theme="one-dark"] .markdown-body table td {
-  border-color: #3e4451;
-}
-
-[data-theme="one-dark"] .markdown-body table tr {
-  background-color: #282c34;
-  border-top-color: #3e4451;
-}
-
-[data-theme="one-dark"] .markdown-body table tr:nth-child(2n) {
-  background-color: #21252b;
-}
-
-[data-theme="one-dark"] .markdown-body code,
-[data-theme="one-dark"] .markdown-body tt {
-  background-color: #3e4451;
-}
-
-[data-theme="one-dark"] .markdown-body .highlight pre,
-[data-theme="one-dark"] .markdown-body pre {
-  color: #abb2bf;
-  background-color: #21252b;
-}
-
-[data-theme="one-dark"] .markdown-body kbd {
-  color: #abb2bf;
-  background-color: #21252b;
-  border-color: #3e4451;
-  box-shadow: inset 0 -1px 0 #3e4451;
-}
-
-[data-theme="one-dark"] .hljs {
-  color: #abb2bf;
-  background: #21252b;
-}
-
-[data-theme="one-dark"] .hljs-comment,
-[data-theme="one-dark"] .hljs-quote {
-  color: #5c6370;
-}
-
-[data-theme="one-dark"] .hljs-keyword,
-[data-theme="one-dark"] .hljs-selector-tag {
-  color: #c678dd;
-}
-
-[data-theme="one-dark"] .hljs-string,
-[data-theme="one-dark"] .hljs-title,
-[data-theme="one-dark"] .hljs-name {
-  color: #98c379;
-}
-
-[data-theme="one-dark"] .hljs-type,
-[data-theme="one-dark"] .hljs-built_in,
-[data-theme="one-dark"] .hljs-class .hljs-title {
-  color: #e5c07b;
-}
-
-[data-theme="one-dark"] .hljs-attribute,
-[data-theme="one-dark"] .hljs-variable {
-  color: #d19a66;
-}
-
-[data-theme="one-dark"] .hljs-number,
-[data-theme="one-dark"] .hljs-literal {
-  color: #d19a66;
-}
-
-/* ========== Gruvbox Light Theme ========== */
-[data-theme="gruvbox-light"] .markdown-body {
-  color-scheme: light;
-  color: #3c3836;
-  background-color: #fbf1c7;
-}
-
-[data-theme="gruvbox-light"] .markdown-body a {
-  color: #076678;
-}
-
-[data-theme="gruvbox-light"] .markdown-body h1,
-[data-theme="gruvbox-light"] .markdown-body h2 {
-  border-bottom-color: #d5c4a1;
-}
-
-[data-theme="gruvbox-light"] .markdown-body h6 {
-  color: #928374;
-}
-
-[data-theme="gruvbox-light"] .markdown-body hr {
-  background-color: #d5c4a1;
-  border-bottom-color: #d5c4a1;
-}
-
-[data-theme="gruvbox-light"] .markdown-body blockquote {
-  color: #928374;
-  border-left-color: #d65d0e;
-}
-
-[data-theme="gruvbox-light"] .markdown-body table th,
-[data-theme="gruvbox-light"] .markdown-body table td {
-  border-color: #d5c4a1;
-}
-
-[data-theme="gruvbox-light"] .markdown-body table tr {
-  background-color: #fbf1c7;
-  border-top-color: #d5c4a1;
-}
-
-[data-theme="gruvbox-light"] .markdown-body table tr:nth-child(2n) {
-  background-color: #ebdbb2;
-}
-
-[data-theme="gruvbox-light"] .markdown-body code,
-[data-theme="gruvbox-light"] .markdown-body tt {
-  background-color: #ebdbb2;
-}
-
-[data-theme="gruvbox-light"] .markdown-body .highlight pre,
-[data-theme="gruvbox-light"] .markdown-body pre {
-  color: #3c3836;
-  background-color: #ebdbb2;
-}
-
-[data-theme="gruvbox-light"] .markdown-body kbd {
-  color: #3c3836;
-  background-color: #ebdbb2;
-  border-color: #928374;
-  box-shadow: inset 0 -1px 0 #928374;
-}
-
-[data-theme="gruvbox-light"] .hljs {
-  color: #3c3836;
-  background: #ebdbb2;
-}
-
-[data-theme="gruvbox-light"] .hljs-comment,
-[data-theme="gruvbox-light"] .hljs-quote {
-  color: #928374;
-}
-
-[data-theme="gruvbox-light"] .hljs-keyword,
-[data-theme="gruvbox-light"] .hljs-selector-tag {
+[data-theme="sepia"] .hljs-keyword,
+[data-theme="sepia"] .hljs-selector-tag {
   color: #9d0006;
 }
 
-[data-theme="gruvbox-light"] .hljs-string,
-[data-theme="gruvbox-light"] .hljs-title,
-[data-theme="gruvbox-light"] .hljs-name {
+[data-theme="sepia"] .hljs-string,
+[data-theme="sepia"] .hljs-title,
+[data-theme="sepia"] .hljs-name {
   color: #79740e;
 }
 
-[data-theme="gruvbox-light"] .hljs-type,
-[data-theme="gruvbox-light"] .hljs-built_in,
-[data-theme="gruvbox-light"] .hljs-class .hljs-title {
+[data-theme="sepia"] .hljs-type,
+[data-theme="sepia"] .hljs-built_in,
+[data-theme="sepia"] .hljs-class .hljs-title {
   color: #b57614;
 }
 
-[data-theme="gruvbox-light"] .hljs-attribute,
-[data-theme="gruvbox-light"] .hljs-variable {
+[data-theme="sepia"] .hljs-attribute,
+[data-theme="sepia"] .hljs-variable {
   color: #076678;
 }
 
-[data-theme="gruvbox-light"] .hljs-number,
-[data-theme="gruvbox-light"] .hljs-literal {
+[data-theme="sepia"] .hljs-number,
+[data-theme="sepia"] .hljs-literal {
   color: #8f3f71;
 }
 
-/* ========== Gruvbox Dark Theme ========== */
-[data-theme="gruvbox-dark"] .markdown-body {
+/* ========== Night Theme (warm, low-blue-light dark) ========== */
+[data-theme="night"] .markdown-body {
   color-scheme: dark;
-  color: #ebdbb2;
-  background-color: #282828;
+  color: #d6cbbd;
+  background-color: #1b1714;
 }
 
-[data-theme="gruvbox-dark"] .markdown-body a {
-  color: #83a598;
+[data-theme="night"] .markdown-body a {
+  color: #d9a066;
 }
 
-[data-theme="gruvbox-dark"] .markdown-body h1,
-[data-theme="gruvbox-dark"] .markdown-body h2 {
-  border-bottom-color: #504945;
+[data-theme="night"] .markdown-body h1,
+[data-theme="night"] .markdown-body h2 {
+  border-bottom-color: #3a322b;
 }
 
-[data-theme="gruvbox-dark"] .markdown-body h6 {
-  color: #928374;
+[data-theme="night"] .markdown-body h6 {
+  color: #9a8f80;
 }
 
-[data-theme="gruvbox-dark"] .markdown-body hr {
-  background-color: #504945;
-  border-bottom-color: #504945;
+[data-theme="night"] .markdown-body hr {
+  background-color: #3a322b;
+  border-bottom-color: #3a322b;
 }
 
-[data-theme="gruvbox-dark"] .markdown-body blockquote {
-  color: #928374;
-  border-left-color: #d65d0e;
+[data-theme="night"] .markdown-body blockquote {
+  color: #9a8f80;
+  border-left-color: #4d4239;
 }
 
-[data-theme="gruvbox-dark"] .markdown-body table th,
-[data-theme="gruvbox-dark"] .markdown-body table td {
-  border-color: #504945;
+[data-theme="night"] .markdown-body table th,
+[data-theme="night"] .markdown-body table td {
+  border-color: #3a322b;
 }
 
-[data-theme="gruvbox-dark"] .markdown-body table tr {
-  background-color: #282828;
-  border-top-color: #504945;
+[data-theme="night"] .markdown-body table tr {
+  background-color: #1b1714;
+  border-top-color: #3a322b;
 }
 
-[data-theme="gruvbox-dark"] .markdown-body table tr:nth-child(2n) {
-  background-color: #3c3836;
+[data-theme="night"] .markdown-body table tr:nth-child(2n) {
+  background-color: #241f1a;
 }
 
-[data-theme="gruvbox-dark"] .markdown-body code,
-[data-theme="gruvbox-dark"] .markdown-body tt {
-  background-color: #3c3836;
+[data-theme="night"] .markdown-body code,
+[data-theme="night"] .markdown-body tt {
+  background-color: #2e2820;
 }
 
-[data-theme="gruvbox-dark"] .markdown-body .highlight pre,
-[data-theme="gruvbox-dark"] .markdown-body pre {
-  color: #ebdbb2;
-  background-color: #3c3836;
+[data-theme="night"] .markdown-body .highlight pre,
+[data-theme="night"] .markdown-body pre {
+  color: #d6cbbd;
+  background-color: #241f1a;
 }
 
-[data-theme="gruvbox-dark"] .markdown-body kbd {
-  color: #ebdbb2;
-  background-color: #3c3836;
-  border-color: #504945;
-  box-shadow: inset 0 -1px 0 #504945;
+[data-theme="night"] .markdown-body kbd {
+  color: #d6cbbd;
+  background-color: #241f1a;
+  border-color: #3a322b;
+  box-shadow: inset 0 -1px 0 #3a322b;
 }
 
-[data-theme="gruvbox-dark"] .hljs {
-  color: #ebdbb2;
-  background: #3c3836;
+/* Night syntax highlighting (warm, dimmed) */
+[data-theme="night"] .hljs {
+  color: #d6cbbd;
+  background: #241f1a;
 }
 
-[data-theme="gruvbox-dark"] .hljs-comment,
-[data-theme="gruvbox-dark"] .hljs-quote {
-  color: #928374;
+[data-theme="night"] .hljs-comment,
+[data-theme="night"] .hljs-quote {
+  color: #8a7d6b;
 }
 
-[data-theme="gruvbox-dark"] .hljs-keyword,
-[data-theme="gruvbox-dark"] .hljs-selector-tag {
-  color: #fb4934;
+[data-theme="night"] .hljs-keyword,
+[data-theme="night"] .hljs-selector-tag {
+  color: #e6918a;
 }
 
-[data-theme="gruvbox-dark"] .hljs-string,
-[data-theme="gruvbox-dark"] .hljs-title,
-[data-theme="gruvbox-dark"] .hljs-name {
-  color: #b8bb26;
+[data-theme="night"] .hljs-string,
+[data-theme="night"] .hljs-title,
+[data-theme="night"] .hljs-name {
+  color: #b8bb8c;
 }
 
-[data-theme="gruvbox-dark"] .hljs-type,
-[data-theme="gruvbox-dark"] .hljs-built_in,
-[data-theme="gruvbox-dark"] .hljs-class .hljs-title {
-  color: #fabd2f;
+[data-theme="night"] .hljs-type,
+[data-theme="night"] .hljs-built_in,
+[data-theme="night"] .hljs-class .hljs-title {
+  color: #e0b070;
 }
 
-[data-theme="gruvbox-dark"] .hljs-attribute,
-[data-theme="gruvbox-dark"] .hljs-variable {
-  color: #83a598;
+[data-theme="night"] .hljs-attribute,
+[data-theme="night"] .hljs-variable {
+  color: #d9a066;
 }
 
-[data-theme="gruvbox-dark"] .hljs-number,
-[data-theme="gruvbox-dark"] .hljs-literal {
-  color: #d3869b;
+[data-theme="night"] .hljs-number,
+[data-theme="night"] .hljs-literal {
+  color: #d3a0b0;
 }

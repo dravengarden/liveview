@@ -45,24 +45,12 @@ function getThemeColors(themeValue: Theme): ThemeColors {
   switch (themeValue) {
     case "light":
       return { bg: "#ffffff", fg: "#1f2328", accent: "#0969da" };
+    case "sepia":
+      return { bg: "#f4ecd8", fg: "#5b4636", accent: "#9a5b3d" };
     case "dark":
       return { bg: "#0d1117", fg: "#e6edf3", accent: "#58a6ff" };
-    case "solarized-light":
-      return { bg: "#fdf6e3", fg: "#657b83", accent: "#268bd2" };
-    case "solarized-dark":
-      return { bg: "#002b36", fg: "#839496", accent: "#268bd2" };
-    case "dracula":
-      return { bg: "#282a36", fg: "#f8f8f2", accent: "#bd93f9" };
-    case "nord":
-      return { bg: "#2e3440", fg: "#eceff4", accent: "#88c0d0" };
-    case "monokai":
-      return { bg: "#272822", fg: "#f8f8f2", accent: "#fd971f" };
-    case "one-dark":
-      return { bg: "#282c34", fg: "#abb2bf", accent: "#61afef" };
-    case "gruvbox-light":
-      return { bg: "#fbf1c7", fg: "#3c3836", accent: "#d65d0e" };
-    case "gruvbox-dark":
-      return { bg: "#282828", fg: "#ebdbb2", accent: "#d65d0e" };
+    case "night":
+      return { bg: "#1b1714", fg: "#d6cbbd", accent: "#d9a066" };
   }
 }
 
