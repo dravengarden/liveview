@@ -38,6 +38,10 @@ const STRINGS: Record<Language, Dict> = {
     "settings.theme": "THEME",
     "settings.font": "READING FONT",
     "settings.opacity": "MENU BAR OPACITY",
+    "settings.reading": "READING LAYOUT",
+    "settings.contentWidth": "CONTENT WIDTH",
+    "settings.contentWidthFull": "Full width",
+    "settings.lineHeight": "LINE HEIGHT",
   },
   zh: {
     "landing.title": "书架",
@@ -61,6 +65,10 @@ const STRINGS: Record<Language, Dict> = {
     "settings.theme": "主题",
     "settings.font": "阅读字体",
     "settings.opacity": "菜单栏不透明度",
+    "settings.reading": "阅读版式",
+    "settings.contentWidth": "内容宽度",
+    "settings.contentWidthFull": "整页",
+    "settings.lineHeight": "行距",
   },
 };
 

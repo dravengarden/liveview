@@ -26,6 +26,10 @@ interface MarkdownViewerProps {
   currentPath: string | null;
   theme: Theme;
   onNavigate: (path: string) => void;
+  /** Max width of the inner reading column in px. 0 ⇒ no limit (full width). */
+  contentMaxWidth: number;
+  /** Line height applied to .markdown-body via the --lv-line-height CSS var. */
+  lineHeight: number;
 }
 
 function isDarkTheme(theme: Theme): boolean {
@@ -37,6 +41,8 @@ export function MarkdownViewer({
   currentPath,
   theme,
   onNavigate,
+  contentMaxWidth,
+  lineHeight,
 }: MarkdownViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const prevThemeRef = useRef<Theme>(theme);
@@ -226,17 +232,28 @@ export function MarkdownViewer({
     [currentPath, onNavigate]
   );
 
+  // Reading-layout vars from settings → applied as CSS custom properties on
+  // the inner column. `.markdown-body` reads --lv-line-height; max-width is
+  // applied directly so layout responds without an extra CSS round-trip.
+  const innerSx = {
+    maxWidth: contentMaxWidth > 0 ? `${contentMaxWidth}px` : "none",
+    mx: "auto",
+    // CSS custom prop consumed by markdown.css.
+    "--lv-line-height": String(lineHeight),
+  } as const;
+
   if (!html) {
     // Empty file - just show empty content area
     return (
       <Box
-        className="markdown-body"
         sx={{
           flex: 1,
           overflow: "auto",
           p: 4,
         }}
-      />
+      >
+        <Box className="markdown-body" sx={innerSx} />
+      </Box>
     );
   }
 
@@ -245,7 +262,6 @@ export function MarkdownViewer({
     <Box
       ref={containerRef}
       onClick={handleClick}
-      className="markdown-body"
       sx={{
         flex: 1,
         overflow: "auto",
@@ -275,8 +291,13 @@ export function MarkdownViewer({
           opacity: 1,
         },
       }}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    >
+      <Box
+        className="markdown-body"
+        sx={innerSx}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    </Box>
       <ImageLightbox
         src={lightbox?.src ?? null}
         alt={lightbox?.alt ?? ""}

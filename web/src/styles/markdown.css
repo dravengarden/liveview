@@ -17,7 +17,9 @@
      below override this with a monospace stack. */
   font-family: var(--lv-reading-font, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif), "Apple Color Emoji", "Segoe UI Emoji";
   font-size: 16px;
-  line-height: 1.5;
+  /* Reader-controlled line-height (Settings → READING LAYOUT). Default mirrors
+     the prior hardcoded value so untouched preferences read identically. */
+  line-height: var(--lv-line-height, 1.5);
   word-wrap: break-word;
 }
 

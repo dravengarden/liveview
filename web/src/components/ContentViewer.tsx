@@ -18,6 +18,10 @@ interface ContentViewerProps {
   currentPath: string | null;
   theme: Theme;
   onNavigate: (path: string) => void;
+  /** Markdown reader: max content width in px (0 = full width). */
+  contentMaxWidth: number;
+  /** Markdown reader: line-height multiplier. */
+  lineHeight: number;
 }
 
 export function ContentViewer({
@@ -26,6 +30,8 @@ export function ContentViewer({
   currentPath,
   theme,
   onNavigate,
+  contentMaxWidth,
+  lineHeight,
 }: ContentViewerProps): React.JSX.Element {
   const { t } = useI18n();
   if (!currentPath) {
@@ -54,6 +60,8 @@ export function ContentViewer({
           currentPath={currentPath}
           theme={theme}
           onNavigate={onNavigate}
+          contentMaxWidth={contentMaxWidth}
+          lineHeight={lineHeight}
         />
       );
 

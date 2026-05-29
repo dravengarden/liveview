@@ -271,7 +271,7 @@ export function App(): React.JSX.Element {
 
   const { t, lang: uiLang } = useI18n();
   const { theme, muiTheme, setTheme } = useTheme();
-  const { menuBarSettings, setFloatOpacity } = useSettings();
+  const { menuBarSettings, setFloatOpacity, setContentMaxWidth, setLineHeight } = useSettings();
   const { fontId, setFont } = useFont();
 
   // Collapse the sidebar when shrinking to a phone/tablet width, reopen it
@@ -594,6 +594,8 @@ export function App(): React.JSX.Element {
                   currentPath={currentPath}
                   theme={theme}
                   onNavigate={handleSelect}
+                  contentMaxWidth={menuBarSettings.contentMaxWidth}
+                  lineHeight={menuBarSettings.lineHeight}
                 />
               </Box>
             </Box>
@@ -609,6 +611,8 @@ export function App(): React.JSX.Element {
           onThemeChange={setTheme}
           onFontChange={setFont}
           onFloatOpacityChange={setFloatOpacity}
+          onContentMaxWidthChange={setContentMaxWidth}
+          onLineHeightChange={setLineHeight}
         />
       </Box>
     </ThemeProvider>

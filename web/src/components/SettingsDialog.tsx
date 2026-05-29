@@ -11,7 +11,15 @@ import {
 } from "@mui/material";
 import { Close as CloseIcon, Check as CheckIcon } from "@mui/icons-material";
 import type { Theme, MenuBarSettings } from "@/types";
-import { THEME_OPTIONS } from "@/types";
+import {
+  THEME_OPTIONS,
+  CONTENT_WIDTH_MIN,
+  CONTENT_WIDTH_MAX,
+  CONTENT_WIDTH_STEP,
+  LINE_HEIGHT_MIN,
+  LINE_HEIGHT_MAX,
+  LINE_HEIGHT_STEP,
+} from "@/types";
 import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
 
@@ -24,6 +32,8 @@ interface SettingsDialogProps {
   onThemeChange: (theme: Theme) => void;
   onFontChange: (id: string) => void;
   onFloatOpacityChange: (opacity: number) => void;
+  onContentMaxWidthChange: (width: number) => void;
+  onLineHeightChange: (lh: number) => void;
 }
 
 interface ThemeColors {
@@ -66,6 +76,8 @@ export function SettingsDialog({
   onThemeChange,
   onFontChange,
   onFloatOpacityChange,
+  onContentMaxWidthChange,
+  onLineHeightChange,
 }: SettingsDialogProps): React.JSX.Element {
   const { t, lang, setLang } = useI18n();
   return (
@@ -242,6 +254,53 @@ export function SettingsDialog({
                 </Box>
               );
             })}
+          </Box>
+        </Box>
+
+        <Box sx={{ mb: 3 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, mb: 1.5, display: "block" }}>
+            {t("settings.reading")}
+          </Typography>
+
+          {/* Content width — Smaller = bigger left/right margin. The bottom
+              of the slider snaps to "Full width" (0) so users can opt out of
+              any max-width and let prose span the viewport. */}
+          <Box sx={{ px: 1, mb: 2 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+              {t("settings.contentWidth")}
+            </Typography>
+            <Slider
+              value={menuBarSettings.contentMaxWidth || CONTENT_WIDTH_MIN}
+              onChange={(_, value) => {
+                const v = value as number;
+                // Snap to "full width" (0) when the user drags past the max.
+                onContentMaxWidthChange(v >= CONTENT_WIDTH_MAX ? 0 : v);
+              }}
+              min={CONTENT_WIDTH_MIN}
+              max={CONTENT_WIDTH_MAX}
+              step={CONTENT_WIDTH_STEP}
+              size="small"
+              valueLabelDisplay="auto"
+              valueLabelFormat={(v) =>
+                v >= CONTENT_WIDTH_MAX ? t("settings.contentWidthFull") : `${v}px`
+              }
+            />
+          </Box>
+
+          <Box sx={{ px: 1 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+              {t("settings.lineHeight")}
+            </Typography>
+            <Slider
+              value={menuBarSettings.lineHeight}
+              onChange={(_, value) => onLineHeightChange(value as number)}
+              min={LINE_HEIGHT_MIN}
+              max={LINE_HEIGHT_MAX}
+              step={LINE_HEIGHT_STEP}
+              size="small"
+              valueLabelDisplay="auto"
+              valueLabelFormat={(v) => (v as number).toFixed(1)}
+            />
           </Box>
         </Box>
 
