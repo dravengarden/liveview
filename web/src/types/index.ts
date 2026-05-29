@@ -30,6 +30,14 @@ export interface FileContent {
   content: string;
 }
 
+/** A document's saved reading position (scroll as a 0..1 ratio of scrollable
+ *  height). `updated_at` is Unix epoch ms; rows arrive newest-first per book. */
+export interface ProgressEntry {
+  path: string;
+  scroll: number;
+  updated_at: number;
+}
+
 /** A language edition of a book, for the in-book language switcher. */
 export interface LangInfo {
   lang: string;

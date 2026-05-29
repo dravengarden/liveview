@@ -11,7 +11,7 @@ import {
 } from "@mui/material";
 import { Menu as MenuIcon, Settings as SettingsIcon } from "@mui/icons-material";
 import { Sidebar, SettingsDialog, ContentViewer, Landing } from "@/components";
-import { useWebSocket, useTheme, useSettings, useFont } from "@/hooks";
+import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
 import type { TreeNode, FileType, FileContent, Book } from "@/types";
 
@@ -45,6 +45,14 @@ function findReadme(nodes: TreeNode[]): string | null {
     }
   }
   return null;
+}
+
+function hasFilePath(nodes: TreeNode[], target: string): boolean {
+  for (const node of nodes) {
+    if (!node.is_dir && node.path === target) return true;
+    if (node.is_dir && hasFilePath(node.children, target)) return true;
+  }
+  return false;
 }
 
 function findFirstFile(nodes: TreeNode[]): string | null {
@@ -269,6 +277,8 @@ export function App(): React.JSX.Element {
   const currentPathRef = useRef<string | null>(null);
   const contentLangRef = useRef<string>("");
 
+  const { loadBook, savedScroll, save: saveProgress } = useProgress();
+
   const { t, lang: uiLang } = useI18n();
   const { theme, muiTheme, setTheme } = useTheme();
   const { menuBarSettings, setFloatOpacity, setContentMaxWidth, setLineHeight } = useSettings();
@@ -394,18 +404,23 @@ export function App(): React.JSX.Element {
     [currentPath, openFile]
   );
 
-  // Enter a book from the landing page: open its README, else its first doc.
+  // Enter a book from the landing page: resume the last-read chapter if there
+  // is one (and it still exists), else open its README, else its first doc.
   const enterBook = useCallback(
     (slug: string) => {
       const book = books.find((b) => b.slug === slug);
       const node = tree.find((n) => n.path === slug);
       if (!book || !node) return;
-      const entry = findReadme([node]) ?? findFirstFile([node]);
-      if (entry) {
-        void openFile(entry, pickInitialLang(book));
-      }
+      void (async () => {
+        const last = await loadBook(slug);
+        const resume = last && hasFilePath([node], last.path) ? last.path : null;
+        const entry = resume ?? findReadme([node]) ?? findFirstFile([node]);
+        if (entry) {
+          void openFile(entry, pickInitialLang(book));
+        }
+      })();
     },
-    [books, tree, openFile, pickInitialLang]
+    [books, tree, openFile, pickInitialLang, loadBook]
   );
 
   // Return to the landing bookshelf.
@@ -449,6 +464,9 @@ export function App(): React.JSX.Element {
           const entryLang = langForHashEntry(path, hashLang);
           setLang(entryLang);
           writeHash(path, hashLang, true);
+          // Load the book's progress first so the doc restores its scroll.
+          const slug = path.split("/")[0];
+          if (slug) await loadBook(slug);
           void loadFile(path, entryLang);
         }
       } catch (e) {
@@ -456,7 +474,7 @@ export function App(): React.JSX.Element {
       }
     };
     void fetchTree();
-  }, [books, loadFile, langForHashEntry]);
+  }, [books, loadFile, langForHashEntry, loadBook]);
 
   // Handle browser back/forward navigation.
   useEffect(() => {
@@ -465,6 +483,8 @@ export function App(): React.JSX.Element {
       if (path) {
         const entryLang = langForHashEntry(path, hashLang);
         setLang(entryLang);
+        const slug = path.split("/")[0];
+        if (slug) void loadBook(slug);
         void loadFile(path, entryLang);
       } else {
         // back/forward to an empty hash returns to the landing bookshelf
@@ -479,7 +499,7 @@ export function App(): React.JSX.Element {
     return () => {
       window.removeEventListener("popstate", handlePopState);
     };
-  }, [loadFile, langForHashEntry]);
+  }, [loadFile, langForHashEntry, loadBook]);
 
   const handleCloseSidebar = useCallback(() => {
     setSidebarOpen(false);
@@ -596,6 +616,8 @@ export function App(): React.JSX.Element {
                   onNavigate={handleSelect}
                   contentMaxWidth={menuBarSettings.contentMaxWidth}
                   lineHeight={menuBarSettings.lineHeight}
+                  savedScroll={savedScroll}
+                  onSaveScroll={saveProgress}
                 />
               </Box>
             </Box>

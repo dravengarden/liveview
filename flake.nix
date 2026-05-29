@@ -102,7 +102,7 @@
 
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-OBsODLRfgQAN3JMiYD2bbQUkDyTtBEZ3Pl60OVhUYJw=";
+        outputHash = "sha256-vPIulbS6RxRbiUAGVXcH8uc4AkIHkq2A4JGDSfta7c8=";
       };
 
       # ── lv: axum daemon, embeds the SPA via include_dir! ──────────────
@@ -125,11 +125,16 @@
             ]);
         };
 
+        # sqlx's sqlite driver links libsqlite3 (via libsqlite3-sys), found at
+        # build time through pkg-config.
+        nativeBuildInputs = [ pkgs.pkg-config ];
+        buildInputs = [ pkgs.sqlite ];
+
         # Vendor via fetchCargoVendor (cargo's own downloader → sparse index
         # + static.crates.io), NOT importCargoLock: this box's omega proxy
         # 403s the crates.io API download endpoint that importCargoLock uses,
         # while static.crates.io returns 200.
-        cargoHash = "sha256-5/nOlg/EsI5X+GKrGJl+qY+GQGosiSCJ4Hbo4TltaB8=";
+        cargoHash = "sha256-HXI94NMd1vLlAIb6Dmei5z7szPM/woSMwqJrLFlSv0g=";
 
         # include_dir!("$CARGO_MANIFEST_DIR/web/dist") is a compile-time
         # lookup — drop the prebuilt SPA there before cargo runs.
@@ -167,6 +172,8 @@
           pkgs.rustc
           deno
           pkgs.nodejs
+          pkgs.pkg-config
+          pkgs.sqlite
         ];
       };
     };

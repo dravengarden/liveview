@@ -30,6 +30,10 @@ interface MarkdownViewerProps {
   contentMaxWidth: number;
   /** Line height applied to .markdown-body via the --lv-line-height CSS var. */
   lineHeight: number;
+  /** Saved scroll ratio (0..1) for a doc path, to restore on open. */
+  savedScroll?: ((path: string) => number | undefined) | undefined;
+  /** Report the current scroll ratio (0..1) for a doc path (debounced upstream). */
+  onSaveScroll?: ((path: string, ratio: number) => void) | undefined;
 }
 
 function isDarkTheme(theme: Theme): boolean {
@@ -43,9 +47,14 @@ export function MarkdownViewer({
   onNavigate,
   contentMaxWidth,
   lineHeight,
+  savedScroll,
+  onSaveScroll,
 }: MarkdownViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   const prevThemeRef = useRef<Theme>(theme);
+  // Suppresses the scroll handler while we programmatically restore position,
+  // so restoring doesn't immediately overwrite the saved value with itself.
+  const restoringRef = useRef(false);
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
 
   const processContent = useCallback((forceRerender = false) => {
@@ -174,6 +183,42 @@ export function MarkdownViewer({
     processContent(themeChanged);
   }, [html, theme, processContent]);
 
+  // Persist scroll position (as a 0..1 ratio, robust to reflow) while reading.
+  // Upstream debounces the network write; here we just report on each scroll.
+  const handleScroll = useCallback(() => {
+    if (restoringRef.current || !currentPath || !onSaveScroll) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const max = el.scrollHeight - el.clientHeight;
+    if (max <= 0) return; // not scrollable yet — don't clobber with 0
+    onSaveScroll(currentPath, el.scrollTop / max);
+  }, [currentPath, onSaveScroll]);
+
+  // Restore the saved position when a document opens. Content height settles
+  // asynchronously (syntax highlight, KaTeX, mermaid, images), so re-apply a
+  // few times; `restoringRef` keeps these programmatic scrolls from saving.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || !currentPath) return undefined;
+    const ratio = savedScroll?.(currentPath) ?? 0;
+    restoringRef.current = true;
+    const apply = (): void => {
+      const max = el.scrollHeight - el.clientHeight;
+      el.scrollTop = max > 0 ? ratio * max : 0;
+    };
+    apply();
+    const t1 = setTimeout(apply, 250);
+    const t2 = setTimeout(apply, 600);
+    const done = setTimeout(() => {
+      restoringRef.current = false;
+    }, 700);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(done);
+    };
+  }, [html, currentPath, savedScroll]);
+
   const handleClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       const target = e.target as HTMLElement;
@@ -262,6 +307,7 @@ export function MarkdownViewer({
     <Box
       ref={containerRef}
       onClick={handleClick}
+      onScroll={handleScroll}
       sx={{
         flex: 1,
         overflow: "auto",

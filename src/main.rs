@@ -14,6 +14,7 @@ use axum::{
 use clap::Parser;
 use cli::Cli;
 use config::{auto_discover, implicit_resolved, Config, Resolved};
+use server::progress::{ProgressEntry, ProgressStore};
 use server::state::{AppState, SharedState};
 use shared::{FileContent, FileType};
 use std::collections::HashMap;
@@ -100,11 +101,14 @@ async fn run(cli: Cli, resolved: Resolved) {
 
     let (tx, _rx) = broadcast::channel::<String>(64);
 
+    let progress = open_progress_store(&cli).await;
+
     let state: SharedState = Arc::new(AppState {
         tx,
         books: resolved.books,
         file_tree: RwLock::new(initial_tree),
         rendered_cache: RwLock::new(HashMap::new()),
+        progress,
     });
 
     server::watcher::start_watcher(state.clone(), resolved.debounce_ms);
@@ -125,6 +129,7 @@ async fn run(cli: Cli, resolved: Resolved) {
         .route("/api/tree", get(api_tree))
         .route("/api/file", get(api_file))
         .route("/api/raw", get(api_raw))
+        .route("/api/progress", get(api_progress_get).put(api_progress_put))
         .route("/ws", get(server::ws::ws_handler))
         .with_state(state.clone());
 
@@ -213,6 +218,86 @@ fn load_explicit(path: &Path) -> Result<Resolved, String> {
 async fn api_tree(State(state): State<SharedState>) -> impl IntoResponse {
     let tree = state.file_tree.read().await;
     axum::Json(tree.clone())
+}
+
+#[derive(serde::Deserialize)]
+struct ProgressQuery {
+    /// Restrict to one book's chapters (newest first). Omitted ⇒ everything.
+    book: Option<String>,
+}
+
+/// Reading progress for restoring scroll position / resuming the last-read
+/// chapter. Returns `[]` when progress is disabled (no state dir).
+async fn api_progress_get(
+    State(state): State<SharedState>,
+    Query(q): Query<ProgressQuery>,
+) -> impl IntoResponse {
+    let Some(store) = &state.progress else {
+        return Json(Vec::<ProgressEntry>::new()).into_response();
+    };
+    let Some(slug) = q.book.as_deref() else {
+        // `book` is required: the client always restores per-book. Without it,
+        // return empty rather than dumping every book's rows.
+        return Json(Vec::<ProgressEntry>::new()).into_response();
+    };
+    match store.for_book(slug).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "progress read failed");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct ProgressUpdate {
+    path: String,
+    /// Scroll position as a 0..1 ratio of the document's scrollable height.
+    scroll: f64,
+}
+
+/// Save one document's scroll position (debounced by the client). No-op 204
+/// when progress is disabled.
+async fn api_progress_put(
+    State(state): State<SharedState>,
+    Json(body): Json<ProgressUpdate>,
+) -> impl IntoResponse {
+    let Some(store) = &state.progress else {
+        return StatusCode::NO_CONTENT;
+    };
+    match store.upsert(&body.path, body.scroll).await {
+        Ok(()) => StatusCode::NO_CONTENT,
+        Err(e) => {
+            tracing::warn!(error = %e, "progress write failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+/// Resolve the state dir (`--state-dir`, else `$STATE_DIRECTORY` from systemd —
+/// a colon-separated list, first entry wins) and open the progress db there.
+/// `None` (no dir configured, or open failed) disables reading-progress.
+async fn open_progress_store(cli: &Cli) -> Option<ProgressStore> {
+    let dir = cli.state_dir.clone().or_else(|| {
+        std::env::var_os("STATE_DIRECTORY").and_then(|v| {
+            std::env::split_paths(&v).next().filter(|p| !p.as_os_str().is_empty())
+        })
+    })?;
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::error!(dir = %dir.display(), error = %e, "create state dir failed; reading-progress disabled");
+        return None;
+    }
+    let db = dir.join("progress.db");
+    match ProgressStore::open(&db).await {
+        Ok(store) => {
+            tracing::info!("reading-progress db: {}", db.display());
+            Some(store)
+        }
+        Err(e) => {
+            tracing::error!(db = %db.display(), error = %e, "open progress db failed; reading-progress disabled");
+            None
+        }
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -450,6 +535,7 @@ mod tests {
             books,
             file_tree: RwLock::new(Vec::new()),
             rendered_cache: RwLock::new(HashMap::new()),
+            progress: None,
         }
     }
 

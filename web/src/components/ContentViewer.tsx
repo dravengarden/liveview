@@ -22,6 +22,10 @@ interface ContentViewerProps {
   contentMaxWidth: number;
   /** Markdown reader: line-height multiplier. */
   lineHeight: number;
+  /** Reading-progress: saved scroll ratio for a doc path. */
+  savedScroll?: ((path: string) => number | undefined) | undefined;
+  /** Reading-progress: report current scroll ratio for a doc path. */
+  onSaveScroll?: ((path: string, ratio: number) => void) | undefined;
 }
 
 export function ContentViewer({
@@ -32,6 +36,8 @@ export function ContentViewer({
   onNavigate,
   contentMaxWidth,
   lineHeight,
+  savedScroll,
+  onSaveScroll,
 }: ContentViewerProps): React.JSX.Element {
   const { t } = useI18n();
   if (!currentPath) {
@@ -62,6 +68,8 @@ export function ContentViewer({
           onNavigate={onNavigate}
           contentMaxWidth={contentMaxWidth}
           lineHeight={lineHeight}
+          savedScroll={savedScroll}
+          onSaveScroll={onSaveScroll}
         />
       );
 

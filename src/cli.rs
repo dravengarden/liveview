@@ -35,6 +35,12 @@ pub struct Cli {
     #[arg(short, long)]
     pub open: bool,
 
+    /// Directory for mutable state (the reading-progress SQLite db). Defaults
+    /// to `$STATE_DIRECTORY` (set by systemd's `StateDirectory=`) when unset;
+    /// if neither is given, reading-progress is disabled.
+    #[arg(long)]
+    pub state_dir: Option<PathBuf>,
+
     /// Verbose tracing (`debug` level instead of `info`).
     #[arg(short, long)]
     pub verbose: bool,

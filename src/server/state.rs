@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
 use crate::config::{BookState, EditionState};
+use crate::server::progress::ProgressStore;
 use crate::shared::TreeNode;
 
 pub struct AppState {
@@ -15,6 +16,10 @@ pub struct AppState {
     pub file_tree: RwLock<Vec<TreeNode>>,
     /// Rendered-HTML cache keyed by `"<lang>\u{0}<virtual_path>"`.
     pub rendered_cache: RwLock<HashMap<String, String>>,
+    /// Reading-progress store, or `None` when no state dir is configured
+    /// (`--state-dir` / `$STATE_DIRECTORY`), in which case progress is disabled
+    /// and the API degrades to read-empty / write-noop.
+    pub progress: Option<ProgressStore>,
 }
 
 pub type SharedState = Arc<AppState>;
