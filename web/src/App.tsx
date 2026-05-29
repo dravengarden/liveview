@@ -159,7 +159,7 @@ export function App(): React.JSX.Element {
 
   const { t, lang: uiLang } = useI18n();
   const { theme, muiTheme, setTheme } = useTheme();
-  const { menuBarSettings, setFloatOpacity, setContentMaxWidth, setLineHeight } = useSettings();
+  const { menuBarSettings, setContentMaxWidth, setLineHeight } = useSettings();
   const { fontId, setFont } = useFont();
 
   // The active book is the first path segment; null ⇒ the landing bookshelf.
@@ -523,7 +523,6 @@ export function App(): React.JSX.Element {
           onClose={handleCloseSettings}
           onThemeChange={setTheme}
           onFontChange={setFont}
-          onFloatOpacityChange={setFloatOpacity}
           onContentMaxWidthChange={setContentMaxWidth}
           onLineHeightChange={setLineHeight}
         />

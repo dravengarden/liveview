@@ -31,7 +31,6 @@ interface SettingsDialogProps {
   onClose: () => void;
   onThemeChange: (theme: Theme) => void;
   onFontChange: (id: string) => void;
-  onFloatOpacityChange: (opacity: number) => void;
   onContentMaxWidthChange: (width: number) => void;
   onLineHeightChange: (lh: number) => void;
 }
@@ -75,7 +74,6 @@ export function SettingsDialog({
   onClose,
   onThemeChange,
   onFontChange,
-  onFloatOpacityChange,
   onContentMaxWidthChange,
   onLineHeightChange,
 }: SettingsDialogProps): React.JSX.Element {
@@ -300,24 +298,6 @@ export function SettingsDialog({
               size="small"
               valueLabelDisplay="auto"
               valueLabelFormat={(v) => (v as number).toFixed(1)}
-            />
-          </Box>
-        </Box>
-
-        <Box>
-          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, mb: 1, display: "block" }}>
-            {t("settings.opacity")}
-          </Typography>
-          <Box sx={{ px: 1 }}>
-            <Slider
-              value={menuBarSettings.floatOpacity}
-              onChange={(_, value) => onFloatOpacityChange(value as number)}
-              min={0.1}
-              max={1}
-              step={0.1}
-              size="small"
-              valueLabelDisplay="auto"
-              valueLabelFormat={(v) => `${Math.round(v * 100)}%`}
             />
           </Box>
         </Box>
