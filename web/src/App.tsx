@@ -5,12 +5,9 @@ import {
   Box,
   IconButton,
   Tooltip,
-  SwipeableDrawer,
   Alert,
-  useMediaQuery,
 } from "@mui/material";
 import {
-  Menu as MenuIcon,
   Settings as SettingsIcon,
   Headphones as HeadphonesIcon,
   MenuBook as MenuBookIcon,
@@ -18,7 +15,7 @@ import {
 import { Sidebar, SettingsDialog, ContentViewer, AudiobookPlayer, Landing } from "@/components";
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
-import { PortalLauncherButton, PortalProvider } from "./_shell";
+import { NavShell, PortalProvider } from "./_shell";
 import type {
   TreeNode,
   FileType,
@@ -27,15 +24,6 @@ import type {
   ProgressEntry,
   ReadingProgress,
 } from "@/types";
-
-const DEFAULT_SIDEBAR_WIDTH = 280;
-// Below this width the sidebar becomes an overlay drawer (phones + portrait
-// tablets). MUI's `md` breakpoint.
-const MOBILE_QUERY = "(max-width:899.95px)";
-// iOS needs the swipe-to-open discovery affordance but not the backdrop
-// transition (perf); the inverse holds elsewhere. MUI's documented split.
-const IS_IOS =
-  typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent);
 
 function findReadme(nodes: TreeNode[]): string | null {
   for (const node of nodes) {
@@ -139,146 +127,6 @@ function writeHash(path: string | null, lang: string | null, replace: boolean): 
   }
 }
 
-interface FloatButtonProps {
-  position: "left" | "right";
-  floatOpacity: number;
-  children: React.ReactNode;
-}
-
-function FloatButton({ position, floatOpacity, children }: FloatButtonProps): React.JSX.Element {
-  const isLeft = position === "left";
-  // Drive expand/collapse from state instead of pure CSS `:hover`. On iOS
-  // there is no real pointer, so `:hover` sticks after the first tap and the
-  // box can never fold back into the transparent triangle. State plus an
-  // outside-tap listener makes the triangle reachable on touch, while mouse
-  // enter/leave preserves the original desktop hover behaviour.
-  const [expanded, setExpanded] = useState(false);
-  const boxRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!expanded) return undefined;
-    const handleOutside = (e: Event): void => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) {
-        setExpanded(false);
-      }
-    };
-    document.addEventListener("pointerdown", handleOutside);
-    return () => {
-      document.removeEventListener("pointerdown", handleOutside);
-    };
-  }, [expanded]);
-
-  return (
-    <Box
-      ref={boxRef}
-      onMouseEnter={() => {
-        setExpanded(true);
-      }}
-      onMouseLeave={() => {
-        setExpanded(false);
-      }}
-      onClick={() => {
-        setExpanded((v) => !v);
-      }}
-      sx={{
-        position: "absolute",
-        top: 12,
-        [position]: 0,
-        zIndex: 10,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        borderRadius: isLeft ? "0 4px 4px 0" : "4px 0 0 4px",
-        transition: "all 0.2s ease",
-        height: 36,
-        cursor: "pointer",
-        ...(expanded
-          ? {
-              opacity: 1,
-              bgcolor: "background.paper",
-              boxShadow: isLeft ? "2px 0 8px rgba(0,0,0,0.1)" : "-2px 0 8px rgba(0,0,0,0.1)",
-              width: "auto",
-              px: 0.5,
-            }
-          : {
-              opacity: floatOpacity,
-              bgcolor: "rgba(128, 128, 128, 0.15)",
-              width: 20,
-            }),
-      }}
-    >
-      {expanded ? (
-        <Box sx={{ display: "flex", alignItems: "center", gap: 0 }}>{children}</Box>
-      ) : (
-        <Box
-          sx={{
-            width: 0,
-            height: 0,
-            borderTop: "5px solid transparent",
-            borderBottom: "5px solid transparent",
-            ...(isLeft
-              ? { borderLeft: "6px solid rgba(128, 128, 128, 0.5)" }
-              : { borderRight: "6px solid rgba(128, 128, 128, 0.5)" }),
-          }}
-        />
-      )}
-    </Box>
-  );
-}
-
-interface ReaderNavBarProps {
-  position: "top" | "bottom";
-  onOpenSidebar: () => void;
-  onOpenSettings: () => void;
-}
-
-// Fixed (non-floating), full-width navigation bar for the reader chrome — used
-// on every form factor when the sidebar's own header isn't carrying these
-// controls (mobile drawer, or a collapsed desktop sidebar). It's a flex item in
-// the content column (not an overlay), so it sits flush at the bottom (default)
-// or top edge without ever covering the text — a floating overlay here hurt
-// reading (conventions/ui.md §7). Layout: the sidebar-expand control on the
-// left; settings then the portal launcher on the right (portal rightmost).
-// Top/bottom edge safe-area insets clear the notch / home indicator; the parent
-// already insets the side notches.
-function ReaderNavBar({
-  position,
-  onOpenSidebar,
-  onOpenSettings,
-}: ReaderNavBarProps): React.JSX.Element {
-  const { t } = useI18n();
-  const isTop = position === "top";
-  return (
-    <Box
-      component="nav"
-      sx={{
-        flexShrink: 0,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        px: 1,
-        bgcolor: "background.paper",
-        borderColor: "divider",
-        ...(isTop
-          ? { borderBottom: 1, pt: "calc(env(safe-area-inset-top, 0px) + 4px)", pb: 0.5 }
-          : { borderTop: 1, pb: "calc(env(safe-area-inset-bottom, 0px) + 4px)", pt: 0.5 }),
-      }}
-    >
-      {/* Left: expand the sidebar. */}
-      <IconButton aria-label={t("app.openSidebar")} onClick={onOpenSidebar} sx={{ p: 1 }}>
-        <MenuIcon />
-      </IconButton>
-      {/* Right: settings, then the portal launcher (self-hides when not hosted). */}
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-        <IconButton aria-label={t("app.settings")} onClick={onOpenSettings} sx={{ p: 1 }}>
-          <SettingsIcon />
-        </IconButton>
-        <PortalLauncherButton />
-      </Box>
-    </Box>
-  );
-}
-
 /** A page missing in the selected edition; we render `shown` content instead. */
 interface UntranslatedNotice {
   requested: string;
@@ -295,10 +143,6 @@ export function App(): React.JSX.Element {
   const [untranslated, setUntranslated] = useState<UntranslatedNotice | null>(null);
   const [currentFileType, setCurrentFileType] = useState<FileType>("markdown");
   const [currentContent, setCurrentContent] = useState<string | null>(null);
-  // `isMobile` (width) drives the Drawer-vs-persistent sidebar layout.
-  const isMobile = useMediaQuery(MOBILE_QUERY);
-  const [sidebarOpen, setSidebarOpen] = useState(() => !window.matchMedia(MOBILE_QUERY).matches);
-  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [audiobookOpen, setAudiobookOpen] = useState(false);
   const initializedRef = useRef(false);
@@ -315,15 +159,8 @@ export function App(): React.JSX.Element {
 
   const { t, lang: uiLang } = useI18n();
   const { theme, muiTheme, setTheme } = useTheme();
-  const { menuBarSettings, setFloatOpacity, setContentMaxWidth, setLineHeight, setNavBarPosition } =
-    useSettings();
+  const { menuBarSettings, setFloatOpacity, setContentMaxWidth, setLineHeight } = useSettings();
   const { fontId, setFont } = useFont();
-
-  // Collapse the sidebar when shrinking to a phone/tablet width, reopen it
-  // when growing back to desktop (also handles device rotation).
-  useEffect(() => {
-    setSidebarOpen(!isMobile);
-  }, [isMobile]);
 
   // The active book is the first path segment; null ⇒ the landing bookshelf.
   const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;
@@ -447,13 +284,9 @@ export function App(): React.JSX.Element {
 
       setLang(langArg);
       writeHash(path, langForHash, false);
-      // On mobile the drawer overlays the content — close it so the file shows.
-      if (isMobile) {
-        setSidebarOpen(false);
-      }
       await loadFile(path, langArg);
     },
-    [books, isMobile, loadFile]
+    [books, loadFile]
   );
 
   // Sidebar / markdown-link navigation stays within the current edition.
@@ -581,14 +414,6 @@ export function App(): React.JSX.Element {
     };
   }, [loadFile, langForHashEntry, loadBook]);
 
-  const handleCloseSidebar = useCallback(() => {
-    setSidebarOpen(false);
-  }, []);
-
-  const handleOpenSidebar = useCallback(() => {
-    setSidebarOpen(true);
-  }, []);
-
   const handleOpenSettings = useCallback(() => {
     setSettingsOpen(true);
   }, []);
@@ -597,90 +422,45 @@ export function App(): React.JSX.Element {
     setSettingsOpen(false);
   }, []);
 
-  // The reader chrome controls (sidebar toggle, settings, launcher) live in a
-  // fixed edge nav bar — never a floating overlay over the text (that hurt
-  // reading; see conventions/ui.md §7). The bar shows whenever those controls
-  // aren't already in the sidebar header: on mobile (the sidebar is a drawer)
-  // and on desktop whenever the persistent sidebar is collapsed.
-  const showNavBar = isMobile || !sidebarOpen;
-
   const langLabel = (code: string): string =>
     bookLangs.find((l) => l.lang === code)?.label ?? code;
-
-  const sidebarCommon = {
-    tree: activeTree,
-    currentPath,
-    bookMode,
-    bookLabel,
-    langs: bookLangs,
-    currentLang: lang,
-    onSwitchLang: switchLang,
-    onSelect: handleSelect,
-    onClose: handleCloseSidebar,
-    onOpenSettings: handleOpenSettings,
-    onBackToLanding: backToLanding,
-    onWidthChange: setSidebarWidth,
-  };
 
   return (
     <ThemeProvider theme={muiTheme}>
       <CssBaseline />
       <PortalProvider appId="liveview">
-      <Box sx={{ display: "flex", height: "100dvh", overflow: "hidden" }}>
         {activeSlug === null ? (
-          <Landing
-            books={books}
-            progress={progressBySlug}
-            onOpen={enterBook}
-            onHome={backToLanding}
-            onOpenSettings={handleOpenSettings}
-          />
+          <Box sx={{ height: "100dvh", overflow: "hidden" }}>
+            <Landing
+              books={books}
+              progress={progressBySlug}
+              onOpen={enterBook}
+              onHome={backToLanding}
+              onOpenSettings={handleOpenSettings}
+            />
+          </Box>
         ) : (
-          <>
-            {isMobile ? (
-              <SwipeableDrawer
-                // Swipe-to-dismiss + edge-swipe-to-open are what phone users
-                // reach for; backdrop tap and the in-sidebar ✕ still close it.
-                open={sidebarOpen}
-                onOpen={handleOpenSidebar}
-                onClose={handleCloseSidebar}
-                disableBackdropTransition={!IS_IOS}
-                disableDiscovery={IS_IOS}
-                swipeAreaWidth={24}
-                ModalProps={{ keepMounted: true }}
-                slotProps={{
-                  paper: { sx: { width: "min(85vw, 320px)", boxSizing: "border-box" } },
+          <NavShell
+            appKey="liveview"
+            title={bookLabel}
+            nav={(api) => (
+              <Sidebar
+                tree={activeTree}
+                currentPath={currentPath}
+                bookMode={bookMode}
+                langs={bookLangs}
+                currentLang={lang}
+                onSwitchLang={switchLang}
+                onSelect={(path) => {
+                  handleSelect(path);
+                  api.closeMobile();
                 }}
-              >
-                <Sidebar {...sidebarCommon} width={DEFAULT_SIDEBAR_WIDTH} isMobile />
-              </SwipeableDrawer>
-            ) : (
-              sidebarOpen && <Sidebar {...sidebarCommon} width={sidebarWidth} />
+                onBackToLanding={backToLanding}
+              />
             )}
-
-            <Box
-              sx={{
-                flex: 1,
-                display: "flex",
-                flexDirection: "column",
-                overflow: "hidden",
-                bgcolor: "background.default",
-                position: "relative",
-                // Keep content clear of the side notch in landscape on iPhone.
-                pl: "env(safe-area-inset-left, 0px)",
-                pr: "env(safe-area-inset-right, 0px)",
-              }}
-            >
-              {showNavBar && menuBarSettings.navBarPosition === "top" && (
-                <ReaderNavBar
-                  position="top"
-                  onOpenSidebar={handleOpenSidebar}
-                  onOpenSettings={handleOpenSettings}
-                />
-              )}
-
-              {canAudiobook && (
-                <FloatButton position="right" floatOpacity={menuBarSettings.floatOpacity}>
+            actions={
+              <>
+                {canAudiobook && (
                   <Tooltip title={audiobookOpen ? t("audiobook.close") : t("audiobook.open")}>
                     <IconButton
                       size="small"
@@ -695,49 +475,44 @@ export function App(): React.JSX.Element {
                       )}
                     </IconButton>
                   </Tooltip>
-                </FloatButton>
-              )}
-
-              <Box sx={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-                {untranslated && (
-                  <Alert severity="info" square sx={{ py: 0.25 }}>
-                    {t("content.untranslated", {
-                      lang: langLabel(untranslated.requested),
-                      fallback: langLabel(untranslated.shown),
-                    })}
-                  </Alert>
                 )}
-                {audiobookOpen && currentPath ? (
-                  <AudiobookPlayer
-                    currentPath={currentPath}
-                    lang={lang}
-                    contentMaxWidth={menuBarSettings.contentMaxWidth}
-                    lineHeight={menuBarSettings.lineHeight}
-                  />
-                ) : (
-                  <ContentViewer
-                    content={currentContent}
-                    fileType={currentFileType}
-                    currentPath={currentPath}
-                    theme={theme}
-                    onNavigate={handleSelect}
-                    contentMaxWidth={menuBarSettings.contentMaxWidth}
-                    lineHeight={menuBarSettings.lineHeight}
-                    savedScroll={savedScroll}
-                    onSaveScroll={saveProgress}
-                  />
-                )}
-              </Box>
-
-              {showNavBar && menuBarSettings.navBarPosition === "bottom" && (
-                <ReaderNavBar
-                  position="bottom"
-                  onOpenSidebar={handleOpenSidebar}
-                  onOpenSettings={handleOpenSettings}
-                />
-              )}
-            </Box>
-          </>
+                <Tooltip title={t("app.settings")}>
+                  <IconButton size="small" onClick={handleOpenSettings}>
+                    <SettingsIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </>
+            }
+          >
+            {untranslated && (
+              <Alert severity="info" square sx={{ py: 0.25 }}>
+                {t("content.untranslated", {
+                  lang: langLabel(untranslated.requested),
+                  fallback: langLabel(untranslated.shown),
+                })}
+              </Alert>
+            )}
+            {audiobookOpen && currentPath ? (
+              <AudiobookPlayer
+                currentPath={currentPath}
+                lang={lang}
+                contentMaxWidth={menuBarSettings.contentMaxWidth}
+                lineHeight={menuBarSettings.lineHeight}
+              />
+            ) : (
+              <ContentViewer
+                content={currentContent}
+                fileType={currentFileType}
+                currentPath={currentPath}
+                theme={theme}
+                onNavigate={handleSelect}
+                contentMaxWidth={menuBarSettings.contentMaxWidth}
+                lineHeight={menuBarSettings.lineHeight}
+                savedScroll={savedScroll}
+                onSaveScroll={saveProgress}
+              />
+            )}
+          </NavShell>
         )}
 
         <SettingsDialog
@@ -751,9 +526,7 @@ export function App(): React.JSX.Element {
           onFloatOpacityChange={setFloatOpacity}
           onContentMaxWidthChange={setContentMaxWidth}
           onLineHeightChange={setLineHeight}
-          onNavBarPositionChange={setNavBarPosition}
         />
-      </Box>
       </PortalProvider>
     </ThemeProvider>
   );

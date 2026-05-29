@@ -20,9 +20,6 @@ import {
   ExpandMore as ExpandMoreIcon,
   UnfoldMore as ExpandAllIcon,
   UnfoldLess as CollapseAllIcon,
-  ChevronLeft as ChevronLeftIcon,
-  Close as CloseIcon,
-  Settings as SettingsIcon,
   MyLocation as LocateIcon,
   ArrowBack as BackIcon,
 } from "@mui/icons-material";
@@ -217,45 +214,36 @@ function findParentPaths(nodes: TreeNode[], targetPath: string): string[] {
 interface SidebarProps {
   tree: TreeNode[];
   currentPath: string | null;
-  width: number;
-  isMobile?: boolean;
   /** "book" mode (book.toml-driven) renders a clean titled spine — no file
    *  icons, root folder already dropped upstream. "docs" mode renders the raw
    *  filesystem tree with folder/file icons. */
   bookMode?: boolean;
-  bookLabel?: string;
   langs?: LangInfo[];
   currentLang?: string;
   onSwitchLang?: (lang: string) => void;
   onSelect: (path: string) => void;
-  onClose: () => void;
-  onOpenSettings: () => void;
   onBackToLanding: () => void;
-  onWidthChange: (width: number) => void;
 }
 
+// The Sidebar is the nav body inside NavShell, which owns the surrounding frame
+// (panel width / drawer / collapse) and the top bar (title, settings, launcher,
+// the collapse toggle). So this renders only the in-nav controls — back to the
+// bookshelf, expand/collapse-all, reveal current — plus the language switcher
+// and the tree, filling whatever container NavShell gives it.
 export function Sidebar({
   tree,
   currentPath,
-  width,
-  isMobile = false,
   bookMode = false,
-  bookLabel,
   langs = [],
   currentLang,
   onSwitchLang,
   onSelect,
-  onClose,
-  onOpenSettings,
   onBackToLanding,
-  onWidthChange,
 }: SidebarProps): React.JSX.Element {
   const { t } = useI18n();
   const allDirPaths = useMemo(() => collectAllDirPaths(tree), [tree]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
-  const resizeRef = useRef<HTMLDivElement>(null);
   const listContainerRef = useRef<HTMLDivElement>(null);
-  const isDraggingRef = useRef(false);
   const prevCurrentPathRef = useRef<string | null>(null);
 
   // Auto-expand parent directories only when currentPath actually changes
@@ -321,47 +309,15 @@ export function Sidebar({
     }, 100);
   }, [currentPath, tree]);
 
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent): void => {
-      if (!isDraggingRef.current) return;
-      const newWidth = Math.min(Math.max(e.clientX, 180), 600);
-      onWidthChange(newWidth);
-    };
-
-    const handleMouseUp = (): void => {
-      isDraggingRef.current = false;
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-    };
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [onWidthChange]);
-
-  const handleResizeStart = useCallback(() => {
-    isDraggingRef.current = true;
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-  }, []);
-
   return (
     <Box
       sx={{
-        // In the mobile Drawer the paper sets the width and height; fill it.
-        width: isMobile ? "100%" : width,
-        minWidth: isMobile ? 0 : width,
-        height: isMobile ? "100%" : "100dvh",
+        width: "100%",
+        height: "100%",
+        minHeight: 0,
         display: "flex",
         flexDirection: "column",
         bgcolor: "background.paper",
-        borderRight: isMobile ? 0 : 1,
-        borderColor: "divider",
-        position: "relative",
       }}
     >
       <Box
@@ -371,29 +327,15 @@ export function Sidebar({
           justifyContent: "space-between",
           px: 1,
           py: 0.5,
-          // Clear the iPhone status bar / notch when shown as a drawer.
-          pt: isMobile ? "calc(env(safe-area-inset-top, 0px) + 4px)" : 0.5,
           borderBottom: 1,
           borderColor: "divider",
         }}
       >
-        <Box sx={{ display: "flex", alignItems: "center", minWidth: 0, flex: 1 }}>
-          <Tooltip title={t("sidebar.back")}>
-            <IconButton size="small" onClick={onBackToLanding}>
-              <BackIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          {bookLabel && (
-            <Typography
-              variant="subtitle2"
-              noWrap
-              title={bookLabel}
-              sx={{ ml: 0.5, fontWeight: 600, minWidth: 0 }}
-            >
-              {bookLabel}
-            </Typography>
-          )}
-        </Box>
+        <Tooltip title={t("sidebar.back")}>
+          <IconButton size="small" onClick={onBackToLanding}>
+            <BackIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
         <Box sx={{ display: "flex", flexShrink: 0 }}>
           <Tooltip title={t(isAllExpanded ? "sidebar.collapseAll" : "sidebar.expandAll")}>
             <IconButton size="small" onClick={handleToggleAll}>
@@ -410,17 +352,6 @@ export function Sidebar({
                 <LocateIcon fontSize="small" />
               </IconButton>
             </span>
-          </Tooltip>
-          <Tooltip title={t("sidebar.settings")}>
-            <IconButton size="small" onClick={onOpenSettings}>
-              <SettingsIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title={t("sidebar.close")}>
-            <IconButton size="small" onClick={onClose}>
-              {/* ✕ reads as "close overlay" on mobile; ‹ as "collapse" on desktop. */}
-              {isMobile ? <CloseIcon fontSize="small" /> : <ChevronLeftIcon fontSize="small" />}
-            </IconButton>
           </Tooltip>
         </Box>
       </Box>
@@ -477,24 +408,6 @@ export function Sidebar({
           ))}
         </List>
       </Box>
-
-      {!isMobile && (
-        <Box
-          ref={resizeRef}
-          onMouseDown={handleResizeStart}
-          sx={{
-            position: "absolute",
-            right: 0,
-            top: 0,
-            bottom: 0,
-            width: 4,
-            cursor: "col-resize",
-            "&:hover": {
-              bgcolor: "primary.main",
-            },
-          }}
-        />
-      )}
     </Box>
   );
 }

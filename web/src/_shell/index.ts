@@ -16,6 +16,11 @@ export {
   type PortalLauncherButtonProps,
 } from "./app-grid-button";
 export {
+  NavShell,
+  type NavShellApi,
+  type NavShellProps,
+} from "./nav-shell";
+export {
   type NavigateOptions,
   type PortalApi,
   PortalProvider,
