@@ -123,6 +123,35 @@
   box-sizing: content-box;
 }
 
+/* ── Dark-mode figure handling ─────────────────────────────────────────────
+   Book figures are extracted raster (PDF diagrams, screenshots, photos) that
+   bake in a light background or dark-on-transparent line art. On a dark page
+   the white-bg ones glare and the transparent line-art ones vanish. The safe
+   universal floor is a neutral light plate: white-bg figures blend into it
+   seamlessly, transparent line art stays legible, and photos are merely framed
+   — not a single pixel distorted (unlike filter:invert, which wrecks photos).
+   Per-figure theming (vectorize diagrams to currentColor SVG / author dual
+   images) is the diagram-polish follow-up; this is the floor under it.
+
+   The gate mirrors the JS isDarkTheme() (= !theme.includes("light")), so any
+   future dark theme is covered automatically. Escape hatches:
+     - class `no-plate`     figure that already carries its own dark background
+     - `foo.png#only-dark`  author-supplied dark variant: shown only in dark and
+       never plated; pair with `foo.png#only-light` for the light one. */
+html[data-theme]:not([data-theme*="light"]) .markdown-body
+  img:not(.emoji):not(.no-plate):not([src$="#only-dark"]) {
+  background-color: #ffffff;
+  padding: 0.5rem;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+/* Light/dark dual-image switch (opt-in, mirrors MkDocs Material's #only-*). */
+html[data-theme]:not([data-theme*="light"]) .markdown-body img[src$="#only-light"],
+html[data-theme*="light"] .markdown-body img[src$="#only-dark"] {
+  display: none;
+}
+
 .markdown-body code,
 .markdown-body kbd,
 .markdown-body pre,
