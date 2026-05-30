@@ -2,11 +2,17 @@ import {
   Box,
   Card,
   CardActionArea,
+  Checkbox,
   Chip,
+  FormControl,
   IconButton,
   InputAdornment,
   LinearProgress,
-  Stack,
+  ListItemText,
+  MenuItem,
+  OutlinedInput,
+  Select,
+  type SelectChangeEvent,
   TextField,
   Typography,
 } from "@mui/material";
@@ -17,8 +23,9 @@ import {
   Headphones as AudiobookIcon,
   Search as SearchIcon,
   Clear as ClearIcon,
+  FilterList as FilterIcon,
 } from "@mui/icons-material";
-import { useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { Book, ReadingProgress } from "@/types";
 import { useI18n } from "@/i18n";
 import { PortalLauncherButton } from "../_shell";
@@ -41,14 +48,21 @@ interface LandingProps {
  *  the 有声书 filter (not double-counted under books). A `book.toml` book with no
  *  audio is a plain "book"; a raw `[[book]]`/`[[mount]]` tree is "docs". */
 type Category = "book" | "audiobook" | "docs";
-/** `all` is the no-filter pseudo-category the leftmost chip selects. */
-type Filter = "all" | Category;
 
 function bookCategory(b: Book): Category {
   if (!b.manifest) return "docs";
   if (b.renditions.some((r) => r.kind === "audio")) return "audiobook";
   return "book";
 }
+
+/** Filter dropdown rows, in display order, with their i18n label keys. An empty
+ *  selection means "all kinds" (no narrowing), so there's no explicit "all" row. */
+const KIND_ORDER: Category[] = ["book", "audiobook", "docs"];
+const KIND_LABEL: Record<Category, string> = {
+  book: "landing.filterBooks",
+  audiobook: "landing.filterAudiobooks",
+  docs: "landing.filterDocs",
+};
 
 /** Deterministic hue (0–359) from a slug, so a book's generated cover colour is
  *  stable across reloads without storing anything. */
@@ -156,9 +170,10 @@ const coverChipSx = {
  * language edition show their editions as chips, and books with saved progress
  * show a % badge on the cover plus a progress bar along the card's bottom.
  *
- * The navbar stays put while the shelf scrolls so search/filters/settings are
- * always one tap away. Search matches by name (label/slug); the filter chips
- * narrow the shelf to one kind (书 / 有声书 / docs) and combine with search.
+ * The navbar stays put while the shelf scrolls so search/filter/settings are
+ * always one tap away. Search matches by name (label/slug); a compact
+ * multi-select dropdown narrows the shelf by kind (书 / 有声书 / docs) and
+ * combines with search (empty selection = all kinds).
  */
 export function Landing({
   books,
@@ -169,12 +184,13 @@ export function Landing({
 }: LandingProps): React.JSX.Element {
   const { t } = useI18n();
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
+  // Multi-select kind filter; an empty selection means "all kinds".
+  const [kinds, setKinds] = useState<Category[]>([]);
 
-  // Per-kind totals for the filter chips, over the WHOLE shelf (not the search
-  // result), so the chips read as a stable map of what's available.
+  // Per-kind totals for the dropdown, over the WHOLE shelf (not the search
+  // result), so each row reads as a stable map of what's available.
   const counts = useMemo(() => {
-    const c: Record<Filter, number> = { all: books.length, book: 0, audiobook: 0, docs: 0 };
+    const c: Record<Category, number> = { book: 0, audiobook: 0, docs: 0 };
     for (const b of books) c[bookCategory(b)] += 1;
     return c;
   }, [books]);
@@ -183,21 +199,19 @@ export function Landing({
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return books.filter((b) => {
-      if (filter !== "all" && bookCategory(b) !== filter) return false;
+      if (kinds.length > 0 && !kinds.includes(bookCategory(b))) return false;
       if (q && !b.label.toLowerCase().includes(q) && !b.slug.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [books, filter, query]);
+  }, [books, kinds, query]);
 
-  // Leftmost "All" always shows; a kind chip only appears when the shelf has at
-  // least one of that kind (no dead "有声书 0" chip).
-  const allChips: { key: Filter; labelKey: string; icon?: ReactElement }[] = [
-    { key: "all", labelKey: "landing.filterAll" },
-    { key: "book", labelKey: "landing.filterBooks", icon: <BookIcon /> },
-    { key: "audiobook", labelKey: "landing.filterAudiobooks", icon: <AudiobookIcon /> },
-    { key: "docs", labelKey: "landing.filterDocs", icon: <DocsIcon /> },
-  ];
-  const filterChips = allChips.filter((f) => f.key === "all" || counts[f.key] > 0);
+  // Only offer a kind in the dropdown when the shelf actually has one.
+  const availableKinds = KIND_ORDER.filter((k) => counts[k] > 0);
+
+  const onKindsChange = (e: SelectChangeEvent<Category[]>): void => {
+    const v = e.target.value;
+    setKinds(typeof v === "string" ? (v.split(",") as Category[]) : v);
+  };
 
   return (
     <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}>
@@ -256,11 +270,11 @@ export function Landing({
             </Box>
           </Box>
 
-          {/* Row 2: search + filter chips. Wraps on narrow widths — search takes
-              the first row, chips drop below — so nothing is a horizontal-scroll
-              strip (ui.md §7). Hidden entirely on an empty shelf. */}
+          {/* Row 2: search + the kind filter share one line to save vertical
+              space. Search grows to fill; the filter is a compact multi-select
+              dropdown (empty selection = all kinds). */}
           {books.length > 0 && (
-            <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 1 }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
               <TextField
                 size="small"
                 value={query}
@@ -281,27 +295,54 @@ export function Landing({
                     </InputAdornment>
                   ) : null,
                 }}
-                sx={{ flexGrow: 1, flexBasis: 200, minWidth: 160, maxWidth: 360 }}
+                sx={{ flexGrow: 1, minWidth: 0 }}
               />
-              <Stack direction="row" sx={{ flexWrap: "wrap", gap: 1 }}>
-                {filterChips.map((f) => {
-                  const selected = filter === f.key;
-                  return (
-                    <Chip
-                      key={f.key}
-                      icon={f.icon}
-                      label={`${t(f.labelKey)} · ${counts[f.key]}`}
-                      onClick={() => setFilter(f.key)}
-                      // Selected = accent fill (the you-are-here treatment, ui.md
-                      // §6), never a dimmed chip.
-                      color={selected ? "primary" : "default"}
-                      variant={selected ? "filled" : "outlined"}
-                      aria-pressed={selected}
-                      sx={{ fontVariantNumeric: "tabular-nums" }}
-                    />
-                  );
-                })}
-              </Stack>
+              {availableKinds.length > 0 && (
+                <FormControl size="small" sx={{ flexShrink: 0, width: { xs: 136, sm: 172 } }}>
+                  <Select
+                    multiple
+                    displayEmpty
+                    value={kinds}
+                    onChange={onKindsChange}
+                    aria-label={t("landing.filter")}
+                    title={t("landing.filter")}
+                    input={
+                      <OutlinedInput
+                        startAdornment={
+                          <InputAdornment position="start">
+                            <FilterIcon fontSize="small" />
+                          </InputAdornment>
+                        }
+                      />
+                    }
+                    // Empty selection reads as a muted "All kinds" placeholder;
+                    // otherwise the picked kinds, comma-joined (ellipsized by the
+                    // Select when they overflow the compact control).
+                    renderValue={(selected) =>
+                      selected.length === 0 ? (
+                        <Box component="span" sx={{ color: "text.secondary" }}>
+                          {t("landing.filterAll")}
+                        </Box>
+                      ) : (
+                        selected.map((k) => t(KIND_LABEL[k])).join(", ")
+                      )
+                    }
+                  >
+                    {availableKinds.map((k) => (
+                      <MenuItem key={k} value={k} dense>
+                        <Checkbox checked={kinds.includes(k)} size="small" sx={{ py: 0, pl: 0, pr: 1 }} />
+                        <ListItemText primary={t(KIND_LABEL[k])} />
+                        <Box
+                          component="span"
+                          sx={{ ml: 3, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}
+                        >
+                          {counts[k]}
+                        </Box>
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              )}
             </Box>
           )}
         </Box>
