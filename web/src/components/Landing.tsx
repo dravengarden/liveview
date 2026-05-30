@@ -1,11 +1,10 @@
 import {
   Box,
+  Card,
+  CardActionArea,
   Chip,
   IconButton,
   LinearProgress,
-  List,
-  ListItemButton,
-  Paper,
   Tooltip,
   Typography,
 } from "@mui/material";
@@ -29,18 +28,35 @@ interface LandingProps {
   onOpenSettings: () => void;
 }
 
+/** Deterministic hue (0–359) from a slug, so a book's generated cover colour is
+ *  stable across reloads without storing anything. */
+function slugHue(slug: string): number {
+  let h = 0;
+  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) | 0;
+  return Math.abs(h) % 360;
+}
+
+/** A book has no cover art, so synthesise one: a calm two-stop gradient keyed
+ *  off the slug. Mid lightness so the white kind-icon over it reads on any
+ *  theme. */
+function coverGradient(slug: string): string {
+  const h = slugHue(slug);
+  return `linear-gradient(135deg, hsl(${h} 52% 52%), hsl(${(h + 38) % 360} 48% 42%))`;
+}
+
 /**
- * The "bookshelf" landing page: a compact reading list, one row per book.
+ * The "bookshelf" landing page: a masonry of book cards.
  *
- * Why a list, not a card grid: with no cover art, a grid of equal-height tiles
- * is mostly empty box around a little text — it reads as clunky and wastes the
- * screen (the "giant cards" anti-pattern in conventions/ui.md). A divided list
- * scales to any number of books, never leaves dead space, and scans like a real
- * library index. Picking a row enters that book (resuming the last-read
- * chapter); the sidebar then scopes to it and offers a way back. Rows with more
- * than one language edition show their editions as chips, and books with saved
- * progress show how far the reader got — both as a trailing % and a hairline
- * progress bar along the row's bottom edge.
+ * Why masonry cards (not the old equal-height grid, nor a flat list): books
+ * have no cover art, so an equal-height tile grid is mostly empty box around a
+ * little text — the "giant cards" problem. Masonry fixes exactly that: each
+ * card sizes to its own content (title + however much description + langs +
+ * progress), so there's no dead space, while a synthesised gradient cover keyed
+ * off the slug gives the shelf real visual rhythm and makes it scan like a
+ * library. CSS columns give the vertical waterfall with no JS. Picking a card
+ * enters that book (resuming the last-read chapter); books with more than one
+ * language edition show their editions as chips, and books with saved progress
+ * show a % badge on the cover plus a progress bar along the card's bottom.
  */
 export function Landing({
   books,
@@ -124,47 +140,82 @@ export function Landing({
         {books.length === 0 ? (
           <Typography color="text.secondary">{t("landing.noMounts")}</Typography>
         ) : (
-          <Paper variant="outlined" sx={{ borderRadius: 2, overflow: "hidden" }}>
-            <List disablePadding>
-              {books.map((b) => {
-                const p = progress[b.slug];
-                const pct = p ? Math.min(100, Math.max(0, Math.round(p.scroll * 100))) : 0;
-                return (
-                  <ListItemButton
-                    key={b.slug}
-                    onClick={() => onOpen(b.slug)}
-                    sx={{
-                      position: "relative",
-                      alignItems: "flex-start",
-                      gap: 1.5,
-                      px: { xs: 1.75, sm: 2.5 },
-                      py: 1.5,
-                      // Row separators instead of one box per book — reads as a
-                      // single shelf, not a grid of tiles.
-                      "&:not(:last-of-type)": { borderBottom: 1, borderColor: "divider" },
-                      // On phones the meta cluster (langs + %) wraps under the
-                      // title rather than crushing it; nowrap from sm up.
-                      flexWrap: { xs: "wrap", sm: "nowrap" },
-                    }}
-                  >
-                    {/* Icon by kind: a book.toml-driven title is a "book";
-                        a plain [[book]]/[[mount]] is a raw "docs" tree, which
-                        gets a document icon rather than a misleading book. */}
-                    {b.manifest ? (
-                      <BookIcon fontSize="small" color="primary" sx={{ mt: 0.3, flexShrink: 0 }} />
-                    ) : (
-                      <DocsIcon fontSize="small" color="primary" sx={{ mt: 0.3, flexShrink: 0 }} />
-                    )}
-                    <Box sx={{ minWidth: 0, flex: 1 }}>
-                      <Typography variant="subtitle1" fontWeight={600} noWrap title={b.label}>
+          // CSS multi-column = a true vertical waterfall with no JS. Cards are
+          // break-inside:avoid so none splits across columns; column-width lets
+          // the count adapt to the container (1 col on phones → ~3 at 1000px).
+          <Box sx={{ columnWidth: "260px", columnGap: "20px" }}>
+            {books.map((b) => {
+              const p = progress[b.slug];
+              const pct = p ? Math.min(100, Math.max(0, Math.round(p.scroll * 100))) : 0;
+              return (
+                <Card
+                  key={b.slug}
+                  variant="outlined"
+                  sx={{
+                    breakInside: "avoid",
+                    mb: "20px",
+                    borderRadius: 2,
+                    overflow: "hidden",
+                    transition: "box-shadow 0.18s, transform 0.18s",
+                    "&:hover": { boxShadow: 4, transform: "translateY(-2px)" },
+                  }}
+                >
+                  <CardActionArea onClick={() => onOpen(b.slug)}>
+                    {/* Synthesised cover: slug-keyed gradient + the kind icon
+                        (book vs docs), since books have no cover art. The %
+                        badge rides the cover for books in progress. */}
+                    <Box
+                      sx={{
+                        position: "relative",
+                        height: 104,
+                        background: coverGradient(b.slug),
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      {b.manifest ? (
+                        <BookIcon sx={{ fontSize: 52, color: "rgba(255,255,255,0.92)" }} />
+                      ) : (
+                        <DocsIcon sx={{ fontSize: 52, color: "rgba(255,255,255,0.92)" }} />
+                      )}
+                      {p && (
+                        <Chip
+                          label={`${pct}%`}
+                          size="small"
+                          sx={{
+                            position: "absolute",
+                            top: 8,
+                            right: 8,
+                            bgcolor: "rgba(0,0,0,0.4)",
+                            color: "#fff",
+                            fontVariantNumeric: "tabular-nums",
+                          }}
+                        />
+                      )}
+                    </Box>
+                    <Box sx={{ p: 1.75 }}>
+                      <Typography variant="subtitle1" fontWeight={700} sx={{ lineHeight: 1.3 }}>
                         {b.label}
                       </Typography>
                       {b.description ? (
-                        <Typography variant="body2" color="text.secondary" noWrap title={b.description}>
+                        <Typography
+                          variant="body2"
+                          color="text.secondary"
+                          sx={{
+                            mt: 0.5,
+                            // Clamp long blurbs but let short ones stay short —
+                            // the height variance is what makes the masonry work.
+                            display: "-webkit-box",
+                            WebkitLineClamp: 5,
+                            WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                          }}
+                        >
                           {b.description}
                         </Typography>
                       ) : (
-                        <Typography variant="body2" color="text.disabled" fontStyle="italic" noWrap>
+                        <Typography variant="body2" color="text.disabled" fontStyle="italic" sx={{ mt: 0.5 }}>
                           /{b.slug}
                         </Typography>
                       )}
@@ -172,64 +223,26 @@ export function Landing({
                         <Typography
                           variant="caption"
                           color="text.secondary"
-                          noWrap
-                          sx={{ display: "block", mt: 0.25 }}
+                          sx={{ display: "block", mt: 1 }}
                           title={p.chapterLabel}
                         >
                           {t("landing.continue", { chapter: p.chapterLabel })}
                         </Typography>
                       )}
-                    </Box>
-                    <Box
-                      sx={{
-                        display: "flex",
-                        alignItems: "center",
-                        flexWrap: "wrap",
-                        justifyContent: "flex-end",
-                        gap: 0.75,
-                        flexShrink: 0,
-                        // Push to the right edge on wide rows; on the wrapped
-                        // mobile line, indent to line up under the title.
-                        ml: { sm: "auto" },
-                        pl: { xs: "32px", sm: 0 },
-                      }}
-                    >
-                      {b.langs.length > 1 &&
-                        b.langs.map((l) => (
-                          <Chip key={l.lang} label={l.label} size="small" variant="outlined" />
-                        ))}
-                      {p && (
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ fontVariantNumeric: "tabular-nums" }}
-                        >
-                          {pct}%
-                        </Typography>
+                      {b.langs.length > 1 && (
+                        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 1 }}>
+                          {b.langs.map((l) => (
+                            <Chip key={l.lang} label={l.label} size="small" variant="outlined" />
+                          ))}
+                        </Box>
                       )}
                     </Box>
-                    {p && (
-                      <LinearProgress
-                        variant="determinate"
-                        value={pct}
-                        aria-hidden
-                        sx={{
-                          position: "absolute",
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          height: 2,
-                          // Track transparent so only the read portion shows as
-                          // a thin accent rule along the row's bottom edge.
-                          bgcolor: "transparent",
-                        }}
-                      />
-                    )}
-                  </ListItemButton>
-                );
-              })}
-            </List>
-          </Paper>
+                    {p && <LinearProgress variant="determinate" value={pct} aria-hidden sx={{ height: 3 }} />}
+                  </CardActionArea>
+                </Card>
+              );
+            })}
+          </Box>
         )}
       </Box>
     </Box>
