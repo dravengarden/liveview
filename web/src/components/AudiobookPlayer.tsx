@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Box, IconButton, CircularProgress, Alert, Typography, Slider, Tooltip } from "@mui/material";
+import {
+  Box,
+  IconButton,
+  CircularProgress,
+  Alert,
+  Typography,
+  Slider,
+  Select,
+  MenuItem,
+} from "@mui/material";
 import { PlayArrow, Pause } from "@mui/icons-material";
 import { useAudiobook } from "@/hooks/useAudiobook";
 import { useI18n } from "@/i18n";
@@ -103,11 +112,6 @@ export function AudiobookPlayer({
     [audioRef]
   );
 
-  const cycleRate = useCallback(() => {
-    const i = RATES.indexOf(rate);
-    setRate(RATES[(i + 1) % RATES.length] ?? 1);
-  }, [rate, setRate]);
-
   // Re-engage auto-follow when the reader presses play or jumps to a sentence.
   const handlePlay = useCallback(() => {
     lastManualScroll.current = 0;
@@ -188,7 +192,9 @@ export function AudiobookPlayer({
           alignItems: "center",
           gap: 1.5,
           px: 2,
-          py: 1,
+          pt: 1,
+          // Clear the iPhone home indicator / rounded-corner safe area.
+          pb: "calc(8px + env(safe-area-inset-bottom, 0px))",
           borderTop: 1,
           borderColor: "divider",
           bgcolor: "background.paper",
@@ -213,13 +219,24 @@ export function AudiobookPlayer({
         <Typography variant="caption" sx={{ minWidth: 40, fontVariantNumeric: "tabular-nums" }}>
           {fmtTime(dur)}
         </Typography>
-        <Tooltip title={t("audiobook.speed")}>
-          <IconButton onClick={cycleRate} size="small" sx={{ minWidth: 44, borderRadius: 1.5 }}>
-            <Typography variant="caption" sx={{ fontWeight: 600 }}>
-              {rate}×
-            </Typography>
-          </IconButton>
-        </Tooltip>
+        <Select
+          size="small"
+          variant="standard"
+          disableUnderline
+          value={rate}
+          onChange={(e) => {
+            setRate(Number(e.target.value));
+          }}
+          aria-label={t("audiobook.speed")}
+          renderValue={(v) => `${v}×`}
+          sx={{ "& .MuiSelect-select": { py: 0.5, fontWeight: 600, fontSize: "0.8rem" } }}
+        >
+          {RATES.map((r) => (
+            <MenuItem key={r} value={r} dense>
+              {r}×
+            </MenuItem>
+          ))}
+        </Select>
       </Box>
 
       {/* Narration audio; no captions track (the read-along text is the caption). */}
