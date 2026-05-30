@@ -150,6 +150,12 @@
         # while static.crates.io returns 200.
         cargoHash = "sha256-6sK3Yzkg9am+BdNDOoDX9RZwi6DFhFCCTg86Iu7MIJ8=";
 
+        # Build id the binary serves at /version.json for the atlantis portal's
+        # update-banner poll. The app's commit SHA changes every deploy; a dirty
+        # tree (local `nix build`) has no rev, so fall back to the static
+        # version. Read via option_env! in src/main.rs.
+        ATLANTIS_BUILD_VERSION = self.shortRev or "0.1.0";
+
         # include_dir!("$CARGO_MANIFEST_DIR/web/dist") is a compile-time
         # lookup — drop the prebuilt SPA there before cargo runs.
         preBuild = ''

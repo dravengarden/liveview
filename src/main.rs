@@ -142,6 +142,7 @@ async fn run(cli: Cli, resolved: Resolved) {
         .route("/api/marks", get(api_marks))
         .route("/api/progress", get(api_progress_get).put(api_progress_put))
         .route("/api/progress/recent", get(api_progress_recent))
+        .route("/version.json", get(api_version))
         .route("/ws", get(server::ws::ws_handler))
         .with_state(state.clone());
 
@@ -351,6 +352,16 @@ struct BookInfo {
     manifest: bool,
 }
 
+/// The deployed build id the atlantis portal polls to raise an update banner
+/// over a kept-alive iframe running a stale bundle (atlantis README → "Update
+/// notifications"). The flake injects the app's commit SHA at build time; a
+/// plain `cargo build` falls back to the crate version.
+async fn api_version() -> axum::Json<serde_json::Value> {
+    axum::Json(serde_json::json!({
+        "version": option_env!("ATLANTIS_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
+    }))
+}
+
 /// Lightweight list of books for the landing page ("bookshelf"): the curated
 /// label, its slug (entry path), an optional blurb, and the available
 /// language editions for the in-book language switcher.
@@ -502,6 +513,25 @@ async fn api_file(
     }
 }
 
+/// Resolve a chapter's **narration source**: prefer the LLM-distilled
+/// `<id>.spoken.md` track (an audiobook is a rewrite for the ear, not a strip);
+/// fall back to the raw `<id>.md`, which is then mechanically stripped at
+/// runtime. Both go through overlay → base resolution. Returns
+/// `(path, served_lang)`; `Ok(None)` = neither exists.
+fn resolve_narration(
+    state: &AppState,
+    virtual_path: &str,
+    lang: Option<&str>,
+) -> Result<Option<(PathBuf, String)>, ()> {
+    if let Some(stem) = virtual_path.strip_suffix(".md") {
+        let spoken = format!("{stem}.spoken.md");
+        if let Some(hit) = resolve_with_fallback(state, &spoken, lang)? {
+            return Ok(Some(hit));
+        }
+    }
+    resolve_with_fallback(state, virtual_path, lang)
+}
+
 #[derive(serde::Serialize)]
 struct SpokenContent {
     /// Edition actually served (overlay → base fallback).
@@ -511,9 +541,10 @@ struct SpokenContent {
     sentences: Vec<String>,
 }
 
-/// Read-along narration text: the chapter stripped to speakable sentences (no
-/// code/math/tables/figures). Same overlay → base resolution as /api/file.
-/// Chapters listed in the book's `[spoken].skip` have no narration → 404.
+/// Read-along narration text: the chapter's distilled `<id>.spoken.md` (or, as a
+/// fallback, the raw `<id>.md` mechanically stripped) segmented into sentences.
+/// Same overlay → base resolution as /api/file. Chapters listed in the book's
+/// `[spoken].skip` have no narration → 404.
 async fn api_spoken(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
@@ -536,7 +567,7 @@ async fn api_spoken(
     }
 
     let (full_path, served_lang) =
-        match resolve_with_fallback(&state, &query.path, query.lang.as_deref()) {
+        match resolve_narration(&state, &query.path, query.lang.as_deref()) {
             Ok(Some(x)) => x,
             Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
             Err(()) => return (StatusCode::FORBIDDEN, "Access denied").into_response(),
@@ -585,7 +616,7 @@ async fn prepare_audio(
     }
 
     let (md_path, served_lang) =
-        match resolve_with_fallback(state, &query.path, query.lang.as_deref()) {
+        match resolve_narration(state, &query.path, query.lang.as_deref()) {
             Ok(Some(x)) => x,
             Ok(None) => return Err((StatusCode::NOT_FOUND, "File not found".to_owned())),
             Err(()) => return Err((StatusCode::FORBIDDEN, "Access denied".to_owned())),
