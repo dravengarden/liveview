@@ -1197,6 +1197,9 @@
   position: relative;
   display: inline-block;
   max-width: 100%;
+  /* Vertical breathing room so a figure (and its white plate) doesn't sit flush
+     against the surrounding prose. */
+  margin-block: 1rem;
   line-height: 0;
   cursor: zoom-in;
 }

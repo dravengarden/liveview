@@ -75,6 +75,23 @@ function mermaidConfig(): Record<string, unknown> {
   };
 }
 
+// Resolve a document-relative reference (a link href or an image src) against
+// the directory of `currentPath`, using shelf path semantics: a leading "/" is
+// shelf-root-absolute, "." / ".." segments collapse, the result has no leading
+// slash. Shared by the in-doc link handler and the image-src rewrite so the two
+// can't drift.
+function resolveDocPath(currentPath: string | null, ref: string): string {
+  if (ref.startsWith("/")) return ref.slice(1);
+  const basePath = currentPath?.split("/").slice(0, -1).join("/") ?? "";
+  if (!basePath) return ref;
+  const normalized: string[] = [];
+  for (const part of `${basePath}/${ref}`.split("/")) {
+    if (part === "..") normalized.pop();
+    else if (part !== "." && part !== "") normalized.push(part);
+  }
+  return normalized.join("/");
+}
+
 export function MarkdownViewer({
   html,
   currentPath,
@@ -208,6 +225,21 @@ export function MarkdownViewer({
     const gallery: { src: string; alt: string }[] = [];
     const cleanups: (() => void)[] = [];
     imgs.forEach((img) => {
+      // Book images are authored relative to the chapter (e.g. "assets/x.jpg").
+      // Against the SPA origin those resolve to /assets/*, which is the embedded
+      // bundle route — a 404, so the figure (and its lightbox entry) is blank.
+      // Rewrite doc-relative srcs to the /api/raw file route; its overlay→base
+      // fallback finds the asset under the served lang. Absolute URLs, data:/
+      // blob: URIs and existing /api/ paths pass through. A trailing
+      // #only-light/#only-dark fragment is kept so the dual-image CSS switch
+      // (markdown.css) still matches on it.
+      const rawSrc = img.getAttribute("src") ?? "";
+      if (rawSrc && !/^(?:https?:|data:|blob:|\/\/|\/api\/)/.test(rawSrc)) {
+        const hash = rawSrc.indexOf("#");
+        const pathPart = hash >= 0 ? rawSrc.slice(0, hash) : rawSrc;
+        const frag = hash >= 0 ? rawSrc.slice(hash) : "";
+        img.src = `/api/raw?path=${encodeURIComponent(resolveDocPath(currentPath, pathPart))}${frag}`;
+      }
       const idx = gallery.length;
       gallery.push({ src: img.currentSrc || img.src, alt: img.alt });
       let wrap = img.parentElement;
@@ -238,6 +270,26 @@ export function MarkdownViewer({
     const svgToDataUrl = (svg: SVGSVGElement): string => {
       const clone = svg.cloneNode(true) as SVGSVGElement;
       if (!clone.getAttribute("xmlns")) clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      // Mermaid/book SVGs are sized with width="100%" + a CSS max-width. An
+      // <img> is a replaced element with no containing block to resolve "100%"
+      // against, so it falls back to the SVG default 300×150 — the diagram
+      // shrinks to an unreadable thumbnail in the lightbox. Pin explicit pixel
+      // dimensions from the viewBox (the diagram's own coordinate space), or
+      // the rendered box if there's no viewBox, so the data: URL carries a real
+      // intrinsic size; drop the inline max-width that would otherwise cap it.
+      const vb = svg.viewBox.baseVal;
+      let w = vb.width;
+      let h = vb.height;
+      if (!w || !h) {
+        const rect = svg.getBoundingClientRect();
+        w = rect.width;
+        h = rect.height;
+      }
+      if (w && h) {
+        clone.setAttribute("width", String(Math.round(w)));
+        clone.setAttribute("height", String(Math.round(h)));
+        clone.style.maxWidth = "none";
+      }
       clone.style.backgroundColor = "#ffffff";
       const xml = new XMLSerializer().serializeToString(clone);
       return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(xml)}`;
@@ -272,7 +324,7 @@ export function MarkdownViewer({
     return () => {
       for (const c of cleanups) c();
     };
-  }, [html]);
+  }, [html, currentPath]);
 
   // Persist scroll position (as a 0..1 ratio, robust to reflow) while reading.
   // Upstream debounces the network write; here we just report on each scroll.
@@ -351,26 +403,7 @@ export function MarkdownViewer({
         }
 
         if (href.endsWith(".md") || href.endsWith(".markdown")) {
-          const basePath = currentPath?.split("/").slice(0, -1).join("/") ?? "";
-          let resolvedPath: string;
-          if (href.startsWith("/")) {
-            resolvedPath = href.slice(1);
-          } else if (basePath) {
-            // Resolve relative path
-            const parts = `${basePath}/${href}`.split("/");
-            const normalized: string[] = [];
-            for (const part of parts) {
-              if (part === "..") {
-                normalized.pop();
-              } else if (part !== "." && part !== "") {
-                normalized.push(part);
-              }
-            }
-            resolvedPath = normalized.join("/");
-          } else {
-            resolvedPath = href;
-          }
-          onNavigate(resolvedPath);
+          onNavigate(resolveDocPath(currentPath, href));
         }
         return;
       }
