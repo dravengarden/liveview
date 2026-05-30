@@ -170,7 +170,7 @@
         # + static.crates.io), NOT importCargoLock: this box's omega proxy
         # 403s the crates.io API download endpoint that importCargoLock uses,
         # while static.crates.io returns 200.
-        cargoHash = "sha256-6sK3Yzkg9am+BdNDOoDX9RZwi6DFhFCCTg86Iu7MIJ8=";
+        cargoHash = "sha256-chO5OPy/KFkU8rqWLG3kcy6X34lKoo/EnRX2zmEwJQs=";
 
         # Build id the binary serves at /version.json for the atlantis portal's
         # update-banner poll. The app's commit SHA changes every deploy; a dirty
