@@ -153,6 +153,29 @@
   display: none;
 }
 
+/* ── Diagram plate (mermaid + standalone SVG) ──────────────────────────────
+   Mermaid renders dark-on-light with a TRANSPARENT svg background, and book
+   SVGs are the same: readable on a light page, invisible on a dark one. Rather
+   than maintain per-theme diagram variants, reuse the figure-plate idea — back
+   every diagram with the same neutral white plate in every theme. Combined with
+   pinning mermaid to its light `default` theme (MarkdownViewer.tsx), a diagram
+   then looks identical in Light / Sepia / Dark / Night. `cursor: zoom-in`
+   advertises the click-to-enlarge the lightbox provides (see lv-zoom-wrap).
+   `.lv-svg-figure` is added in JS to genuine standalone SVGs only — never to
+   KaTeX/octicon SVGs, which must not get a plate. */
+.markdown-body .mermaid,
+.markdown-body .lv-svg-figure {
+  background-color: #ffffff;
+  padding: 0.5rem;
+  border-radius: 6px;
+  cursor: zoom-in;
+}
+
+/* The plate lives on the .mermaid wrapper; its inner svg stays transparent. */
+.markdown-body .mermaid svg {
+  background-color: transparent;
+}
+
 .markdown-body code,
 .markdown-body kbd,
 .markdown-body pre,
@@ -801,6 +824,16 @@
   word-wrap: normal;
   background-color: rgba(0,0,0,0);
   border: 0;
+}
+
+/* highlight.css (the vendored hljs theme) sets `pre code.hljs { padding: 1em }`,
+   which lands ON TOP of the `pre` block's own 0.6rem/0.75rem padding — a double
+   layer that pushes the code text in twice. Zero the inner hljs layer here (our
+   authored file, higher specificity than the vendored rule) so the only padding
+   is the `pre` block's. Keep this rather than editing highlight.css, which is
+   regenerated from the upstream hljs theme. */
+.markdown-body pre code.hljs {
+  padding: 0;
 }
 
 .markdown-body .csv-data td,

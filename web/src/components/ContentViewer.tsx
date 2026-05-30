@@ -64,7 +64,6 @@ export function ContentViewer({
         <MarkdownViewer
           html={content}
           currentPath={currentPath}
-          theme={theme}
           onNavigate={onNavigate}
           contentMaxWidth={contentMaxWidth}
           lineHeight={lineHeight}
