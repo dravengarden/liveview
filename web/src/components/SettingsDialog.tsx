@@ -1,15 +1,12 @@
 import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  IconButton,
   Typography,
   Box,
   Slider,
   ToggleButton,
   ToggleButtonGroup,
 } from "@mui/material";
-import { Close as CloseIcon, Check as CheckIcon } from "@mui/icons-material";
+import { Check as CheckIcon } from "@mui/icons-material";
+import { SettingsSheet } from "../_shell";
 import type { Theme, MenuBarSettings } from "@/types";
 import {
   THEME_OPTIONS,
@@ -23,12 +20,10 @@ import {
 import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
 
-interface SettingsDialogProps {
-  open: boolean;
+interface SettingsButtonProps {
   theme: Theme;
   fontId: string;
   menuBarSettings: MenuBarSettings;
-  onClose: () => void;
   onThemeChange: (theme: Theme) => void;
   onFontChange: (id: string) => void;
   onContentMaxWidthChange: (width: number) => void;
@@ -54,27 +49,18 @@ function getThemeColors(themeValue: Theme): ThemeColors {
   }
 }
 
-export function SettingsDialog({
-  open,
+export function SettingsButton({
   theme,
   menuBarSettings,
   fontId,
-  onClose,
   onThemeChange,
   onFontChange,
   onContentMaxWidthChange,
   onLineHeightChange,
-}: SettingsDialogProps): React.JSX.Element {
+}: SettingsButtonProps): React.JSX.Element {
   const { t, lang, setLang } = useI18n();
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        {t("settings.title")}
-        <IconButton size="small" onClick={onClose} edge="end">
-          <CloseIcon fontSize="small" />
-        </IconButton>
-      </DialogTitle>
-      <DialogContent sx={{ p: 2 }}>
+    <SettingsSheet title={t("settings.title")}>
         <Box sx={{ mb: 3 }}>
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, mb: 1.5, display: "block" }}>
             {t("settings.language")}
@@ -289,7 +275,6 @@ export function SettingsDialog({
             />
           </Box>
         </Box>
-      </DialogContent>
-    </Dialog>
+    </SettingsSheet>
   );
 }

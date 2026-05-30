@@ -8,11 +8,10 @@ import {
   Alert,
 } from "@mui/material";
 import {
-  Settings as SettingsIcon,
   Headphones as HeadphonesIcon,
   MenuBook as MenuBookIcon,
 } from "@mui/icons-material";
-import { Sidebar, SettingsDialog, ContentViewer, AudiobookPlayer, Landing } from "@/components";
+import { Sidebar, SettingsButton, ContentViewer, AudiobookPlayer, Landing } from "@/components";
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
 import { NavShell, PortalProvider } from "./_shell";
@@ -143,7 +142,6 @@ export function App(): React.JSX.Element {
   const [untranslated, setUntranslated] = useState<UntranslatedNotice | null>(null);
   const [currentFileType, setCurrentFileType] = useState<FileType>("markdown");
   const [currentContent, setCurrentContent] = useState<string | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [audiobookOpen, setAudiobookOpen] = useState(false);
   const initializedRef = useRef(false);
   // Refs for matching live WebSocket updates against what's currently shown
@@ -414,13 +412,21 @@ export function App(): React.JSX.Element {
     };
   }, [loadFile, langForHashEntry, loadBook]);
 
-  const handleOpenSettings = useCallback(() => {
-    setSettingsOpen(true);
-  }, []);
-
-  const handleCloseSettings = useCallback(() => {
-    setSettingsOpen(false);
-  }, []);
+  // One settings affordance reused in both chrome contexts (bookshelf header +
+  // in-book NavShell actions). The shared SettingsSheet owns the gear and the
+  // responsive surface — a bottom sheet on mobile, a dialog on desktop — so we
+  // just hand it liveview's settings rows.
+  const settingsButton = (
+    <SettingsButton
+      theme={theme}
+      fontId={fontId}
+      menuBarSettings={menuBarSettings}
+      onThemeChange={setTheme}
+      onFontChange={setFont}
+      onContentMaxWidthChange={setContentMaxWidth}
+      onLineHeightChange={setLineHeight}
+    />
+  );
 
   const langLabel = (code: string): string =>
     bookLangs.find((l) => l.lang === code)?.label ?? code;
@@ -436,7 +442,7 @@ export function App(): React.JSX.Element {
               progress={progressBySlug}
               onOpen={enterBook}
               onHome={backToLanding}
-              onOpenSettings={handleOpenSettings}
+              settingsSlot={settingsButton}
             />
           </Box>
         ) : (
@@ -476,11 +482,7 @@ export function App(): React.JSX.Element {
                     </IconButton>
                   </Tooltip>
                 )}
-                <Tooltip title={t("app.settings")}>
-                  <IconButton size="small" onClick={handleOpenSettings}>
-                    <SettingsIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
+                {settingsButton}
               </>
             }
           >
@@ -515,17 +517,6 @@ export function App(): React.JSX.Element {
           </NavShell>
         )}
 
-        <SettingsDialog
-          open={settingsOpen}
-          theme={theme}
-          fontId={fontId}
-          menuBarSettings={menuBarSettings}
-          onClose={handleCloseSettings}
-          onThemeChange={setTheme}
-          onFontChange={setFont}
-          onContentMaxWidthChange={setContentMaxWidth}
-          onLineHeightChange={setLineHeight}
-        />
       </PortalProvider>
     </ThemeProvider>
   );

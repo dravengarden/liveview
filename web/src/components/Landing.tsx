@@ -3,17 +3,15 @@ import {
   Card,
   CardActionArea,
   Chip,
-  IconButton,
   LinearProgress,
-  Tooltip,
   Typography,
 } from "@mui/material";
 import {
   AutoStories as ShelfIcon,
   MenuBook as BookIcon,
   Article as DocsIcon,
-  Settings as SettingsIcon,
 } from "@mui/icons-material";
+import type { ReactNode } from "react";
 import type { Book, ReadingProgress } from "@/types";
 import { useI18n } from "@/i18n";
 import { PortalLauncherButton } from "../_shell";
@@ -25,7 +23,8 @@ interface LandingProps {
   onOpen: (slug: string) => void;
   /** Return to a clean bookshelf (clears any deep link) — the title is a home link. */
   onHome: () => void;
-  onOpenSettings: () => void;
+  /** The shared SettingsSheet (gear + responsive sheet), placed in the header. */
+  settingsSlot: ReactNode;
 }
 
 /** Deterministic hue (0–359) from a slug, so a book's generated cover colour is
@@ -63,7 +62,7 @@ export function Landing({
   progress,
   onOpen,
   onHome,
-  onOpenSettings,
+  settingsSlot,
 }: LandingProps): React.JSX.Element {
   const { t } = useI18n();
   return (
@@ -125,11 +124,7 @@ export function Landing({
             </Typography>
           </Box>
           <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
-            <Tooltip title={t("app.settings")}>
-              <IconButton aria-label={t("app.settings")} onClick={onOpenSettings}>
-                <SettingsIcon />
-              </IconButton>
-            </Tooltip>
+            {settingsSlot}
             <PortalLauncherButton />
           </Box>
         </Box>
