@@ -37,6 +37,12 @@ export {
   type Visibility,
 } from "./protocol";
 export {
+  SettingsSheet,
+  type SettingsSheetProps,
+  type ThemeChoice,
+  ThemeModeControl,
+} from "./settings-sheet";
+export {
   type AtlantisThemeOptions,
   createAtlantisTheme,
 } from "./theme";
