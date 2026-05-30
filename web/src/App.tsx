@@ -632,19 +632,33 @@ export function App(): React.JSX.Element {
   }, [rendition, currentPath, activeBook, activeTree, lang, uiLang, audioNowPlaying, audioPlayChapter]);
 
   // Auto-advance the other way: when the engine rolls into the next chapter while
-  // you're watching this book's reader, follow it (URL + sidebar highlight). If
-  // you've navigated away, leave your view alone — the mini-player tracks it.
+  // you're watching this book's reader, follow it (URL + sidebar highlight). We
+  // follow ONLY when we were already in sync with the engine (so this is it
+  // advancing under us) — never when we just navigated to a chapter the engine
+  // isn't on (e.g. a deep link while a stale resume-session points elsewhere);
+  // there, effect A brings the engine to us instead. If you've navigated away
+  // (bookshelf, text), we leave your view alone and the mini-player tracks it.
+  const syncedChapterRef = useRef<string | null>(null);
   useEffect(() => {
     const np = audioNowPlaying;
-    if (!np || rendition !== "audio" || activeSlug !== np.bookSlug || currentPath === np.chapterPath) return;
+    if (!np || activeRendition?.kind !== "audio" || activeSlug !== np.bookSlug) {
+      syncedChapterRef.current = null;
+      return;
+    }
+    if (currentPath === np.chapterPath) {
+      syncedChapterRef.current = np.chapterPath;
+      return;
+    }
+    if (syncedChapterRef.current !== currentPath) return; // we weren't in sync — don't hijack
     setCurrentPath(np.chapterPath);
     currentPathRef.current = np.chapterPath;
     setUntranslated(null);
+    syncedChapterRef.current = np.chapterPath;
     const rInfo = activeBook?.renditions.find((r) => r.kind === rendition);
     const langForHash = rInfo && lang !== rInfo.default_lang ? lang : null;
     const renditionForHash = activeBook && rendition !== activeBook.default_rendition ? rendition : null;
     writeHash(np.chapterPath, langForHash, renditionForHash, true);
-  }, [audioNowPlaying, rendition, activeSlug, currentPath, activeBook, lang]);
+  }, [audioNowPlaying, activeRendition, activeSlug, currentPath, activeBook, rendition, lang]);
 
   // One settings affordance reused in both chrome contexts (bookshelf header +
   // in-book NavShell actions). The shared SettingsSheet owns the gear and the
