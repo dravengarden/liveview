@@ -665,13 +665,12 @@ export function App(): React.JSX.Element {
   const langLabel = (code: string): string =>
     bookLangs.find((l) => l.lang === code)?.label ?? code;
 
-  // The mini-player is the "audio continues elsewhere" surface, so hide it while
-  // the full reader for the very chapter that's playing is already on screen.
+  // The mini-player is the "audio continues elsewhere" surface, so hide it
+  // whenever the full audio reader is the foreground view — that reader only
+  // ever shows the chapter that's playing (opening an audio chapter plays it),
+  // so this is exactly "you're already looking at the player".
   const onPlayingReader =
-    audioNowPlaying != null &&
-    rendition === "audio" &&
-    activeSlug === audioNowPlaying.bookSlug &&
-    currentPath === audioNowPlaying.chapterPath;
+    audioNowPlaying != null && currentPath != null && activeRendition?.kind === "audio";
 
   return (
     <ThemeProvider theme={muiTheme}>
