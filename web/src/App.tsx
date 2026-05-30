@@ -144,6 +144,10 @@ export function App(): React.JSX.Element {
   const [currentContent, setCurrentContent] = useState<string | null>(null);
   const [audiobookOpen, setAudiobookOpen] = useState(false);
   const initializedRef = useRef(false);
+  // Bookshelf scroll position, kept here so it survives Landing unmounting
+  // while a book is open and is restored on return (chapter scroll has the
+  // progress system; the shelf had nothing).
+  const shelfScrollRef = useRef(0);
   // Refs for matching live WebSocket updates against what's currently shown
   // (the shown edition may differ from `lang` when falling back).
   const currentPathRef = useRef<string | null>(null);
@@ -443,6 +447,10 @@ export function App(): React.JSX.Element {
               onOpen={enterBook}
               onHome={backToLanding}
               settingsSlot={settingsButton}
+              initialScroll={shelfScrollRef.current}
+              onScroll={(top) => {
+                shelfScrollRef.current = top;
+              }}
             />
           </Box>
         ) : (
