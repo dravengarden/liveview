@@ -233,11 +233,24 @@ export function App(): React.JSX.Element {
   }, []);
 
   // Refresh the landing's reading-progress whenever the bookshelf is shown
-  // (initial load and every return from a book).
+  // (initial load and every return from a book). Skip the state update when the
+  // fetched rows are identical to what we already hold: returning from a book
+  // otherwise replaced the array with an equal-but-new reference, which churned
+  // `progressBySlug` (per-entry tree walks) and re-rendered every shelf card —
+  // part of the "scroll is dead for a beat after returning" stall.
   useEffect(() => {
     if (activeSlug !== null) return;
     void (async () => {
-      setRecentProgress(await loadRecent());
+      const rows = await loadRecent();
+      setRecentProgress((prev) =>
+        prev.length === rows.length &&
+        prev.every((p, i) => {
+          const r = rows[i];
+          return r !== undefined && p.path === r.path && p.scroll === r.scroll;
+        })
+          ? prev
+          : rows
+      );
     })();
   }, [activeSlug, loadRecent]);
 

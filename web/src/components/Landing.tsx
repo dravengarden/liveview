@@ -213,8 +213,23 @@ export function Landing({
                     mb: "20px",
                     borderRadius: 2,
                     overflow: "hidden",
-                    transition: "box-shadow 0.18s, transform 0.18s",
-                    "&:hover": { boxShadow: 4, transform: "translateY(-2px)" },
+                    // Skip layout/paint for off-screen cards. The shelf is a tall
+                    // CSS-multicol list; on a phone (and right after returning
+                    // from a book, when the whole shelf re-lays-out at once) the
+                    // browser was laying out + painting every card every frame,
+                    // which made the first second of scrolling drop inputs.
+                    // content-visibility:auto lets the engine skip cards outside
+                    // the viewport; contain-intrinsic-size reserves a plausible
+                    // box so the scrollbar/column balance stays stable.
+                    contentVisibility: "auto",
+                    containIntrinsicSize: "0 320px",
+                    // Hover lift is a pointer affordance; on touch it fires on
+                    // every scroll-tap and forces a repaint mid-scroll, so gate
+                    // the transition + lift behind a real hover-capable pointer.
+                    "@media (hover: hover)": {
+                      transition: "box-shadow 0.18s, transform 0.18s",
+                      "&:hover": { boxShadow: 4, transform: "translateY(-2px)" },
+                    },
                   }}
                 >
                   <CardActionArea onClick={() => onOpen(b.slug)}>
