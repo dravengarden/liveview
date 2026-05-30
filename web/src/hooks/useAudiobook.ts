@@ -38,6 +38,10 @@ export function useAudiobook(path: string, lang: string, rendition = "audio"): U
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rate, setRateState] = useState(1);
+  // `load()` on a new chapter resets playbackRate to defaultPlaybackRate, so we
+  // re-apply the chosen rate on every `loadedmetadata`; the ref lets that
+  // listener see the current rate without re-subscribing.
+  const rateRef = useRef(1);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Fetch sentences (instant), then marks (triggers server synth — slow on
@@ -68,7 +72,10 @@ export function useAudiobook(path: string, lang: string, rendition = "audio"): U
         const audio = audioRef.current;
         if (audio) {
           audio.src = `/api/audio?${q}`;
-          audio.playbackRate = rate;
+          // load() resets playbackRate from defaultPlaybackRate — set both so
+          // the chosen rate survives the reload (also re-applied on loadedmetadata).
+          audio.defaultPlaybackRate = rateRef.current;
+          audio.playbackRate = rateRef.current;
           audio.load();
           const saved = Number(localStorage.getItem(posKey(path, lang)) ?? "");
           if (Number.isFinite(saved) && saved > 0) {
@@ -127,16 +134,22 @@ export function useAudiobook(path: string, lang: string, rendition = "audio"): U
       setCurrentIdx(-1);
       localStorage.removeItem(posKey(path, lang));
     };
+    // Reloading a chapter resets the rate to default; restore the chosen rate.
+    const onLoadedMeta = (): void => {
+      audio.playbackRate = rateRef.current;
+    };
 
     audio.addEventListener("timeupdate", onTimeUpdate);
     audio.addEventListener("play", onPlay);
     audio.addEventListener("pause", onPause);
     audio.addEventListener("ended", onEnded);
+    audio.addEventListener("loadedmetadata", onLoadedMeta);
     return () => {
       audio.removeEventListener("timeupdate", onTimeUpdate);
       audio.removeEventListener("play", onPlay);
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("loadedmetadata", onLoadedMeta);
     };
   }, [marks, path, lang]);
 
@@ -160,7 +173,12 @@ export function useAudiobook(path: string, lang: string, rendition = "audio"): U
 
   const setRate = useCallback((r: number) => {
     setRateState(r);
-    if (audioRef.current) audioRef.current.playbackRate = r;
+    rateRef.current = r;
+    const audio = audioRef.current;
+    if (audio) {
+      audio.playbackRate = r;
+      audio.defaultPlaybackRate = r;
+    }
   }, []);
 
   return {

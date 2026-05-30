@@ -27,7 +27,7 @@ interface AudiobookPlayerProps {
   lineHeight: number;
 }
 
-const RATES = [0.75, 1, 1.25, 1.5, 2];
+const RATES = [0.75, 1, 1.25, 1.5, 2, 2.25, 2.5, 2.75, 3];
 // Don't fight a reader who scrolled by hand: suspend auto-follow this long after
 // their last manual scroll.
 const MANUAL_SCROLL_GRACE_MS = 4000;
