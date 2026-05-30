@@ -7,19 +7,17 @@
         ]
       },
       "locked": {
-        "dir": "interface/app-shell",
-        "lastModified": 1780141610,
-        "narHash": "sha256-Dds2HSexAD40suwCtOJbDW+AQwFhqDAJgxjBIDc3hQ0=",
+        "lastModified": 1780156070,
+        "narHash": "sha256-1WWbRB2AXEQLEUD3S9uBV0bfanxAUxlX7thHk38+EDk=",
         "ref": "refs/heads/main",
-        "rev": "fdb41f3a4eb211060159ad89829189e98a8c7058",
-        "revCount": 60,
+        "rev": "69031b35a4481c3a5d2823fac8d111b53191c33b",
+        "revCount": 26,
         "type": "git",
-        "url": "file:///home/draven/columbus"
+        "url": "file:///home/draven/columbus/projects/atlantis/main"
       },
       "original": {
-        "dir": "interface/app-shell",
         "type": "git",
-        "url": "file:///home/draven/columbus"
+        "url": "file:///home/draven/columbus/projects/atlantis/main"
       }
     },
     "nixpkgs": {

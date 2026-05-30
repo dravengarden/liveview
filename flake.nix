@@ -14,8 +14,9 @@
   # The shared atlantis app-shell SDK (contract + UI primitives), referenced as
   # a Nix package and staged into the web build below — NOT vendored into this
   # repo's git tree (web/src/_shell/ is gitignored and materialized from here).
-  # Lives as a subdir-flake of the columbus monorepo.
-  inputs.app-shell.url = "git+file:///home/draven/columbus?dir=interface/app-shell";
+  # Lives in the atlantis project (projects/atlantis/main/components), exposed
+  # as that flake's `components` package.
+  inputs.app-shell.url = "git+file:///home/draven/columbus/projects/atlantis/main";
   inputs.app-shell.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs =
@@ -27,7 +28,7 @@
 
       # SDK source tree (contract + UI primitives) from the app-shell package,
       # staged into web/src/_shell/ at build time.
-      appShellSrc = app-shell.packages.${system}.src;
+      appShellSrc = app-shell.packages.${system}.components;
 
       # edge-tts CLI for the audiobook track: `lv` shells out to it to
       # synthesize chapter narration. Baked onto the binary's PATH (below) so
@@ -128,7 +129,7 @@
 
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-rNkmT/n5b0wUDhI+0kHePEI1AhDmWKgxItWSpsyV3K4=";
+        outputHash = "sha256-dPTbRj0BoOLU0gSLqaZ0UJw4lopQwy1Zel9K4VJarZw=";
       };
 
       # ── lv: axum daemon, embeds the SPA via include_dir! ──────────────
