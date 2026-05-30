@@ -65,12 +65,10 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
   } = useAudioPlayer();
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Explicit follow: ON auto-scrolls the spoken line to centre; a manual scroll
-  // turns it OFF (we don't fight the reader), and the jump pill / a sentence tap
-  // turns it back ON. `autoScrolling` masks our own programmatic scroll so it
-  // doesn't read as a manual one.
+  // Explicit follow: ON auto-scrolls the spoken line to centre; a genuine user
+  // scroll GESTURE turns it OFF (we don't fight the reader), and the jump pill /
+  // a sentence tap turns it back ON.
   const [following, setFollowing] = useState(true);
-  const autoScrolling = useRef(false);
   // Whether the spoken line currently sits above or below the viewport, so the
   // jump pill can point the right way.
   const [lineDir, setLineDir] = useState<"up" | "down" | null>(null);
@@ -79,12 +77,7 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
     const container = scrollRef.current;
     if (!container || currentIdx < 0) return;
     const el = container.querySelector<HTMLElement>(`[data-sent="${currentIdx}"]`);
-    if (!el) return;
-    autoScrolling.current = true;
-    el.scrollIntoView({ block: "center", behavior: "smooth" });
-    window.setTimeout(() => {
-      autoScrolling.current = false;
-    }, 700);
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [currentIdx]);
 
   // Auto-follow the spoken sentence while following is on.
@@ -116,12 +109,18 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
     if (!following) updateLineDir();
   }, [currentIdx, following, updateLineDir]);
 
+  // Position-only: keep the jump pill's direction current. Runs on every scroll
+  // (programmatic or not) — it must NOT cancel follow (our own scrollIntoView
+  // fires scroll events too).
   const onScroll = useCallback(() => {
-    if (autoScrolling.current) return;
-    // A genuine manual scroll drops follow; recompute the line direction.
-    setFollowing(false);
     updateLineDir();
   }, [updateLineDir]);
+
+  // Cancel follow only on a real user scroll gesture — wheel or touch-drag — so
+  // programmatic auto-scroll never switches it off the instant it engages.
+  const cancelFollow = useCallback(() => {
+    setFollowing(false);
+  }, []);
 
   const jumpToCurrent = useCallback(() => {
     setFollowing(true);
@@ -153,7 +152,13 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
         </Alert>
       )}
 
-      <Box ref={scrollRef} onScroll={onScroll} sx={{ flex: 1, overflowY: "auto", px: 3, py: 4 }}>
+      <Box
+        ref={scrollRef}
+        onScroll={onScroll}
+        onWheel={cancelFollow}
+        onTouchMove={cancelFollow}
+        sx={{ flex: 1, overflowY: "auto", px: 3, py: 4 }}
+      >
         <Box
           sx={{
             maxWidth: contentMaxWidth > 0 ? contentMaxWidth : "none",
