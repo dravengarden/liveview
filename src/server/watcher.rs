@@ -1,5 +1,6 @@
-use notify_debouncer_mini::new_debouncer;
-use notify_debouncer_mini::notify::RecursiveMode;
+use notify_debouncer_full::new_debouncer;
+use notify_debouncer_full::notify::event::{AccessKind, AccessMode};
+use notify_debouncer_full::notify::{EventKind, RecursiveMode};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -58,31 +59,43 @@ fn spawn_notify_thread(
 
         let mut debouncer = new_debouncer(
             Duration::from_millis(debounce_ms),
-            move |res: Result<
-                Vec<notify_debouncer_mini::DebouncedEvent>,
-                notify_debouncer_mini::notify::Error,
-            >| {
+            None,
+            move |res: notify_debouncer_full::DebounceEventResult| {
                 let Ok(events) = res else { return };
 
                 let mut structure_changed = false;
 
                 for event in events {
-                    let path = &event.path;
-                    let rel_path = path.strip_prefix(&source).unwrap_or(path);
-
-                    if exclude_set.is_match(rel_path) {
+                    // Ignore ACCESS events (opens / reads / read-closes). Our own
+                    // tree scans and file reads OPEN the watched paths, and the
+                    // recursive inotify watch reports those opens — reacting to
+                    // them re-triggers the scan forever (the CPU runaway). They are
+                    // never a real change. A *write*-close still counts (an editor
+                    // saving), so keep Close(Write); everything non-Access
+                    // (create/modify/remove/rename) passes through.
+                    if matches!(event.kind, EventKind::Access(a)
+                        if !matches!(a, AccessKind::Close(AccessMode::Write)))
+                    {
                         continue;
                     }
 
-                    if path.is_file() && include_set.is_match(rel_path) {
-                        let _ = tx.blocking_send(FileEvent::ContentChanged {
-                            book_idx,
-                            rendition_idx,
-                            edition_idx,
-                            path: path.clone(),
-                        });
-                    } else {
-                        structure_changed = true;
+                    for path in &event.paths {
+                        let rel_path = path.strip_prefix(&source).unwrap_or(path);
+
+                        if exclude_set.is_match(rel_path) {
+                            continue;
+                        }
+
+                        if path.is_file() && include_set.is_match(rel_path) {
+                            let _ = tx.blocking_send(FileEvent::ContentChanged {
+                                book_idx,
+                                rendition_idx,
+                                edition_idx,
+                                path: path.clone(),
+                            });
+                        } else {
+                            structure_changed = true;
+                        }
                     }
                 }
 
@@ -94,7 +107,6 @@ fn spawn_notify_thread(
         .expect("Failed to create file watcher");
 
         debouncer
-            .watcher()
             .watch(&source_for_thread, RecursiveMode::Recursive)
             .expect("Failed to start watching");
 
