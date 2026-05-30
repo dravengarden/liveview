@@ -60,8 +60,8 @@ fn assemble(clips: &[Vec<u8>]) -> (Vec<u8>, Vec<Mark>) {
     (audio, marks)
 }
 
-/// Synthesize one sentence to MP3 bytes via the `edge-tts` CLI.
-async fn synth_sentence(cmd: &str, voice: &str, text: &str) -> Result<Vec<u8>, String> {
+/// Synthesize one sentence to MP3 bytes via the `edge-tts` CLI (one attempt).
+async fn try_synth_once(cmd: &str, voice: &str, text: &str) -> Result<Vec<u8>, String> {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = std::env::temp_dir().join(format!("lv-tts-{}-{n}.mp3", std::process::id()));
@@ -84,6 +84,32 @@ async fn synth_sentence(cmd: &str, voice: &str, text: &str) -> Result<Vec<u8>, S
         .map_err(|e| format!("read tts output {}: {e}", tmp.display()))?;
     let _ = tokio::fs::remove_file(&tmp).await;
     Ok(bytes)
+}
+
+const SYNTH_ATTEMPTS: u32 = 3;
+
+/// Synthesize one sentence, resilient to two failure modes:
+/// - **unspeakable text** (a lone `…` / `」` segmented out as its own sentence)
+///   makes edge-tts raise `NoAudioReceived` — emit a zero-length clip so the
+///   chapter still synthesizes and sentence indices stay aligned with the marks;
+/// - **transient network drops** — retry a few times before giving up.
+async fn synth_sentence(cmd: &str, voice: &str, text: &str) -> Result<Vec<u8>, String> {
+    let mut last = String::new();
+    for _ in 0..SYNTH_ATTEMPTS {
+        match try_synth_once(cmd, voice, text).await {
+            Ok(bytes) if !bytes.is_empty() => return Ok(bytes),
+            Ok(_) => last = "empty audio".to_owned(),
+            // No audio for this text → it has nothing speakable; skip it.
+            Err(e) if e.contains("NoAudioReceived") => {
+                tracing::warn!(text, "tts: no audio for sentence; emitting silence");
+                return Ok(Vec::new());
+            }
+            Err(e) => last = e,
+        }
+    }
+    Err(format!(
+        "tts failed after {SYNTH_ATTEMPTS} attempts: {last}"
+    ))
 }
 
 /// Ensure `<stem>.mp3` + `<stem>.marks.json` exist under the edition's
