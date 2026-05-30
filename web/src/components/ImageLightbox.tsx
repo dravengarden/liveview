@@ -279,10 +279,6 @@ export function ImageLightbox({
   return createPortal(
     <div
       ref={overlayRef}
-      onClick={(e) => {
-        // Clicks landing on the backdrop (not the image / controls) close.
-        if (e.target === overlayRef.current) onClose();
-      }}
       style={{
         position: "fixed",
         inset: 0,
@@ -294,48 +290,8 @@ export function ImageLightbox({
         overflow: "hidden",
         touchAction: "none",
         animation: "liveview-lightbox-in 0.18s ease",
-        paddingTop: "env(safe-area-inset-top, 0px)",
-        paddingBottom: "env(safe-area-inset-bottom, 0px)",
       }}
     >
-      <button type="button" aria-label="Close" onClick={onClose} style={closeBtnStyle}>
-        ✕
-      </button>
-
-      {images.length > 1 ? (
-        <>
-          <button
-            type="button"
-            aria-label="Previous image"
-            onClick={goPrev}
-            disabled={!canPrev}
-            style={navBtnStyle("left", canPrev)}
-          >
-            ‹
-          </button>
-          <button
-            type="button"
-            aria-label="Next image"
-            onClick={goNext}
-            disabled={!canNext}
-            style={navBtnStyle("right", canNext)}
-          >
-            ›
-          </button>
-        </>
-      ) : null}
-
-      {/* Visible zoom controls — pinch/wheel/double-tap still work, but a
-          mouse user on desktop needs an obvious affordance. */}
-      <div style={zoomGroupStyle}>
-        <button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.5)} style={zoomBtnStyle}>
-          −
-        </button>
-        <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.5)} style={zoomBtnStyle}>
-          +
-        </button>
-      </div>
-
       <img
         ref={imgRef}
         src={current.src}
@@ -367,103 +323,152 @@ export function ImageLightbox({
         }}
       />
 
-      {(current.alt || images.length > 1) ? (
-        <div style={captionStyle}>
-          {current.alt ? <span>{current.alt}</span> : null}
+      {/* One bottom dock holds every control, within the thumb's reach on a
+          phone (and a single obvious cluster on desktop). Order mirrors how a
+          hand sweeps the arc: navigate · zoom · close, split by hairlines so a
+          reach for "next" doesn't fat-finger "close". The backdrop no longer
+          dismisses on tap (too easy to lose the image by accident) — Close is
+          explicit, and Esc / swipe-down still work. The dock is click-through
+          except on the bar itself, so a tap beside it falls to the image. */}
+      <div style={dockStyle}>
+        {current.alt ? <div style={captionStyle}>{current.alt}</div> : null}
+        <div style={barStyle}>
           {images.length > 1 ? (
-            <span style={{ opacity: 0.7 }}>
-              {index + 1} / {images.length}
-            </span>
+            <>
+              <button
+                type="button"
+                aria-label="Previous image"
+                onClick={goPrev}
+                disabled={!canPrev}
+                style={ctrlBtnStyle(canPrev, 30)}
+              >
+                ‹
+              </button>
+              <span style={counterStyle}>
+                {index + 1} / {images.length}
+              </span>
+              <button
+                type="button"
+                aria-label="Next image"
+                onClick={goNext}
+                disabled={!canNext}
+                style={ctrlBtnStyle(canNext, 30)}
+              >
+                ›
+              </button>
+              <span style={dividerStyle} />
+            </>
           ) : null}
+          <button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.5)} style={ctrlBtnStyle(true, 26)}>
+            −
+          </button>
+          <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.5)} style={ctrlBtnStyle(true, 24)}>
+            +
+          </button>
+          <span style={dividerStyle} />
+          <button type="button" aria-label="Close" onClick={onClose} style={ctrlBtnStyle(true, 22)}>
+            ✕
+          </button>
         </div>
-      ) : null}
+      </div>
     </div>,
     document.body,
   );
 }
 
-const closeBtnStyle: React.CSSProperties = {
+// The control dock pinned to the bottom of the viewport. It spans the width and
+// centres its children (caption above the bar), but is click-through
+// (pointerEvents: none) so only the bar swallows taps — everywhere else falls to
+// the image. Insets are floored on all four edges so the bar clears the iOS home
+// indicator and landscape rounded corners (ui.md §7).
+const dockStyle: React.CSSProperties = {
   position: "absolute",
-  top: "calc(env(safe-area-inset-top, 0px) + 12px)",
-  right: "12px",
-  width: 44,
-  height: 44,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontSize: 26,
-  lineHeight: 1,
-  color: "#fff",
-  background: "rgba(0, 0, 0, 0.35)",
-  border: "none",
-  borderRadius: "50%",
-  cursor: "pointer",
+  left: 0,
+  right: 0,
+  bottom: 0,
   zIndex: 1,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  gap: 10,
+  paddingBottom: "max(env(safe-area-inset-bottom, 0px), 16px)",
+  paddingLeft: "max(env(safe-area-inset-left, 0px), 12px)",
+  paddingRight: "max(env(safe-area-inset-right, 0px), 12px)",
+  pointerEvents: "none",
 };
 
-function navBtnStyle(side: "left" | "right", enabled: boolean): React.CSSProperties {
+// The control bar: a single translucent, blurred pill so the buttons stay
+// legible over any image. This is the only pointer-catching surface in the dock.
+const barStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 2,
+  padding: 6,
+  maxWidth: "100%",
+  borderRadius: 999,
+  background: "rgba(0, 0, 0, 0.55)",
+  backdropFilter: "blur(8px)",
+  WebkitBackdropFilter: "blur(8px)",
+  pointerEvents: "auto",
+};
+
+// A 44px round control (the iOS minimum tap target). `glyph` tunes the font size
+// per icon so the arrows read larger than the +/−/✕. Disabled ends fade rather
+// than vanish so the bar keeps a stable width.
+function ctrlBtnStyle(enabled: boolean, glyph: number): React.CSSProperties {
   return {
-    position: "absolute",
-    top: "50%",
-    transform: "translateY(-50%)",
-    [side]: "12px",
-    width: 48,
-    height: 48,
+    flex: "0 0 auto",
+    width: 44,
+    height: 44,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: 34,
+    padding: 0,
+    fontSize: glyph,
     lineHeight: 1,
     color: "#fff",
-    background: "rgba(0, 0, 0, 0.35)",
+    background: "transparent",
     border: "none",
     borderRadius: "50%",
     cursor: enabled ? "pointer" : "default",
-    opacity: enabled ? 1 : 0.25,
-    zIndex: 1,
+    opacity: enabled ? 1 : 0.3,
+    WebkitTapHighlightColor: "transparent",
   };
 }
 
-const zoomGroupStyle: React.CSSProperties = {
-  position: "absolute",
-  right: "12px",
-  bottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)",
-  display: "flex",
-  gap: 8,
-  zIndex: 1,
+const counterStyle: React.CSSProperties = {
+  flex: "0 0 auto",
+  padding: "0 6px",
+  color: "#fff",
+  fontSize: 13,
+  fontVariantNumeric: "tabular-nums",
+  whiteSpace: "nowrap",
+  userSelect: "none",
 };
 
-const zoomBtnStyle: React.CSSProperties = {
-  width: 44,
-  height: 44,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontSize: 26,
-  lineHeight: 1,
-  color: "#fff",
-  background: "rgba(0, 0, 0, 0.35)",
-  border: "none",
-  borderRadius: "50%",
-  cursor: "pointer",
+// Hairline between control groups (nav | zoom | close), so a reach for one group
+// doesn't land on the next.
+const dividerStyle: React.CSSProperties = {
+  flex: "0 0 auto",
+  width: 1,
+  height: 22,
+  margin: "0 4px",
+  background: "rgba(255, 255, 255, 0.25)",
 };
 
 const captionStyle: React.CSSProperties = {
-  position: "absolute",
-  left: "50%",
-  bottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)",
-  transform: "translateX(-50%)",
-  maxWidth: "min(90%, 720px)",
-  display: "flex",
-  alignItems: "center",
-  gap: 10,
-  padding: "6px 14px",
+  maxWidth: "min(90vw, 680px)",
+  padding: "4px 12px",
   borderRadius: 999,
-  background: "rgba(0, 0, 0, 0.5)",
+  background: "rgba(0, 0, 0, 0.55)",
+  backdropFilter: "blur(8px)",
+  WebkitBackdropFilter: "blur(8px)",
   color: "#fff",
   fontSize: 13,
   lineHeight: 1.4,
   textAlign: "center",
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
   pointerEvents: "none",
-  zIndex: 1,
 };
