@@ -150,6 +150,15 @@ export function ImageLightbox({
     [applyTransform],
   );
 
+  // Button zoom: step toward the viewport centre (mouse users who don't think
+  // to scroll-to-zoom, and a visible affordance on touch).
+  const zoomBy = useCallback(
+    (factor: number) => {
+      zoomAt(factor, window.innerWidth / 2, window.innerHeight / 2, true);
+    },
+    [zoomAt],
+  );
+
   // Wheel zoom (passive:false so we can preventDefault the page scroll).
   useEffect(() => {
     const img = imgRef.current;
@@ -316,6 +325,17 @@ export function ImageLightbox({
         </>
       ) : null}
 
+      {/* Visible zoom controls — pinch/wheel/double-tap still work, but a
+          mouse user on desktop needs an obvious affordance. */}
+      <div style={zoomGroupStyle}>
+        <button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.5)} style={zoomBtnStyle}>
+          −
+        </button>
+        <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.5)} style={zoomBtnStyle}>
+          +
+        </button>
+      </div>
+
       <img
         ref={imgRef}
         src={current.src}
@@ -403,6 +423,30 @@ function navBtnStyle(side: "left" | "right", enabled: boolean): React.CSSPropert
     zIndex: 1,
   };
 }
+
+const zoomGroupStyle: React.CSSProperties = {
+  position: "absolute",
+  right: "12px",
+  bottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)",
+  display: "flex",
+  gap: 8,
+  zIndex: 1,
+};
+
+const zoomBtnStyle: React.CSSProperties = {
+  width: 44,
+  height: 44,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontSize: 26,
+  lineHeight: 1,
+  color: "#fff",
+  background: "rgba(0, 0, 0, 0.35)",
+  border: "none",
+  borderRadius: "50%",
+  cursor: "pointer",
+};
 
 const captionStyle: React.CSSProperties = {
   position: "absolute",
