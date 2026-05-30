@@ -1,6 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { Box } from "@mui/material";
-import type { Theme } from "@/types";
 import { ImageLightbox } from "./ImageLightbox";
 
 declare global {
@@ -28,7 +27,6 @@ declare global {
 interface MarkdownViewerProps {
   html: string | null;
   currentPath: string | null;
-  theme: Theme;
   onNavigate: (path: string) => void;
   /** Max width of the inner reading column in px. 0 ⇒ no limit (full width). */
   contentMaxWidth: number;
@@ -38,10 +36,6 @@ interface MarkdownViewerProps {
   savedScroll?: ((path: string) => number | undefined) | undefined;
   /** Report the current scroll ratio (0..1) for a doc path (debounced upstream). */
   onSaveScroll?: ((path: string, ratio: number) => void) | undefined;
-}
-
-function isDarkTheme(theme: Theme): boolean {
-  return !theme.includes("light");
 }
 
 // Font stack for mermaid SVG labels. Why: mermaid's built-in default is
@@ -55,14 +49,17 @@ const MERMAID_FONT_FAMILY =
   'var(--lv-reading-font), "Noto Sans SC", "PingFang SC", ' +
   '"Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif';
 
-// Shared init config for both the first render and the theme re-render path.
-// Why these knobs: markdownAutoWrap + flowchart.wrappingWidth make long node
-// labels fold instead of overflowing the diagram; useMaxWidth keeps the SVG
-// inside the reading column; the slightly larger node/rank spacing relieves the
-// "too crowded" complaint without changing the diagram source.
-function mermaidConfig(theme: string): Record<string, unknown> {
+// Mermaid is pinned to its light "default" theme in EVERY app theme, and the
+// rendered diagram sits on a fixed light plate (.mermaid in markdown.css). Why
+// not switch mermaid light/dark with the page: that needs a full re-render of
+// every diagram on each theme change, and still leaves dark-mermaid mismatched
+// against the (necessarily light) plate book SVGs need. One fixed theme + one
+// fixed plate means a diagram reads identically in Light / Sepia / Dark / Night
+// with zero per-theme variants to maintain — the same floor the figure plate
+// gives raster images.
+function mermaidConfig(): Record<string, unknown> {
   return {
-    theme,
+    theme: "default",
     startOnLoad: false,
     fontFamily: MERMAID_FONT_FAMILY,
     markdownAutoWrap: true,
@@ -81,7 +78,6 @@ function mermaidConfig(theme: string): Record<string, unknown> {
 export function MarkdownViewer({
   html,
   currentPath,
-  theme,
   onNavigate,
   contentMaxWidth,
   lineHeight,
@@ -89,7 +85,6 @@ export function MarkdownViewer({
   onSaveScroll,
 }: MarkdownViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
-  const prevThemeRef = useRef<Theme>(theme);
   // Suppresses the scroll handler while we programmatically restore position,
   // so restoring doesn't immediately overwrite the saved value with itself.
   const restoringRef = useRef(false);
@@ -99,7 +94,7 @@ export function MarkdownViewer({
   const [images, setImages] = useState<{ src: string; alt: string }[]>([]);
   const [lbIndex, setLbIndex] = useState<number | null>(null);
 
-  const processContent = useCallback((forceRerender = false) => {
+  const processContent = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
 
@@ -126,14 +121,15 @@ export function MarkdownViewer({
       }
     });
 
-    const mermaidTheme = isDarkTheme(theme) ? "dark" : "default";
-
-    // Handle unprocessed mermaid blocks
+    // Mermaid: pinned to one light theme regardless of the app theme (see
+    // mermaidConfig), so there is no theme re-render path to maintain — render
+    // each block once. The light plate behind it (.mermaid in markdown.css)
+    // makes the diagram read identically in every app theme.
     const mermaidBlocks = container.querySelectorAll<HTMLElement>(
       'pre[lang="mermaid"], code.language-mermaid'
     );
     if (mermaidBlocks.length > 0 && window.mermaid) {
-      window.mermaid.initialize(mermaidConfig(mermaidTheme));
+      window.mermaid.initialize(mermaidConfig());
 
       mermaidBlocks.forEach((block) => {
         const code = block.tagName === "CODE" ? block.textContent : block.querySelector("code")?.textContent;
@@ -147,31 +143,6 @@ export function MarkdownViewer({
 
       const mermaidDivs = container.querySelectorAll<Element>(".mermaid:not([data-processed])");
       if (mermaidDivs.length > 0) {
-        void window.mermaid.run({ nodes: mermaidDivs });
-      }
-    }
-
-    // Re-render existing mermaid diagrams when theme changes
-    if (forceRerender && window.mermaid) {
-      window.mermaid.initialize(mermaidConfig(mermaidTheme));
-
-      const processedMermaids = container.querySelectorAll<HTMLElement>(".mermaid[data-processed]");
-      processedMermaids.forEach((el) => {
-        const originalCode = el.getAttribute("data-original");
-        if (originalCode) {
-          el.removeAttribute("data-processed");
-          el.innerHTML = originalCode;
-        }
-      });
-
-      const mermaidDivs = container.querySelectorAll<Element>(".mermaid:not([data-processed])");
-      if (mermaidDivs.length > 0) {
-        // Store original code before re-rendering
-        mermaidDivs.forEach((el) => {
-          if (!el.getAttribute("data-original")) {
-            el.setAttribute("data-original", el.textContent ?? "");
-          }
-        });
         void window.mermaid.run({ nodes: mermaidDivs });
       }
     }
@@ -211,13 +182,11 @@ export function MarkdownViewer({
         }
       });
     }
-  }, [theme]);
+  }, []);
 
   useEffect(() => {
-    const themeChanged = prevThemeRef.current !== theme;
-    prevThemeRef.current = theme;
-    processContent(themeChanged);
-  }, [html, theme, processContent]);
+    processContent();
+  }, [html, processContent]);
 
   // Make every (non-linked) doc image a zoomable, tappable target and collect
   // them into an ordered gallery for the lightbox. The open listener is bound
@@ -258,6 +227,47 @@ export function MarkdownViewer({
       target.addEventListener("click", onOpen);
       cleanups.push(() => target.removeEventListener("click", onOpen));
     });
+
+    // Diagrams (mermaid + standalone SVG) join the same lightbox gallery. They
+    // aren't <img>, so the click opens a lightbox entry backed by the SVG
+    // serialized to a data: URL — the lightbox's <img> + zoom/pan code then
+    // works unchanged. The SVG is snapshotted with an explicit white background
+    // so the enlarged view matches the in-page plate (the backdrop is dark).
+    // `.lv-svg-figure` is tagged here on genuine standalone SVGs only (skip
+    // KaTeX math and octicons), so the CSS plate also lands only on those.
+    const svgToDataUrl = (svg: SVGSVGElement): string => {
+      const clone = svg.cloneNode(true) as SVGSVGElement;
+      if (!clone.getAttribute("xmlns")) clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      clone.style.backgroundColor = "#ffffff";
+      const xml = new XMLSerializer().serializeToString(clone);
+      return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(xml)}`;
+    };
+    const diagrams: HTMLElement[] = [
+      ...body.querySelectorAll<HTMLElement>(".mermaid"),
+      ...[...body.querySelectorAll<SVGSVGElement>("svg")]
+        .filter(
+          (svg) =>
+            !svg.closest(".mermaid") &&
+            !svg.classList.contains("octicon") &&
+            !svg.closest(".katex") &&
+            !svg.closest("a"),
+        )
+        .map((svg) => {
+          svg.classList.add("lv-svg-figure");
+          return svg as unknown as HTMLElement;
+        }),
+    ];
+    diagrams.forEach((el) => {
+      const svg = el.tagName.toLowerCase() === "svg" ? (el as unknown as SVGSVGElement) : el.querySelector("svg");
+      if (!svg) return;
+      const idx = gallery.length;
+      gallery.push({ src: svgToDataUrl(svg), alt: "" });
+      el.style.cursor = "zoom-in";
+      const onOpen = (): void => setLbIndex(idx);
+      el.addEventListener("click", onOpen);
+      cleanups.push(() => el.removeEventListener("click", onOpen));
+    });
+
     setImages(gallery);
     return () => {
       for (const c of cleanups) c();
