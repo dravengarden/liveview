@@ -34,7 +34,8 @@ interface LandingProps {
   books: Book[];
   /** Per-book "continue reading" state, keyed by slug; absent ⇒ never opened. */
   progress: Record<string, ReadingProgress>;
-  onOpen: (slug: string) => void;
+  /** Open a book in a specific rendition kind (the card's text/audio variant). */
+  onOpen: (slug: string, rendition: string) => void;
   /** Return to a clean bookshelf (clears any deep link) — the title is a home link. */
   onHome: () => void;
   /** The shared SettingsSheet (gear + responsive sheet), placed in the header. */
@@ -49,10 +50,31 @@ interface LandingProps {
  *  audio is a plain "book"; a raw `[[book]]`/`[[mount]]` tree is "docs". */
 type Category = "book" | "audiobook" | "docs";
 
-function bookCategory(b: Book): Category {
-  if (!b.manifest) return "docs";
-  if (b.renditions.some((r) => r.kind === "audio")) return "audiobook";
-  return "book";
+/** A single shelf card. A book expands to one card PER rendition, so a book that
+ *  ships both text and audio shows up as two independent cards — a "book" (its
+ *  text rendition) and an "audiobook" (its audio one) — rather than one merged
+ *  entry. A raw `[[book]]`/`[[mount]]` tree stays a single "docs" card.
+ *  `rendition` is the kind the card opens into. */
+interface ShelfEntry {
+  book: Book;
+  category: Category;
+  rendition: string;
+}
+
+function shelfEntries(books: Book[]): ShelfEntry[] {
+  const out: ShelfEntry[] = [];
+  for (const b of books) {
+    if (!b.manifest) {
+      out.push({ book: b, category: "docs", rendition: b.default_rendition });
+    } else if (b.renditions.length === 0) {
+      out.push({ book: b, category: "book", rendition: b.default_rendition });
+    } else {
+      for (const r of b.renditions) {
+        out.push({ book: b, category: r.kind === "audio" ? "audiobook" : "book", rendition: r.kind });
+      }
+    }
+  }
+  return out;
 }
 
 /** Filter dropdown rows, in display order, with their i18n label keys. An empty
@@ -187,23 +209,26 @@ export function Landing({
   // Multi-select kind filter; an empty selection means "all kinds".
   const [kinds, setKinds] = useState<Category[]>([]);
 
+  // Each book fans out to one card per rendition (book / audiobook), docs to one.
+  const entries = useMemo(() => shelfEntries(books), [books]);
+
   // Per-kind totals for the dropdown, over the WHOLE shelf (not the search
   // result), so each row reads as a stable map of what's available.
   const counts = useMemo(() => {
     const c: Record<Category, number> = { book: 0, audiobook: 0, docs: 0 };
-    for (const b of books) c[bookCategory(b)] += 1;
+    for (const e of entries) c[e.category] += 1;
     return c;
-  }, [books]);
+  }, [entries]);
 
   // The shelf after both narrowing controls: kind filter AND name search.
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return books.filter((b) => {
-      if (kinds.length > 0 && !kinds.includes(bookCategory(b))) return false;
-      if (q && !b.label.toLowerCase().includes(q) && !b.slug.toLowerCase().includes(q)) return false;
+    return entries.filter((e) => {
+      if (kinds.length > 0 && !kinds.includes(e.category)) return false;
+      if (q && !e.book.label.toLowerCase().includes(q) && !e.book.slug.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [books, kinds, query]);
+  }, [entries, kinds, query]);
 
   // Only offer a kind in the dropdown when the shelf actually has one.
   const availableKinds = KIND_ORDER.filter((k) => counts[k] > 0);
@@ -362,13 +387,17 @@ export function Landing({
             // plain block flow (columnWidth:auto) on xs. Cards stay
             // break-inside:avoid + margin-bottom, which work in both modes.
             <Box sx={{ columnWidth: { xs: "auto", sm: "260px" }, columnGap: "20px" }}>
-              {visible.map((b) => {
-                const category = bookCategory(b);
+              {visible.map((e) => {
+                const b = e.book;
+                const category = e.category;
+                // The edition chips show the languages of THIS card's rendition
+                // (a book's audio edition may offer different langs than its text).
+                const langs = b.renditions.find((r) => r.kind === e.rendition)?.langs ?? b.langs;
                 const p = progress[b.slug];
                 const pct = p ? Math.min(100, Math.max(0, Math.round(p.scroll * 100))) : 0;
                 return (
                   <Card
-                    key={b.slug}
+                    key={`${b.slug}:${e.rendition}`}
                     variant="outlined"
                     sx={{
                       breakInside: "avoid",
@@ -400,7 +429,7 @@ export function Landing({
                         hidden, so it lingers on the card for seconds after
                         returning. Navigation is its own feedback — drop the
                         ripple. */}
-                    <CardActionArea disableRipple onClick={() => onOpen(b.slug)}>
+                    <CardActionArea disableRipple onClick={() => onOpen(b.slug, e.rendition)}>
                       {/* Cover: the book's own image when it has one, else a
                           slug-keyed gradient + the kind icon. Audiobooks carry an
                           audio badge (top-left); books in progress carry a % badge
@@ -463,9 +492,9 @@ export function Landing({
                             {t("landing.continue", { chapter: p.chapterLabel })}
                           </Typography>
                         )}
-                        {b.langs.length > 1 && (
+                        {langs.length > 1 && (
                           <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 1 }}>
-                            {b.langs.map((l) => (
+                            {langs.map((l) => (
                               <Chip key={l.lang} label={l.label} size="small" variant="outlined" />
                             ))}
                           </Box>

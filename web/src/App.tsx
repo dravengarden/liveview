@@ -411,14 +411,17 @@ export function App(): React.JSX.Element {
     [activeSlug, activeBook, entryChapter, openFile, pickInitialLang]
   );
 
-  // Enter a book from the landing page: open it in its default rendition,
-  // resuming the last-read chapter if there is one (and it still exists), else
-  // its README, else its first doc.
+  // Enter a book from the landing page in a specific rendition (the bookshelf
+  // shows a separate card per rendition, so it passes the kind to open). Falls
+  // back to the book's default rendition. Resumes the last-read chapter if there
+  // is one (and it still exists), else its README, else its first doc.
   const enterBook = useCallback(
-    (slug: string) => {
+    (slug: string, renditionKind?: string) => {
       const book = books.find((b) => b.slug === slug);
       if (!book) return;
-      const r = defaultRendition(book);
+      const r =
+        (renditionKind ? book.renditions.find((x) => x.kind === renditionKind) : undefined) ??
+        defaultRendition(book);
       if (!r) return;
       void (async () => {
         // Always fetch the default rendition's spine on entry: the cached
