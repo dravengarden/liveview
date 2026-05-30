@@ -138,10 +138,12 @@ export function Landing({
         {books.length === 0 ? (
           <Typography color="text.secondary">{t("landing.noMounts")}</Typography>
         ) : (
-          // CSS multi-column = a true vertical waterfall with no JS. Cards are
-          // break-inside:avoid so none splits across columns; column-width lets
-          // the count adapt to the container (1 col on phones → ~3 at 1000px).
-          <Box sx={{ columnWidth: "260px", columnGap: "20px" }}>
+          // CSS multi-column = a true vertical waterfall with no JS, but only
+          // from `sm` up: on a phone it's one column anyway, and iOS Safari's
+          // multicol + break-inside is buggy (cards render blank), so drop to
+          // plain block flow (columnWidth:auto) on xs. Cards stay
+          // break-inside:avoid + margin-bottom, which work in both modes.
+          <Box sx={{ columnWidth: { xs: "auto", sm: "260px" }, columnGap: "20px" }}>
             {books.map((b) => {
               const p = progress[b.slug];
               const pct = p ? Math.min(100, Math.max(0, Math.round(p.scroll * 100))) : 0;
