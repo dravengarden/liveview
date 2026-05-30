@@ -110,6 +110,10 @@ export function MarkdownViewer({
   // Ordered list of zoomable images in the doc + which one the lightbox shows.
   const [images, setImages] = useState<{ src: string; alt: string }[]>([]);
   const [lbIndex, setLbIndex] = useState<number | null>(null);
+  // Bumped when mermaid finishes rendering. Mermaid runs asynchronously, so the
+  // diagrams aren't in the DOM yet when the gallery effect first wires click
+  // handlers — re-running the effect on this tick picks them up once they are.
+  const [diagramTick, setDiagramTick] = useState(0);
 
   const processContent = useCallback(() => {
     const container = containerRef.current;
@@ -160,7 +164,11 @@ export function MarkdownViewer({
 
       const mermaidDivs = container.querySelectorAll<Element>(".mermaid:not([data-processed])");
       if (mermaidDivs.length > 0) {
-        void window.mermaid.run({ nodes: mermaidDivs });
+        // Re-wire the lightbox gallery once the SVGs actually exist (run() is
+        // async; see diagramTick).
+        void window.mermaid.run({ nodes: mermaidDivs }).then(() => {
+          setDiagramTick((t) => t + 1);
+        });
       }
     }
 
@@ -324,7 +332,7 @@ export function MarkdownViewer({
     return () => {
       for (const c of cleanups) c();
     };
-  }, [html, currentPath]);
+  }, [html, currentPath, diagramTick]);
 
   // Persist scroll position (as a 0..1 ratio, robust to reflow) while reading.
   // Upstream debounces the network write; here we just report on each scroll.
