@@ -1,7 +1,8 @@
 use notify_debouncer_mini::new_debouncer;
 use notify_debouncer_mini::notify::RecursiveMode;
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use crate::server::renderer::render_file;
@@ -105,6 +106,19 @@ fn spawn_notify_thread(
 }
 
 async fn process_events(state: SharedState, mut rx: mpsc::Receiver<FileEvent>) {
+    // Self-trigger guard. Rebuilding the tree / re-rendering a file OPENS the
+    // watched paths, and our recursive inotify watch reports opens (IN_OPEN) —
+    // so the work's own filesystem scan re-triggers the same work, forever, at
+    // the debounce rate (a CPU runaway that pegs the server). Break the loop by
+    // ignoring repeat work on the same target within a short window, with the
+    // window starting AFTER the work finishes — so the burst of open-events the
+    // scan itself produces lands inside the window and is dropped. A genuine
+    // external edit after the window still reloads; live-reload just can't fire
+    // more than once per window per target.
+    const SELF_TRIGGER_GUARD: Duration = Duration::from_secs(3);
+    let mut last_structure: Option<Instant> = None;
+    let mut last_content: HashMap<PathBuf, Instant> = HashMap::new();
+
     while let Some(event) = rx.recv().await {
         match event {
             FileEvent::ContentChanged {
@@ -113,10 +127,21 @@ async fn process_events(state: SharedState, mut rx: mpsc::Receiver<FileEvent>) {
                 edition_idx,
                 path,
             } => {
+                if last_content
+                    .get(&path)
+                    .is_some_and(|t| t.elapsed() < SELF_TRIGGER_GUARD)
+                {
+                    continue;
+                }
                 handle_content_change(&state, book_idx, rendition_idx, edition_idx, &path).await;
+                last_content.insert(path, Instant::now());
             }
             FileEvent::StructureChanged => {
+                if last_structure.is_some_and(|t| t.elapsed() < SELF_TRIGGER_GUARD) {
+                    continue;
+                }
                 handle_structure_change(&state).await;
+                last_structure = Some(Instant::now());
             }
         }
     }
