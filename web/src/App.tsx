@@ -436,7 +436,7 @@ export function App(): React.JSX.Element {
       <CssBaseline />
       <PortalProvider appId="liveview">
         {activeSlug === null ? (
-          <Box sx={{ height: "100dvh", overflow: "hidden" }}>
+          <Box sx={{ height: "100dvh", overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <Landing
               books={books}
               progress={progressBySlug}

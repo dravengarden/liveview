@@ -383,6 +383,10 @@ export function MarkdownViewer({
       onScroll={handleScroll}
       sx={{
         flex: 1,
+        // Without min-height:0 a flex child won't shrink below its content, so
+        // overflow:auto never engages and the page can't scroll (notably on
+        // iOS, where there's no trackpad to mask it).
+        minHeight: 0,
         overflow: "auto",
         p: { xs: 2, md: 4 },
         "& img": {

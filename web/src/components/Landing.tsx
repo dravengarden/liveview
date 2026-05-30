@@ -69,6 +69,9 @@ export function Landing({
     <Box
       sx={{
         flex: 1,
+        // Pair with the flex-column parent so this column owns the scroll
+        // (min-height:0 lets it shrink below content, engaging overflow:auto).
+        minHeight: 0,
         overflow: "auto",
         px: { xs: 2, md: 6 },
         pb: { xs: 4, md: 6 },
