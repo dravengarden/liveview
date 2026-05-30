@@ -4,5 +4,3 @@ export { useSettings } from "./useSettings";
 export { useFont } from "./useFont";
 export { useProgress } from "./useProgress";
 export type { UseProgress } from "./useProgress";
-export { useAudiobook } from "./useAudiobook";
-export type { UseAudiobook } from "./useAudiobook";

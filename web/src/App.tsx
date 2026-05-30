@@ -5,9 +5,10 @@ import {
   Box,
   Alert,
 } from "@mui/material";
-import { Sidebar, SettingsButton, ContentViewer, AudiobookPlayer, Landing } from "@/components";
+import { Sidebar, SettingsButton, ContentViewer, AudiobookPlayer, MiniPlayer, Landing } from "@/components";
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
+import { useAudioPlayer, type Track } from "@/audio/player";
 import { NavShell, PortalProvider } from "./_shell";
 import type {
   TreeNode,
@@ -70,6 +71,20 @@ function findFirstFile(nodes: TreeNode[]): string | null {
     }
   }
   return null;
+}
+
+/** Flatten a rendition spine into ordered chapter tracks — the playback queue
+ *  for next/prev + auto-advance. Leaf files in depth-first (reading) order. */
+function flattenTracks(nodes: TreeNode[], uiLang: string): Track[] {
+  const out: Track[] = [];
+  const walk = (ns: TreeNode[]): void => {
+    for (const n of ns) {
+      if (n.is_dir) walk(n.children);
+      else out.push({ path: n.path, label: (uiLang && n.titles?.[uiLang]) || n.name });
+    }
+  };
+  walk(nodes);
+  return out;
 }
 
 interface HashState {
@@ -175,6 +190,10 @@ export function App(): React.JSX.Element {
   const { theme, muiTheme, setTheme } = useTheme();
   const { menuBarSettings, setContentMaxWidth, setLineHeight } = useSettings();
   const { fontId, setFont } = useFont();
+  // The root audio engine: playback lives above every view, so navigating never
+  // stops it. We only read what we need (stable `playChapter`, the now-playing
+  // chapter) so these don't churn effects.
+  const { playChapter: audioPlayChapter, nowPlaying: audioNowPlaying } = useAudioPlayer();
 
   // The active book is the first path segment; null ⇒ the landing bookshelf.
   const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;
@@ -453,6 +472,33 @@ export function App(): React.JSX.Element {
     setUntranslated(null);
   }, []);
 
+  // Jump the view to whatever the engine is narrating (the mini-player tap). The
+  // audio is already playing — this just brings the screen to it (and re-engages
+  // the read-along reader); playback is untouched.
+  const openNowPlaying = useCallback(() => {
+    const np = audioNowPlaying;
+    if (!np) return;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/tree?rendition=${encodeURIComponent(np.rendition)}`);
+        setTree((await res.json()) as TreeNode[]);
+      } catch (e) {
+        console.error("Failed to fetch rendition tree:", e);
+      }
+      setLang(np.lang);
+      setRendition(np.rendition);
+      renditionRef.current = np.rendition;
+      setCurrentPath(np.chapterPath);
+      currentPathRef.current = np.chapterPath;
+      setUntranslated(null);
+      const book = books.find((b) => b.slug === np.bookSlug);
+      const rInfo = book?.renditions.find((r) => r.kind === np.rendition);
+      const langForHash = rInfo && np.lang !== rInfo.default_lang ? np.lang : null;
+      const renditionForHash = book && np.rendition !== book.default_rendition ? np.rendition : null;
+      writeHash(np.chapterPath, langForHash, renditionForHash, false);
+    })();
+  }, [audioNowPlaying, books]);
+
   useEffect(() => {
     document.title = currentPath ?? "liveview";
   }, [currentPath]);
@@ -565,6 +611,41 @@ export function App(): React.JSX.Element {
     };
   }, [restoreFromHash]);
 
+  // Viewing an audio chapter ⇒ the engine plays it (seeding the book's chapter
+  // queue from the loaded spine). Guarded on the spine being present so the queue
+  // is complete from the first play; a no-op once it's already that chapter, so
+  // re-opening / auto-advancing never restarts it.
+  useEffect(() => {
+    if (rendition !== "audio" || !currentPath || !activeBook || activeTree.length === 0) return;
+    if (audioNowPlaying?.chapterPath === currentPath) return;
+    audioPlayChapter(
+      {
+        bookSlug: activeBook.slug,
+        bookLabel: activeBook.label,
+        cover: activeBook.cover,
+        chapterPath: currentPath,
+        lang,
+        rendition,
+      },
+      flattenTracks(activeTree, uiLang)
+    );
+  }, [rendition, currentPath, activeBook, activeTree, lang, uiLang, audioNowPlaying, audioPlayChapter]);
+
+  // Auto-advance the other way: when the engine rolls into the next chapter while
+  // you're watching this book's reader, follow it (URL + sidebar highlight). If
+  // you've navigated away, leave your view alone — the mini-player tracks it.
+  useEffect(() => {
+    const np = audioNowPlaying;
+    if (!np || rendition !== "audio" || activeSlug !== np.bookSlug || currentPath === np.chapterPath) return;
+    setCurrentPath(np.chapterPath);
+    currentPathRef.current = np.chapterPath;
+    setUntranslated(null);
+    const rInfo = activeBook?.renditions.find((r) => r.kind === rendition);
+    const langForHash = rInfo && lang !== rInfo.default_lang ? lang : null;
+    const renditionForHash = activeBook && rendition !== activeBook.default_rendition ? rendition : null;
+    writeHash(np.chapterPath, langForHash, renditionForHash, true);
+  }, [audioNowPlaying, rendition, activeSlug, currentPath, activeBook, lang]);
+
   // One settings affordance reused in both chrome contexts (bookshelf header +
   // in-book NavShell actions). The shared SettingsSheet owns the gear and the
   // responsive surface — a bottom sheet on mobile, a dialog on desktop — so we
@@ -584,6 +665,14 @@ export function App(): React.JSX.Element {
   const langLabel = (code: string): string =>
     bookLangs.find((l) => l.lang === code)?.label ?? code;
 
+  // The mini-player is the "audio continues elsewhere" surface, so hide it while
+  // the full reader for the very chapter that's playing is already on screen.
+  const onPlayingReader =
+    audioNowPlaying != null &&
+    rendition === "audio" &&
+    activeSlug === audioNowPlaying.bookSlug &&
+    currentPath === audioNowPlaying.chapterPath;
+
   return (
     <ThemeProvider theme={muiTheme}>
       <CssBaseline />
@@ -595,7 +684,11 @@ export function App(): React.JSX.Element {
             frame of the swap as a white flash. Painting background.default on
             the always-mounted container means the swap happens over a stable,
             theme-correct surface. */}
-        <Box sx={{ position: "relative", height: "100dvh", overflow: "hidden", bgcolor: "background.default" }}>
+        <Box sx={{ height: "100dvh", overflow: "hidden", display: "flex", flexDirection: "column", bgcolor: "background.default" }}>
+          {/* The view stack (bookshelf + open book) fills the space above the
+              persistent mini-player, which takes its own row below so it pushes
+              content up instead of covering it. */}
+          <Box sx={{ position: "relative", flex: 1, minHeight: 0 }}>
           {/* The bookshelf stays mounted (just hidden) while a book is open, so
               its scroll position survives the round trip — no remount, no
               restore jump. We hide it with opacity:0 (NOT visibility:hidden):
@@ -659,9 +752,6 @@ export function App(): React.JSX.Element {
             )}
             {activeRendition?.kind === "audio" && currentPath ? (
               <AudiobookPlayer
-                currentPath={currentPath}
-                lang={lang}
-                rendition={rendition}
                 contentMaxWidth={menuBarSettings.contentMaxWidth}
                 lineHeight={menuBarSettings.lineHeight}
               />
@@ -680,6 +770,8 @@ export function App(): React.JSX.Element {
             )}
             </NavShell>
           )}
+          </Box>
+          <MiniPlayer hidden={onPlayingReader} onOpen={openNowPlaying} />
         </Box>
       </PortalProvider>
     </ThemeProvider>

@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { I18nProvider } from "./i18n";
+import { AudioPlayerProvider } from "./audio/player";
 import "./styles/index.css";
 
 const rootElement = document.getElementById("root");
@@ -12,7 +13,9 @@ if (!rootElement) {
 createRoot(rootElement).render(
   <StrictMode>
     <I18nProvider>
-      <App />
+      <AudioPlayerProvider>
+        <App />
+      </AudioPlayerProvider>
     </I18nProvider>
   </StrictMode>
 );

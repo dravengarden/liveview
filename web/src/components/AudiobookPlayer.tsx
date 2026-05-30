@@ -8,29 +8,28 @@ import {
   Slider,
   Select,
   MenuItem,
+  Button,
 } from "@mui/material";
-import { PlayArrow, Pause } from "@mui/icons-material";
-import { useAudiobook } from "@/hooks/useAudiobook";
+import {
+  PlayArrow,
+  Pause,
+  SkipNext,
+  SkipPrevious,
+  Replay10,
+  Forward10,
+  MyLocation,
+  KeyboardArrowDown,
+  KeyboardArrowUp,
+} from "@mui/icons-material";
+import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
 
 interface AudiobookPlayerProps {
-  /** Virtual chapter path. For the audio rendition this IS the `.spoken.md`
-   *  script (`<slug>/<aid>.spoken.md`); for the text rendition's read-along it
-   *  is the chapter `.md`. */
-  currentPath: string;
-  /** Selected edition; narration uses the served edition (overlay → base). */
-  lang: string;
-  /** Reading mode the chapter belongs to (`"audio"` for the audio rendition).
-   *  Forwarded to the `/api/spoken|audio|marks` query strings. */
-  rendition: string;
   contentMaxWidth: number;
   lineHeight: number;
 }
 
 const RATES = [0.75, 1, 1.25, 1.5, 2, 2.25, 2.5, 2.75, 3];
-// Don't fight a reader who scrolled by hand: suspend auto-follow this long after
-// their last manual scroll.
-const MANUAL_SCROLL_GRACE_MS = 4000;
 
 function fmtTime(sec: number): string {
   if (!Number.isFinite(sec)) return "0:00";
@@ -39,56 +38,46 @@ function fmtTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-/** Audiobook read-along: the spoken text with the narrated sentence highlighted
- *  and auto-scrolled into view (WeChat-Read style), plus a transport bar. */
-export function AudiobookPlayer({
-  currentPath,
-  lang,
-  rendition,
-  contentMaxWidth,
-  lineHeight,
-}: AudiobookPlayerProps): React.JSX.Element {
+/** The full read-along reader for the currently-playing chapter: the spoken text
+ *  with the narrated sentence highlighted, an explicit (cancelable) follow mode,
+ *  and the transport. All playback state comes from the root audio engine, so
+ *  this view is purely a window onto it — leaving it never stops the audio. */
+export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayerProps): React.JSX.Element {
   const { t } = useI18n();
-  const { sentences, currentIdx, playing, loading, error, rate, audioRef, togglePlay, seekToSentence, setRate } =
-    useAudiobook(currentPath, lang, rendition);
+  const {
+    sentences,
+    currentIdx,
+    playing,
+    loading,
+    error,
+    rate,
+    currentTime,
+    duration,
+    canPrev,
+    canNext,
+    togglePlay,
+    seek,
+    skip,
+    seekToSentence,
+    setRate,
+    nextChapter,
+    prevChapter,
+  } = useAudioPlayer();
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Distinguish our own smooth-scroll from the reader's: ignore scroll events
-  // fired while `autoScrolling` is set, and pause auto-follow for a grace
-  // period after a genuine manual scroll.
+  // Explicit follow: ON auto-scrolls the spoken line to centre; a manual scroll
+  // turns it OFF (we don't fight the reader), and the jump pill / a sentence tap
+  // turns it back ON. `autoScrolling` masks our own programmatic scroll so it
+  // doesn't read as a manual one.
+  const [following, setFollowing] = useState(true);
   const autoScrolling = useRef(false);
-  const lastManualScroll = useRef(0);
+  // Whether the spoken line currently sits above or below the viewport, so the
+  // jump pill can point the right way.
+  const [lineDir, setLineDir] = useState<"up" | "down" | null>(null);
 
-  // Transport-bar position (separate lightweight listeners; the hook owns the
-  // sentence mapping).
-  const [cur, setCur] = useState(0);
-  const [dur, setDur] = useState(0);
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return undefined;
-    const onTime = (): void => {
-      setCur(audio.currentTime);
-    };
-    const onMeta = (): void => {
-      setDur(audio.duration);
-    };
-    audio.addEventListener("timeupdate", onTime);
-    audio.addEventListener("loadedmetadata", onMeta);
-    audio.addEventListener("durationchange", onMeta);
-    return () => {
-      audio.removeEventListener("timeupdate", onTime);
-      audio.removeEventListener("loadedmetadata", onMeta);
-      audio.removeEventListener("durationchange", onMeta);
-    };
-  }, [audioRef]);
-
-  // Follow the spoken sentence: scroll it to center unless the reader just
-  // scrolled by hand.
-  useEffect(() => {
-    if (currentIdx < 0) return;
+  const scrollCurrentIntoView = useCallback(() => {
     const container = scrollRef.current;
-    if (!container) return;
-    if (Date.now() - lastManualScroll.current < MANUAL_SCROLL_GRACE_MS) return;
+    if (!container || currentIdx < 0) return;
     const el = container.querySelector<HTMLElement>(`[data-sent="${currentIdx}"]`);
     if (!el) return;
     autoScrolling.current = true;
@@ -98,51 +87,73 @@ export function AudiobookPlayer({
     }, 700);
   }, [currentIdx]);
 
-  const onScroll = useCallback(() => {
-    if (!autoScrolling.current) {
-      lastManualScroll.current = Date.now();
+  // Auto-follow the spoken sentence while following is on.
+  useEffect(() => {
+    if (following) scrollCurrentIntoView();
+  }, [currentIdx, following, scrollCurrentIntoView]);
+
+  // Track whether the current line is off-screen (and which way) to drive the
+  // jump pill, but only while NOT following (when following it's always centred).
+  const updateLineDir = useCallback(() => {
+    const container = scrollRef.current;
+    if (!container || currentIdx < 0) {
+      setLineDir(null);
+      return;
     }
-  }, []);
+    const el = container.querySelector<HTMLElement>(`[data-sent="${currentIdx}"]`);
+    if (!el) {
+      setLineDir(null);
+      return;
+    }
+    const cRect = container.getBoundingClientRect();
+    const eRect = el.getBoundingClientRect();
+    if (eRect.bottom < cRect.top + 8) setLineDir("up");
+    else if (eRect.top > cRect.bottom - 8) setLineDir("down");
+    else setLineDir(null);
+  }, [currentIdx]);
 
-  const onSeekBar = useCallback(
-    (_e: Event, value: number | number[]) => {
-      const audio = audioRef.current;
-      if (audio) audio.currentTime = Array.isArray(value) ? (value[0] ?? 0) : value;
-    },
-    [audioRef]
-  );
+  useEffect(() => {
+    if (!following) updateLineDir();
+  }, [currentIdx, following, updateLineDir]);
 
-  // Re-engage auto-follow when the reader presses play or jumps to a sentence.
-  const handlePlay = useCallback(() => {
-    lastManualScroll.current = 0;
-    togglePlay();
-  }, [togglePlay]);
+  const onScroll = useCallback(() => {
+    if (autoScrolling.current) return;
+    // A genuine manual scroll drops follow; recompute the line direction.
+    setFollowing(false);
+    updateLineDir();
+  }, [updateLineDir]);
+
+  const jumpToCurrent = useCallback(() => {
+    setFollowing(true);
+    scrollCurrentIntoView();
+  }, [scrollCurrentIntoView]);
+
   const handleSentenceClick = useCallback(
     (idx: number) => {
-      lastManualScroll.current = 0;
+      setFollowing(true);
       seekToSentence(idx);
     },
     [seekToSentence]
   );
 
+  const onSeekBar = useCallback(
+    (_e: Event, value: number | number[]) => {
+      seek(Array.isArray(value) ? (value[0] ?? 0) : value);
+    },
+    [seek]
+  );
+
+  const showJumpPill = !following && lineDir !== null;
+
   return (
-    <Box sx={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <Box sx={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" }}>
       {error && (
         <Alert severity="error" square sx={{ py: 0.25 }}>
           {t("audiobook.error", { error })}
         </Alert>
       )}
 
-      <Box
-        ref={scrollRef}
-        onScroll={onScroll}
-        sx={{
-          flex: 1,
-          overflowY: "auto",
-          px: 3,
-          py: 4,
-        }}
-      >
+      <Box ref={scrollRef} onScroll={onScroll} sx={{ flex: 1, overflowY: "auto", px: 3, py: 4 }}>
         <Box
           sx={{
             maxWidth: contentMaxWidth > 0 ? contentMaxWidth : "none",
@@ -177,70 +188,111 @@ export function AudiobookPlayer({
                   "&:hover": { bgcolor: i === currentIdx ? "warning.main" : "action.hover" },
                 }}
               >
-                {s}
-                {" "}
+                {s}{" "}
               </Box>
             ))
           )}
         </Box>
       </Box>
 
-      {/* Transport bar */}
+      {/* "Jump to the spoken line" pill — appears only when follow is off and the
+          line has scrolled off-screen; tapping re-engages follow. */}
+      {showJumpPill && (
+        <Button
+          variant="contained"
+          size="small"
+          onClick={jumpToCurrent}
+          startIcon={lineDir === "up" ? <KeyboardArrowUp /> : <KeyboardArrowDown />}
+          sx={{
+            position: "absolute",
+            left: "50%",
+            transform: "translateX(-50%)",
+            bottom: 88,
+            borderRadius: 999,
+            boxShadow: 4,
+            textTransform: "none",
+            zIndex: 2,
+          }}
+        >
+          {t("audiobook.jumpToLine")}
+        </Button>
+      )}
+
+      {/* Transport: scrubber row + control row. */}
       <Box
         sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 1.5,
-          px: 2,
-          pt: 1,
-          // Clear the iPhone home indicator / rounded-corner safe area.
-          pb: "calc(8px + env(safe-area-inset-bottom, 0px))",
           borderTop: 1,
           borderColor: "divider",
           bgcolor: "background.paper",
+          px: 2,
+          pt: 1,
+          pb: "calc(8px + env(safe-area-inset-bottom, 0px))",
         }}
       >
-        <IconButton onClick={handlePlay} disabled={loading} color="primary">
-          {loading ? <CircularProgress size={24} /> : playing ? <Pause /> : <PlayArrow />}
-        </IconButton>
-        <Typography variant="caption" sx={{ minWidth: 40, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-          {fmtTime(cur)}
-        </Typography>
-        <Slider
-          size="small"
-          min={0}
-          max={dur || 1}
-          value={Math.min(cur, dur || 1)}
-          onChange={onSeekBar}
-          disabled={loading || dur === 0}
-          sx={{ flex: 1 }}
-          aria-label={t("audiobook.seek")}
-        />
-        <Typography variant="caption" sx={{ minWidth: 40, fontVariantNumeric: "tabular-nums" }}>
-          {fmtTime(dur)}
-        </Typography>
-        <Select
-          size="small"
-          variant="standard"
-          disableUnderline
-          value={rate}
-          onChange={(e) => {
-            setRate(Number(e.target.value));
-          }}
-          aria-label={t("audiobook.speed")}
-          renderValue={(v) => `${v}×`}
-          sx={{ "& .MuiSelect-select": { py: 0.5, fontWeight: 600, fontSize: "0.8rem" } }}
-        >
-          {RATES.map((r) => (
-            <MenuItem key={r} value={r} dense>
-              {r}×
-            </MenuItem>
-          ))}
-        </Select>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+          <Typography variant="caption" sx={{ minWidth: 40, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+            {fmtTime(currentTime)}
+          </Typography>
+          <Slider
+            size="small"
+            min={0}
+            max={duration || 1}
+            value={Math.min(currentTime, duration || 1)}
+            onChange={onSeekBar}
+            disabled={loading || duration === 0}
+            sx={{ flex: 1 }}
+            aria-label={t("audiobook.seek")}
+          />
+          <Typography variant="caption" sx={{ minWidth: 40, fontVariantNumeric: "tabular-nums" }}>
+            {fmtTime(duration)}
+          </Typography>
+          <Select
+            size="small"
+            variant="standard"
+            disableUnderline
+            value={rate}
+            onChange={(e) => {
+              setRate(Number(e.target.value));
+            }}
+            aria-label={t("audiobook.speed")}
+            renderValue={(v) => `${v}×`}
+            sx={{ "& .MuiSelect-select": { py: 0.5, fontWeight: 600, fontSize: "0.8rem" } }}
+          >
+            {RATES.map((r) => (
+              <MenuItem key={r} value={r} dense>
+                {r}×
+              </MenuItem>
+            ))}
+          </Select>
+        </Box>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0.5 }}>
+          <IconButton
+            aria-label={following ? t("audiobook.following") : t("audiobook.follow")}
+            onClick={() => (following ? setFollowing(false) : jumpToCurrent())}
+            color={following ? "primary" : "default"}
+            sx={{ mr: "auto" }}
+          >
+            <MyLocation />
+          </IconButton>
+          <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev}>
+            <SkipPrevious />
+          </IconButton>
+          <IconButton aria-label={t("audiobook.skipBack")} onClick={() => skip(-10)}>
+            <Replay10 />
+          </IconButton>
+          <IconButton onClick={togglePlay} disabled={loading} color="primary" aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}>
+            {loading ? <CircularProgress size={24} /> : playing ? <Pause /> : <PlayArrow />}
+          </IconButton>
+          <IconButton aria-label={t("audiobook.skipForward")} onClick={() => skip(10)}>
+            <Forward10 />
+          </IconButton>
+          <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext}>
+            <SkipNext />
+          </IconButton>
+          {/* Spacer to balance the follow button so the transport stays centred. */}
+          <Box sx={{ ml: "auto", width: 40 }} />
+        </Box>
       </Box>
-
-      {/* Narration audio; no captions track (the read-along text is the caption). */}
-      <audio ref={audioRef} preload="metadata" hidden />
     </Box>
   );
 }
