@@ -11,12 +11,23 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+  # The shared atlantis app-shell SDK (contract + UI primitives), referenced as
+  # a Nix package and staged into the web build below — NOT vendored into this
+  # repo's git tree (web/src/_shell/ is gitignored and materialized from here).
+  # Lives as a subdir-flake of the columbus monorepo.
+  inputs.app-shell.url = "git+file:///home/draven/columbus?dir=interface/app-shell";
+  inputs.app-shell.inputs.nixpkgs.follows = "nixpkgs";
+
   outputs =
-    { self, nixpkgs }:
+    { self, nixpkgs, app-shell }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
       lib = pkgs.lib;
+
+      # SDK source tree (contract + UI primitives) from the app-shell package,
+      # staged into web/src/_shell/ at build time.
+      appShellSrc = app-shell.packages.${system}.src;
 
       # edge-tts CLI for the audiobook track: `lv` shells out to it to
       # synthesize chapter narration. Baked onto the binary's PATH (below) so
@@ -59,6 +70,9 @@
         pname = "liveview-web";
         version = "0.1.0";
 
+        # _shell excluded here: it's not committed in this repo and is staged
+        # fresh from the app-shell package in buildPhase, so the FOD's copy is
+        # pinned by the input, not by whatever a dev materialized locally.
         src = lib.cleanSourceWith {
           src = ./web;
           filter =
@@ -69,6 +83,7 @@
             !(builtins.elem base [
               "node_modules"
               "dist"
+              "_shell"
             ]);
         };
 
@@ -84,6 +99,12 @@
         buildPhase = ''
           runHook preBuild
           export HOME=$TMPDIR
+          # Stage the shared app-shell SDK into src/_shell/ from the Nix
+          # package (not committed in this repo). chmod: the store source is
+          # read-only and the tree must be writable for the build.
+          mkdir -p src/_shell
+          cp ${appShellSrc}/* src/_shell/
+          chmod -R u+w src/_shell
           # --allow-scripts so esbuild's lifecycle script links its native
           # binary; deno blocks npm lifecycle scripts by default. No
           # --frozen: deno.lock is gitignored (not in the flake source),
@@ -184,6 +205,10 @@
       packages.${system} = {
         inherit liveview liveview-web;
         default = liveview;
+        # The app-shell SDK source, re-exposed so local dev can materialize
+        # web/src/_shell/ via `make shell` (it isn't committed). Pinned by the
+        # same locked app-shell input the web build uses.
+        app-shell-src = appShellSrc;
       };
 
       devShells.${system}.default = pkgs.mkShell {

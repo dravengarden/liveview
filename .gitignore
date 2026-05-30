@@ -26,3 +26,5 @@
 tailwindcss
 assets/tailwind.css
 result
+web/src/_shell
+.shell-src

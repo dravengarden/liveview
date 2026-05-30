@@ -1,5 +1,27 @@
 {
   "nodes": {
+    "app-shell": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "dir": "interface/app-shell",
+        "lastModified": 1780125441,
+        "narHash": "sha256-b57p9hV4j1F31NvbSJZ1FU50XaLnswxgQFPOIa6FyoI=",
+        "ref": "refs/heads/main",
+        "rev": "764819528f5a4280cfb671834f6bbb7668ee97e3",
+        "revCount": 54,
+        "type": "git",
+        "url": "file:///home/draven/columbus"
+      },
+      "original": {
+        "dir": "interface/app-shell",
+        "type": "git",
+        "url": "file:///home/draven/columbus"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1779560665,
@@ -18,6 +40,7 @@
     },
     "root": {
       "inputs": {
+        "app-shell": "app-shell",
         "nixpkgs": "nixpkgs"
       }
     }

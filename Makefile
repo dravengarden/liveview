@@ -1,7 +1,17 @@
-.PHONY: dev dev-web dev-server build build-web install uninstall clean fmt check
+.PHONY: dev dev-web dev-server build build-web install uninstall clean fmt check shell
+
+# Materialize the shared app-shell SDK into web/src/_shell/ from the Nix
+# package (it is NOT committed in this repo — gitignored). Run once after a
+# fresh checkout and whenever the SDK changes; dev/build targets depend on it.
+shell:
+	nix build .#app-shell-src -o .shell-src
+	mkdir -p web/src/_shell
+	cp -f .shell-src/* web/src/_shell/
+	chmod -R u+w web/src/_shell
+	rm -f .shell-src
 
 # Development: run frontend and backend in parallel
-dev:
+dev: shell
 	@echo "Starting development servers..."
 	@echo "Frontend: http://localhost:5173"
 	@echo "Backend: http://localhost:4159"
@@ -14,7 +24,7 @@ dev-server:
 	cargo run -- --port 4159
 
 # Build frontend SPA
-build-web:
+build-web: shell
 	cd web && deno install --allow-scripts && deno task build
 
 # Build release binary with embedded SPA
