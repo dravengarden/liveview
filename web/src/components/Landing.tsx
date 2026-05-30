@@ -11,7 +11,7 @@ import {
   MenuBook as BookIcon,
   Article as DocsIcon,
 } from "@mui/icons-material";
-import { type ReactNode, useLayoutEffect, useRef } from "react";
+import type { ReactNode } from "react";
 import type { Book, ReadingProgress } from "@/types";
 import { useI18n } from "@/i18n";
 import { PortalLauncherButton } from "../_shell";
@@ -25,10 +25,6 @@ interface LandingProps {
   onHome: () => void;
   /** The shared SettingsSheet (gear + responsive sheet), placed in the header. */
   settingsSlot: ReactNode;
-  /** Scroll position to restore on mount (the shelf survives book visits). */
-  initialScroll: number;
-  /** Report the live scroll position so it can be restored on return. */
-  onScroll: (top: number) => void;
 }
 
 /** Deterministic hue (0–359) from a slug, so a book's generated cover colour is
@@ -67,22 +63,10 @@ export function Landing({
   onOpen,
   onHome,
   settingsSlot,
-  initialScroll,
-  onScroll,
 }: LandingProps): React.JSX.Element {
   const { t } = useI18n();
-  const scrollRef = useRef<HTMLDivElement>(null);
-  // Restore the shelf's last scroll position on mount (cards render
-  // synchronously, so the scrollHeight is ready immediately).
-  useLayoutEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = initialScroll;
-  }, [initialScroll]);
   return (
     <Box
-      ref={scrollRef}
-      onScroll={() => {
-        if (scrollRef.current) onScroll(scrollRef.current.scrollTop);
-      }}
       sx={{
         flex: 1,
         // Pair with the flex-column parent so this column owns the scroll

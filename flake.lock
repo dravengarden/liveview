@@ -8,11 +8,11 @@
       },
       "locked": {
         "dir": "interface/app-shell",
-        "lastModified": 1780125441,
-        "narHash": "sha256-b57p9hV4j1F31NvbSJZ1FU50XaLnswxgQFPOIa6FyoI=",
+        "lastModified": 1780141610,
+        "narHash": "sha256-Dds2HSexAD40suwCtOJbDW+AQwFhqDAJgxjBIDc3hQ0=",
         "ref": "refs/heads/main",
-        "rev": "764819528f5a4280cfb671834f6bbb7668ee97e3",
-        "revCount": 54,
+        "rev": "fdb41f3a4eb211060159ad89829189e98a8c7058",
+        "revCount": 60,
         "type": "git",
         "url": "file:///home/draven/columbus"
       },
