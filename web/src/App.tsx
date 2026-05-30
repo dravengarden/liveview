@@ -595,15 +595,22 @@ export function App(): React.JSX.Element {
         <Box sx={{ position: "relative", height: "100dvh", overflow: "hidden", bgcolor: "background.default" }}>
           {/* The bookshelf stays mounted (just hidden) while a book is open, so
               its scroll position survives the round trip — no remount, no
-              restore jump, no flash. visibility (not display:none) keeps the
-              layout, and thus the scroll offset, intact. */}
+              restore jump. We hide it with opacity:0 (NOT visibility:hidden):
+              a visibility-hidden subtree is "not relevant to the user", so the
+              cards' `content-visibility:auto` skips rendering them, and on the
+              way back they must render in for a frame (empty intrinsic-size
+              boxes → content pops) — a whole-page flash. opacity:0 keeps the
+              in-viewport cards rendered (just transparent), so returning is a
+              compositor-only opacity flip: instant, flash-free. (Off-screen
+              cards are still skipped by content-visibility, and the scroll
+              offset is preserved.) */}
           <Box
             sx={{
               position: "absolute",
               inset: 0,
               display: "flex",
               flexDirection: "column",
-              visibility: activeSlug === null ? "visible" : "hidden",
+              opacity: activeSlug === null ? 1 : 0,
               pointerEvents: activeSlug === null ? "auto" : "none",
             }}
           >
