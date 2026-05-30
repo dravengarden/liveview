@@ -123,24 +123,24 @@
   box-sizing: content-box;
 }
 
-/* ── Dark-mode figure handling ─────────────────────────────────────────────
+/* ── Figure backing plate (all themes) ─────────────────────────────────────
    Book figures are extracted raster (PDF diagrams, screenshots, photos) that
-   bake in a light background or dark-on-transparent line art. On a dark page
-   the white-bg ones glare and the transparent line-art ones vanish. The safe
-   universal floor is a neutral light plate: white-bg figures blend into it
-   seamlessly, transparent line art stays legible, and photos are merely framed
-   — not a single pixel distorted (unlike filter:invert, which wrecks photos).
-   Per-figure theming (vectorize diagrams to currentColor SVG / author dual
-   images) is the diagram-polish follow-up; this is the floor under it.
+   bake in a white/light background or dark-on-transparent line art. Raster
+   pixels can't recolour per theme, so a figure that's invisible on one theme
+   (transparent dark line art on a dark page; a white block glaring on cream)
+   stays a problem until it's vectorised. The universal floor is to give EVERY
+   figure its own neutral white plate, in every theme: white-bg figures blend
+   into it seamlessly, dark-on-transparent line art always has the light
+   backing it expects, and photos are merely framed — not a pixel distorted
+   (unlike filter:invert, which wrecks photos). So a figure reads the same
+   whether the page is Light, Sepia, Dark, or Night.
 
-   The gate keys on data-color-scheme (set by useTheme alongside data-theme),
-   so it tracks the light/dark flag directly rather than guessing from theme
-   names — sepia is a light theme, dark and night are dark. Escape hatches:
-     - class `no-plate`     figure that already carries its own dark background
-     - `foo.png#only-dark`  author-supplied dark variant: shown only in dark and
-       never plated; pair with `foo.png#only-light` for the light one. */
-[data-color-scheme="dark"] .markdown-body
-  img:not(.emoji):not(.no-plate):not([src$="#only-dark"]) {
+   Per-figure theming — recolour a diagram to the active theme (vectorise to
+   currentColor SVG) or author light/dark variants (the #only-* switch below)
+   — is the diagram-polish follow-up; this is the floor under it. Escape
+   hatches: `no-plate` for a figure that carries its own background, and
+   `foo.png#only-dark` (a dark variant, never plated). */
+.markdown-body img:not(.emoji):not(.no-plate):not([src$="#only-dark"]) {
   background-color: #ffffff;
   padding: 0.5rem;
   border-radius: 6px;
