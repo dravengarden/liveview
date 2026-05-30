@@ -353,7 +353,13 @@ export function Landing({
                       },
                     }}
                   >
-                    <CardActionArea onClick={() => onOpen(b.slug)}>
+                    {/* disableRipple: the bookshelf is kept mounted while a
+                        book is open (visibility:hidden, no remount). A press
+                        ripple started here can't run its exit animation while
+                        hidden, so it lingers on the card for seconds after
+                        returning. Navigation is its own feedback — drop the
+                        ripple. */}
+                    <CardActionArea disableRipple onClick={() => onOpen(b.slug)}>
                       {/* Cover: the book's own image when it has one, else a
                           slug-keyed gradient + the kind icon. Audiobooks carry an
                           audio badge (top-left); books in progress carry a % badge
