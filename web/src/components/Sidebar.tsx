@@ -23,7 +23,7 @@ import {
   MyLocation as LocateIcon,
   ArrowBack as BackIcon,
 } from "@mui/icons-material";
-import type { LangInfo, TreeNode } from "@/types";
+import type { LangInfo, RenditionInfo, TreeNode } from "@/types";
 import { useI18n } from "@/i18n";
 
 /** A single-line label that reveals its full text in a tooltip only when it is
@@ -221,6 +221,11 @@ interface SidebarProps {
   langs?: LangInfo[];
   currentLang?: string;
   onSwitchLang?: (lang: string) => void;
+  /** Reading modes the active book offers. A segmented toggle appears when >1. */
+  renditions?: RenditionInfo[];
+  /** Active rendition kind (`"text"` / `"audio"`). */
+  currentRendition?: string;
+  onSwitchRendition?: (kind: string) => void;
   onSelect: (path: string) => void;
   onBackToLanding: () => void;
 }
@@ -237,6 +242,9 @@ export function Sidebar({
   langs = [],
   currentLang,
   onSwitchLang,
+  renditions = [],
+  currentRendition,
+  onSwitchRendition,
   onSelect,
   onBackToLanding,
 }: SidebarProps): React.JSX.Element {
@@ -355,6 +363,43 @@ export function Sidebar({
           </Tooltip>
         </Box>
       </Box>
+
+      {/* Whole-book reading-mode switch (阅读 / 听书). Mirrors the language
+          switcher's UI; only shown when the book offers more than one mode. */}
+      {renditions.length > 1 && (
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            px: 1,
+            py: 0.75,
+            borderBottom: 1,
+            borderColor: "divider",
+          }}
+        >
+          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+            {t("sidebar.rendition")}
+          </Typography>
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={currentRendition ?? null}
+            onChange={(_, value: string | null) => {
+              if (value && onSwitchRendition) {
+                onSwitchRendition(value);
+              }
+            }}
+            sx={{ flexWrap: "wrap" }}
+          >
+            {renditions.map((r) => (
+              <ToggleButton key={r.kind} value={r.kind} sx={{ px: 1, py: 0.25, textTransform: "none" }}>
+                {r.label}
+              </ToggleButton>
+            ))}
+          </ToggleButtonGroup>
+        </Box>
+      )}
 
       {langs.length > 1 && (
         <Box

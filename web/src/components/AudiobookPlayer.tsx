@@ -5,10 +5,15 @@ import { useAudiobook } from "@/hooks/useAudiobook";
 import { useI18n } from "@/i18n";
 
 interface AudiobookPlayerProps {
-  /** Virtual chapter path (`<slug>/<file>.md`). */
+  /** Virtual chapter path. For the audio rendition this IS the `.spoken.md`
+   *  script (`<slug>/<aid>.spoken.md`); for the text rendition's read-along it
+   *  is the chapter `.md`. */
   currentPath: string;
   /** Selected edition; narration uses the served edition (overlay → base). */
   lang: string;
+  /** Reading mode the chapter belongs to (`"audio"` for the audio rendition).
+   *  Forwarded to the `/api/spoken|audio|marks` query strings. */
+  rendition: string;
   contentMaxWidth: number;
   lineHeight: number;
 }
@@ -30,12 +35,13 @@ function fmtTime(sec: number): string {
 export function AudiobookPlayer({
   currentPath,
   lang,
+  rendition,
   contentMaxWidth,
   lineHeight,
 }: AudiobookPlayerProps): React.JSX.Element {
   const { t } = useI18n();
   const { sentences, currentIdx, playing, loading, error, rate, audioRef, togglePlay, seekToSentence, setRate } =
-    useAudiobook(currentPath, lang);
+    useAudiobook(currentPath, lang, rendition);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // Distinguish our own smooth-scroll from the reader's: ignore scroll events

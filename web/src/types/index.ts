@@ -55,15 +55,32 @@ export interface LangInfo {
   label: string;
 }
 
+/** A reading mode of a book (text vs audio), for the rendition switcher. Each
+ *  rendition carries its own default language + language list — the lang
+ *  switcher shows the *active* rendition's `langs`. */
+export interface RenditionInfo {
+  kind: "text" | "audio";
+  /** Mode-toggle label (e.g. "阅读" / "听书"). */
+  label: string;
+  default_lang: string;
+  langs: LangInfo[];
+}
+
 /** A book as shown on the landing "bookshelf". */
 export interface Book {
   label: string;
   slug: string;
   description?: string | null;
+  /** Whether a cover image is available at `/api/cover?book=<slug>`. */
+  cover: boolean;
+  /** Which rendition kind the book opens in. */
+  default_rendition: string;
+  /** Every reading mode the book offers (always ≥1). */
+  renditions: RenditionInfo[];
+  /** Mirrors the default rendition's languages, for back-compat. Prefer the
+   *  active rendition's `langs` from {@link renditions}. */
   default_lang: string;
   langs: LangInfo[];
-  /** `[features].audio` — whether to offer the audiobook read-along player. */
-  audio: boolean;
   /** `true` for a `book.toml`-driven book → "book" mode: the sidebar is a
    *  clean, titled spine (no root folder, no file icons). `false` for a plain
    *  `[[book]]`/`[[mount]]` → "docs" mode: the raw filesystem tree. */

@@ -3,26 +3,33 @@ use std::path::{Path, PathBuf};
 
 use globset::GlobSet;
 
-use crate::config::{BookState, Layout};
+use crate::config::{BookState, Layout, RenditionKind, RenditionState};
 use crate::shared::TreeNode;
 
-/// Build the full sidebar forest across every book. Each book becomes a
-/// top-level `is_dir` node whose `name` is the book label and `path` is the
-/// book slug; descendants carry slug-prefixed paths
-/// (`<slug>/<rel-under-source>`).
+/// Build the sidebar forest for the given `rendition` across every book. Each
+/// book that offers that rendition becomes a top-level `is_dir` node whose
+/// `name` is the book label and `path` is the book slug; descendants carry
+/// slug-prefixed paths (`<slug>/<rel-under-source>`). Books lacking the
+/// rendition are omitted.
 ///
-/// The tree is built from each book's *default* edition. Editions mirror the
-/// same logical structure, so the tree is language-independent — switching
-/// language only changes which edition's content is fetched.
-pub fn build_virtual_tree(books: &[BookState]) -> Vec<TreeNode> {
+/// The tree is built from the rendition's *default* edition. Editions mirror
+/// the same logical structure, so the tree is language-independent — switching
+/// language only changes which edition's content is fetched. A text rendition's
+/// spine is its filesystem tree (or, for a `book.toml` book, an H1-titled
+/// chapter spine); an audio rendition's spine is its top-level `*.spoken.md`
+/// chapters.
+pub fn build_virtual_tree(books: &[BookState], rendition: RenditionKind) -> Vec<TreeNode> {
     books
         .iter()
-        .map(|b| {
-            let children = if b.manifest {
+        .filter_map(|b| {
+            let r = b.rendition(rendition)?;
+            let children = if r.kind == RenditionKind::Audio {
+                build_audio_spine(b, r)
+            } else if r.manifest {
                 // book.toml book: a flat spine of section titles — no dirs/files.
-                build_spine(b)
+                build_spine(b, r)
             } else {
-                let ed = b.default_edition();
+                let ed = r.default_edition();
                 let mut children = Vec::new();
                 scan_dir(
                     &ed.source,
@@ -32,18 +39,61 @@ pub fn build_virtual_tree(books: &[BookState]) -> Vec<TreeNode> {
                     &mut children,
                 );
                 prefix_all(&mut children, &b.slug);
-                order_children(&mut children, b.layout.as_ref());
+                order_children(&mut children, r.layout.as_ref());
                 children
             };
-            TreeNode {
+            Some(TreeNode {
                 name: b.label.clone(),
                 path: b.slug.clone(),
                 is_dir: true,
                 children,
                 titles: None,
-            }
+            })
         })
         .collect()
+}
+
+/// Audiobook spine: the rendition's default-edition top-level `*.spoken.md`
+/// files (these ARE the audiobook chapters), titled by each file's H1, in
+/// filename order. Per-language titles are collected across the rendition's
+/// editions so the sidebar can swap titles with the language.
+fn build_audio_spine(book: &BookState, rendition: &RenditionState) -> Vec<TreeNode> {
+    let ed = rendition.default_edition();
+    let Ok(entries) = std::fs::read_dir(&ed.source) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+    paths.sort();
+
+    let mut nodes = Vec::new();
+    for path in paths {
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        // Audio chapters are the `<aid>.spoken.md` scripts at the top level.
+        if !name.ends_with(".spoken.md") {
+            continue;
+        }
+        let title = read_h1(&path).unwrap_or_else(|| name.to_string());
+        // Each edition holds the same chapter at the same filename; its H1 is
+        // that edition's title.
+        let titles: std::collections::HashMap<String, String> = rendition
+            .editions
+            .iter()
+            .filter_map(|e| read_h1(&e.source.join(name)).map(|h1| (e.lang.clone(), h1)))
+            .collect();
+        nodes.push(TreeNode {
+            name: title,
+            path: format!("{}/{}", book.slug, name),
+            is_dir: false,
+            children: Vec::new(),
+            titles: (!titles.is_empty()).then_some(titles),
+        });
+    }
+    nodes
 }
 
 /// Sidebar for a `book.toml` book: an ordered spine of the base edition's
@@ -52,9 +102,9 @@ pub fn build_virtual_tree(books: &[BookState]) -> Vec<TreeNode> {
 /// (labelled by the directory name) so a book can have a nested structure.
 /// Non-markdown files and markdown-free dirs (e.g. `assets/`, `audio/`) are
 /// hidden — readers see titled sections, not files.
-fn build_spine(book: &BookState) -> Vec<TreeNode> {
-    let ed = book.default_edition();
-    build_spine_dir(book, &ed.source, &ed.source)
+fn build_spine(book: &BookState, rendition: &RenditionState) -> Vec<TreeNode> {
+    let ed = rendition.default_edition();
+    build_spine_dir(book, rendition, &ed.source, &ed.source)
 }
 
 /// Recursively build a book's spine rooted at `dir` (relative to the edition
@@ -63,7 +113,12 @@ fn build_spine(book: &BookState) -> Vec<TreeNode> {
 /// become group nodes. A dir with no markdown under it is dropped, so asset
 /// directories never surface. Siblings are sorted by filename — the book
 /// convention for chapter ordering (numeric `NN-` prefixes sort naturally).
-fn build_spine_dir(book: &BookState, root: &Path, dir: &Path) -> Vec<TreeNode> {
+fn build_spine_dir(
+    book: &BookState,
+    rendition: &RenditionState,
+    root: &Path,
+    dir: &Path,
+) -> Vec<TreeNode> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -75,8 +130,17 @@ fn build_spine_dir(book: &BookState, root: &Path, dir: &Path) -> Vec<TreeNode> {
         let Ok(rel) = path.strip_prefix(root) else {
             continue;
         };
+        // `*.spoken.md` are the audiobook scripts (the `audio` rendition's
+        // spine), never text chapters — keep them out of the text spine.
+        if path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .is_some_and(|n| n.ends_with(".spoken.md"))
+        {
+            continue;
+        }
         if path.is_dir() {
-            let children = build_spine_dir(book, root, &path);
+            let children = build_spine_dir(book, rendition, root, &path);
             if children.is_empty() {
                 continue;
             }
@@ -107,7 +171,7 @@ fn build_spine_dir(book: &BookState, root: &Path, dir: &Path) -> Vec<TreeNode> {
             // H1 is that edition's title. Collect them so the sidebar can switch
             // titles with the language. Editions missing the page are simply
             // absent (the sidebar falls back to `name`, like the content fallback).
-            let titles: std::collections::HashMap<String, String> = book
+            let titles: std::collections::HashMap<String, String> = rendition
                 .editions
                 .iter()
                 .filter_map(|e| read_h1(&e.source.join(rel)).map(|h1| (e.lang.clone(), h1)))
@@ -251,7 +315,9 @@ fn matches_layout(pattern: &str, name: &str, is_dir: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{build_globset, BookState, EditionState, Layout};
+    use crate::config::{
+        build_globset, BookState, EditionState, Layout, RenditionKind, RenditionState,
+    };
     use std::fs;
     use std::path::PathBuf;
 
@@ -288,24 +354,29 @@ mod tests {
         }
     }
 
+    /// A single-`text`-rendition book over `source` (the `[[mount]]` shape).
     fn mk_mount(label: &str, slug: &str, source: &Path, layout: Option<Layout>) -> BookState {
         BookState {
             label: label.to_string(),
             slug: slug.to_string(),
             description: None,
-            default_lang: "default".to_string(),
-            layout,
-            manifest: false,
-            editions: vec![EditionState {
-                lang: "default".to_string(),
-                label: "default".to_string(),
-                source: source.to_path_buf(),
-                include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
-                exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+            cover: None,
+            default_rendition: RenditionKind::Text,
+            renditions: vec![RenditionState {
+                kind: RenditionKind::Text,
+                label: "text".to_string(),
+                default_lang: "default".to_string(),
+                voice: None,
+                layout,
+                manifest: false,
+                editions: vec![EditionState {
+                    lang: "default".to_string(),
+                    label: "default".to_string(),
+                    source: source.to_path_buf(),
+                    include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
+                    exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+                }],
             }],
-            audio_enabled: false,
-            spoken_skip: Vec::new(),
-            voice: None,
         }
     }
 
@@ -324,8 +395,8 @@ mod tests {
         fs::write(tmp.path().join("assets/fig.png"), b"").unwrap();
 
         let mut book = mk_mount("My Book", "mybook", tmp.path(), None);
-        book.manifest = true;
-        let tree = build_virtual_tree(&[book]);
+        book.renditions[0].manifest = true;
+        let tree = build_virtual_tree(&[book], RenditionKind::Text);
 
         let top = &tree[0];
         assert_eq!(top.name, "My Book");
@@ -361,8 +432,8 @@ mod tests {
         fs::write(tmp.path().join("assets/fig.png"), b"").unwrap();
 
         let mut book = mk_mount("My Book", "mybook", tmp.path(), None);
-        book.manifest = true;
-        let tree = build_virtual_tree(&[book]);
+        book.renditions[0].manifest = true;
+        let tree = build_virtual_tree(&[book], RenditionKind::Text);
 
         let kids = &tree[0].children;
         // Filename order: 00-intro.md, then the 01-part-one group; assets dropped.
@@ -405,31 +476,35 @@ mod tests {
             label: "Book".to_string(),
             slug: "book".to_string(),
             description: None,
-            default_lang: "zh".to_string(),
-            layout: None,
-            manifest: true,
-            editions: vec![
-                EditionState {
-                    lang: "zh".to_string(),
-                    label: "中文".to_string(),
-                    source: zh.path().to_path_buf(),
-                    include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
-                    exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
-                },
-                EditionState {
-                    lang: "en".to_string(),
-                    label: "English".to_string(),
-                    source: en.path().to_path_buf(),
-                    include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
-                    exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
-                },
-            ],
-            audio_enabled: false,
-            spoken_skip: Vec::new(),
-            voice: None,
+            cover: None,
+            default_rendition: RenditionKind::Text,
+            renditions: vec![RenditionState {
+                kind: RenditionKind::Text,
+                label: "text".to_string(),
+                default_lang: "zh".to_string(),
+                voice: None,
+                layout: None,
+                manifest: true,
+                editions: vec![
+                    EditionState {
+                        lang: "zh".to_string(),
+                        label: "中文".to_string(),
+                        source: zh.path().to_path_buf(),
+                        include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
+                        exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+                    },
+                    EditionState {
+                        lang: "en".to_string(),
+                        label: "English".to_string(),
+                        source: en.path().to_path_buf(),
+                        include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
+                        exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+                    },
+                ],
+            }],
         };
 
-        let tree = build_virtual_tree(&[book]);
+        let tree = build_virtual_tree(&[book], RenditionKind::Text);
         let kids = &tree[0].children;
 
         // Default `name` is the zh (default edition) title.
@@ -452,7 +527,7 @@ mod tests {
         tmp.touch("sub/INDEX.md");
 
         let mount = mk_mount("Docs", "docs", tmp.path(), None);
-        let tree = build_virtual_tree(&[mount]);
+        let tree = build_virtual_tree(&[mount], RenditionKind::Text);
 
         assert_eq!(tree.len(), 1);
         let top = &tree[0];
@@ -481,7 +556,7 @@ mod tests {
             ..Default::default()
         };
         let mount = mk_mount("Docs", "docs", tmp.path(), Some(layout));
-        let tree = build_virtual_tree(&[mount]);
+        let tree = build_virtual_tree(&[mount], RenditionKind::Text);
         let top_children: Vec<_> = tree[0].children.iter().map(|n| n.name.as_str()).collect();
 
         // First two by layout, remainder in default (dir-then-alpha) order.
@@ -512,7 +587,7 @@ mod tests {
             subtree,
         };
         let mount = mk_mount("Docs", "docs", tmp.path(), Some(layout));
-        let tree = build_virtual_tree(&[mount]);
+        let tree = build_virtual_tree(&[mount], RenditionKind::Text);
 
         let top: Vec<_> = tree[0].children.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(top, vec!["INDEX.md", "projects"]);
@@ -536,13 +611,100 @@ mod tests {
 
         let docs = mk_mount("Docs", "docs", tmp_docs.path(), None);
         let tasks = mk_mount("Tasks", "tasks", tmp_tasks.path(), None);
-        let tree = build_virtual_tree(&[docs, tasks]);
+        let tree = build_virtual_tree(&[docs, tasks], RenditionKind::Text);
 
         assert_eq!(tree.len(), 2);
         assert_eq!(tree[0].path, "docs");
         assert_eq!(tree[1].path, "tasks");
         assert_eq!(tree[0].children[0].path, "docs/hello.md");
         assert_eq!(tree[1].children[0].path, "tasks/work.md");
+    }
+
+    #[test]
+    fn audio_rendition_spine_lists_spoken_chapters() {
+        // A book with both renditions: text reads `*.md`, audio reads the
+        // sibling `*.spoken.md` scripts. The text spine must hide `.spoken.md`;
+        // the audio spine must list exactly them, H1-titled.
+        let text_dir = TempDir::new("lv-rt-text");
+        fs::write(text_dir.path().join("01-intro.md"), b"# Intro\n").unwrap();
+        // A stray `.spoken.md` in the text dir must NOT appear in the text spine.
+        fs::write(
+            text_dir.path().join("01-intro.spoken.md"),
+            b"# Intro spoken\n",
+        )
+        .unwrap();
+        let audio_dir = TempDir::new("lv-rt-audio");
+        fs::write(audio_dir.path().join("01-intro.spoken.md"), "# 介绍\n").unwrap();
+        fs::write(audio_dir.path().join("02-types.spoken.md"), "# 类型\n").unwrap();
+        // A non-spoken file in the audio dir must NOT surface.
+        fs::write(audio_dir.path().join("notes.md"), b"# notes\n").unwrap();
+
+        let mk_ed = |lang: &str, src: &Path| EditionState {
+            lang: lang.to_string(),
+            label: lang.to_string(),
+            source: src.to_path_buf(),
+            include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
+            exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+        };
+        let book = BookState {
+            label: "Eth".to_string(),
+            slug: "eth".to_string(),
+            description: None,
+            cover: None,
+            default_rendition: RenditionKind::Text,
+            renditions: vec![
+                RenditionState {
+                    kind: RenditionKind::Text,
+                    label: "阅读".to_string(),
+                    default_lang: "zh".to_string(),
+                    voice: None,
+                    layout: None,
+                    manifest: true,
+                    editions: vec![mk_ed("zh", text_dir.path())],
+                },
+                RenditionState {
+                    kind: RenditionKind::Audio,
+                    label: "听书".to_string(),
+                    default_lang: "zh".to_string(),
+                    voice: None,
+                    layout: None,
+                    manifest: true,
+                    editions: vec![mk_ed("zh", audio_dir.path())],
+                },
+            ],
+        };
+
+        let books = [book];
+        // Text spine: just the `.md` chapter, `.spoken.md` hidden.
+        let text = build_virtual_tree(&books, RenditionKind::Text);
+        let text_kids: Vec<&str> = text[0].children.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(text_kids, vec!["Intro"]);
+
+        // Audio spine: the two `.spoken.md` scripts, H1-titled, filename order.
+        let audio = build_virtual_tree(&books, RenditionKind::Audio);
+        let audio_kids: Vec<(&str, &str)> = audio[0]
+            .children
+            .iter()
+            .map(|n| (n.name.as_str(), n.path.as_str()))
+            .collect();
+        assert_eq!(
+            audio_kids,
+            vec![
+                ("介绍", "eth/01-intro.spoken.md"),
+                ("类型", "eth/02-types.spoken.md"),
+            ]
+        );
+    }
+
+    #[test]
+    fn book_without_rendition_is_omitted_from_that_tree() {
+        let text_dir = TempDir::new("lv-noaud");
+        text_dir.touch("a.md");
+        // Text-only book (the `[[mount]]` shape).
+        let book = mk_mount("Docs", "docs", text_dir.path(), None);
+        // Asking for the audio tree yields no node for a text-only book.
+        let audio = build_virtual_tree(&[book], RenditionKind::Audio);
+        assert!(audio.is_empty());
     }
 
     #[test]

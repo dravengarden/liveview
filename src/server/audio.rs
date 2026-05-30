@@ -2,10 +2,11 @@
 //!
 //! On first play of a chapter we synthesize its speakable sentences (from
 //! [`crate::server::spoken`]) one at a time via the `edge-tts` CLI, concatenate
-//! the per-sentence MP3s, and write `<lang>/audio/<stem>.mp3` plus a
-//! `<stem>.marks.json` of per-sentence time ranges. Later plays serve straight
-//! from that cache. Audio + marks + the read-along `data-sent` spans all derive
-//! from the one sentence list, so they align by construction.
+//! the per-sentence MP3s, and write `<aid>.mp3` plus a `<aid>.marks.json` of
+//! per-sentence time ranges as siblings of the `<aid>.spoken.md` script. Later
+//! plays serve straight from that cache. Audio + marks + the read-along
+//! `data-sent` spans all derive from the one sentence list, so they align by
+//! construction.
 //!
 //! Timing: edge-tts emits CBR mono MP3 at 48 kbit/s, so a sentence clip's
 //! duration ≈ `bytes * 8 / 48000`. That estimate is good enough to drive
@@ -28,12 +29,13 @@ pub struct Mark {
     pub end_ms: u64,
 }
 
-/// `(mp3, marks.json)` cache paths for a chapter stem under an edition source.
+/// `(mp3, marks.json)` cache paths for a chapter stem. The audio rendition's
+/// edition source is already `<book>/audio/<lang>/`, so the mp3 + marks live as
+/// siblings of the `<aid>.spoken.md` script — no nested `audio/` segment.
 pub fn audio_paths(edition_source: &Path, stem: &str) -> (PathBuf, PathBuf) {
-    let dir = edition_source.join("audio");
     (
-        dir.join(format!("{stem}.mp3")),
-        dir.join(format!("{stem}.marks.json")),
+        edition_source.join(format!("{stem}.mp3")),
+        edition_source.join(format!("{stem}.marks.json")),
     )
 }
 
@@ -112,9 +114,10 @@ async fn synth_sentence(cmd: &str, voice: &str, text: &str) -> Result<Vec<u8>, S
     ))
 }
 
-/// Ensure `<stem>.mp3` + `<stem>.marks.json` exist under the edition's
-/// `audio/` dir, synthesizing them from `sentences` if absent. Returns the
-/// cache paths. Idempotent: a fully-cached chapter does no synthesis.
+/// Ensure `<stem>.mp3` + `<stem>.marks.json` exist beside the chapter script
+/// (the audio rendition's edition source), synthesizing them from `sentences`
+/// if absent. Returns the cache paths. Idempotent: a fully-cached chapter does
+/// no synthesis.
 pub async fn ensure_audio(
     edition_source: &Path,
     stem: &str,
@@ -179,9 +182,11 @@ mod tests {
     }
 
     #[test]
-    fn audio_paths_live_under_audio_dir() {
-        let (mp3, marks) = audio_paths(Path::new("/books/eth/zh"), "05-evm");
-        assert_eq!(mp3, Path::new("/books/eth/zh/audio/05-evm.mp3"));
-        assert_eq!(marks, Path::new("/books/eth/zh/audio/05-evm.marks.json"));
+    fn audio_paths_are_siblings_of_the_script() {
+        // The audio rendition's edition source is already `<book>/audio/<lang>`,
+        // so mp3 + marks sit directly beside the `.spoken.md` script.
+        let (mp3, marks) = audio_paths(Path::new("/books/eth/audio/zh"), "05-evm");
+        assert_eq!(mp3, Path::new("/books/eth/audio/zh/05-evm.mp3"));
+        assert_eq!(marks, Path::new("/books/eth/audio/zh/05-evm.marks.json"));
     }
 }

@@ -25,8 +25,12 @@ export interface UseAudiobook {
 /** Drives the audiobook read-along: fetches the spoken sentences + per-sentence
  *  time marks, points an <audio> element at the lazily-synthesized chapter MP3,
  *  and maps playback time → current sentence index. Audio, marks, and sentence
- *  indices share one server-side segmentation, so they align exactly. */
-export function useAudiobook(path: string, lang: string): UseAudiobook {
+ *  indices share one server-side segmentation, so they align exactly.
+ *
+ *  `rendition` is forwarded to `/api/spoken|audio|marks` so the audio rendition
+ *  reads the `<aid>.spoken.md` script directly (no `.md` fallback). Always
+ *  `"audio"` at the only call site today; defaulted for safety. */
+export function useAudiobook(path: string, lang: string, rendition = "audio"): UseAudiobook {
   const [sentences, setSentences] = useState<string[]>([]);
   const [marks, setMarks] = useState<Mark[]>([]);
   const [currentIdx, setCurrentIdx] = useState(-1);
@@ -46,7 +50,7 @@ export function useAudiobook(path: string, lang: string): UseAudiobook {
     setMarks([]);
     setCurrentIdx(-1);
     setPlaying(false);
-    const q = `path=${encodeURIComponent(path)}&lang=${encodeURIComponent(lang)}`;
+    const q = `path=${encodeURIComponent(path)}&lang=${encodeURIComponent(lang)}&rendition=${encodeURIComponent(rendition)}`;
     void (async () => {
       try {
         const sres = await fetch(`/api/spoken?${q}`);
@@ -82,8 +86,9 @@ export function useAudiobook(path: string, lang: string): UseAudiobook {
     return () => {
       cancelled = true;
     };
-    // Keyed on (path, lang) only — a speed change must not re-fetch the audio.
-  }, [path, lang]);
+    // Keyed on (path, lang, rendition) only — a speed change must not re-fetch
+    // the audio.
+  }, [path, lang, rendition]);
 
   // Map playback time → sentence index (binary search; marks are contiguous).
   useEffect(() => {

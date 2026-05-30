@@ -97,7 +97,8 @@ async fn run(cli: Cli, resolved: Resolved) {
     let port = cli.port.or(resolved.port);
     let should_open = cli.open || resolved.open;
 
-    let initial_tree = server::tree::build_virtual_tree(&resolved.books);
+    let initial_tree =
+        server::tree::build_virtual_tree(&resolved.books, config::RenditionKind::Text);
 
     let (tx, _rx) = broadcast::channel::<String>(64);
 
@@ -122,18 +123,22 @@ async fn run(cli: Cli, resolved: Resolved) {
     server::watcher::start_watcher(state.clone(), resolved.debounce_ms);
 
     for b in &state.books {
-        for e in &b.editions {
-            tracing::info!(
-                "book /{:<16} [{:<6}]  =>  {}",
-                b.slug,
-                e.lang,
-                e.source.display()
-            );
+        for r in &b.renditions {
+            for e in &r.editions {
+                tracing::info!(
+                    "book /{:<16} [{:<5}/{:<6}]  =>  {}",
+                    b.slug,
+                    r.kind.as_str(),
+                    e.lang,
+                    e.source.display()
+                );
+            }
         }
     }
 
     let api_router = Router::new()
         .route("/api/books", get(api_books))
+        .route("/api/cover", get(api_cover))
         .route("/api/tree", get(api_tree))
         .route("/api/file", get(api_file))
         .route("/api/raw", get(api_raw))
@@ -228,9 +233,31 @@ fn load_explicit(path: &Path) -> Result<Resolved, String> {
     cfg.resolve(&dir)
 }
 
-async fn api_tree(State(state): State<SharedState>) -> impl IntoResponse {
-    let tree = state.file_tree.read().await;
-    axum::Json(tree.clone())
+#[derive(serde::Deserialize)]
+struct TreeQuery {
+    /// Reading mode whose spine to return. Omitted/unknown ⇒ `text`.
+    rendition: Option<String>,
+}
+
+/// The sidebar forest for a rendition. The default (text) tree is served from
+/// the cached `file_tree`; other renditions are built on demand (books lacking
+/// that rendition are omitted).
+async fn api_tree(
+    State(state): State<SharedState>,
+    Query(q): Query<TreeQuery>,
+) -> impl IntoResponse {
+    use crate::config::RenditionKind;
+    let kind = q
+        .rendition
+        .as_deref()
+        .and_then(RenditionKind::parse)
+        .unwrap_or(RenditionKind::Text);
+    if kind == RenditionKind::Text {
+        let tree = state.file_tree.read().await;
+        return axum::Json(tree.clone());
+    }
+    let tree = server::tree::build_virtual_tree(&state.books, kind);
+    axum::Json(tree)
 }
 
 #[derive(serde::Deserialize)]
@@ -336,19 +363,36 @@ struct LangInfo {
     label: String,
 }
 
+/// One reading mode of a book, for the rendition toggle.
+#[derive(serde::Serialize)]
+struct RenditionInfo {
+    /// `"text"` / `"audio"`.
+    kind: String,
+    /// Mode-toggle label ("阅读" / "听书").
+    label: String,
+    default_lang: String,
+    langs: Vec<LangInfo>,
+}
+
 #[derive(serde::Serialize)]
 struct BookInfo {
     label: String,
     slug: String,
     description: Option<String>,
+    /// Whether a cover image is available at `/api/cover?book=<slug>`.
+    cover: bool,
+    /// Which rendition the book opens in.
+    default_rendition: String,
+    /// Every reading mode the book offers (always ≥1).
+    renditions: Vec<RenditionInfo>,
+    /// Mirrors the default rendition's languages, for clients that still read
+    /// the flat language list.
     default_lang: String,
     langs: Vec<LangInfo>,
-    /// `[features].audio` — whether the audiobook player should be offered.
-    audio: bool,
     /// `true` for a `book.toml`-driven book (the sidebar is a clean, titled
     /// spine — "book" mode); `false` for a plain `[[book]]`/`[[mount]]` whose
-    /// sidebar is the raw filesystem tree ("docs" mode). The frontend renders
-    /// the two modes differently.
+    /// sidebar is the raw filesystem tree ("docs" mode). Mirrors the default
+    /// rendition. The frontend renders the two modes differently.
     manifest: bool,
 }
 
@@ -366,27 +410,76 @@ async fn api_version() -> axum::Json<serde_json::Value> {
 /// label, its slug (entry path), an optional blurb, and the available
 /// language editions for the in-book language switcher.
 async fn api_books(State(state): State<SharedState>) -> impl IntoResponse {
+    let lang_infos = |r: &crate::config::RenditionState| -> Vec<LangInfo> {
+        r.editions
+            .iter()
+            .map(|e| LangInfo {
+                lang: e.lang.clone(),
+                label: e.label.clone(),
+            })
+            .collect()
+    };
     let books: Vec<BookInfo> = state
         .books
         .iter()
-        .map(|b| BookInfo {
-            label: b.label.clone(),
-            slug: b.slug.clone(),
-            description: b.description.clone(),
-            default_lang: b.default_lang.clone(),
-            langs: b
-                .editions
-                .iter()
-                .map(|e| LangInfo {
-                    lang: e.lang.clone(),
-                    label: e.label.clone(),
-                })
-                .collect(),
-            audio: b.audio_enabled,
-            manifest: b.manifest,
+        .map(|b| {
+            let default = b.default_rendition();
+            BookInfo {
+                label: b.label.clone(),
+                slug: b.slug.clone(),
+                description: b.description.clone(),
+                cover: b.cover.is_some(),
+                default_rendition: b.default_rendition.as_str().to_string(),
+                renditions: b
+                    .renditions
+                    .iter()
+                    .map(|r| RenditionInfo {
+                        kind: r.kind.as_str().to_string(),
+                        label: r.label.clone(),
+                        default_lang: r.default_lang.clone(),
+                        langs: lang_infos(r),
+                    })
+                    .collect(),
+                // Mirror the default rendition for back-compat clients.
+                default_lang: default.default_lang.clone(),
+                langs: lang_infos(default),
+                manifest: default.manifest,
+            }
         })
         .collect();
     axum::Json(books)
+}
+
+#[derive(serde::Deserialize)]
+struct CoverQuery {
+    book: String,
+}
+
+/// Serve a book's cover image (resolved at config time to an abs path under the
+/// book dir). 404 when the book is unknown or has no cover. Streams the file
+/// with a `Content-Type` guessed from its extension — same pattern as /api/raw.
+async fn api_cover(
+    State(state): State<SharedState>,
+    Query(q): Query<CoverQuery>,
+) -> impl IntoResponse {
+    let Some(cover) = state.book(&q.book).and_then(|b| b.cover.clone()) else {
+        return (StatusCode::NOT_FOUND, "no cover").into_response();
+    };
+    let file = match tokio::fs::File::open(&cover).await {
+        Ok(f) => f,
+        Err(_) => return (StatusCode::NOT_FOUND, "no cover").into_response(),
+    };
+    let mime_type = mime_guess::from_path(&cover)
+        .first_or_octet_stream()
+        .to_string();
+    let body = Body::from_stream(ReaderStream::new(file));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime_type)
+        .header(header::CACHE_CONTROL, "public, max-age=3600")
+        .body(body)
+        .unwrap()
+        .into_response()
 }
 
 #[derive(serde::Deserialize)]
@@ -394,6 +487,27 @@ struct FileQuery {
     path: String,
     /// Language edition to read. Omitted ⇒ the book's default edition.
     lang: Option<String>,
+    /// Reading mode (`"text"` / `"audio"`). Omitted ⇒ the book's default
+    /// rendition. An unknown value is treated as the default (text-ish) mode.
+    rendition: Option<String>,
+}
+
+impl FileQuery {
+    /// The rendition kind for this request, defaulting per the book's own
+    /// default. Resolved against the book named by the path's slug; an unknown
+    /// book or unknown token falls back to the book default (or `Text`).
+    fn rendition_kind(&self, state: &AppState) -> crate::config::RenditionKind {
+        use crate::config::RenditionKind;
+        if let Some(tok) = self.rendition.as_deref() {
+            if let Some(k) = RenditionKind::parse(tok) {
+                return k;
+            }
+        }
+        let slug = self.path.split('/').next().unwrap_or("");
+        state
+            .book(slug)
+            .map_or(RenditionKind::Text, |b| b.default_rendition)
+    }
 }
 
 /// Resolve a virtual-path request (plus optional `lang`) to an on-disk path
@@ -404,6 +518,7 @@ struct FileQuery {
 fn resolve_with_fallback(
     state: &AppState,
     virtual_path: &str,
+    rendition: crate::config::RenditionKind,
     lang: Option<&str>,
 ) -> Result<Option<(PathBuf, String)>, ()> {
     // Candidate editions in priority order: the requested `lang` overlay, then
@@ -416,7 +531,7 @@ fn resolve_with_fallback(
     candidates.push(None);
 
     for cand in candidates {
-        let Some(res) = state.resolve_path(virtual_path, cand) else {
+        let Some(res) = state.resolve_path(virtual_path, rendition, cand) else {
             // Unknown slug, or no such edition for `cand` → try the next one.
             continue;
         };
@@ -442,8 +557,9 @@ async fn api_file(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
 ) -> impl IntoResponse {
+    let rendition = query.rendition_kind(&state);
     let (full_path, served_lang) =
-        match resolve_with_fallback(&state, &query.path, query.lang.as_deref()) {
+        match resolve_with_fallback(&state, &query.path, rendition, query.lang.as_deref()) {
             Ok(Some(x)) => x,
             Ok(None) => {
                 return (
@@ -521,15 +637,22 @@ async fn api_file(
 fn resolve_narration(
     state: &AppState,
     virtual_path: &str,
+    rendition: crate::config::RenditionKind,
     lang: Option<&str>,
 ) -> Result<Option<(PathBuf, String)>, ()> {
-    if let Some(stem) = virtual_path.strip_suffix(".md") {
-        let spoken = format!("{stem}.spoken.md");
-        if let Some(hit) = resolve_with_fallback(state, &spoken, lang)? {
-            return Ok(Some(hit));
+    use crate::config::RenditionKind;
+    // The audio rendition's chapters ARE `<aid>.spoken.md` scripts — resolve
+    // the path as given, no `.md` fallback. Only the text rendition's read-along
+    // tries the distilled `.spoken.md` overlay before the raw `.md`.
+    if rendition == RenditionKind::Text {
+        if let Some(stem) = virtual_path.strip_suffix(".md") {
+            let spoken = format!("{stem}.spoken.md");
+            if let Some(hit) = resolve_with_fallback(state, &spoken, rendition, lang)? {
+                return Ok(Some(hit));
+            }
         }
     }
-    resolve_with_fallback(state, virtual_path, lang)
+    resolve_with_fallback(state, virtual_path, rendition, lang)
 }
 
 #[derive(serde::Serialize)]
@@ -541,10 +664,11 @@ struct SpokenContent {
     sentences: Vec<String>,
 }
 
-/// Read-along narration text: the chapter's distilled `<id>.spoken.md` (or, as a
-/// fallback, the raw `<id>.md` mechanically stripped) segmented into sentences.
-/// Same overlay → base resolution as /api/file. Chapters listed in the book's
-/// `[spoken].skip` have no narration → 404.
+/// Read-along narration text segmented into sentences. For the **audio**
+/// rendition the chapter's `<aid>.spoken.md` IS the script — read it directly.
+/// For the **text** rendition, prefer the distilled `<id>.spoken.md` overlay,
+/// else the raw `<id>.md` mechanically stripped. Same overlay → base resolution
+/// as /api/file.
 async fn api_spoken(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
@@ -552,22 +676,10 @@ async fn api_spoken(
     if !matches!(FileType::from_path(&query.path), FileType::Markdown) {
         return (StatusCode::BAD_REQUEST, "not a markdown chapter").into_response();
     }
-    let (slug, file) = query
-        .path
-        .split_once('/')
-        .unwrap_or((query.path.as_str(), ""));
-    let stem = Path::new(file)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    if let Some(book) = state.book(slug) {
-        if book.spoken_skip.iter().any(|s| s == stem) {
-            return (StatusCode::NOT_FOUND, "chapter skipped for narration").into_response();
-        }
-    }
+    let rendition = query.rendition_kind(&state);
 
     let (full_path, served_lang) =
-        match resolve_narration(&state, &query.path, query.lang.as_deref()) {
+        match resolve_narration(&state, &query.path, rendition, query.lang.as_deref()) {
             Ok(Some(x)) => x,
             Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
             Err(()) => return (StatusCode::FORBIDDEN, "Access denied").into_response(),
@@ -584,44 +696,46 @@ async fn api_spoken(
 }
 
 /// Gate + resolve + lazily synthesize a chapter's audio. Returns the cached
-/// `(mp3, marks.json)` paths, or an error response (404 unknown/disabled/
-/// skipped, 403 traversal, 500 synth failure). Honors `[features].audio` and
-/// `[spoken].skip`; caches under the *served* edition.
+/// `(mp3, marks.json)` paths, or an error response (404 no-audio-rendition /
+/// not-found, 403 traversal, 500 synth failure). Gated on the book having an
+/// `audio` rendition; the mp3 + marks are cached as siblings of the
+/// `<aid>.spoken.md` script (the audio edition source).
 async fn prepare_audio(
     state: &AppState,
     query: &FileQuery,
 ) -> Result<(PathBuf, PathBuf), (StatusCode, String)> {
+    use crate::config::RenditionKind;
     let (slug, file) = query
         .path
         .split_once('/')
         .unwrap_or((query.path.as_str(), ""));
-    let stem = Path::new(file)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
     let book = state
         .book(slug)
         .ok_or((StatusCode::NOT_FOUND, "unknown book".to_owned()))?;
-    if !book.audio_enabled {
-        return Err((
-            StatusCode::NOT_FOUND,
-            "audio not enabled for this book".to_owned(),
-        ));
-    }
-    if book.spoken_skip.iter().any(|s| s == stem) {
-        return Err((
-            StatusCode::NOT_FOUND,
-            "chapter skipped for narration".to_owned(),
-        ));
-    }
+    let audio = book.rendition(RenditionKind::Audio).ok_or((
+        StatusCode::NOT_FOUND,
+        "audio not available for this book".to_owned(),
+    ))?;
 
-    let (md_path, served_lang) = match resolve_narration(state, &query.path, query.lang.as_deref())
-    {
+    // The audio chapter's wire file is `<aid>.spoken.md`; the cache stem is
+    // `<aid>` (strip the `.spoken.md` suffix so we write `<aid>.mp3`, not
+    // `<aid>.spoken.mp3`).
+    let stem = file
+        .strip_suffix(".spoken.md")
+        .or_else(|| Path::new(file).file_stem().and_then(|s| s.to_str()))
+        .unwrap_or("");
+
+    let (md_path, served_lang) = match resolve_narration(
+        state,
+        &query.path,
+        RenditionKind::Audio,
+        query.lang.as_deref(),
+    ) {
         Ok(Some(x)) => x,
         Ok(None) => return Err((StatusCode::NOT_FOUND, "File not found".to_owned())),
         Err(()) => return Err((StatusCode::FORBIDDEN, "Access denied".to_owned())),
     };
-    let edition = book.edition(&served_lang).ok_or((
+    let edition = audio.edition(&served_lang).ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
         "served edition missing".to_owned(),
     ))?;
@@ -629,7 +743,7 @@ async fn prepare_audio(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, format!("read chapter: {e}")))?;
     let sentences = server::spoken::spoken_sentences(&source);
-    let voice = book.voice.as_deref().unwrap_or(&state.tts_voice);
+    let voice = audio.voice.as_deref().unwrap_or(&state.tts_voice);
     server::audio::ensure_audio(&edition.source, stem, &sentences, voice, &state.tts_cmd)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
@@ -719,11 +833,13 @@ async fn api_raw(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
 ) -> impl IntoResponse {
-    let full_path = match resolve_with_fallback(&state, &query.path, query.lang.as_deref()) {
-        Ok(Some((p, _served))) => p,
-        Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
-        Err(()) => return (StatusCode::FORBIDDEN, "Access denied").into_response(),
-    };
+    let rendition = query.rendition_kind(&state);
+    let full_path =
+        match resolve_with_fallback(&state, &query.path, rendition, query.lang.as_deref()) {
+            Ok(Some((p, _served))) => p,
+            Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+            Err(()) => return (StatusCode::FORBIDDEN, "Access denied").into_response(),
+        };
 
     let file = match tokio::fs::File::open(&full_path).await {
         Ok(file) => file,
@@ -749,7 +865,7 @@ async fn api_raw(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{build_globset, BookState, EditionState};
+    use crate::config::{build_globset, BookState, EditionState, RenditionKind, RenditionState};
     use std::fs;
     use std::path::PathBuf;
 
@@ -792,24 +908,50 @@ mod tests {
         }
     }
 
+    /// A single-`text`-rendition book over `source`.
     fn mk_mount(slug: &str, source: PathBuf) -> BookState {
         BookState {
             label: slug.to_string(),
             slug: slug.to_string(),
             description: None,
-            default_lang: "default".to_string(),
-            layout: None,
-            manifest: false,
-            editions: vec![EditionState {
-                lang: "default".to_string(),
-                label: "default".to_string(),
-                source,
-                include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
-                exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+            cover: None,
+            default_rendition: RenditionKind::Text,
+            renditions: vec![RenditionState {
+                kind: RenditionKind::Text,
+                label: "text".to_string(),
+                default_lang: "default".to_string(),
+                voice: None,
+                layout: None,
+                manifest: false,
+                editions: vec![EditionState {
+                    lang: "default".to_string(),
+                    label: "default".to_string(),
+                    source,
+                    include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
+                    exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
+                }],
             }],
-            audio_enabled: false,
-            spoken_skip: Vec::new(),
-            voice: None,
+        }
+    }
+
+    /// A book with a single `text` rendition wrapping the given editions;
+    /// `default_lang` opens first.
+    fn mk_book_text(slug: &str, default_lang: &str, editions: Vec<EditionState>) -> BookState {
+        BookState {
+            label: slug.to_string(),
+            slug: slug.to_string(),
+            description: None,
+            cover: None,
+            default_rendition: RenditionKind::Text,
+            renditions: vec![RenditionState {
+                kind: RenditionKind::Text,
+                label: "text".to_string(),
+                default_lang: default_lang.to_string(),
+                voice: None,
+                layout: None,
+                manifest: false,
+                editions,
+            }],
         }
     }
 
@@ -817,7 +959,9 @@ mod tests {
     fn resolve_splits_on_first_slash() {
         let tmp = TempDir::new("lv-resolve");
         let state = mk_state(vec![mk_mount("docs", tmp.path().to_path_buf())]);
-        let r = state.resolve_path("docs/foo/bar.md", None).unwrap();
+        let r = state
+            .resolve_path("docs/foo/bar.md", RenditionKind::Text, None)
+            .unwrap();
         assert_eq!(r.edition.source, tmp.path());
         assert_eq!(r.rest, "foo/bar.md");
     }
@@ -826,7 +970,9 @@ mod tests {
     fn resolve_mount_root_no_slash() {
         let tmp = TempDir::new("lv-resolve");
         let state = mk_state(vec![mk_mount("docs", tmp.path().to_path_buf())]);
-        let r = state.resolve_path("docs", None).unwrap();
+        let r = state
+            .resolve_path("docs", RenditionKind::Text, None)
+            .unwrap();
         assert_eq!(r.edition.source, tmp.path());
         assert_eq!(r.rest, "");
     }
@@ -842,27 +988,20 @@ mod tests {
             include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
             exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
         };
-        let book = BookState {
-            label: "Docs".to_string(),
-            slug: "docs".to_string(),
-            description: None,
-            default_lang: "en".to_string(),
-            layout: None,
-            manifest: false,
-            editions: vec![
+        let book = mk_book_text(
+            "docs",
+            "en",
+            vec![
                 mk_ed("en", tmp_en.path().to_path_buf()),
                 mk_ed("zh", tmp_zh.path().to_path_buf()),
             ],
-            audio_enabled: false,
-            spoken_skip: Vec::new(),
-            voice: None,
-        };
+        );
         let state = mk_state(vec![book]);
 
         // Explicit lang selects that edition.
         assert_eq!(
             state
-                .resolve_path("docs/x.md", Some("zh"))
+                .resolve_path("docs/x.md", RenditionKind::Text, Some("zh"))
                 .unwrap()
                 .edition
                 .source,
@@ -871,14 +1010,16 @@ mod tests {
         // No lang falls back to the default edition.
         assert_eq!(
             state
-                .resolve_path("docs/x.md", None)
+                .resolve_path("docs/x.md", RenditionKind::Text, None)
                 .unwrap()
                 .edition
                 .source,
             tmp_en.path()
         );
         // A lang the book doesn't offer resolves to None (→ 404 → frontend fallback).
-        assert!(state.resolve_path("docs/x.md", Some("ja")).is_none());
+        assert!(state
+            .resolve_path("docs/x.md", RenditionKind::Text, Some("ja"))
+            .is_none());
     }
 
     #[test]
@@ -894,32 +1035,27 @@ mod tests {
             include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
             exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
         };
-        let book = BookState {
-            label: "Docs".to_string(),
-            slug: "docs".to_string(),
-            description: None,
-            default_lang: "en".to_string(),
-            layout: None,
-            manifest: false,
-            editions: vec![
+        let book = mk_book_text(
+            "docs",
+            "en",
+            vec![
                 mk_ed("en", tmp_en.path().canonicalize().unwrap()),
                 mk_ed("zh", tmp_zh.path().canonicalize().unwrap()),
             ],
-            audio_enabled: false,
-            spoken_skip: Vec::new(),
-            voice: None,
-        };
+        );
         let state = mk_state(vec![book]);
 
         // a.md is absent from the zh overlay → served from the en base.
-        let (_p, served) = resolve_with_fallback(&state, "docs/a.md", Some("zh"))
-            .unwrap()
-            .unwrap();
+        let (_p, served) =
+            resolve_with_fallback(&state, "docs/a.md", RenditionKind::Text, Some("zh"))
+                .unwrap()
+                .unwrap();
         assert_eq!(served, "en");
         // b.md exists in the zh overlay → served from zh.
-        let (_p, served) = resolve_with_fallback(&state, "docs/b.md", Some("zh"))
-            .unwrap()
-            .unwrap();
+        let (_p, served) =
+            resolve_with_fallback(&state, "docs/b.md", RenditionKind::Text, Some("zh"))
+                .unwrap()
+                .unwrap();
         assert_eq!(served, "zh");
     }
 
@@ -927,7 +1063,9 @@ mod tests {
     fn resolve_returns_none_on_unknown_slug() {
         let tmp = TempDir::new("lv-resolve");
         let state = mk_state(vec![mk_mount("docs", tmp.path().to_path_buf())]);
-        assert!(state.resolve_path("nope/x.md", None).is_none());
+        assert!(state
+            .resolve_path("nope/x.md", RenditionKind::Text, None)
+            .is_none());
     }
 
     #[test]
@@ -938,7 +1076,9 @@ mod tests {
             mk_mount("docs", tmp_a.path().to_path_buf()),
             mk_mount("tasks", tmp_b.path().to_path_buf()),
         ]);
-        let r = state.resolve_path("tasks/x.md", None).unwrap();
+        let r = state
+            .resolve_path("tasks/x.md", RenditionKind::Text, None)
+            .unwrap();
         assert_eq!(r.edition.source, tmp_b.path());
     }
 
@@ -948,7 +1088,7 @@ mod tests {
         let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
         // Ok(None) maps to 404 at the handler layer.
         assert!(matches!(
-            resolve_with_fallback(&state, "bogus/x.md", None),
+            resolve_with_fallback(&state, "bogus/x.md", RenditionKind::Text, None),
             Ok(None)
         ));
     }
@@ -958,7 +1098,7 @@ mod tests {
         let tmp = TempDir::new("lv-safe");
         let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
         assert!(matches!(
-            resolve_with_fallback(&state, "docs/missing.md", None),
+            resolve_with_fallback(&state, "docs/missing.md", RenditionKind::Text, None),
             Ok(None)
         ));
     }
@@ -968,9 +1108,10 @@ mod tests {
         let tmp = TempDir::new("lv-safe");
         fs::write(tmp.path().join("README.md"), b"hi").unwrap();
         let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
-        let (out, served) = resolve_with_fallback(&state, "docs/README.md", None)
-            .unwrap()
-            .unwrap();
+        let (out, served) =
+            resolve_with_fallback(&state, "docs/README.md", RenditionKind::Text, None)
+                .unwrap()
+                .unwrap();
         assert!(out.ends_with("README.md"));
         assert_eq!(served, "default");
     }
@@ -990,7 +1131,7 @@ mod tests {
         let b_name = tmp_b.path().file_name().unwrap().to_str().unwrap();
         let virtual_path = format!("docs/../{b_name}/secret.md");
         assert!(matches!(
-            resolve_with_fallback(&state, &virtual_path, None),
+            resolve_with_fallback(&state, &virtual_path, RenditionKind::Text, None),
             Err(())
         ));
     }
@@ -1010,7 +1151,7 @@ mod tests {
         let a_canon = tmp_a.path().canonicalize().unwrap();
         let state = mk_state(vec![mk_mount("docs", a_canon)]);
         assert!(matches!(
-            resolve_with_fallback(&state, "docs/link.md", None),
+            resolve_with_fallback(&state, "docs/link.md", RenditionKind::Text, None),
             Err(())
         ));
     }

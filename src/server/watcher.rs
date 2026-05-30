@@ -13,6 +13,7 @@ use crate::shared::{FileType, WsMessage};
 enum FileEvent {
     ContentChanged {
         book_idx: usize,
+        rendition_idx: usize,
         edition_idx: usize,
         path: PathBuf,
     },
@@ -22,14 +23,17 @@ enum FileEvent {
 pub fn start_watcher(state: SharedState, debounce_ms: u64) {
     let (tx, rx) = mpsc::channel::<FileEvent>(256);
     for (book_idx, book) in state.books.iter().enumerate() {
-        for edition_idx in 0..book.editions.len() {
-            spawn_notify_thread(
-                state.clone(),
-                book_idx,
-                edition_idx,
-                tx.clone(),
-                debounce_ms,
-            );
+        for (rendition_idx, rendition) in book.renditions.iter().enumerate() {
+            for edition_idx in 0..rendition.editions.len() {
+                spawn_notify_thread(
+                    state.clone(),
+                    book_idx,
+                    rendition_idx,
+                    edition_idx,
+                    tx.clone(),
+                    debounce_ms,
+                );
+            }
         }
     }
     tokio::spawn(process_events(state, rx));
@@ -38,11 +42,12 @@ pub fn start_watcher(state: SharedState, debounce_ms: u64) {
 fn spawn_notify_thread(
     state: SharedState,
     book_idx: usize,
+    rendition_idx: usize,
     edition_idx: usize,
     tx: mpsc::Sender<FileEvent>,
     debounce_ms: u64,
 ) {
-    let edition = state.books[book_idx].editions[edition_idx].clone();
+    let edition = state.books[book_idx].renditions[rendition_idx].editions[edition_idx].clone();
     let source = edition.source.clone();
     let include_set = edition.include_set.clone();
     let exclude_set = edition.exclude_set.clone();
@@ -71,6 +76,7 @@ fn spawn_notify_thread(
                     if path.is_file() && include_set.is_match(rel_path) {
                         let _ = tx.blocking_send(FileEvent::ContentChanged {
                             book_idx,
+                            rendition_idx,
                             edition_idx,
                             path: path.clone(),
                         });
@@ -103,10 +109,11 @@ async fn process_events(state: SharedState, mut rx: mpsc::Receiver<FileEvent>) {
         match event {
             FileEvent::ContentChanged {
                 book_idx,
+                rendition_idx,
                 edition_idx,
                 path,
             } => {
-                handle_content_change(&state, book_idx, edition_idx, &path).await;
+                handle_content_change(&state, book_idx, rendition_idx, edition_idx, &path).await;
             }
             FileEvent::StructureChanged => {
                 handle_structure_change(&state).await;
@@ -118,13 +125,17 @@ async fn process_events(state: SharedState, mut rx: mpsc::Receiver<FileEvent>) {
 async fn handle_content_change(
     state: &SharedState,
     book_idx: usize,
+    rendition_idx: usize,
     edition_idx: usize,
     path: &PathBuf,
 ) {
     let Some(book) = state.books.get(book_idx) else {
         return;
     };
-    let Some(edition) = book.editions.get(edition_idx) else {
+    let Some(rendition) = book.renditions.get(rendition_idx) else {
+        return;
+    };
+    let Some(edition) = rendition.editions.get(edition_idx) else {
         return;
     };
     let rel = path
@@ -179,9 +190,13 @@ async fn handle_content_change(
 
 async fn handle_structure_change(state: &SharedState) {
     let books = state.books.clone();
-    let new_tree = tokio::task::spawn_blocking(move || build_virtual_tree(&books))
-        .await
-        .unwrap_or_default();
+    // The cached `file_tree` + the `TreeUpdate` broadcast mirror `/api/tree`'s
+    // default (text) rendition; other renditions' trees are fetched on demand.
+    let new_tree = tokio::task::spawn_blocking(move || {
+        build_virtual_tree(&books, crate::config::RenditionKind::Text)
+    })
+    .await
+    .unwrap_or_default();
 
     {
         let mut tree = state.file_tree.write().await;

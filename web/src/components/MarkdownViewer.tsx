@@ -93,6 +93,8 @@ export function MarkdownViewer({
   // Suppresses the scroll handler while we programmatically restore position,
   // so restoring doesn't immediately overwrite the saved value with itself.
   const restoringRef = useRef(false);
+  // rAF handle coalescing scroll bursts into one layout read per frame.
+  const scrollRafRef = useRef<number | null>(null);
   // Ordered list of zoomable images in the doc + which one the lightbox shows.
   const [images, setImages] = useState<{ src: string; alt: string }[]>([]);
   const [lbIndex, setLbIndex] = useState<number | null>(null);
@@ -264,14 +266,32 @@ export function MarkdownViewer({
 
   // Persist scroll position (as a 0..1 ratio, robust to reflow) while reading.
   // Upstream debounces the network write; here we just report on each scroll.
+  //
+  // The read is deferred to a single requestAnimationFrame, NOT done inline.
+  // Why: reading scrollHeight/clientHeight inside the scroll event forces a
+  // synchronous reflow. A scroll burst (momentum scrolling, or the column
+  // collapsing on teardown) would otherwise re-measure the tall .markdown-body
+  // on every event. Coalescing to one read per frame — and bailing if the node
+  // has since detached — keeps the scroll handler off the layout-thrash path.
   const handleScroll = useCallback(() => {
     if (restoringRef.current || !currentPath || !onSaveScroll) return;
-    const el = containerRef.current;
-    if (!el) return;
-    const max = el.scrollHeight - el.clientHeight;
-    if (max <= 0) return; // not scrollable yet — don't clobber with 0
-    onSaveScroll(currentPath, el.scrollTop / max);
+    if (scrollRafRef.current !== null) return; // a read is already queued
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const el = containerRef.current;
+      if (!el || restoringRef.current || !currentPath || !onSaveScroll) return;
+      const max = el.scrollHeight - el.clientHeight;
+      if (max <= 0) return; // not scrollable yet — don't clobber with 0
+      onSaveScroll(currentPath, el.scrollTop / max);
+    });
   }, [currentPath, onSaveScroll]);
+
+  // Cancel any queued scroll read on unmount so it can't fire after teardown.
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current);
+    };
+  }, []);
 
   // Restore the saved position when a document opens. Content height settles
   // asynchronously (syntax highlight, KaTeX, mermaid, images), so re-apply a

@@ -1,14 +1,17 @@
 //! Config file — virtual books + global defaults.
 //!
 //! A *book* is a curated reading view that appears as a card on the landing
-//! "bookshelf" and as a top-level folder in the sidebar. Each book has one
-//! or more *editions* — one per language — that share the same logical
-//! structure (same chapter/file layout) but live in different source dirs.
-//! Switching language keeps your logical position and swaps the edition.
+//! "bookshelf" and as a top-level folder in the sidebar. Each book has one or
+//! more *renditions* — a whole-book reading mode (`text` to read, `audio` to
+//! listen) — and each rendition has one or more *editions* (one per language)
+//! that share the same logical structure but live in different source dirs.
+//! Switching language keeps your logical position and swaps the edition;
+//! switching rendition swaps the whole book (its spine and source roots).
 //!
-//! The on-the-wire path of any file is `<slug>/<rel-path-under-source>`
-//! (edition-independent); the requested `lang` selects the edition. The slug
-//! is derived from `label` (lower-kebab) unless explicitly overridden.
+//! The on-the-wire path of any file is `<slug>/<rel-path-under-source>` where
+//! `rest` is relative to the *selected rendition's* edition source; the
+//! requested `rendition`+`lang` select which edition. The slug is derived from
+//! `label` (lower-kebab) unless explicitly overridden.
 //!
 //! A single-language book is the degenerate case: declare `source` directly
 //! on the book and liveview synthesises one implicit edition. `[[mount]]` is
@@ -133,42 +136,54 @@ pub struct ShelfCfg {
 
 /// `book.toml` — the per-book manifest that lives inside the book directory
 /// (cf. books/ARCHITECTURE.md §5). Sections liveview doesn't consume
-/// (`[provenance]`, …) are ignored; `[features]`/`[spoken]` drive the audiobook
-/// track.
+/// (`[provenance]`, …) are ignored.
+///
+/// Two shapes are accepted for backward-compat:
+///   * **legacy** — top-level `[langs]` (+ optional `[features]`/`[spoken]`),
+///     no `[renditions]`: synthesised into a single `text` rendition over
+///     `<book>/<lang>/`, exactly as before.
+///   * **renditions** — an explicit `[renditions.<kind>]` table per mode. Each
+///     rendition picks its own langs and (for `audio`) voice.
 #[derive(Debug, Deserialize)]
 pub struct BookManifest {
     /// Defaults to the directory name when omitted.
     pub slug: Option<String>,
     pub title: String,
     pub default_lang: String,
+    /// Which rendition opens first. Defaults to `text`; must name a declared
+    /// (or, in legacy shape, the synthesised) rendition.
+    pub default_rendition: Option<RenditionKind>,
+    /// Cover image, relative to the book dir. When unset, a `cover.{jpg,png,
+    /// webp}` in the book dir is auto-detected.
+    pub cover: Option<PathBuf>,
     /// `[langs.<code>]` → label. The default lang is the base edition; every
     /// other language is an overlay that falls back to it (resolved server-side
-    /// for raw assets).
+    /// for raw assets). In the renditions shape these are the book-wide
+    /// defaults a rendition inherits when it omits its own `langs`.
     #[serde(default)]
     pub langs: HashMap<String, LangManifest>,
+    /// Explicit per-mode renditions. Absent ⇒ legacy single-`text` synthesis.
     #[serde(default)]
-    pub features: Features,
-    #[serde(default)]
-    pub spoken: SpokenCfg,
+    pub renditions: HashMap<RenditionKind, RenditionManifest>,
 }
 
-/// `[features]` — capability flags. Only `audio` is consumed by liveview (it
-/// gates the audiobook player affordance).
-#[derive(Debug, Default, Deserialize)]
-pub struct Features {
-    #[serde(default)]
-    pub audio: bool,
-}
-
-/// `[spoken]` — audiobook narration hints (books/ARCHITECTURE.md §7).
-#[derive(Debug, Default, Deserialize)]
-pub struct SpokenCfg {
-    /// Chapter stems (spine ids) to omit from narration entirely (TOC, index,
-    /// bibliography, …).
-    #[serde(default)]
-    pub skip: Vec<String>,
-    /// Override the edge-tts voice for this book (default: the server's voice).
+/// One `[renditions.<kind>]` entry.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenditionManifest {
+    /// Display name of the mode toggle ("阅读" / "听书"). Defaults to the kind.
+    pub label: Option<String>,
+    /// Languages this rendition offers. Defaults to the book's top-level
+    /// `[langs]` keys when omitted.
+    pub langs: Option<Vec<String>>,
+    /// Which language opens first. Defaults to the book's `default_lang`.
+    pub default_lang: Option<String>,
+    /// `audio` only — the edge-tts voice (default: the server's voice).
     pub voice: Option<String>,
+    /// Documented/accepted but not consumed: which rendition this one derives
+    /// from (e.g. audio narrated `from = "text"`). liveview doesn't act on it.
+    #[allow(dead_code)]
+    pub from: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -193,6 +208,34 @@ pub struct Layout {
     pub subtree: HashMap<String, Layout>,
 }
 
+/// A reading mode. `text` is read on screen; `audio` is the audiobook track
+/// (its spine is the `*.spoken.md` chapters under `<book>/audio/<lang>/`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RenditionKind {
+    Text,
+    Audio,
+}
+
+impl RenditionKind {
+    /// Wire token, also the default mode label.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RenditionKind::Text => "text",
+            RenditionKind::Audio => "audio",
+        }
+    }
+
+    /// Parse the `?rendition=` query token. Unknown ⇒ `None` (caller decides).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "text" => Some(RenditionKind::Text),
+            "audio" => Some(RenditionKind::Audio),
+            _ => None,
+        }
+    }
+}
+
 /// Resolved language edition — canonical source path + compiled globsets.
 #[derive(Clone)]
 pub struct EditionState {
@@ -203,30 +246,30 @@ pub struct EditionState {
     pub exclude_set: GlobSet,
 }
 
-/// Resolved book — metadata plus one or more editions.
+/// Resolved rendition — one reading mode of a book, with its own languages and
+/// its own spine (the per-language source roots and the spine differ by mode:
+/// text reads `<book>/<lang>/`, audio reads `<book>/audio/<lang>/`).
 #[derive(Clone)]
-pub struct BookState {
+pub struct RenditionState {
+    pub kind: RenditionKind,
+    /// Mode-toggle label ("阅读" / "听书").
     pub label: String,
-    pub slug: String,
-    pub description: Option<String>,
+    /// Which edition opens first (by `default_lang`, falling back to the first).
     pub default_lang: String,
-    pub layout: Option<Layout>,
-    /// `true` for a `book.toml`-driven book: the sidebar is a flat list of
-    /// section titles (each chapter's H1), filenames/dirs hidden. `false` for
-    /// a plain `[[book]]`/`[[mount]]` whose sidebar is the filesystem tree.
-    pub manifest: bool,
-    /// Always non-empty. First entry is the declaration order; `default_lang`
-    /// names which one opens first.
-    pub editions: Vec<EditionState>,
-    /// `[features].audio` — whether this book offers an audiobook track.
-    pub audio_enabled: bool,
-    /// `[spoken].skip` — chapter stems excluded from narration.
-    pub spoken_skip: Vec<String>,
-    /// `[spoken].voice` — per-book edge-tts voice override.
+    /// `audio` only — per-book edge-tts voice override (else the server voice).
     pub voice: Option<String>,
+    /// Shared logical ordering applied to every edition's tree (text only;
+    /// audio spines are explicit `.spoken.md` files in filename order).
+    pub layout: Option<Layout>,
+    /// `true` for a `book.toml`-driven rendition: the sidebar is a flat list of
+    /// section titles (each chapter's H1), filenames/dirs hidden. `false` for a
+    /// plain `[[book]]`/`[[mount]]` whose sidebar is the filesystem tree.
+    pub manifest: bool,
+    /// Always non-empty. `default_lang` names which one opens first.
+    pub editions: Vec<EditionState>,
 }
 
-impl BookState {
+impl RenditionState {
     /// The edition matching `lang`, or `None`.
     pub fn edition(&self, lang: &str) -> Option<&EditionState> {
         self.editions.iter().find(|e| e.lang == lang)
@@ -236,7 +279,35 @@ impl BookState {
     pub fn default_edition(&self) -> &EditionState {
         self.edition(&self.default_lang)
             .or_else(|| self.editions.first())
-            .expect("book always has at least one edition")
+            .expect("rendition always has at least one edition")
+    }
+}
+
+/// Resolved book — metadata plus one or more renditions.
+#[derive(Clone)]
+pub struct BookState {
+    pub label: String,
+    pub slug: String,
+    pub description: Option<String>,
+    /// Resolved absolute path to the cover image, when one exists.
+    pub cover: Option<PathBuf>,
+    /// Which rendition opens first.
+    pub default_rendition: RenditionKind,
+    /// Always non-empty.
+    pub renditions: Vec<RenditionState>,
+}
+
+impl BookState {
+    /// The rendition of the given `kind`, or `None`.
+    pub fn rendition(&self, kind: RenditionKind) -> Option<&RenditionState> {
+        self.renditions.iter().find(|r| r.kind == kind)
+    }
+
+    /// The default rendition (by `default_rendition`, falling back to the first).
+    pub fn default_rendition(&self) -> &RenditionState {
+        self.rendition(self.default_rendition)
+            .or_else(|| self.renditions.first())
+            .expect("book always has at least one rendition")
     }
 }
 
@@ -459,17 +530,23 @@ impl Config {
 
             let default_lang = b.default_lang.unwrap_or_else(|| editions[0].lang.clone());
 
+            // A `[[book]]`/`[[mount]]` is a single `text` rendition over the
+            // filesystem tree — no audio, no manifest spine.
             books.push(BookState {
                 label: b.label,
                 slug,
                 description: b.description,
-                default_lang,
-                layout: b.layout,
-                manifest: false,
-                editions,
-                audio_enabled: false,
-                spoken_skip: Vec::new(),
-                voice: None,
+                cover: None,
+                default_rendition: RenditionKind::Text,
+                renditions: vec![RenditionState {
+                    kind: RenditionKind::Text,
+                    label: RenditionKind::Text.as_str().to_string(),
+                    default_lang,
+                    voice: None,
+                    layout: b.layout,
+                    manifest: false,
+                    editions,
+                }],
             });
         }
 
@@ -530,9 +607,11 @@ fn discover_shelf(
     Ok(books)
 }
 
-/// Parse one `book.toml` and resolve it into a `BookState`. Each `[langs.<code>]`
-/// becomes an edition over `<book_dir>/<code>`; the default language is listed
-/// first (it is the base edition), the rest follow in alphabetical order.
+/// Parse one `book.toml` and resolve it into a `BookState` with one or more
+/// renditions. Without a `[renditions]` table the book is a single `text`
+/// rendition over `<book_dir>/<lang>/` (legacy shape). With one, each
+/// `[renditions.<kind>]` becomes a rendition: `text` editions root at
+/// `<book_dir>/<lang>/`, `audio` editions at `<book_dir>/audio/<lang>/`.
 fn load_book_manifest(
     manifest_path: &Path,
     book_dir: &Path,
@@ -541,7 +620,7 @@ fn load_book_manifest(
 ) -> Result<BookState, String> {
     let raw = std::fs::read_to_string(manifest_path)
         .map_err(|e| format!("read {}: {e}", manifest_path.display()))?;
-    let manifest: BookManifest =
+    let mut manifest: BookManifest =
         toml::from_str(&raw).map_err(|e| format!("parse {}: {e}", manifest_path.display()))?;
 
     if manifest.langs.is_empty() {
@@ -579,54 +658,152 @@ fn load_book_manifest(
     let exclude_set = build_globset(default_excludes)
         .map_err(|e| format!("{}: bad exclude glob: {e}", manifest_path.display()))?;
 
-    // Default lang first (the base edition), then the rest alphabetically.
-    let mut langs: Vec<&String> = manifest.langs.keys().collect();
-    langs.sort();
-    langs.sort_by_key(|l| *l != &manifest.default_lang);
+    // The book-wide lang labels every rendition draws from.
+    let book_langs: Vec<String> = {
+        let mut v: Vec<String> = manifest.langs.keys().cloned().collect();
+        v.sort();
+        v
+    };
 
-    let mut editions = Vec::with_capacity(langs.len());
-    for lang in langs {
-        let abs = book_dir.join(lang);
-        let source = abs.canonicalize().map_err(|e| {
-            format!(
-                "{}: edition dir {} not found: {e}",
-                manifest_path.display(),
-                abs.display()
-            )
-        })?;
-        if !source.is_dir() {
-            return Err(format!(
-                "{}: edition {} is not a directory",
-                manifest_path.display(),
-                source.display()
-            ));
+    // Resolve which renditions to build. Legacy (no `[renditions]`) synthesises
+    // a single `text` rendition over the book-wide langs.
+    let mut specs: Vec<(RenditionKind, RenditionManifest)> = Vec::new();
+    if manifest.renditions.is_empty() {
+        specs.push((
+            RenditionKind::Text,
+            RenditionManifest {
+                label: None,
+                langs: None,
+                default_lang: Some(manifest.default_lang.clone()),
+                voice: None,
+                from: None,
+            },
+        ));
+    } else {
+        // Stable kind order: text first, then audio.
+        for kind in [RenditionKind::Text, RenditionKind::Audio] {
+            if let Some(rm) = manifest.renditions.remove(&kind) {
+                specs.push((kind, rm));
+            }
         }
-        let label = manifest
-            .langs
-            .get(lang)
-            .and_then(|l| l.label.clone())
-            .unwrap_or_else(|| lang.clone());
-        editions.push(EditionState {
-            lang: lang.clone(),
-            label,
-            source,
-            include_set: include_set.clone(),
-            exclude_set: exclude_set.clone(),
+    }
+
+    let mut renditions = Vec::new();
+    for (kind, rm) in specs {
+        // The rendition's langs default to the book-wide langs; its
+        // default_lang defaults to the book's, but must land on a built edition.
+        let langs = rm.langs.unwrap_or_else(|| book_langs.clone());
+        let default_lang = rm
+            .default_lang
+            .unwrap_or_else(|| manifest.default_lang.clone());
+
+        // Editions live at <book>/<lang>/ (text) or <book>/audio/<lang>/ (audio).
+        // A lang dir missing on disk is skipped, NOT an error — a partially
+        // translated audiobook is fine. Default lang first (base edition).
+        let mut ordered: Vec<&String> = langs.iter().collect();
+        ordered.sort();
+        ordered.sort_by_key(|l| **l != default_lang);
+
+        let mut editions = Vec::new();
+        for lang in ordered {
+            let abs = match kind {
+                RenditionKind::Text => book_dir.join(lang),
+                RenditionKind::Audio => book_dir.join("audio").join(lang),
+            };
+            let Ok(source) = abs.canonicalize() else {
+                continue; // untranslated/absent for this mode — skip the lang.
+            };
+            if !source.is_dir() {
+                continue;
+            }
+            let label = manifest
+                .langs
+                .get(lang)
+                .and_then(|l| l.label.clone())
+                .unwrap_or_else(|| lang.clone());
+            editions.push(EditionState {
+                lang: lang.clone(),
+                label,
+                source,
+                include_set: include_set.clone(),
+                exclude_set: exclude_set.clone(),
+            });
+        }
+
+        // A rendition with no existing edition is dropped entirely.
+        if editions.is_empty() {
+            continue;
+        }
+        // `default_lang` may have been skipped (no dir); fall back to the first
+        // edition that did resolve.
+        let default_lang = if editions.iter().any(|e| e.lang == default_lang) {
+            default_lang
+        } else {
+            editions[0].lang.clone()
+        };
+
+        renditions.push(RenditionState {
+            kind,
+            label: rm.label.unwrap_or_else(|| kind.as_str().to_string()),
+            default_lang,
+            voice: rm.voice,
+            layout: None,
+            manifest: true,
+            editions,
         });
     }
+
+    if renditions.is_empty() {
+        return Err(format!(
+            "{}: no rendition has any existing edition directory",
+            manifest_path.display()
+        ));
+    }
+
+    // default_rendition must name a built rendition.
+    let default_rendition = manifest.default_rendition.unwrap_or(RenditionKind::Text);
+    let default_rendition = if renditions.iter().any(|r| r.kind == default_rendition) {
+        default_rendition
+    } else {
+        renditions[0].kind
+    };
+
+    let cover = resolve_cover(book_dir, manifest.cover.as_deref());
 
     Ok(BookState {
         label: manifest.title,
         slug,
         description: None,
-        default_lang: manifest.default_lang,
-        layout: None,
-        manifest: true,
-        editions,
-        audio_enabled: manifest.features.audio,
-        spoken_skip: manifest.spoken.skip,
-        voice: manifest.spoken.voice,
+        cover,
+        default_rendition,
+        renditions,
     })
+}
+
+/// Resolve a book's cover image: the manifest `cover` if it exists, else the
+/// first `cover.{jpg,png,webp}` in the book dir, else `None`.
+fn resolve_cover(book_dir: &Path, declared: Option<&Path>) -> Option<PathBuf> {
+    if let Some(rel) = declared {
+        let abs = if rel.is_absolute() {
+            rel.to_path_buf()
+        } else {
+            book_dir.join(rel)
+        };
+        if let Ok(p) = abs.canonicalize() {
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    for name in ["cover.jpg", "cover.png", "cover.webp"] {
+        let p = book_dir.join(name);
+        if let Ok(c) = p.canonicalize() {
+            if c.is_file() {
+                return Some(c);
+            }
+        }
+    }
+    None
 }
 
 /// Look for a config file in `dir` using a fixed precedence order. Returns
@@ -686,19 +863,23 @@ pub fn implicit_resolved(dir: &Path) -> Result<Resolved, String> {
             label,
             slug,
             description: None,
-            default_lang: "default".to_string(),
-            layout: None,
-            manifest: false,
-            editions: vec![EditionState {
-                lang: "default".to_string(),
-                label: "default".to_string(),
-                source,
-                include_set,
-                exclude_set,
+            cover: None,
+            default_rendition: RenditionKind::Text,
+            renditions: vec![RenditionState {
+                kind: RenditionKind::Text,
+                label: RenditionKind::Text.as_str().to_string(),
+                default_lang: "default".to_string(),
+                voice: None,
+                layout: None,
+                manifest: false,
+                editions: vec![EditionState {
+                    lang: "default".to_string(),
+                    label: "default".to_string(),
+                    source,
+                    include_set,
+                    exclude_set,
+                }],
             }],
-            audio_enabled: false,
-            spoken_skip: Vec::new(),
-            voice: None,
         }],
     })
 }

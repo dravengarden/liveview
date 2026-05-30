@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
-use crate::config::{BookState, EditionState};
+use crate::config::{BookState, EditionState, RenditionKind};
 use crate::server::progress::ProgressStore;
 use crate::shared::TreeNode;
 
@@ -45,21 +45,26 @@ impl AppState {
         self.books.iter().find(|b| b.slug == slug)
     }
 
-    /// Resolve a wire-side virtual path (`<slug>` or `<slug>/<rest>`) plus an
-    /// optional `lang` to the backing edition + the rest relative to that
-    /// edition's source. `lang = None` uses the book's default edition; a
-    /// requested `lang` with no matching edition returns `None` (→ 404, which
-    /// the frontend treats as "untranslated, fall back to default").
+    /// Resolve a wire-side virtual path (`<slug>` or `<slug>/<rest>`) plus a
+    /// `rendition` kind and optional `lang` to the backing edition + the rest
+    /// relative to that edition's source. The book picks `rendition` (else its
+    /// default rendition); the rendition picks `lang` (else its default lang).
+    /// A requested `rendition`/`lang` the book/rendition doesn't offer returns
+    /// `None` (→ 404, which the frontend treats as "fall back").
     pub fn resolve_path<'a>(
         &'a self,
         virtual_path: &'a str,
+        rendition: RenditionKind,
         lang: Option<&str>,
     ) -> Option<Resolution<'a>> {
         let (slug, rest) = virtual_path.split_once('/').unwrap_or((virtual_path, ""));
         let book = self.book(slug)?;
+        let rendition = book
+            .rendition(rendition)
+            .unwrap_or(book.default_rendition());
         let edition = match lang {
-            Some(l) => book.edition(l)?,
-            None => book.default_edition(),
+            Some(l) => rendition.edition(l)?,
+            None => rendition.default_edition(),
         };
         Some(Resolution { edition, rest })
     }

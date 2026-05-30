@@ -11,7 +11,7 @@ import {
   MenuBook as BookIcon,
   Article as DocsIcon,
 } from "@mui/icons-material";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { Book, ReadingProgress } from "@/types";
 import { useI18n } from "@/i18n";
 import { PortalLauncherButton } from "../_shell";
@@ -41,6 +41,63 @@ function slugHue(slug: string): number {
 function coverGradient(slug: string): string {
   const h = slugHue(slug);
   return `linear-gradient(135deg, hsl(${h} 52% 52%), hsl(${(h + 38) % 360} 48% 42%))`;
+}
+
+/** A book card's cover: the real cover image when the book has one (lazy-loaded,
+ *  falling back to the synthesised gradient if it fails to load), else the
+ *  gradient straight away. The kind icon + progress badge ride on top in both
+ *  cases. */
+function BookCover({
+  book,
+  children,
+}: {
+  book: Book;
+  children: ReactNode;
+}): React.JSX.Element {
+  // Once the <img> errors we permanently fall back to the gradient for this
+  // card (avoids a broken-image flash on every re-render).
+  const [imgFailed, setImgFailed] = useState(false);
+  const showImage = book.cover && !imgFailed;
+  return (
+    <Box
+      sx={{
+        position: "relative",
+        height: 104,
+        // The gradient is always the backdrop: it shows through while the image
+        // loads and after a load error, so there's never a bare box.
+        background: coverGradient(book.slug),
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+      }}
+    >
+      {showImage ? (
+        <Box
+          component="img"
+          src={`/api/cover?book=${encodeURIComponent(book.slug)}`}
+          alt=""
+          loading="lazy"
+          onError={() => {
+            setImgFailed(true);
+          }}
+          sx={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+          }}
+        />
+      ) : // No image (or it failed): show the kind icon over the gradient.
+      book.manifest ? (
+        <BookIcon sx={{ fontSize: 52, color: "rgba(255,255,255,0.92)" }} />
+      ) : (
+        <DocsIcon sx={{ fontSize: 52, color: "rgba(255,255,255,0.92)" }} />
+      )}
+      {children}
+    </Box>
+  );
 }
 
 /**
@@ -161,24 +218,10 @@ export function Landing({
                   }}
                 >
                   <CardActionArea onClick={() => onOpen(b.slug)}>
-                    {/* Synthesised cover: slug-keyed gradient + the kind icon
-                        (book vs docs), since books have no cover art. The %
-                        badge rides the cover for books in progress. */}
-                    <Box
-                      sx={{
-                        position: "relative",
-                        height: 104,
-                        background: coverGradient(b.slug),
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      {b.manifest ? (
-                        <BookIcon sx={{ fontSize: 52, color: "rgba(255,255,255,0.92)" }} />
-                      ) : (
-                        <DocsIcon sx={{ fontSize: 52, color: "rgba(255,255,255,0.92)" }} />
-                      )}
+                    {/* Cover: the book's own image when it has one, else a
+                        slug-keyed gradient + the kind icon (book vs docs). The %
+                        badge for books in progress rides on top in both cases. */}
+                    <BookCover book={b}>
                       {p && (
                         <Chip
                           label={`${pct}%`}
@@ -193,7 +236,7 @@ export function Landing({
                           }}
                         />
                       )}
-                    </Box>
+                    </BookCover>
                     <Box sx={{ p: 1.75 }}>
                       <Typography variant="subtitle1" fontWeight={700} sx={{ lineHeight: 1.3 }}>
                         {b.label}
