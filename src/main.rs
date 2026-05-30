@@ -615,12 +615,12 @@ async fn prepare_audio(
         ));
     }
 
-    let (md_path, served_lang) =
-        match resolve_narration(state, &query.path, query.lang.as_deref()) {
-            Ok(Some(x)) => x,
-            Ok(None) => return Err((StatusCode::NOT_FOUND, "File not found".to_owned())),
-            Err(()) => return Err((StatusCode::FORBIDDEN, "Access denied".to_owned())),
-        };
+    let (md_path, served_lang) = match resolve_narration(state, &query.path, query.lang.as_deref())
+    {
+        Ok(Some(x)) => x,
+        Ok(None) => return Err((StatusCode::NOT_FOUND, "File not found".to_owned())),
+        Err(()) => return Err((StatusCode::FORBIDDEN, "Access denied".to_owned())),
+    };
     let edition = book.edition(&served_lang).ok_or((
         StatusCode::INTERNAL_SERVER_ERROR,
         "served edition missing".to_owned(),
@@ -635,23 +635,69 @@ async fn prepare_audio(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
-/// Chapter narration audio (lazy-synth-on-first-play, then cached). MP3.
+/// Parse an HTTP `Range: bytes=…` value into an inclusive `(start, end)` within
+/// `total`. Supports `start-`, `start-end`, and `-suffix`; `None` if malformed
+/// or unsatisfiable (caller then serves the full body).
+fn parse_range(value: &str, total: u64) -> Option<(u64, u64)> {
+    let (s, e) = value.strip_prefix("bytes=")?.split_once('-')?;
+    let (start, end) = if s.is_empty() {
+        let suffix: u64 = e.parse().ok()?;
+        (total.saturating_sub(suffix), total.checked_sub(1)?)
+    } else {
+        let start: u64 = s.parse().ok()?;
+        let end = if e.is_empty() {
+            total.checked_sub(1)?
+        } else {
+            e.parse().ok()?
+        };
+        (start, end)
+    };
+    (start <= end && end < total).then_some((start, end))
+}
+
+/// Chapter narration audio (lazy-synth-on-first-play, then cached). MP3 with a
+/// `Content-Length` (so the player can show total duration) and HTTP Range
+/// support (so seeking works). Files are small (a few MB) → read the whole
+/// cached mp3 per request.
 async fn api_audio(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
+    headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
-    match prepare_audio(&state, &query).await {
-        Ok((mp3, _)) => match tokio::fs::File::open(&mp3).await {
-            Ok(file) => Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "audio/mpeg")
-                .header(header::CACHE_CONTROL, "public, max-age=3600")
-                .body(Body::from_stream(ReaderStream::new(file)))
-                .unwrap()
-                .into_response(),
-            Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "open audio").into_response(),
-        },
-        Err((code, msg)) => (code, msg).into_response(),
+    let mp3 = match prepare_audio(&state, &query).await {
+        Ok((mp3, _)) => mp3,
+        Err((code, msg)) => return (code, msg).into_response(),
+    };
+    let Ok(data) = tokio::fs::read(&mp3).await else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "open audio").into_response();
+    };
+    let total = data.len() as u64;
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| parse_range(v, total));
+
+    let builder = Response::builder()
+        .header(header::CONTENT_TYPE, "audio/mpeg")
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CACHE_CONTROL, "public, max-age=3600");
+    match range {
+        Some((start, end)) => builder
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{total}"),
+            )
+            .header(header::CONTENT_LENGTH, end - start + 1)
+            .body(Body::from(data[start as usize..=end as usize].to_vec()))
+            .unwrap()
+            .into_response(),
+        None => builder
+            .status(StatusCode::OK)
+            .header(header::CONTENT_LENGTH, total)
+            .body(Body::from(data))
+            .unwrap()
+            .into_response(),
     }
 }
 
