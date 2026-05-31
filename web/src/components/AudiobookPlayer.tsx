@@ -8,7 +8,6 @@ import {
   Slider,
   Select,
   MenuItem,
-  Button,
 } from "@mui/material";
 import {
   PlayArrow,
@@ -18,9 +17,8 @@ import {
   Replay10,
   Forward10,
   MyLocation,
-  KeyboardArrowDown,
-  KeyboardArrowUp,
   Bedtime,
+  Speed,
 } from "@mui/icons-material";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
@@ -71,12 +69,9 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // Explicit follow: ON auto-scrolls the spoken line to centre; a genuine user
-  // scroll GESTURE turns it OFF (we don't fight the reader), and the jump pill /
-  // a sentence tap turns it back ON.
+  // scroll GESTURE turns it OFF (we don't fight the reader), and the follow
+  // button / a sentence tap turns it back ON.
   const [following, setFollowing] = useState(true);
-  // Whether the spoken line currently sits above or below the viewport, so the
-  // jump pill can point the right way.
-  const [lineDir, setLineDir] = useState<"up" | "down" | null>(null);
 
   const scrollCurrentIntoView = useCallback(() => {
     const container = scrollRef.current;
@@ -89,37 +84,6 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
   useEffect(() => {
     if (following) scrollCurrentIntoView();
   }, [currentIdx, following, scrollCurrentIntoView]);
-
-  // Track whether the current line is off-screen (and which way) to drive the
-  // jump pill, but only while NOT following (when following it's always centred).
-  const updateLineDir = useCallback(() => {
-    const container = scrollRef.current;
-    if (!container || currentIdx < 0) {
-      setLineDir(null);
-      return;
-    }
-    const el = container.querySelector<HTMLElement>(`[data-sent="${currentIdx}"]`);
-    if (!el) {
-      setLineDir(null);
-      return;
-    }
-    const cRect = container.getBoundingClientRect();
-    const eRect = el.getBoundingClientRect();
-    if (eRect.bottom < cRect.top + 8) setLineDir("up");
-    else if (eRect.top > cRect.bottom - 8) setLineDir("down");
-    else setLineDir(null);
-  }, [currentIdx]);
-
-  useEffect(() => {
-    if (!following) updateLineDir();
-  }, [currentIdx, following, updateLineDir]);
-
-  // Position-only: keep the jump pill's direction current. Runs on every scroll
-  // (programmatic or not) — it must NOT cancel follow (our own scrollIntoView
-  // fires scroll events too).
-  const onScroll = useCallback(() => {
-    updateLineDir();
-  }, [updateLineDir]);
 
   // Cancel follow only on a real user scroll gesture — wheel or touch-drag — so
   // programmatic auto-scroll never switches it off the instant it engages.
@@ -147,8 +111,6 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
     [seek]
   );
 
-  const showJumpPill = !following && lineDir !== null;
-
   return (
     <Box sx={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" }}>
       {error && (
@@ -159,7 +121,6 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
 
       <Box
         ref={scrollRef}
-        onScroll={onScroll}
         onWheel={cancelFollow}
         onTouchMove={cancelFollow}
         sx={{ flex: 1, overflowY: "auto", px: 3, py: 4 }}
@@ -205,29 +166,6 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
         </Box>
       </Box>
 
-      {/* "Jump to the spoken line" pill — appears only when follow is off and the
-          line has scrolled off-screen; tapping re-engages follow. */}
-      {showJumpPill && (
-        <Button
-          variant="contained"
-          size="small"
-          onClick={jumpToCurrent}
-          startIcon={lineDir === "up" ? <KeyboardArrowUp /> : <KeyboardArrowDown />}
-          sx={{
-            position: "absolute",
-            left: "50%",
-            transform: "translateX(-50%)",
-            bottom: 88,
-            borderRadius: 999,
-            boxShadow: 4,
-            textTransform: "none",
-            zIndex: 2,
-          }}
-        >
-          {t("audiobook.jumpToLine")}
-        </Button>
-      )}
-
       {/* Transport: scrubber row + control row. */}
       <Box
         sx={{
@@ -268,34 +206,15 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
           <Typography variant="caption" sx={{ minWidth: 40, fontVariantNumeric: "tabular-nums" }}>
             {fmtTime(duration)}
           </Typography>
-          <Select
-            size="small"
-            variant="standard"
-            disableUnderline
-            value={rate}
-            onChange={(e) => {
-              setRate(Number(e.target.value));
-            }}
-            aria-label={t("audiobook.speed")}
-            renderValue={(v) => `${v}×`}
-            // No dropdown caret — the value itself is the affordance (the whole
-            // chip is tappable); the triangle is visual noise.
-            IconComponent={() => null}
-            sx={{ minHeight: 44, "& .MuiSelect-select": { py: 1, pr: "0 !important", fontWeight: 700, fontSize: "1.05rem" } }}
-          >
-            {RATES.map((r) => (
-              <MenuItem key={r} value={r} dense>
-                {r}×
-              </MenuItem>
-            ))}
-          </Select>
         </Box>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0.25 }}>
+        {/* Transport: follow pinned absolute-left so the play cluster stays
+            optically centred; touch-sized controls (from the sizing sweep). */}
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0.25, position: "relative", minHeight: 58 }}>
           <IconButton
             aria-label={following ? t("audiobook.following") : t("audiobook.follow")}
             onClick={() => (following ? setFollowing(false) : jumpToCurrent())}
             color={following ? "primary" : "default"}
-            sx={{ mr: "auto", width: 50, height: 50 }}
+            sx={{ position: "absolute", left: 0, width: 50, height: 50 }}
           >
             <MyLocation sx={{ fontSize: 29 }} />
           </IconButton>
@@ -320,38 +239,51 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
           <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 50, height: 50 }}>
             <SkipNext sx={{ fontSize: 33 }} />
           </IconButton>
-          {/* Sleep timer — balances the follow button (keeps the transport
-              centred) and doubles as the "auto-pause after N minutes" control.
-              Off shows just the muted moon; armed shows the moon + minutes. */}
+        </Box>
+
+        {/* Speed + sleep timer as standard outlined Select dropdowns — a proper,
+            recognizable control (leading icon · value · caret) rather than a bare
+            glyph, on their own centred row so the transport above stays clean. */}
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 1.5, pt: 0.5 }}>
           <Select
             size="small"
-            variant="standard"
-            disableUnderline
+            value={rate}
+            onChange={(e) => {
+              setRate(Number(e.target.value));
+            }}
+            aria-label={t("audiobook.speed")}
+            renderValue={(v) => (
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+                <Speed fontSize="small" />
+                <span>{v}×</span>
+              </Box>
+            )}
+            sx={{ minWidth: 92, minHeight: 44, "& .MuiSelect-select": { display: "flex", alignItems: "center", py: 0.75 } }}
+          >
+            {RATES.map((r) => (
+              <MenuItem key={r} value={r}>
+                {r}×
+              </MenuItem>
+            ))}
+          </Select>
+          <Select
+            size="small"
             value={sleepMinutes}
             onChange={(e) => {
               setSleepTimer(Number(e.target.value));
             }}
             aria-label={t("audiobook.sleepTimer")}
-            // No dropdown caret — the moon (+ minutes when armed) is the whole
-            // affordance; the triangle is visual noise.
-            IconComponent={() => null}
             renderValue={(v) => (
-              <Box sx={{ display: "flex", alignItems: "center", gap: 0.25, color: v > 0 ? "primary.main" : "text.secondary" }}>
-                <Bedtime sx={{ fontSize: 26 }} />
-                {v > 0 && (
-                  <Typography variant="body2" fontWeight={700}>
-                    {v}
-                  </Typography>
-                )}
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, color: v > 0 ? "primary.main" : "inherit" }}>
+                <Bedtime fontSize="small" />
+                <span>{v > 0 ? t("audiobook.sleepMinutes", { n: v }) : t("audiobook.sleepOff")}</span>
               </Box>
             )}
-            sx={{ ml: "auto", minHeight: 44, "& .MuiSelect-select": { py: 1, pr: "0 !important" } }}
+            sx={{ minWidth: 116, minHeight: 44, "& .MuiSelect-select": { display: "flex", alignItems: "center", py: 0.75 } }}
           >
-            <MenuItem value={0} dense>
-              {t("audiobook.sleepOff")}
-            </MenuItem>
+            <MenuItem value={0}>{t("audiobook.sleepOff")}</MenuItem>
             {SLEEP_MINUTES.map((m) => (
-              <MenuItem key={m} value={m} dense>
+              <MenuItem key={m} value={m}>
                 {t("audiobook.sleepMinutes", { n: m })}
               </MenuItem>
             ))}
