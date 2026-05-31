@@ -48,6 +48,18 @@ impl ProgressStore {
         )
         .execute(&pool)
         .await?;
+        // Player settings (rate, sleep-timer, …) live alongside progress so they
+        // sync across the reader's devices too. Tiny key/value table; the values
+        // are stored as strings (the client owns parsing).
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS settings (
+                 key        TEXT PRIMARY KEY,
+                 value      TEXT NOT NULL,
+                 updated_at INTEGER NOT NULL
+             )",
+        )
+        .execute(&pool)
+        .await?;
         Ok(Self { pool })
     }
 
@@ -96,6 +108,29 @@ impl ProgressStore {
         )
         .bind(path)
         .bind(scroll.clamp(0.0, 1.0))
+        .bind(now_millis())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// All player settings as `(key, value)` pairs.
+    pub async fn settings_all(&self) -> sqlx::Result<Vec<(String, String)>> {
+        let rows = sqlx::query_as::<_, (String, String)>("SELECT key, value FROM settings")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows)
+    }
+
+    /// Insert or update one setting, stamping the current time.
+    pub async fn settings_set(&self, key: &str, value: &str) -> sqlx::Result<()> {
+        sqlx::query(
+            "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET
+                 value = excluded.value, updated_at = excluded.updated_at",
+        )
+        .bind(key)
+        .bind(value)
         .bind(now_millis())
         .execute(&self.pool)
         .await?;

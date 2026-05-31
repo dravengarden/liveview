@@ -165,6 +165,19 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     }
   }, []);
 
+  // Fire-and-forget server-side persistence of a player setting (rate, sleep
+  // timer). Survives reloads and syncs across devices; localStorage stays as the
+  // offline fallback.
+  const persistSetting = useCallback((key: string, value: string) => {
+    void fetch("/api/settings", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ key, value }),
+    }).catch(() => {
+      // best-effort; localStorage remains the offline fallback
+    });
+  }, []);
+
   // Load a chapter into the element: fetch sentences (instant) then marks
   // (triggers server synth — slow on first play), point <audio> at the cached
   // MP3, restore the saved position, and optionally play.
@@ -263,6 +276,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       sleepTimerRef.current = null;
     }
     setSleepMinutes(minutes);
+    persistSetting("audio.sleepMinutes", String(minutes));
     if (minutes > 0) {
       sleepTimerRef.current = window.setTimeout(() => {
         audioRef.current?.pause();
@@ -270,7 +284,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
         setSleepMinutes(0);
       }, minutes * 60_000);
     }
-  }, []);
+  }, [persistSetting]);
 
   // Attach the element's listeners ONCE. They read refs so they never go stale.
   useEffect(() => {
@@ -348,6 +362,37 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Restore server-persisted player settings once on mount (rate + sleep). The
+  // rate is applied to the audio element via setRate. The sleep duration is only
+  // restored as the displayed selection (raw setSleepMinutes) — no live
+  // countdown starts until playback (see the arm-on-play effect below).
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch("/api/settings");
+        if (!res.ok) return;
+        const s = (await res.json()) as Record<string, string>;
+        const r = Number(s["audio.rate"]);
+        if (Number.isFinite(r) && r > 0) setRate(r);
+        const sm = Number(s["audio.sleepMinutes"]);
+        if (Number.isFinite(sm) && sm > 0) setSleepMinutes(sm);
+      } catch {
+        // ignore — localStorage fallback already applied
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Arm the restored sleep duration once the user actually starts playing, so a
+  // resumed selection takes effect without counting down while paused. The
+  // `=== null` guard (setSleepTimer sets the ref to a timeout id) prevents
+  // re-arming on every render.
+  useEffect(() => {
+    if (playing && sleepMinutes > 0 && sleepTimerRef.current === null) {
+      setSleepTimer(sleepMinutes);
+    }
+  }, [playing, sleepMinutes, setSleepTimer]);
+
   // OS / lock-screen / headphone controls. Metadata follows the chapter; the
   // handlers are wired once.
   useEffect(() => {
@@ -381,9 +426,14 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       title: nowPlaying.chapterLabel,
       artist: nowPlaying.bookLabel,
       album: nowPlaying.bookLabel,
-      artwork: nowPlaying.cover
-        ? [{ src: `/api/cover?book=${encodeURIComponent(nowPlaying.bookSlug)}`, sizes: "512x512" }]
-        : [],
+      // Always supply artwork so the iOS/iPadOS/macOS lock-screen tile is never
+      // blank: /api/artwork returns the real cover when the book has one, else a
+      // deterministic gradient PNG. A real server URL (not a data:/blob: URI) is
+      // required — iOS Safari is unreliable about rendering inline-encoded
+      // artwork on the lock screen.
+      artwork: [
+        { src: `/api/artwork?book=${encodeURIComponent(nowPlaying.bookSlug)}`, sizes: "512x512", type: "image/png" },
+      ],
     });
   }, [nowPlaying]);
 
@@ -426,12 +476,13 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     setRateState(r);
     rateRef.current = r;
     localStorage.setItem(RATE_KEY, String(r));
+    persistSetting("audio.rate", String(r));
     const a = audioRef.current;
     if (a) {
       a.playbackRate = r;
       a.defaultPlaybackRate = r;
     }
-  }, []);
+  }, [persistSetting]);
   const stop = useCallback(() => {
     const a = audioRef.current;
     if (a) {
