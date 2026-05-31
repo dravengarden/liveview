@@ -6,7 +6,6 @@ import {
   IconButton,
   Tooltip,
   Typography,
-  Drawer,
   List,
   ListItemButton,
   ListItemText,
@@ -20,6 +19,7 @@ import {
 } from "@mui/icons-material";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
+import { BottomSheet } from "../_shell";
 import { AudiobookPlayer } from "./AudiobookPlayer";
 
 interface NowPlayingPopupProps {
@@ -210,26 +210,14 @@ export function NowPlayingPopup({ contentMaxWidth, lineHeight }: NowPlayingPopup
       }}
     >
       {body}
-      {/* The chapter drawer is nested inside the popup Modal, so it must sit
-          ABOVE it: MUI's default Drawer z-index (theme.zIndex.drawer = 1200) is
-          BELOW the Modal (1300), which would slide the drawer in behind the
-          full-screen sheet — invisible. Lift it past the Modal. */}
-      <Drawer
-        anchor="right"
-        open={tocOpen}
-        onClose={() => setTocOpen(false)}
-        sx={{ zIndex: (theme) => theme.zIndex.modal + 1 }}
-      >
-        <Box sx={{ width: 300, pt: "env(safe-area-inset-top, 0px)" }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, p: 2 }}>
-            <CoverTile slug={nowPlaying.bookSlug} hasCover={nowPlaying.cover} size={48} />
-            <Typography variant="subtitle1" fontWeight={700} noWrap>
-              {nowPlaying.bookLabel}
-            </Typography>
-          </Box>
-          <ChapterList onPick={() => setTocOpen(false)} />
-        </Box>
-      </Drawer>
+      {/* Chapter list as the app's canonical bottom sheet (slide-up momentum
+          sheet on mobile — the standard audiobook-TOC affordance), NOT a bespoke
+          side Drawer (ui.md: every app's modal sheet uses BottomSheet). It's
+          self-contained (its own scrim, non-Modal) so it sits cleanly above the
+          popup without the nested-Modal z-index dance. */}
+      <BottomSheet open={tocOpen} onClose={() => setTocOpen(false)} title={nowPlaying.bookLabel}>
+        <ChapterList onPick={() => setTocOpen(false)} />
+      </BottomSheet>
     </Box>
   ) : (
     <Box

@@ -266,7 +266,10 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
             }}
             aria-label={t("audiobook.speed")}
             renderValue={(v) => `${v}×`}
-            sx={{ "& .MuiSelect-select": { py: 0.5, fontWeight: 600, fontSize: "0.8rem" } }}
+            // No dropdown caret — the value itself is the affordance (the whole
+            // chip is tappable); the triangle is visual noise.
+            IconComponent={() => null}
+            sx={{ "& .MuiSelect-select": { py: 0.5, pr: "0 !important", fontWeight: 600, fontSize: "0.8rem" } }}
           >
             {RATES.map((r) => (
               <MenuItem key={r} value={r} dense>
@@ -311,6 +314,9 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
               setSleepTimer(Number(e.target.value));
             }}
             aria-label={t("audiobook.sleepTimer")}
+            // No dropdown caret — the moon (+ minutes when armed) is the whole
+            // affordance; the triangle is visual noise.
+            IconComponent={() => null}
             renderValue={(v) => (
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.25, color: v > 0 ? "primary.main" : "text.secondary" }}>
                 <Bedtime sx={{ fontSize: 19 }} />
@@ -321,7 +327,7 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
                 )}
               </Box>
             )}
-            sx={{ ml: "auto", "& .MuiSelect-select": { py: 0.5, pr: "18px !important" } }}
+            sx={{ ml: "auto", "& .MuiSelect-select": { py: 0.5, pr: "0 !important" } }}
           >
             <MenuItem value={0} dense>
               {t("audiobook.sleepOff")}
