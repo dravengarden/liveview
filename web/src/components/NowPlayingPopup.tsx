@@ -210,7 +210,16 @@ export function NowPlayingPopup({ contentMaxWidth, lineHeight }: NowPlayingPopup
       }}
     >
       {body}
-      <Drawer anchor="right" open={tocOpen} onClose={() => setTocOpen(false)}>
+      {/* The chapter drawer is nested inside the popup Modal, so it must sit
+          ABOVE it: MUI's default Drawer z-index (theme.zIndex.drawer = 1200) is
+          BELOW the Modal (1300), which would slide the drawer in behind the
+          full-screen sheet — invisible. Lift it past the Modal. */}
+      <Drawer
+        anchor="right"
+        open={tocOpen}
+        onClose={() => setTocOpen(false)}
+        sx={{ zIndex: (theme) => theme.zIndex.modal + 1 }}
+      >
         <Box sx={{ width: 300, pt: "env(safe-area-inset-top, 0px)" }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, p: 2 }}>
             <CoverTile slug={nowPlaying.bookSlug} hasCover={nowPlaying.cover} size={48} />
