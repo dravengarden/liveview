@@ -55,10 +55,12 @@ export function MiniPlayer(): React.JSX.Element | null {
         borderTop: 1,
         borderColor: "divider",
         bgcolor: "background.paper",
-        // Clear the iPhone home indicator / landscape rounded corners.
+        // Clear the iPhone home indicator / landscape rounded corners; floor the
+        // sides to 12px so the cover (left) and next-chapter button (right) sit
+        // off the corner radius (mirrors cowboy's composer edge discipline).
         pb: "max(env(safe-area-inset-bottom, 0px), 6px)",
-        pl: "max(env(safe-area-inset-left, 0px), 8px)",
-        pr: "max(env(safe-area-inset-right, 0px), 8px)",
+        pl: "max(env(safe-area-inset-left, 0px), 12px)",
+        pr: "max(env(safe-area-inset-right, 0px), 12px)",
         pt: 0.5,
       }}
     >
@@ -129,15 +131,22 @@ export function MiniPlayer(): React.JSX.Element | null {
           </Box>
         </Box>
 
-        {/* Transport: prev / play-pause / next chapter. */}
-        <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-          <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev} size="small">
+        {/* Transport: prev / play-pause / next chapter. Uniform 40px targets
+            (play 44px for emphasis) with a gap so they aren't cramped on iOS —
+            the same touch ergonomics as cowboy's composer action row. */}
+        <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0, gap: 0.5 }}>
+          <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev} sx={{ width: 40, height: 40 }}>
             <SkipPrevious />
           </IconButton>
-          <IconButton aria-label={playing ? t("audiobook.pause") : t("audiobook.play")} onClick={togglePlay} color="primary">
+          <IconButton
+            aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
+            onClick={togglePlay}
+            color="primary"
+            sx={{ width: 44, height: 44 }}
+          >
             {loading ? <CircularProgress size={22} /> : playing ? <Pause /> : <PlayArrow />}
           </IconButton>
-          <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} size="small">
+          <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 40, height: 40 }}>
             <SkipNext />
           </IconButton>
         </Box>

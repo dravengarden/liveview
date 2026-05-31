@@ -234,7 +234,10 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
           borderTop: 1,
           borderColor: "divider",
           bgcolor: "background.paper",
-          px: 2,
+          // Floor the sides off the landscape corner radius (the follow + sleep
+          // controls sit at the edges) — matches cowboy's edge discipline.
+          pl: "max(env(safe-area-inset-left, 0px), 16px)",
+          pr: "max(env(safe-area-inset-right, 0px), 16px)",
           pt: 1,
           pb: "max(env(safe-area-inset-bottom, 0px), 8px)",
         }}
@@ -278,7 +281,7 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
             ))}
           </Select>
         </Box>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0.5 }}>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0.75 }}>
           <IconButton
             aria-label={following ? t("audiobook.following") : t("audiobook.follow")}
             onClick={() => (following ? setFollowing(false) : jumpToCurrent())}
