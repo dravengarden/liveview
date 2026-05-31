@@ -25,6 +25,13 @@ pub struct AppState {
     pub tts_cmd: String,
     /// Default edge-tts voice; a book's `[spoken].voice` overrides it.
     pub tts_voice: String,
+    /// Writable root for the derived audiobook cache (`<root>/<slug>/<lang>/
+    /// <stem>.mp3` + `.marks.json`), set to `<state_dir>/audio` when a state dir
+    /// is configured. `None` (no state dir) falls back to writing the cache
+    /// beside the `.spoken.md` script — fine for ad-hoc local runs on a writable
+    /// tree, but the deployed service keeps the source tree read-only and relies
+    /// on this cache dir.
+    pub audio_cache_dir: Option<std::path::PathBuf>,
 }
 
 pub type SharedState = Arc<AppState>;

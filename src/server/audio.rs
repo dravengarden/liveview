@@ -3,10 +3,21 @@
 //! On first play of a chapter we synthesize its speakable sentences (from
 //! [`crate::server::spoken`]) one at a time via the `edge-tts` CLI, concatenate
 //! the per-sentence MP3s, and write `<aid>.mp3` plus a `<aid>.marks.json` of
-//! per-sentence time ranges as siblings of the `<aid>.spoken.md` script. Later
-//! plays serve straight from that cache. Audio + marks + the read-along
-//! `data-sent` spans all derive from the one sentence list, so they align by
-//! construction.
+//! per-sentence time ranges into a writable **cache directory**. Later plays
+//! serve straight from that cache. Audio + marks + the read-along `data-sent`
+//! spans all derive from the one sentence list, so they align by construction.
+//!
+//! Cache location: the `.spoken.md` scripts are read-only *source* (they may
+//! live on a tree the service can only read — e.g. a git checkout pinned
+//! read-only by the systemd sandbox), so the derived mp3/marks are NOT written
+//! beside the script. The caller passes a writable `cache_dir` (under the
+//! service's state dir); only when no state dir is configured does it fall back
+//! to writing beside the script (ad-hoc local runs on a writable tree).
+//!
+//! Invalidation: a cached chapter is reused only when its mp3/marks are at
+//! least as new as the source `.spoken.md`. Re-narrating a chapter (touching
+//! the script) makes the next play re-synthesize, so edited scripts never serve
+//! stale audio.
 //!
 //! Timing: edge-tts emits CBR mono MP3 at 48 kbit/s, so a sentence clip's
 //! duration ≈ `bytes * 8 / 48000`. That estimate is good enough to drive
@@ -29,14 +40,28 @@ pub struct Mark {
     pub end_ms: u64,
 }
 
-/// `(mp3, marks.json)` cache paths for a chapter stem. The audio rendition's
-/// edition source is already `<book>/audio/<lang>/`, so the mp3 + marks live as
-/// siblings of the `<aid>.spoken.md` script — no nested `audio/` segment.
-pub fn audio_paths(edition_source: &Path, stem: &str) -> (PathBuf, PathBuf) {
+/// `(mp3, marks.json)` cache paths for a chapter stem, under `cache_dir`. The
+/// caller decides `cache_dir`: the writable per-book/lang cache subtree under
+/// the state dir, or — as a fallback when no state dir is configured — the
+/// audio edition source itself (mp3 + marks beside the `<aid>.spoken.md`).
+pub fn audio_paths(cache_dir: &Path, stem: &str) -> (PathBuf, PathBuf) {
     (
-        edition_source.join(format!("{stem}.mp3")),
-        edition_source.join(format!("{stem}.marks.json")),
+        cache_dir.join(format!("{stem}.mp3")),
+        cache_dir.join(format!("{stem}.marks.json")),
     )
+}
+
+/// A cache file is fresh iff it exists and is no older than the source script.
+/// With no known source mtime we treat any existing cache as fresh (the old
+/// existence-only behavior).
+fn cache_fresh(path: &Path, src_mtime: Option<std::time::SystemTime>) -> bool {
+    let Some(src) = src_mtime else {
+        return path.is_file();
+    };
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map(|m| m >= src)
+        .unwrap_or(false)
 }
 
 fn estimate_ms(bytes: usize) -> u64 {
@@ -114,19 +139,22 @@ async fn synth_sentence(cmd: &str, voice: &str, text: &str) -> Result<Vec<u8>, S
     ))
 }
 
-/// Ensure `<stem>.mp3` + `<stem>.marks.json` exist beside the chapter script
-/// (the audio rendition's edition source), synthesizing them from `sentences`
-/// if absent. Returns the cache paths. Idempotent: a fully-cached chapter does
-/// no synthesis.
+/// Ensure `<stem>.mp3` + `<stem>.marks.json` exist under `cache_dir`,
+/// synthesizing them from `sentences` if absent or stale. `src_mtime` is the
+/// source `.spoken.md`'s modified time (when known): a cached chapter is reused
+/// only when both files are at least that new, so re-narration re-synthesizes.
+/// Returns the cache paths. Idempotent: a fresh fully-cached chapter does no
+/// synthesis.
 pub async fn ensure_audio(
-    edition_source: &Path,
+    cache_dir: &Path,
     stem: &str,
     sentences: &[String],
     voice: &str,
     cmd: &str,
+    src_mtime: Option<std::time::SystemTime>,
 ) -> Result<(PathBuf, PathBuf), String> {
-    let (mp3, marks) = audio_paths(edition_source, stem);
-    if mp3.is_file() && marks.is_file() {
+    let (mp3, marks) = audio_paths(cache_dir, stem);
+    if cache_fresh(&mp3, src_mtime) && cache_fresh(&marks, src_mtime) {
         return Ok((mp3, marks));
     }
     if sentences.is_empty() {
@@ -182,11 +210,25 @@ mod tests {
     }
 
     #[test]
-    fn audio_paths_are_siblings_of_the_script() {
-        // The audio rendition's edition source is already `<book>/audio/<lang>`,
-        // so mp3 + marks sit directly beside the `.spoken.md` script.
-        let (mp3, marks) = audio_paths(Path::new("/books/eth/audio/zh"), "05-evm");
-        assert_eq!(mp3, Path::new("/books/eth/audio/zh/05-evm.mp3"));
-        assert_eq!(marks, Path::new("/books/eth/audio/zh/05-evm.marks.json"));
+    fn audio_paths_join_stem_onto_cache_dir() {
+        // mp3 + marks are siblings under whatever cache dir the caller passes —
+        // the per-book/lang subtree under the state dir, or the edition source
+        // as the no-state-dir fallback.
+        let (mp3, marks) = audio_paths(Path::new("/var/lib/liveview/audio/eth/zh"), "05-evm");
+        assert_eq!(mp3, Path::new("/var/lib/liveview/audio/eth/zh/05-evm.mp3"));
+        assert_eq!(
+            marks,
+            Path::new("/var/lib/liveview/audio/eth/zh/05-evm.marks.json")
+        );
+    }
+
+    #[test]
+    fn cache_fresh_requires_existence_and_not_stale() {
+        // Missing file is never fresh, regardless of mtime knowledge.
+        assert!(!cache_fresh(Path::new("/no/such/file.mp3"), None));
+        assert!(!cache_fresh(
+            Path::new("/no/such/file.mp3"),
+            Some(std::time::SystemTime::UNIX_EPOCH)
+        ));
     }
 }

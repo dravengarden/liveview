@@ -102,7 +102,11 @@ async fn run(cli: Cli, resolved: Resolved) {
 
     let (tx, _rx) = broadcast::channel::<String>(64);
 
-    let progress = open_progress_store(&cli).await;
+    let state_dir = resolve_state_dir(&cli);
+    let progress = open_progress_store(state_dir.as_deref()).await;
+    // Derived audiobook cache lives under the writable state dir, never in the
+    // (possibly read-only) source tree. `None` → fall back to beside-the-script.
+    let audio_cache_dir = state_dir.as_ref().map(|d| d.join("audio"));
 
     let state: SharedState = Arc::new(AppState {
         tx,
@@ -118,6 +122,7 @@ async fn run(cli: Cli, resolved: Resolved) {
             .tts_voice
             .clone()
             .unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_owned()),
+        audio_cache_dir,
     });
 
     server::watcher::start_watcher(state.clone(), resolved.debounce_ms);
@@ -329,18 +334,24 @@ async fn api_progress_put(
     }
 }
 
-/// Resolve the state dir (`--state-dir`, else `$STATE_DIRECTORY` from systemd —
-/// a colon-separated list, first entry wins) and open the progress db there.
-/// `None` (no dir configured, or open failed) disables reading-progress.
-async fn open_progress_store(cli: &Cli) -> Option<ProgressStore> {
-    let dir = cli.state_dir.clone().or_else(|| {
+/// Resolve the writable state dir: `--state-dir`, else `$STATE_DIRECTORY` from
+/// systemd (a colon-separated list, first entry wins). `None` when neither is
+/// set. Backs both the reading-progress db and the audiobook cache.
+fn resolve_state_dir(cli: &Cli) -> Option<PathBuf> {
+    cli.state_dir.clone().or_else(|| {
         std::env::var_os("STATE_DIRECTORY").and_then(|v| {
             std::env::split_paths(&v)
                 .next()
                 .filter(|p| !p.as_os_str().is_empty())
         })
-    })?;
-    if let Err(e) = std::fs::create_dir_all(&dir) {
+    })
+}
+
+/// Open the reading-progress db under `state_dir`. `None` (no dir configured, or
+/// open failed) disables reading-progress.
+async fn open_progress_store(state_dir: Option<&Path>) -> Option<ProgressStore> {
+    let dir = state_dir?;
+    if let Err(e) = std::fs::create_dir_all(dir) {
         tracing::error!(dir = %dir.display(), error = %e, "create state dir failed; reading-progress disabled");
         return None;
     }
@@ -698,8 +709,8 @@ async fn api_spoken(
 /// Gate + resolve + lazily synthesize a chapter's audio. Returns the cached
 /// `(mp3, marks.json)` paths, or an error response (404 no-audio-rendition /
 /// not-found, 403 traversal, 500 synth failure). Gated on the book having an
-/// `audio` rendition; the mp3 + marks are cached as siblings of the
-/// `<aid>.spoken.md` script (the audio edition source).
+/// `audio` rendition; the mp3 + marks are cached under the writable state-dir
+/// (`<state_dir>/audio/<slug>/<lang>/`), not in the read-only source tree.
 async fn prepare_audio(
     state: &AppState,
     query: &FileQuery,
@@ -739,14 +750,33 @@ async fn prepare_audio(
         StatusCode::INTERNAL_SERVER_ERROR,
         "served edition missing".to_owned(),
     ))?;
+    let md_meta = tokio::fs::metadata(&md_path)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, format!("stat chapter: {e}")))?;
+    let src_mtime = md_meta.modified().ok();
     let source = tokio::fs::read_to_string(&md_path)
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, format!("read chapter: {e}")))?;
     let sentences = server::spoken::spoken_sentences(&source);
     let voice = audio.voice.as_deref().unwrap_or(&state.tts_voice);
-    server::audio::ensure_audio(&edition.source, stem, &sentences, voice, &state.tts_cmd)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+
+    // Write the derived mp3/marks under the writable state-dir cache
+    // (`<root>/<slug>/<lang>/`), keeping the source tree read-only. Without a
+    // state dir, fall back to beside the script (the edition source).
+    let cache_dir = match &state.audio_cache_dir {
+        Some(root) => root.join(slug).join(&served_lang),
+        None => edition.source.clone(),
+    };
+    server::audio::ensure_audio(
+        &cache_dir,
+        stem,
+        &sentences,
+        voice,
+        &state.tts_cmd,
+        src_mtime,
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
 /// Parse an HTTP `Range: bytes=…` value into an inclusive `(start, end)` within
@@ -905,6 +935,7 @@ mod tests {
             progress: None,
             tts_cmd: "edge-tts".to_string(),
             tts_voice: "zh-CN-XiaoxiaoNeural".to_string(),
+            audio_cache_dir: None,
         }
     }
 
