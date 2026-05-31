@@ -662,7 +662,7 @@ export function App(): React.JSX.Element {
     <>
       {hasAudio && (
         <Tooltip title={t("audiobook.open")}>
-          <IconButton size="small" onClick={openActiveAudiobook} aria-label={t("audiobook.open")}>
+          <IconButton onClick={openActiveAudiobook} aria-label={t("audiobook.open")}>
             <AudiobookIcon />
           </IconButton>
         </Tooltip>

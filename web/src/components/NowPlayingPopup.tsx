@@ -164,8 +164,8 @@ export function NowPlayingPopup({ contentMaxWidth, lineHeight }: NowPlayingPopup
       }}
     >
       <Tooltip title={t("audiobook.collapse")}>
-        <IconButton onClick={collapse} aria-label={t("audiobook.collapse")} size="small">
-          <KeyboardArrowDown />
+        <IconButton onClick={collapse} aria-label={t("audiobook.collapse")} sx={{ width: 44, height: 44 }}>
+          <KeyboardArrowDown sx={{ fontSize: 28 }} />
         </IconButton>
       </Tooltip>
       <Box sx={{ minWidth: 0, flex: 1 }}>
@@ -180,8 +180,8 @@ export function NowPlayingPopup({ contentMaxWidth, lineHeight }: NowPlayingPopup
           shows on mobile (opens the drawer). */}
       {isMobile && (
         <Tooltip title={t("audiobook.chapters")}>
-          <IconButton onClick={() => setTocOpen(true)} aria-label={t("audiobook.chapters")} size="small">
-            <FormatListBulleted />
+          <IconButton onClick={() => setTocOpen(true)} aria-label={t("audiobook.chapters")} sx={{ width: 44, height: 44 }}>
+            <FormatListBulleted sx={{ fontSize: 26 }} />
           </IconButton>
         </Tooltip>
       )}

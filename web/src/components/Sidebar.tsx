@@ -340,24 +340,20 @@ export function Sidebar({
         }}
       >
         <Tooltip title={t("sidebar.back")}>
-          <IconButton size="small" onClick={onBackToLanding}>
-            <BackIcon fontSize="small" />
+          <IconButton onClick={onBackToLanding}>
+            <BackIcon />
           </IconButton>
         </Tooltip>
         <Box sx={{ display: "flex", flexShrink: 0 }}>
           <Tooltip title={t(isAllExpanded ? "sidebar.collapseAll" : "sidebar.expandAll")}>
-            <IconButton size="small" onClick={handleToggleAll}>
-              {isAllExpanded ? (
-                <CollapseAllIcon fontSize="small" />
-              ) : (
-                <ExpandAllIcon fontSize="small" />
-              )}
+            <IconButton onClick={handleToggleAll}>
+              {isAllExpanded ? <CollapseAllIcon /> : <ExpandAllIcon />}
             </IconButton>
           </Tooltip>
           <Tooltip title={t("sidebar.reveal")}>
             <span>
-              <IconButton size="small" onClick={handleRevealCurrentFile} disabled={!currentPath}>
-                <LocateIcon fontSize="small" />
+              <IconButton onClick={handleRevealCurrentFile} disabled={!currentPath}>
+                <LocateIcon />
               </IconButton>
             </span>
           </Tooltip>

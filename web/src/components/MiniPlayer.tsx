@@ -1,4 +1,4 @@
-import { Box, IconButton, LinearProgress, Typography, CircularProgress } from "@mui/material";
+import { Box, ButtonBase, IconButton, LinearProgress, Typography, CircularProgress } from "@mui/material";
 import {
   PlayArrow,
   Pause,
@@ -58,7 +58,7 @@ export function MiniPlayer(): React.JSX.Element | null {
         // Clear the iPhone home indicator / landscape rounded corners; floor the
         // sides to 12px so the cover (left) and next-chapter button (right) sit
         // off the corner radius (mirrors cowboy's composer edge discipline).
-        pb: "max(env(safe-area-inset-bottom, 0px), 6px)",
+        pb: "max(calc(env(safe-area-inset-bottom, 0px) - 8px), 4px)",
         pl: "max(env(safe-area-inset-left, 0px), 12px)",
         pr: "max(env(safe-area-inset-right, 0px), 12px)",
         pt: 0.5,
@@ -72,25 +72,19 @@ export function MiniPlayer(): React.JSX.Element | null {
         sx={{ position: "absolute", top: 0, left: 0, right: 0, height: 2 }}
       />
       <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-        {/* Cover + title: the tap target that re-opens the reader. */}
-        <Box
-          role="button"
-          tabIndex={0}
+        {/* Cover + title: the tap target that re-opens the reader. ButtonBase so
+            it's a real MUI button with a ripple. */}
+        <ButtonBase
           aria-label={t("audiobook.openPlayer")}
           onClick={() => setExpanded(true)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              setExpanded(true);
-            }
-          }}
           sx={{
             display: "flex",
             alignItems: "center",
+            justifyContent: "flex-start",
+            textAlign: "left",
             gap: 1.25,
             flex: 1,
             minWidth: 0,
-            cursor: "pointer",
             borderRadius: 1,
             py: 0.5,
             "&:hover": { opacity: 0.85 },
@@ -129,7 +123,7 @@ export function MiniPlayer(): React.JSX.Element | null {
               {nowPlaying.bookLabel}
             </Typography>
           </Box>
-        </Box>
+        </ButtonBase>
 
         {/* Transport: prev / play-pause / next chapter. Uniform 40px targets
             (play 44px for emphasis) with a gap so they aren't cramped on iOS —

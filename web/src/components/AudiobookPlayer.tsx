@@ -239,23 +239,31 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
           // transport row still fits a narrow (375px) iPhone.
           pl: "max(env(safe-area-inset-left, 0px), 8px)",
           pr: "max(env(safe-area-inset-right, 0px), 8px)",
-          pt: 1,
-          pb: "max(env(safe-area-inset-bottom, 0px), 8px)",
+          pt: 0.5,
+          // Trimmed bottom: sit ~8px tighter than the home-indicator inset
+          // (floored to 4px on devices without one) so the bar isn't bottom-heavy.
+          pb: "max(calc(env(safe-area-inset-bottom, 0px) - 8px), 4px)",
         }}
       >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
           <Typography variant="caption" sx={{ minWidth: 40, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
             {fmtTime(currentTime)}
           </Typography>
           <Slider
-            size="small"
             min={0}
             max={duration || 1}
             value={Math.min(currentTime, duration || 1)}
             onChange={onSeekBar}
             disabled={loading || duration === 0}
-            sx={{ flex: 1 }}
             aria-label={t("audiobook.seek")}
+            // Bigger drag target: a 20px thumb + a taller rail and vertical
+            // padding so the scrub bar is easy to grab on touch.
+            sx={{
+              flex: 1,
+              py: 1.25,
+              "& .MuiSlider-thumb": { width: 20, height: 20 },
+              "& .MuiSlider-rail, & .MuiSlider-track": { height: 6 },
+            }}
           />
           <Typography variant="caption" sx={{ minWidth: 40, fontVariantNumeric: "tabular-nums" }}>
             {fmtTime(duration)}
@@ -273,7 +281,7 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
             // No dropdown caret — the value itself is the affordance (the whole
             // chip is tappable); the triangle is visual noise.
             IconComponent={() => null}
-            sx={{ "& .MuiSelect-select": { py: 0.5, pr: "0 !important", fontWeight: 600, fontSize: "0.8rem" } }}
+            sx={{ minHeight: 44, "& .MuiSelect-select": { py: 1, pr: "0 !important", fontWeight: 700, fontSize: "1.05rem" } }}
           >
             {RATES.map((r) => (
               <MenuItem key={r} value={r} dense>
@@ -329,15 +337,15 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
             IconComponent={() => null}
             renderValue={(v) => (
               <Box sx={{ display: "flex", alignItems: "center", gap: 0.25, color: v > 0 ? "primary.main" : "text.secondary" }}>
-                <Bedtime sx={{ fontSize: 19 }} />
+                <Bedtime sx={{ fontSize: 26 }} />
                 {v > 0 && (
-                  <Typography variant="caption" fontWeight={700}>
+                  <Typography variant="body2" fontWeight={700}>
                     {v}
                   </Typography>
                 )}
               </Box>
             )}
-            sx={{ ml: "auto", "& .MuiSelect-select": { py: 0.5, pr: "0 !important" } }}
+            sx={{ ml: "auto", minHeight: 44, "& .MuiSelect-select": { py: 1, pr: "0 !important" } }}
           >
             <MenuItem value={0} dense>
               {t("audiobook.sleepOff")}

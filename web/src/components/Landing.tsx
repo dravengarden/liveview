@@ -1,5 +1,6 @@
 import {
   Box,
+  ButtonBase,
   Card,
   CardActionArea,
   Checkbox,
@@ -262,24 +263,16 @@ export function Landing({
           {/* Row 1: title (home link) · settings · launcher (rightmost,
               self-hides when not hosted). */}
           <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, minHeight: 40 }}>
-            <Box
-              role="button"
-              tabIndex={0}
+            <ButtonBase
               aria-label={t("landing.home")}
               title={t("landing.home")}
               onClick={onHome}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  onHome();
-                }
-              }}
               sx={{
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 1.25,
                 minWidth: 0,
-                cursor: "pointer",
+                px: 0.5,
                 borderRadius: 1,
                 "&:hover": { opacity: 0.8 },
               }}
@@ -288,7 +281,7 @@ export function Landing({
               <Typography variant="h5" fontWeight={700} noWrap>
                 {t("landing.title")}
               </Typography>
-            </Box>
+            </ButtonBase>
             <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
               {settingsSlot}
               <PortalLauncherButton />
@@ -431,13 +424,12 @@ export function Landing({
                       },
                     }}
                   >
-                    {/* disableRipple: the bookshelf is kept mounted while a
-                        book is open (visibility:hidden, no remount). A press
-                        ripple started here can't run its exit animation while
-                        hidden, so it lingers on the card for seconds after
-                        returning. Navigation is its own feedback — drop the
-                        ripple. */}
-                    <CardActionArea disableRipple onClick={() => onOpen(b.slug, e.rendition)}>
+                    {/* Standard MUI ripple. (It was dropped once because the
+                        shelf was hidden with visibility:hidden while a book was
+                        open, which stranded the ripple's exit animation; the
+                        shelf now stays painted via opacity:0, so the ripple
+                        completes normally.) */}
+                    <CardActionArea onClick={() => onOpen(b.slug, e.rendition)}>
                       {/* Cover: the book's own image when it has one, else a
                           slug-keyed gradient + the kind icon. Audiobooks carry an
                           audio badge (top-left); books in progress carry a % badge

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { IconButton } from "@mui/material";
 
 interface GalleryImage {
   src: string;
@@ -335,40 +336,28 @@ export function ImageLightbox({
         <div style={barStyle}>
           {images.length > 1 ? (
             <>
-              <button
-                type="button"
-                aria-label="Previous image"
-                onClick={goPrev}
-                disabled={!canPrev}
-                style={ctrlBtnStyle(canPrev, 30)}
-              >
+              <IconButton aria-label="Previous image" onClick={goPrev} disabled={!canPrev} sx={ctrlBtnSx(30)}>
                 ‹
-              </button>
+              </IconButton>
               <span style={counterStyle}>
                 {index + 1} / {images.length}
               </span>
-              <button
-                type="button"
-                aria-label="Next image"
-                onClick={goNext}
-                disabled={!canNext}
-                style={ctrlBtnStyle(canNext, 30)}
-              >
+              <IconButton aria-label="Next image" onClick={goNext} disabled={!canNext} sx={ctrlBtnSx(30)}>
                 ›
-              </button>
+              </IconButton>
               <span style={dividerStyle} />
             </>
           ) : null}
-          <button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.5)} style={ctrlBtnStyle(true, 26)}>
+          <IconButton aria-label="Zoom out" onClick={() => zoomBy(1 / 1.5)} sx={ctrlBtnSx(26)}>
             −
-          </button>
-          <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.5)} style={ctrlBtnStyle(true, 24)}>
+          </IconButton>
+          <IconButton aria-label="Zoom in" onClick={() => zoomBy(1.5)} sx={ctrlBtnSx(24)}>
             +
-          </button>
+          </IconButton>
           <span style={dividerStyle} />
-          <button type="button" aria-label="Close" onClick={onClose} style={ctrlBtnStyle(true, 22)}>
+          <IconButton aria-label="Close" onClick={onClose} sx={ctrlBtnSx(22)}>
             ✕
-          </button>
+          </IconButton>
         </div>
       </div>
     </div>,
@@ -412,27 +401,21 @@ const barStyle: React.CSSProperties = {
   pointerEvents: "auto",
 };
 
-// A 44px round control (the iOS minimum tap target). `glyph` tunes the font size
-// per icon so the arrows read larger than the +/−/✕. Disabled ends fade rather
-// than vanish so the bar keeps a stable width.
-function ctrlBtnStyle(enabled: boolean, glyph: number): React.CSSProperties {
+// A 44px round MUI IconButton (the iOS minimum tap target) with the standard
+// ripple. `glyph` tunes the font size per icon so the arrows read larger than
+// the +/−/✕. Disabled ends fade rather than vanish so the bar keeps a stable
+// width. White on the dark dock, regardless of theme.
+function ctrlBtnSx(glyph: number): NonNullable<React.ComponentProps<typeof IconButton>["sx"]> {
   return {
     flex: "0 0 auto",
     width: 44,
     height: 44,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
     padding: 0,
     fontSize: glyph,
     lineHeight: 1,
     color: "#fff",
-    background: "transparent",
-    border: "none",
-    borderRadius: "50%",
-    cursor: enabled ? "pointer" : "default",
-    opacity: enabled ? 1 : 0.3,
-    WebkitTapHighlightColor: "transparent",
+    "&:hover": { backgroundColor: "rgba(255,255,255,0.12)" },
+    "&.Mui-disabled": { color: "rgba(255,255,255,0.3)" },
   };
 }
 
