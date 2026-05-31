@@ -281,29 +281,35 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
             ))}
           </Select>
         </Box>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0.75 }}>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0.5 }}>
           <IconButton
             aria-label={following ? t("audiobook.following") : t("audiobook.follow")}
             onClick={() => (following ? setFollowing(false) : jumpToCurrent())}
             color={following ? "primary" : "default"}
-            sx={{ mr: "auto" }}
+            sx={{ mr: "auto", width: 44, height: 44 }}
           >
-            <MyLocation />
+            <MyLocation sx={{ fontSize: 25 }} />
           </IconButton>
-          <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev}>
-            <SkipPrevious />
+          <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev} sx={{ width: 44, height: 44 }}>
+            <SkipPrevious sx={{ fontSize: 28 }} />
           </IconButton>
-          <IconButton aria-label={t("audiobook.skipBack")} onClick={() => skip(-10)}>
-            <Replay10 />
+          <IconButton aria-label={t("audiobook.skipBack")} onClick={() => skip(-10)} sx={{ width: 44, height: 44 }}>
+            <Replay10 sx={{ fontSize: 26 }} />
           </IconButton>
-          <IconButton onClick={togglePlay} disabled={loading} color="primary" aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}>
-            {loading ? <CircularProgress size={24} /> : playing ? <Pause /> : <PlayArrow />}
+          <IconButton
+            onClick={togglePlay}
+            disabled={loading}
+            color="primary"
+            aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
+            sx={{ width: 50, height: 50 }}
+          >
+            {loading ? <CircularProgress size={28} /> : playing ? <Pause sx={{ fontSize: 32 }} /> : <PlayArrow sx={{ fontSize: 32 }} />}
           </IconButton>
-          <IconButton aria-label={t("audiobook.skipForward")} onClick={() => skip(10)}>
-            <Forward10 />
+          <IconButton aria-label={t("audiobook.skipForward")} onClick={() => skip(10)} sx={{ width: 44, height: 44 }}>
+            <Forward10 sx={{ fontSize: 26 }} />
           </IconButton>
-          <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext}>
-            <SkipNext />
+          <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 44, height: 44 }}>
+            <SkipNext sx={{ fontSize: 28 }} />
           </IconButton>
           {/* Sleep timer — balances the follow button (keeps the transport
               centred) and doubles as the "auto-pause after N minutes" control.

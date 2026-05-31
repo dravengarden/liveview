@@ -135,19 +135,19 @@ export function MiniPlayer(): React.JSX.Element | null {
             (play 44px for emphasis) with a gap so they aren't cramped on iOS —
             the same touch ergonomics as cowboy's composer action row. */}
         <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0, gap: 0.5 }}>
-          <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev} sx={{ width: 40, height: 40 }}>
-            <SkipPrevious />
+          <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev} sx={{ width: 44, height: 44 }}>
+            <SkipPrevious sx={{ fontSize: 28 }} />
           </IconButton>
           <IconButton
             aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
             onClick={togglePlay}
             color="primary"
-            sx={{ width: 44, height: 44 }}
+            sx={{ width: 48, height: 48 }}
           >
-            {loading ? <CircularProgress size={22} /> : playing ? <Pause /> : <PlayArrow />}
+            {loading ? <CircularProgress size={26} /> : playing ? <Pause sx={{ fontSize: 31 }} /> : <PlayArrow sx={{ fontSize: 31 }} />}
           </IconButton>
-          <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 40, height: 40 }}>
-            <SkipNext />
+          <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 44, height: 44 }}>
+            <SkipNext sx={{ fontSize: 28 }} />
           </IconButton>
         </Box>
       </Box>
