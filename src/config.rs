@@ -734,6 +734,15 @@ fn load_book_manifest(
         if editions.is_empty() {
             continue;
         }
+        // An audio rendition is only real if some edition actually holds
+        // `.spoken.md` chapters. The `audio/<lang>/` dir can exist (declared in
+        // book.toml, or left behind by an aborted pre-gen) while carrying no
+        // chapters yet; such a rendition would show a dead shelf card + 听书
+        // button whose tap finds an empty spine and silently does nothing. Drop
+        // it so the audiobook surfaces only once it has content.
+        if kind == RenditionKind::Audio && !audio_rendition_has_chapters(&editions) {
+            continue;
+        }
         // `default_lang` may have been skipped (no dir); fall back to the first
         // edition that did resolve.
         let default_lang = if editions.iter().any(|e| e.lang == default_lang) {
@@ -777,6 +786,24 @@ fn load_book_manifest(
         cover,
         default_rendition,
         renditions,
+    })
+}
+
+/// Whether an audio rendition has any real chapters: at least one edition whose
+/// source dir holds a top-level `*.spoken.md` (the audiobook chapter scripts —
+/// see `build_audio_spine`). Used to drop content-less audio renditions at scan
+/// time so they never reach the shelf or the rendition list.
+fn audio_rendition_has_chapters(editions: &[EditionState]) -> bool {
+    editions.iter().any(|e| {
+        std::fs::read_dir(&e.source).is_ok_and(|rd| {
+            rd.filter_map(Result::ok).any(|entry| {
+                entry.path().is_file()
+                    && entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|n| n.ends_with(".spoken.md"))
+            })
+        })
     })
 }
 

@@ -6,6 +6,7 @@ import {
   Alert,
   IconButton,
   Tooltip,
+  Snackbar,
 } from "@mui/material";
 import { Headphones as AudiobookIcon } from "@mui/icons-material";
 import { Sidebar, SettingsButton, ContentViewer, NowPlayingPopup, MiniPlayer, Landing } from "@/components";
@@ -174,6 +175,11 @@ export function App(): React.JSX.Element {
   // rendition's spine + language list the reading chrome shows, and is threaded
   // to /api/file. The audio rendition is reached via the popup, never here.
   const [rendition, setRendition] = useState<string>("text");
+  // Transient toast, e.g. when a listen affordance resolves to no chapters.
+  // Belt-and-suspenders: the backend already omits content-less audio
+  // renditions (no card/button), so this only fires on a race (content removed
+  // after the book list loaded) — never a silent dead tap.
+  const [notice, setNotice] = useState<string | null>(null);
   const initializedRef = useRef(false);
   // Refs for matching live WebSocket updates against what's currently shown
   // (the shown edition may differ from `lang` when falling back).
@@ -410,7 +416,10 @@ export function App(): React.JSX.Element {
     (slug: string, chapterPath?: string) => {
       const book = books.find((b) => b.slug === slug);
       const r = book?.renditions.find((x) => x.kind === "audio");
-      if (!book || !r) return;
+      if (!book || !r) {
+        setNotice(t("audiobook.empty"));
+        return;
+      }
       void (async () => {
         try {
           const res = await fetch(`/api/tree?rendition=audio`);
@@ -423,7 +432,10 @@ export function App(): React.JSX.Element {
             const last = await loadBook(slug);
             target = (last && hasFilePath(scope, last.path) ? last.path : null) ?? findFirstFile(scope);
           }
-          if (!target) return;
+          if (!target) {
+            setNotice(t("audiobook.empty"));
+            return;
+          }
           audioPlayChapter(
             {
               bookSlug: book.slug,
@@ -441,7 +453,7 @@ export function App(): React.JSX.Element {
         }
       })();
     },
-    [books, uiLang, loadBook, pickInitialLang, audioPlayChapter, setPlayerExpanded]
+    [books, uiLang, loadBook, pickInitialLang, audioPlayChapter, setPlayerExpanded, t]
   );
 
   // Enter a book from the landing page in a specific rendition (the bookshelf
@@ -760,6 +772,13 @@ export function App(): React.JSX.Element {
         <NowPlayingPopup
           contentMaxWidth={menuBarSettings.contentMaxWidth}
           lineHeight={menuBarSettings.lineHeight}
+        />
+        <Snackbar
+          open={notice !== null}
+          autoHideDuration={3000}
+          onClose={() => setNotice(null)}
+          message={notice}
+          anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
         />
       </PortalProvider>
     </ThemeProvider>
