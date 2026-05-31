@@ -55,6 +55,15 @@ export interface AudioPlayer {
   duration: number;
   canPrev: boolean;
   canNext: boolean;
+  /** Whether the full read-along popup is in focus (expanded) vs collapsed to the
+   *  bottom bar. The popup floats above every view, so this is pure listen-plane
+   *  UI state — it never touches what the browse plane shows. */
+  expanded: boolean;
+  setExpanded: (open: boolean) => void;
+  /** The playing book's ordered chapter queue (with labels) — also the popup's
+   *  table of contents. */
+  queue: Track[];
+  queueIndex: number;
   /** Start (or replace) playback at a chapter, seeding the book's chapter queue. */
   playChapter: (np: Omit<NowPlaying, "chapterLabel">, queue: Track[]) => void;
   togglePlay: () => void;
@@ -62,6 +71,8 @@ export interface AudioPlayer {
   /** Jump by a delta (negative = back) in seconds, clamped to the chapter. */
   skip: (deltaSec: number) => void;
   seekToSentence: (idx: number) => void;
+  /** Jump to a chapter by queue index and play it (the popup TOC). */
+  goToChapter: (qi: number) => void;
   setRate: (r: number) => void;
   nextChapter: () => void;
   prevChapter: () => void;
@@ -121,6 +132,9 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   const [duration, setDuration] = useState(0);
   const [queue, setQueue] = useState<Track[]>([]);
   const [queueIndex, setQueueIndex] = useState(-1);
+  // Listen-plane UI: is the full read-along popup in focus? Default collapsed so
+  // a resumed session (rehydrated below) shows only the bar, never auto-expands.
+  const [expanded, setExpanded] = useState(false);
 
   // Refs the once-attached <audio> listeners read without re-subscribing.
   const marksRef = useRef<Mark[]>([]);
@@ -223,6 +237,14 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   const prevChapter = useCallback(() => {
     if (queueIndexRef.current > 0) goTo(queueIndexRef.current - 1, true);
   }, [goTo]);
+  // Jump to an arbitrary chapter (the popup's table of contents). Clamped to the
+  // queue; a no-op for an out-of-range index.
+  const goToChapter = useCallback(
+    (qi: number) => {
+      if (qi >= 0 && qi < queueRef.current.length) goTo(qi, true);
+    },
+    [goTo]
+  );
 
   // Attach the element's listeners ONCE. They read refs so they never go stale.
   useEffect(() => {
@@ -401,6 +423,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     queueRef.current = [];
     setQueueIndex(-1);
     queueIndexRef.current = -1;
+    setExpanded(false);
     localStorage.removeItem(SESSION_KEY);
   }, []);
 
@@ -417,11 +440,16 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       duration,
       canPrev: queueIndex > 0,
       canNext: queueIndex >= 0 && queueIndex < queue.length - 1,
+      expanded,
+      setExpanded,
+      queue,
+      queueIndex,
       playChapter,
       togglePlay,
       seek,
       skip,
       seekToSentence,
+      goToChapter,
       setRate,
       nextChapter,
       prevChapter,
@@ -437,13 +465,15 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       rate,
       currentTime,
       duration,
+      expanded,
+      queue,
       queueIndex,
-      queue.length,
       playChapter,
       togglePlay,
       seek,
       skip,
       seekToSentence,
+      goToChapter,
       setRate,
       nextChapter,
       prevChapter,

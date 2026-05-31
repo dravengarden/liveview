@@ -4,8 +4,11 @@ import {
   CssBaseline,
   Box,
   Alert,
+  IconButton,
+  Tooltip,
 } from "@mui/material";
-import { Sidebar, SettingsButton, ContentViewer, AudiobookPlayer, MiniPlayer, Landing } from "@/components";
+import { Headphones as AudiobookIcon } from "@mui/icons-material";
+import { Sidebar, SettingsButton, ContentViewer, NowPlayingPopup, MiniPlayer, Landing } from "@/components";
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
 import { useAudioPlayer, type Track } from "@/audio/player";
@@ -166,10 +169,10 @@ export function App(): React.JSX.Element {
   const [untranslated, setUntranslated] = useState<UntranslatedNotice | null>(null);
   const [currentFileType, setCurrentFileType] = useState<FileType>("markdown");
   const [currentContent, setCurrentContent] = useState<string | null>(null);
-  // The active reading mode (rendition kind, e.g. "text" / "audio"). A
-  // whole-book switch, not a per-chapter toggle: it drives the sidebar spine,
-  // the language list, and whether chapters render in the MarkdownViewer
-  // (text) or the AudiobookPlayer (audio).
+  // The browse plane's reading mode. Audio is no longer a browse view (it's the
+  // floating popup), so in practice this stays "text" — it still drives which
+  // rendition's spine + language list the reading chrome shows, and is threaded
+  // to /api/file. The audio rendition is reached via the popup, never here.
   const [rendition, setRendition] = useState<string>("text");
   const initializedRef = useRef(false);
   // Refs for matching live WebSocket updates against what's currently shown
@@ -190,10 +193,10 @@ export function App(): React.JSX.Element {
   const { theme, muiTheme, setTheme } = useTheme();
   const { menuBarSettings, setContentMaxWidth, setLineHeight } = useSettings();
   const { fontId, setFont } = useFont();
-  // The root audio engine: playback lives above every view, so navigating never
-  // stops it. We only read what we need (stable `playChapter`, the now-playing
-  // chapter) so these don't churn effects.
-  const { playChapter: audioPlayChapter, nowPlaying: audioNowPlaying } = useAudioPlayer();
+  // The root audio engine: playback + the popup live above every view, so
+  // navigating never stops the audio nor closes the popup. We only need to seed
+  // playback (`playChapter`) and raise the popup into focus (`setExpanded`).
+  const { playChapter: audioPlayChapter, setExpanded: setPlayerExpanded } = useAudioPlayer();
 
   // The active book is the first path segment; null ⇒ the landing bookshelf.
   const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;
@@ -359,14 +362,7 @@ export function App(): React.JSX.Element {
       setRendition(renditionArg);
       renditionRef.current = renditionArg;
       writeHash(path, langForHash, renditionForHash, false);
-      if (rInfo?.kind === "audio") {
-        // The player owns audio chapters; just point it at the path.
-        setCurrentPath(path);
-        currentPathRef.current = path;
-        setUntranslated(null);
-      } else {
-        await loadFile(path, langArg, renditionArg);
-      }
+      await loadFile(path, langArg, renditionArg);
     },
     [books, loadFile]
   );
@@ -403,31 +399,49 @@ export function App(): React.JSX.Element {
     [loadBook]
   );
 
-  // Switch the WHOLE book to another rendition: fetch that rendition's sidebar
-  // spine, reset the language to the rendition's default, and open its entry
-  // chapter (audio chapter ids differ from text — we don't map the current
-  // position across renditions, we open the rendition's first/resume chapter).
-  const switchRendition = useCallback(
-    (newKind: string) => {
-      if (!activeSlug || !activeBook) return;
-      const rInfo = activeBook.renditions.find((r) => r.kind === newKind);
-      if (!rInfo) return;
+  // Open a book's AUDIO rendition in the listening popup. This is the listen
+  // plane, fully decoupled from the browse plane: the page you're reading stays
+  // put — we only seed the engine's queue from the audio spine and raise the
+  // popup. Target chapter: an explicit one (deep link), else the resume chapter,
+  // else the first. Audio chapter ids differ from text, so we never map the
+  // current text position across — the popup opens at the audio rendition's own
+  // resume/first chapter.
+  const openAudiobook = useCallback(
+    (slug: string, chapterPath?: string) => {
+      const book = books.find((b) => b.slug === slug);
+      const r = book?.renditions.find((x) => x.kind === "audio");
+      if (!book || !r) return;
       void (async () => {
         try {
-          const res = await fetch(`/api/tree?rendition=${encodeURIComponent(newKind)}`);
+          const res = await fetch(`/api/tree?rendition=audio`);
           const spine = (await res.json()) as TreeNode[];
-          setTree(spine);
-          renditionRef.current = newKind;
-          const entry = await entryChapter(activeSlug, spine);
-          if (entry) {
-            void openFile(entry, pickInitialLang(rInfo), newKind);
+          const root = spine.find((n) => n.path === slug);
+          const scope = root ? [root] : spine;
+          const tracks = flattenTracks(scope, uiLang);
+          let target = chapterPath && hasFilePath(scope, chapterPath) ? chapterPath : null;
+          if (!target) {
+            const last = await loadBook(slug);
+            target = (last && hasFilePath(scope, last.path) ? last.path : null) ?? findFirstFile(scope);
           }
+          if (!target) return;
+          audioPlayChapter(
+            {
+              bookSlug: book.slug,
+              bookLabel: book.label,
+              cover: book.cover,
+              chapterPath: target,
+              lang: pickInitialLang(r),
+              rendition: "audio",
+            },
+            tracks
+          );
+          setPlayerExpanded(true);
         } catch (e) {
-          console.error("Failed to switch rendition:", e);
+          console.error("Failed to open audiobook:", e);
         }
       })();
     },
-    [activeSlug, activeBook, entryChapter, openFile, pickInitialLang]
+    [books, uiLang, loadBook, pickInitialLang, audioPlayChapter, setPlayerExpanded]
   );
 
   // Enter a book from the landing page in a specific rendition (the bookshelf
@@ -442,6 +456,12 @@ export function App(): React.JSX.Element {
         (renditionKind ? book.renditions.find((x) => x.kind === renditionKind) : undefined) ??
         defaultRendition(book);
       if (!r) return;
+      // An audiobook card opens the listening popup (the listen plane), never a
+      // reading view — the browse plane stays on the shelf behind it.
+      if (r.kind === "audio") {
+        openAudiobook(slug);
+        return;
+      }
       void (async () => {
         // Always fetch the default rendition's spine on entry: the cached
         // `tree` may hold another rendition's spine (we just left an audio
@@ -460,7 +480,7 @@ export function App(): React.JSX.Element {
         }
       })();
     },
-    [books, defaultRendition, entryChapter, openFile, pickInitialLang]
+    [books, defaultRendition, entryChapter, openFile, pickInitialLang, openAudiobook]
   );
 
   // Return to the landing bookshelf.
@@ -471,33 +491,6 @@ export function App(): React.JSX.Element {
     setCurrentContent(null);
     setUntranslated(null);
   }, []);
-
-  // Jump the view to whatever the engine is narrating (the mini-player tap). The
-  // audio is already playing — this just brings the screen to it (and re-engages
-  // the read-along reader); playback is untouched.
-  const openNowPlaying = useCallback(() => {
-    const np = audioNowPlaying;
-    if (!np) return;
-    void (async () => {
-      try {
-        const res = await fetch(`/api/tree?rendition=${encodeURIComponent(np.rendition)}`);
-        setTree((await res.json()) as TreeNode[]);
-      } catch (e) {
-        console.error("Failed to fetch rendition tree:", e);
-      }
-      setLang(np.lang);
-      setRendition(np.rendition);
-      renditionRef.current = np.rendition;
-      setCurrentPath(np.chapterPath);
-      currentPathRef.current = np.chapterPath;
-      setUntranslated(null);
-      const book = books.find((b) => b.slug === np.bookSlug);
-      const rInfo = book?.renditions.find((r) => r.kind === np.rendition);
-      const langForHash = rInfo && np.lang !== rInfo.default_lang ? np.lang : null;
-      const renditionForHash = book && np.rendition !== book.default_rendition ? np.rendition : null;
-      writeHash(np.chapterPath, langForHash, renditionForHash, false);
-    })();
-  }, [audioNowPlaying, books]);
 
   useEffect(() => {
     document.title = currentPath ?? "liveview";
@@ -545,6 +538,19 @@ export function App(): React.JSX.Element {
         return;
       }
       const kind = renditionForHashEntry(path, hashRendition);
+      // Audio is no longer a browse view: a legacy `&rendition=audio` deep link
+      // opens the listening popup at that chapter and leaves the browse plane on
+      // the shelf (the engine carries its own resume, so this is just re-entry).
+      if (kind === "audio") {
+        const audioSlug = path.split("/")[0];
+        setCurrentPath(null);
+        currentPathRef.current = null;
+        setCurrentContent(null);
+        setUntranslated(null);
+        writeHash(null, null, null, true);
+        if (audioSlug) openAudiobook(audioSlug, path);
+        return;
+      }
       const entryLang = langForHashEntry(path, kind, hashLang);
       setLang(entryLang);
       setRendition(kind);
@@ -568,15 +574,9 @@ export function App(): React.JSX.Element {
       // Load the book's progress first so the doc restores its scroll.
       const slug = path.split("/")[0];
       if (slug) await loadBook(slug);
-      if (kind === "audio") {
-        setCurrentPath(path);
-        currentPathRef.current = path;
-        setUntranslated(null);
-      } else {
-        void loadFile(path, entryLang, kind);
-      }
+      void loadFile(path, entryLang, kind);
     },
-    [books, loadFile, langForHashEntry, renditionForHashEntry, loadBook]
+    [books, loadFile, langForHashEntry, renditionForHashEntry, loadBook, openAudiobook]
   );
 
   // Fetch the tree once, then restore any deep link from the hash. Waits for
@@ -611,54 +611,11 @@ export function App(): React.JSX.Element {
     };
   }, [restoreFromHash]);
 
-  // Viewing an audio chapter ⇒ the engine plays it (seeding the book's chapter
-  // queue from the loaded spine). Guarded on the spine being present so the queue
-  // is complete from the first play; a no-op once it's already that chapter, so
-  // re-opening / auto-advancing never restarts it.
-  useEffect(() => {
-    if (rendition !== "audio" || !currentPath || !activeBook || activeTree.length === 0) return;
-    if (audioNowPlaying?.chapterPath === currentPath) return;
-    audioPlayChapter(
-      {
-        bookSlug: activeBook.slug,
-        bookLabel: activeBook.label,
-        cover: activeBook.cover,
-        chapterPath: currentPath,
-        lang,
-        rendition,
-      },
-      flattenTracks(activeTree, uiLang)
-    );
-  }, [rendition, currentPath, activeBook, activeTree, lang, uiLang, audioNowPlaying, audioPlayChapter]);
-
-  // Auto-advance the other way: when the engine rolls into the next chapter while
-  // you're watching this book's reader, follow it (URL + sidebar highlight). We
-  // follow ONLY when we were already in sync with the engine (so this is it
-  // advancing under us) — never when we just navigated to a chapter the engine
-  // isn't on (e.g. a deep link while a stale resume-session points elsewhere);
-  // there, effect A brings the engine to us instead. If you've navigated away
-  // (bookshelf, text), we leave your view alone and the mini-player tracks it.
-  const syncedChapterRef = useRef<string | null>(null);
-  useEffect(() => {
-    const np = audioNowPlaying;
-    if (!np || activeRendition?.kind !== "audio" || activeSlug !== np.bookSlug) {
-      syncedChapterRef.current = null;
-      return;
-    }
-    if (currentPath === np.chapterPath) {
-      syncedChapterRef.current = np.chapterPath;
-      return;
-    }
-    if (syncedChapterRef.current !== currentPath) return; // we weren't in sync — don't hijack
-    setCurrentPath(np.chapterPath);
-    currentPathRef.current = np.chapterPath;
-    setUntranslated(null);
-    syncedChapterRef.current = np.chapterPath;
-    const rInfo = activeBook?.renditions.find((r) => r.kind === rendition);
-    const langForHash = rInfo && lang !== rInfo.default_lang ? lang : null;
-    const renditionForHash = activeBook && rendition !== activeBook.default_rendition ? rendition : null;
-    writeHash(np.chapterPath, langForHash, renditionForHash, true);
-  }, [audioNowPlaying, activeRendition, activeSlug, currentPath, activeBook, rendition, lang]);
+  // The listen plane (popup + bar) is fully decoupled from the browse plane:
+  // the engine plays, the popup is the focus view, and navigating the browse
+  // plane never touches either. So there is no longer any currentPath ⇄ engine
+  // syncing to do here — opening an audiobook seeds the engine directly
+  // (`openAudiobook`) and the popup reads it off the root.
 
   // One settings affordance reused in both chrome contexts (bookshelf header +
   // in-book NavShell actions). The shared SettingsSheet owns the gear and the
@@ -679,12 +636,28 @@ export function App(): React.JSX.Element {
   const langLabel = (code: string): string =>
     bookLangs.find((l) => l.lang === code)?.label ?? code;
 
-  // The mini-player is the "audio continues elsewhere" surface, so hide it
-  // whenever the full audio reader is the foreground view — that reader only
-  // ever shows the chapter that's playing (opening an audio chapter plays it),
-  // so this is exactly "you're already looking at the player".
-  const onPlayingReader =
-    audioNowPlaying != null && currentPath != null && activeRendition?.kind === "audio";
+  // Whether the active book offers an audio rendition — gates the "listen"
+  // affordances (the in-book top-bar headphones + the sidebar button), both of
+  // which open the global listening popup for this book.
+  const hasAudio = bookRenditions.some((r) => r.kind === "audio");
+  const openActiveAudiobook = useCallback(() => {
+    if (activeSlug) openAudiobook(activeSlug);
+  }, [activeSlug, openAudiobook]);
+
+  // In-book top-bar actions: a listen button (when the book has audio) + the
+  // shared settings affordance.
+  const bookActions = (
+    <>
+      {hasAudio && (
+        <Tooltip title={t("audiobook.open")}>
+          <IconButton size="small" onClick={openActiveAudiobook} aria-label={t("audiobook.open")}>
+            <AudiobookIcon />
+          </IconButton>
+        </Tooltip>
+      )}
+      {settingsButton}
+    </>
+  );
 
   return (
     <ThemeProvider theme={muiTheme}>
@@ -743,9 +716,11 @@ export function App(): React.JSX.Element {
                 langs={bookLangs}
                 currentLang={lang}
                 onSwitchLang={switchLang}
-                renditions={bookRenditions}
-                currentRendition={rendition}
-                onSwitchRendition={switchRendition}
+                hasAudio={hasAudio}
+                onOpenAudiobook={() => {
+                  openActiveAudiobook();
+                  api.closeMobile();
+                }}
                 onSelect={(path) => {
                   handleSelect(path);
                   api.closeMobile();
@@ -753,7 +728,7 @@ export function App(): React.JSX.Element {
                 onBackToLanding={backToLanding}
               />
             )}
-            actions={settingsButton}
+            actions={bookActions}
           >
             {untranslated && (
               <Alert severity="info" square sx={{ py: 0.25 }}>
@@ -763,29 +738,29 @@ export function App(): React.JSX.Element {
                 })}
               </Alert>
             )}
-            {activeRendition?.kind === "audio" && currentPath ? (
-              <AudiobookPlayer
-                contentMaxWidth={menuBarSettings.contentMaxWidth}
-                lineHeight={menuBarSettings.lineHeight}
-              />
-            ) : (
-              <ContentViewer
-                content={currentContent}
-                fileType={currentFileType}
-                currentPath={currentPath}
-                theme={theme}
-                onNavigate={handleSelect}
-                contentMaxWidth={menuBarSettings.contentMaxWidth}
-                lineHeight={menuBarSettings.lineHeight}
-                savedScroll={savedScroll}
-                onSaveScroll={saveProgress}
-              />
-            )}
+            <ContentViewer
+              content={currentContent}
+              fileType={currentFileType}
+              currentPath={currentPath}
+              theme={theme}
+              onNavigate={handleSelect}
+              contentMaxWidth={menuBarSettings.contentMaxWidth}
+              lineHeight={menuBarSettings.lineHeight}
+              savedScroll={savedScroll}
+              onSaveScroll={saveProgress}
+            />
             </NavShell>
           )}
           </Box>
-          <MiniPlayer hidden={onPlayingReader} onOpen={openNowPlaying} />
+          <MiniPlayer />
         </Box>
+        {/* The listening popup (focus state of the listen plane) floats above
+            every browse view, mounted at the root so it survives all navigation
+            and is never owned by a book's chrome. */}
+        <NowPlayingPopup
+          contentMaxWidth={menuBarSettings.contentMaxWidth}
+          lineHeight={menuBarSettings.lineHeight}
+        />
       </PortalProvider>
     </ThemeProvider>
   );

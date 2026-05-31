@@ -9,13 +9,6 @@ import {
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
 
-interface MiniPlayerProps {
-  /** Hide it (e.g. while the full read-along reader for this chapter is open). */
-  hidden: boolean;
-  /** Open the full reader at the currently-playing chapter. */
-  onOpen: () => void;
-}
-
 /** Stable hue from a slug → a calm gradient stand-in cover (mirrors the shelf). */
 function coverGradient(slug: string): string {
   let h = 0;
@@ -25,18 +18,32 @@ function coverGradient(slug: string): string {
 }
 
 /**
- * The persistent bottom now-playing bar. Lives at the app root (its own row, so
- * it pushes content up rather than overlapping it) and stays put across every
- * navigation — it IS the "audio doesn't stop when you move around" surface.
- * Tapping the title/cover returns to the full reader; the buttons drive playback
- * and chapter nav. Hidden while you're already looking at the playing chapter.
+ * The persistent bottom now-playing bar — the collapsed (脱离 focus) state of the
+ * listen plane. Lives at the app root (its own row, so it pushes content up
+ * rather than overlapping it) and stays put across every navigation: it IS the
+ * "audio doesn't stop when you move around" surface and the handle back into the
+ * full popup. Tapping the title/cover expands the popup; the buttons drive
+ * playback and chapter nav. Hidden while the popup is already in focus (expanded)
+ * and whenever nothing is loaded.
  */
-export function MiniPlayer({ hidden, onOpen }: MiniPlayerProps): React.JSX.Element | null {
+export function MiniPlayer(): React.JSX.Element | null {
   const { t } = useI18n();
-  const { nowPlaying, playing, loading, currentTime, duration, canPrev, canNext, togglePlay, nextChapter, prevChapter } =
-    useAudioPlayer();
+  const {
+    nowPlaying,
+    expanded,
+    setExpanded,
+    playing,
+    loading,
+    currentTime,
+    duration,
+    canPrev,
+    canNext,
+    togglePlay,
+    nextChapter,
+    prevChapter,
+  } = useAudioPlayer();
 
-  if (hidden || !nowPlaying) return null;
+  if (expanded || !nowPlaying) return null;
 
   const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 
@@ -68,11 +75,11 @@ export function MiniPlayer({ hidden, onOpen }: MiniPlayerProps): React.JSX.Eleme
           role="button"
           tabIndex={0}
           aria-label={t("audiobook.openPlayer")}
-          onClick={onOpen}
+          onClick={() => setExpanded(true)}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
-              onOpen();
+              setExpanded(true);
             }
           }}
           sx={{

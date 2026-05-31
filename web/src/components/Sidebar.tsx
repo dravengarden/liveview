@@ -11,6 +11,7 @@ import {
   Typography,
   ToggleButton,
   ToggleButtonGroup,
+  Button,
 } from "@mui/material";
 import {
   Folder as FolderIcon,
@@ -22,8 +23,9 @@ import {
   UnfoldLess as CollapseAllIcon,
   MyLocation as LocateIcon,
   ArrowBack as BackIcon,
+  Headphones as AudiobookIcon,
 } from "@mui/icons-material";
-import type { LangInfo, RenditionInfo, TreeNode } from "@/types";
+import type { LangInfo, TreeNode } from "@/types";
 import { useI18n } from "@/i18n";
 
 /** A single-line label that reveals its full text in a tooltip only when it is
@@ -221,11 +223,10 @@ interface SidebarProps {
   langs?: LangInfo[];
   currentLang?: string;
   onSwitchLang?: (lang: string) => void;
-  /** Reading modes the active book offers. A segmented toggle appears when >1. */
-  renditions?: RenditionInfo[];
-  /** Active rendition kind (`"text"` / `"audio"`). */
-  currentRendition?: string;
-  onSwitchRendition?: (kind: string) => void;
+  /** Whether the book offers an audio rendition — shows the "听书" button that
+   *  opens the global listening popup (audio is no longer a sidebar view mode). */
+  hasAudio?: boolean;
+  onOpenAudiobook?: () => void;
   onSelect: (path: string) => void;
   onBackToLanding: () => void;
 }
@@ -242,9 +243,8 @@ export function Sidebar({
   langs = [],
   currentLang,
   onSwitchLang,
-  renditions = [],
-  currentRendition,
-  onSwitchRendition,
+  hasAudio = false,
+  onOpenAudiobook,
   onSelect,
   onBackToLanding,
 }: SidebarProps): React.JSX.Element {
@@ -364,40 +364,22 @@ export function Sidebar({
         </Box>
       </Box>
 
-      {/* Whole-book reading-mode switch (阅读 / 听书). Mirrors the language
-          switcher's UI; only shown when the book offers more than one mode. */}
-      {renditions.length > 1 && (
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            gap: 1,
-            px: 1,
-            py: 0.75,
-            borderBottom: 1,
-            borderColor: "divider",
-          }}
-        >
-          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
-            {t("sidebar.rendition")}
-          </Typography>
-          <ToggleButtonGroup
+      {/* "听书" — opens the global listening popup for this book. Audio is no
+          longer a sidebar view mode (a whole-book toggle), but a floating
+          popup, so this is just a quick entry into it (mirrored by the in-book
+          top-bar headphones button). */}
+      {hasAudio && onOpenAudiobook && (
+        <Box sx={{ px: 1, py: 0.75, borderBottom: 1, borderColor: "divider" }}>
+          <Button
             size="small"
-            exclusive
-            value={currentRendition ?? null}
-            onChange={(_, value: string | null) => {
-              if (value && onSwitchRendition) {
-                onSwitchRendition(value);
-              }
-            }}
-            sx={{ flexWrap: "wrap" }}
+            fullWidth
+            variant="outlined"
+            startIcon={<AudiobookIcon />}
+            onClick={onOpenAudiobook}
+            sx={{ textTransform: "none", justifyContent: "flex-start" }}
           >
-            {renditions.map((r) => (
-              <ToggleButton key={r.kind} value={r.kind} sx={{ px: 1, py: 0.25, textTransform: "none" }}>
-                {r.label}
-              </ToggleButton>
-            ))}
-          </ToggleButtonGroup>
+            {t("audiobook.open")}
+          </Button>
         </Box>
       )}
 
