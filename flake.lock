@@ -7,11 +7,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1780203220,
-        "narHash": "sha256-khvgDDFz3FjI3czvg0rDgWrH7oTjWmXsnJ+JqA1pvdM=",
+        "lastModified": 1780203394,
+        "narHash": "sha256-2eJosmPce8YR/AeiSyMGzCwGbbORz5XP3smjHa+k/Rc=",
         "ref": "refs/heads/main",
-        "rev": "2e8b36944984061c345e7cf66a6bbb3a71f82924",
-        "revCount": 29,
+        "rev": "9326405e9305f2adf7efde1886174d495918c8c6",
+        "revCount": 30,
         "type": "git",
         "url": "file:///home/draven/columbus/projects/atlantis/main"
       },
