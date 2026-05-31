@@ -231,7 +231,7 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
           bgcolor: "background.paper",
           px: 2,
           pt: 1,
-          pb: "calc(8px + env(safe-area-inset-bottom, 0px))",
+          pb: "max(env(safe-area-inset-bottom, 0px), 8px)",
         }}
       >
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>

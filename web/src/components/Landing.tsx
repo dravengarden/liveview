@@ -313,8 +313,16 @@ export function Landing({
                     </InputAdornment>
                   ),
                   endAdornment: query ? (
-                    <InputAdornment position="end">
-                      <IconButton size="small" edge="end" onClick={() => setQuery("")} aria-label={t("landing.searchClear")}>
+                    // ui.md §7: no edge="end" (negative margin pins the target to the
+                    // iOS back-swipe edge); floor to a ≥40px touch target on phones and
+                    // keep the adornment off the safe-area edge.
+                    <InputAdornment position="end" sx={{ pr: "max(env(safe-area-inset-right), 8px)" }}>
+                      <IconButton
+                        size="small"
+                        onClick={() => setQuery("")}
+                        aria-label={t("landing.searchClear")}
+                        sx={{ width: { xs: 40, lg: 32 }, height: { xs: 40, lg: 32 } }}
+                      >
                         <ClearIcon fontSize="small" />
                       </IconButton>
                     </InputAdornment>
