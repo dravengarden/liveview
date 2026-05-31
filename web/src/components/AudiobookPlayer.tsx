@@ -20,6 +20,7 @@ import {
   MyLocation,
   KeyboardArrowDown,
   KeyboardArrowUp,
+  Bedtime,
 } from "@mui/icons-material";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
@@ -30,6 +31,8 @@ interface AudiobookPlayerProps {
 }
 
 const RATES = [0.75, 1, 1.25, 1.5, 2, 2.25, 2.5, 2.75, 3];
+// Sleep-timer options in minutes (0 = off). Capped at 90.
+const SLEEP_MINUTES = [15, 30, 45, 60, 90];
 
 function fmtTime(sec: number): string {
   if (!Number.isFinite(sec)) return "0:00";
@@ -60,6 +63,8 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
     skip,
     seekToSentence,
     setRate,
+    sleepMinutes,
+    setSleepTimer,
     nextChapter,
     prevChapter,
   } = useAudioPlayer();
@@ -294,8 +299,39 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
           <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext}>
             <SkipNext />
           </IconButton>
-          {/* Spacer to balance the follow button so the transport stays centred. */}
-          <Box sx={{ ml: "auto", width: 40 }} />
+          {/* Sleep timer — balances the follow button (keeps the transport
+              centred) and doubles as the "auto-pause after N minutes" control.
+              Off shows just the muted moon; armed shows the moon + minutes. */}
+          <Select
+            size="small"
+            variant="standard"
+            disableUnderline
+            value={sleepMinutes}
+            onChange={(e) => {
+              setSleepTimer(Number(e.target.value));
+            }}
+            aria-label={t("audiobook.sleepTimer")}
+            renderValue={(v) => (
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.25, color: v > 0 ? "primary.main" : "text.secondary" }}>
+                <Bedtime sx={{ fontSize: 19 }} />
+                {v > 0 && (
+                  <Typography variant="caption" fontWeight={700}>
+                    {v}
+                  </Typography>
+                )}
+              </Box>
+            )}
+            sx={{ ml: "auto", "& .MuiSelect-select": { py: 0.5, pr: "18px !important" } }}
+          >
+            <MenuItem value={0} dense>
+              {t("audiobook.sleepOff")}
+            </MenuItem>
+            {SLEEP_MINUTES.map((m) => (
+              <MenuItem key={m} value={m} dense>
+                {t("audiobook.sleepMinutes", { n: m })}
+              </MenuItem>
+            ))}
+          </Select>
         </Box>
       </Box>
     </Box>

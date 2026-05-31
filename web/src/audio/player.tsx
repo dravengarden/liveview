@@ -73,6 +73,10 @@ export interface AudioPlayer {
   seekToSentence: (idx: number) => void;
   /** Jump to a chapter by queue index and play it (the popup TOC). */
   goToChapter: (qi: number) => void;
+  /** Sleep timer: minutes until playback auto-pauses (0 = off). */
+  sleepMinutes: number;
+  /** Arm/replace/cancel the sleep timer (0 cancels). */
+  setSleepTimer: (minutes: number) => void;
   setRate: (r: number) => void;
   nextChapter: () => void;
   prevChapter: () => void;
@@ -135,6 +139,10 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   // Listen-plane UI: is the full read-along popup in focus? Default collapsed so
   // a resumed session (rehydrated below) shows only the bar, never auto-expands.
   const [expanded, setExpanded] = useState(false);
+  // Sleep timer: minutes until auto-pause (0 = off). The pending timeout id lives
+  // in a ref so it survives re-renders and can be cleared/replaced.
+  const [sleepMinutes, setSleepMinutes] = useState(0);
+  const sleepTimerRef = useRef<number | null>(null);
 
   // Refs the once-attached <audio> listeners read without re-subscribing.
   const marksRef = useRef<Mark[]>([]);
@@ -245,6 +253,24 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     },
     [goTo]
   );
+
+  // Sleep timer: auto-pause after N minutes (wall-clock from when armed). Picking
+  // a new value restarts the countdown; 0 cancels it. Pauses (not stops) so the
+  // chapter can be resumed where it left off.
+  const setSleepTimer = useCallback((minutes: number) => {
+    if (sleepTimerRef.current !== null) {
+      window.clearTimeout(sleepTimerRef.current);
+      sleepTimerRef.current = null;
+    }
+    setSleepMinutes(minutes);
+    if (minutes > 0) {
+      sleepTimerRef.current = window.setTimeout(() => {
+        audioRef.current?.pause();
+        sleepTimerRef.current = null;
+        setSleepMinutes(0);
+      }, minutes * 60_000);
+    }
+  }, []);
 
   // Attach the element's listeners ONCE. They read refs so they never go stale.
   useEffect(() => {
@@ -424,6 +450,11 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     setQueueIndex(-1);
     queueIndexRef.current = -1;
     setExpanded(false);
+    if (sleepTimerRef.current !== null) {
+      window.clearTimeout(sleepTimerRef.current);
+      sleepTimerRef.current = null;
+    }
+    setSleepMinutes(0);
     localStorage.removeItem(SESSION_KEY);
   }, []);
 
@@ -450,6 +481,8 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       skip,
       seekToSentence,
       goToChapter,
+      sleepMinutes,
+      setSleepTimer,
       setRate,
       nextChapter,
       prevChapter,
@@ -468,6 +501,8 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       expanded,
       queue,
       queueIndex,
+      sleepMinutes,
+      setSleepTimer,
       playChapter,
       togglePlay,
       seek,
