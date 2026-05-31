@@ -8,6 +8,7 @@ import {
   Slider,
   Select,
   MenuItem,
+  Stack,
 } from "@mui/material";
 import {
   PlayArrow,
@@ -19,9 +20,11 @@ import {
   MyLocation,
   Bedtime,
   Speed,
+  Settings as SettingsIcon,
 } from "@mui/icons-material";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
+import { BottomSheet } from "../_shell";
 
 interface AudiobookPlayerProps {
   contentMaxWidth: number;
@@ -72,6 +75,9 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
   // scroll GESTURE turns it OFF (we don't fight the reader), and the follow
   // button / a sentence tap turns it back ON.
   const [following, setFollowing] = useState(true);
+  // Playback-settings sheet (speed + sleep timer), opened by the gear — mirrors
+  // cowboy's Settings-icon → BottomSheet pattern (DetentSheet on mobile).
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const scrollCurrentIntoView = useCallback(() => {
     const container = scrollRef.current;
@@ -239,57 +245,70 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
           <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 50, height: 50 }}>
             <SkipNext sx={{ fontSize: 33 }} />
           </IconButton>
-        </Box>
-
-        {/* Speed + sleep timer as standard outlined Select dropdowns — a proper,
-            recognizable control (leading icon · value · caret) rather than a bare
-            glyph, on their own centred row so the transport above stays clean. */}
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 1.5, pt: 0.5 }}>
-          <Select
-            size="small"
-            value={rate}
-            onChange={(e) => {
-              setRate(Number(e.target.value));
-            }}
-            aria-label={t("audiobook.speed")}
-            renderValue={(v) => (
-              <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
-                <Speed fontSize="small" />
-                <span>{v}×</span>
-              </Box>
-            )}
-            sx={{ minWidth: 92, minHeight: 44, "& .MuiSelect-select": { display: "flex", alignItems: "center", py: 0.75 } }}
+          {/* Settings gear — pinned absolute-right (balances the follow button on
+              the left); opens the playback-settings sheet (speed + sleep). */}
+          <IconButton
+            aria-label={t("audiobook.settings")}
+            onClick={() => setSettingsOpen(true)}
+            sx={{ position: "absolute", right: 0, width: 50, height: 50 }}
           >
-            {RATES.map((r) => (
-              <MenuItem key={r} value={r}>
-                {r}×
-              </MenuItem>
-            ))}
-          </Select>
-          <Select
-            size="small"
-            value={sleepMinutes}
-            onChange={(e) => {
-              setSleepTimer(Number(e.target.value));
-            }}
-            aria-label={t("audiobook.sleepTimer")}
-            renderValue={(v) => (
-              <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, color: v > 0 ? "primary.main" : "inherit" }}>
-                <Bedtime fontSize="small" />
-                <span>{v > 0 ? t("audiobook.sleepMinutes", { n: v }) : t("audiobook.sleepOff")}</span>
-              </Box>
-            )}
-            sx={{ minWidth: 116, minHeight: 44, "& .MuiSelect-select": { display: "flex", alignItems: "center", py: 0.75 } }}
-          >
-            <MenuItem value={0}>{t("audiobook.sleepOff")}</MenuItem>
-            {SLEEP_MINUTES.map((m) => (
-              <MenuItem key={m} value={m}>
-                {t("audiobook.sleepMinutes", { n: m })}
-              </MenuItem>
-            ))}
-          </Select>
+            <SettingsIcon sx={{ fontSize: 27 }} />
+          </IconButton>
         </Box>
       </Box>
+
+      {/* Playback settings — the shared BottomSheet (DetentSheet momentum sheet
+          on mobile, centred Dialog on desktop), the same affordance as cowboy's
+          Settings. Speed + sleep timer as labeled selector rows. */}
+      <BottomSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} title={t("audiobook.settings")}>
+        <Stack spacing={3} sx={{ py: 1 }}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <Speed fontSize="small" color="action" />
+              <Typography variant="body2">{t("audiobook.speed")}</Typography>
+            </Stack>
+            <Select
+              size="small"
+              value={rate}
+              onChange={(e) => {
+                setRate(Number(e.target.value));
+              }}
+              aria-label={t("audiobook.speed")}
+              renderValue={(v) => `${v}×`}
+              sx={{ minWidth: 120 }}
+            >
+              {RATES.map((r) => (
+                <MenuItem key={r} value={r}>
+                  {r}×
+                </MenuItem>
+              ))}
+            </Select>
+          </Stack>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <Bedtime fontSize="small" color="action" />
+              <Typography variant="body2">{t("audiobook.sleepTimer")}</Typography>
+            </Stack>
+            <Select
+              size="small"
+              value={sleepMinutes}
+              onChange={(e) => {
+                setSleepTimer(Number(e.target.value));
+              }}
+              aria-label={t("audiobook.sleepTimer")}
+              renderValue={(v) => (v > 0 ? t("audiobook.sleepMinutes", { n: v }) : t("audiobook.sleepOff"))}
+              sx={{ minWidth: 120 }}
+            >
+              <MenuItem value={0}>{t("audiobook.sleepOff")}</MenuItem>
+              {SLEEP_MINUTES.map((m) => (
+                <MenuItem key={m} value={m}>
+                  {t("audiobook.sleepMinutes", { n: m })}
+                </MenuItem>
+              ))}
+            </Select>
+          </Stack>
+        </Stack>
+      </BottomSheet>
     </Box>
   );
 }
