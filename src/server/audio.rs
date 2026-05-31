@@ -25,7 +25,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
+use futures_util::StreamExt;
 use serde::Serialize;
 
 /// edge-tts default output is `audio-24khz-48kbitrate-mono-mp3`.
@@ -87,18 +89,35 @@ fn assemble(clips: &[Vec<u8>]) -> (Vec<u8>, Vec<Mark>) {
     (audio, marks)
 }
 
+/// A single sentence's synth must not hang the whole chapter: edge-tts can stall
+/// on the Microsoft websocket (waiting for audio that never arrives) WITHOUT
+/// erroring, so cap each attempt and kill the child if it overruns.
+const SYNTH_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Synthesize one sentence to MP3 bytes via the `edge-tts` CLI (one attempt).
 async fn try_synth_once(cmd: &str, voice: &str, text: &str) -> Result<Vec<u8>, String> {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = std::env::temp_dir().join(format!("lv-tts-{}-{n}.mp3", std::process::id()));
 
-    let out = tokio::process::Command::new(cmd)
+    let run = tokio::process::Command::new(cmd)
         .args(["--voice", voice, "--text", text, "--write-media"])
         .arg(&tmp)
-        .output()
-        .await
-        .map_err(|e| format!("spawn {cmd}: {e}"))?;
+        // Kill the child when the future drops (i.e. on timeout), so a stalled
+        // edge-tts doesn't linger.
+        .kill_on_drop(true)
+        .output();
+    let out = match tokio::time::timeout(SYNTH_ATTEMPT_TIMEOUT, run).await {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(format!("spawn {cmd}: {e}"));
+        }
+        Err(_) => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+            return Err(format!("{cmd} timed out after {SYNTH_ATTEMPT_TIMEOUT:?}"));
+        }
+    };
     if !out.status.success() {
         let _ = tokio::fs::remove_file(&tmp).await;
         return Err(format!(
@@ -134,9 +153,12 @@ async fn synth_sentence(cmd: &str, voice: &str, text: &str) -> Result<Vec<u8>, S
             Err(e) => last = e,
         }
     }
-    Err(format!(
-        "tts failed after {SYNTH_ATTEMPTS} attempts: {last}"
-    ))
+    // Persistent failure (a stalled/unspeakable sentence, or a flaky network):
+    // emit silence rather than fail the WHOLE chapter on one sentence — the marks
+    // stay aligned and the chapter is still playable, the lost sentence just a
+    // brief silent gap. Infinite hangs are bounded by the per-attempt timeout.
+    tracing::warn!(text, error = %last, "tts: giving up on sentence after retries; emitting silence");
+    Ok(Vec::new())
 }
 
 /// Ensure `<stem>.mp3` + `<stem>.marks.json` exist under `cache_dir`,
@@ -166,10 +188,18 @@ pub async fn ensure_audio(
             .map_err(|e| format!("create audio dir {}: {e}", dir.display()))?;
     }
 
-    let mut clips = Vec::with_capacity(sentences.len());
-    for text in sentences {
-        clips.push(synth_sentence(cmd, voice, text).await?);
-    }
+    // Synthesize sentences with bounded concurrency. Sequential synth of a
+    // 200+-sentence chapter ran for minutes and blew past the client's patience
+    // (and any request timeout) — "the audiobook won't play". buffered(N)
+    // overlaps the edge-tts round-trips while preserving sentence order.
+    const SYNTH_CONCURRENCY: usize = 6;
+    let clips: Vec<Vec<u8>> = futures_util::stream::iter(sentences.iter().cloned())
+        .map(|text| async move { synth_sentence(cmd, voice, &text).await })
+        .buffered(SYNTH_CONCURRENCY)
+        .collect::<Vec<Result<Vec<u8>, String>>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, String>>()?;
     let (audio, marklist) = assemble(&clips);
 
     tokio::fs::write(&mp3, &audio)
