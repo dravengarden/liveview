@@ -413,8 +413,17 @@ export function Landing({
                       // content-visibility:auto lets the engine skip cards outside
                       // the viewport; contain-intrinsic-size reserves a plausible
                       // box so the scrollbar/column balance stays stable.
-                      contentVisibility: "auto",
-                      containIntrinsicSize: "0 320px",
+                      //
+                      // xs ONLY: in the sm+ CSS-multicolumn layout, iOS Safari
+                      // mis-places the first card of the 2nd+ column (a stale
+                      // intrinsic-size box collides with multicol fragmentation,
+                      // pushing that card's top down so it doesn't align with
+                      // column 1). The phone is single-column, where the perf win
+                      // matters and the multicol interaction can't happen — so
+                      // scope content-visibility to xs and let sm+ lay out cards
+                      // normally (tops align across columns again).
+                      contentVisibility: { xs: "auto", sm: "visible" },
+                      containIntrinsicSize: { xs: "0 320px", sm: "auto" },
                       // Hover lift is a pointer affordance; on touch it fires on
                       // every scroll-tap and forces a repaint mid-scroll, so gate
                       // the transition + lift behind a real hover-capable pointer.
@@ -438,7 +447,7 @@ export function Landing({
                         {category === "audiobook" && (
                           <Chip
                             icon={<AudiobookIcon />}
-                            label={t("landing.filterAudiobooks")}
+                            label={t("landing.audiobookBadge")}
                             size="small"
                             sx={{ position: "absolute", top: 8, left: 8, ...coverChipSx }}
                           />
