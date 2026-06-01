@@ -129,12 +129,15 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
   // value changing (1× ↔ 2.25×, 90m ↔ 1m) never shifts the surrounding layout —
   // the chips are the two "ears" of the centred transport, so any width wobble
   // would jiggle the whole row.
-  const CHIP_W = 58;
+  const CHIP_W = 72;
   const chipSelectSx = {
     width: CHIP_W,
     "& .MuiSelect-select": {
       py: 0.5,
-      px: 0,
+      // MUI reserves padding-right (24px) for the dropdown icon even with
+      // IconComponent removed; force it off both sides so the value is truly
+      // centred and the widest label ("1h30m") isn't clipped.
+      px: "0 !important",
       minHeight: "44px !important",
       display: "flex",
       alignItems: "center",

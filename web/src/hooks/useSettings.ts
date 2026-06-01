@@ -81,7 +81,8 @@ export function useSettings(): UseSettingsResult {
       const w = Number(s[CONTENT_WIDTH_SETTING_KEY]);
       if (
         s[CONTENT_WIDTH_SETTING_KEY] !== undefined &&
-        inRange(w, CONTENT_WIDTH_MIN, CONTENT_WIDTH_MAX) &&
+        // 0 = "full width" (a valid choice, outside the slider's min/max band).
+        (w === 0 || inRange(w, CONTENT_WIDTH_MIN, CONTENT_WIDTH_MAX)) &&
         w !== cur.contentMaxWidth
       ) {
         next.contentMaxWidth = w;

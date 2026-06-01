@@ -130,9 +130,13 @@ export interface MenuBarSettings {
   lineHeight: number;
 }
 
-export const CONTENT_WIDTH_MIN = 640;
+// MIN is deliberately below phone-viewport width (~375px) so the slider visibly
+// narrows the column (= bigger left/right margin, WeChat-style 页边距) even on
+// mobile; with the old 640 floor every value exceeded the viewport and the
+// control appeared to do nothing on a phone.
+export const CONTENT_WIDTH_MIN = 320;
 export const CONTENT_WIDTH_MAX = 1280;
-export const CONTENT_WIDTH_STEP = 40;
+export const CONTENT_WIDTH_STEP = 20;
 export const CONTENT_WIDTH_DEFAULT = 960;
 
 export const LINE_HEIGHT_MIN = 1.3;
