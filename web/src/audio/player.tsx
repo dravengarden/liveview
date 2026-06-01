@@ -101,6 +101,25 @@ function query(path: string, lang: string, rendition: string): string {
   return `path=${encodeURIComponent(path)}&lang=${encodeURIComponent(lang)}&rendition=${encodeURIComponent(rendition)}`;
 }
 
+/** Push the element's timeline to the OS so the lock-screen scrubber tracks
+ *  playback. iOS in particular NEEDS this once seek handlers are registered:
+ *  without a valid position state its remote controls — the play/pause button
+ *  included — go unresponsive (desktop browsers are forgiving, so the bug only
+ *  shows on iOS). iOS also throws and drops the whole state unless every field
+ *  is finite with `0 ≤ position ≤ duration` and `playbackRate > 0`, so clamp. */
+function updatePositionState(audio: HTMLAudioElement): void {
+  if (!("mediaSession" in navigator) || !navigator.mediaSession.setPositionState) return;
+  const { duration, currentTime } = audio;
+  if (!Number.isFinite(duration) || duration <= 0) return;
+  const position = Math.min(Math.max(0, currentTime), duration);
+  const playbackRate = audio.playbackRate > 0 ? audio.playbackRate : 1;
+  try {
+    navigator.mediaSession.setPositionState({ duration, playbackRate, position });
+  } catch {
+    // Older/edge WebKit can still reject a valid-looking state — non-fatal.
+  }
+}
+
 /** Map playback ms → sentence index via binary search over contiguous marks. */
 function markIndex(marks: Mark[], ms: number): number {
   let lo = 0;
@@ -299,6 +318,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
 
     const onTime = (): void => {
       setCurrentTime(audio.currentTime);
+      updatePositionState(audio);
       setCurrentIdx(markIndex(marksRef.current, audio.currentTime * 1000));
       const np = nowPlayingRef.current;
       if (np && audio.currentTime > 0) {
@@ -360,6 +380,9 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     const onMeta = (): void => {
       setDuration(audio.duration);
       audio.playbackRate = rateRef.current;
+      // Seed the lock-screen timeline as soon as duration is known, so the OS
+      // controls are live from the first frame rather than the first tick.
+      updatePositionState(audio);
     };
     const onPlay = (): void => setPlaying(true);
     const onPause = (): void => {
@@ -567,6 +590,9 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     if (a) {
       a.playbackRate = r;
       a.defaultPlaybackRate = r;
+      // Reflect the new rate in the OS timeline now — a paused element fires no
+      // timeupdate, so the lock-screen scrubber would otherwise drift.
+      updatePositionState(a);
     }
   }, [persistSetting]);
   const stop = useCallback(() => {
