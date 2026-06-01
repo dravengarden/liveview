@@ -6,10 +6,12 @@ import {
   useMemo,
   useState,
 } from "react";
+import { getServerSettings, putServerSetting } from "@/serverSettings";
 
 export type Language = "en" | "zh";
 
 const LANG_KEY = "lv-lang";
+const LANG_SETTING_KEY = "ui.lang";
 
 type Dict = Record<string, string>;
 
@@ -160,11 +162,26 @@ export function I18nProvider({ children }: { children: React.ReactNode }): React
   const setLang = useCallback((next: Language) => {
     setLangState(next);
     localStorage.setItem(LANG_KEY, next);
+    putServerSetting(LANG_SETTING_KEY, next);
   }, []);
 
   useEffect(() => {
     document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
   }, [lang]);
+
+  // Reconcile to the server (cross-device truth) once on mount. Apply only a
+  // valid value that differs from the current one, and write straight to state
+  // + localStorage (not setLang) so the mount-apply path doesn't re-PUT it.
+  useEffect(() => {
+    void getServerSettings().then((s) => {
+      const v = s[LANG_SETTING_KEY];
+      if ((v === "en" || v === "zh") && v !== lang) {
+        setLangState(v);
+        localStorage.setItem(LANG_KEY, v);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const t = useCallback<Translate>(
     (key, vars) => {

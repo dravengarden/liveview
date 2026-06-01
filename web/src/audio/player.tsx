@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import type { Mark, SpokenContent } from "@/types";
+import { getServerSettings, putServerSetting } from "@/serverSettings";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Book-level audio engine.
@@ -163,20 +164,21 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     } catch {
       // storage full / disabled — non-fatal, just no resume-on-reload.
     }
+    // Also persist the resume pointer (book + chapter + queue) server-side so it
+    // syncs across devices; the per-chapter position rides "audio.pos" separately.
+    putServerSetting("audio.session", JSON.stringify({ nowPlaying: np, queue: q, queueIndex: qi }));
   }, []);
 
   // Fire-and-forget server-side persistence of a player setting (rate, sleep
   // timer). Survives reloads and syncs across devices; localStorage stays as the
   // offline fallback.
   const persistSetting = useCallback((key: string, value: string) => {
-    void fetch("/api/settings", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ key, value }),
-    }).catch(() => {
-      // best-effort; localStorage remains the offline fallback
-    });
+    putServerSetting(key, value);
   }, []);
+
+  // Throttle for the server-side position write (the localStorage posKey write
+  // stays per-tick; the server save is rate-limited — see the timeupdate handler).
+  const lastPosPutRef = useRef(0);
 
   // Load a chapter into the element: fetch sentences (instant) then marks
   // (triggers server synth — slow on first play), point <audio> at the cached
@@ -297,6 +299,13 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       const np = nowPlayingRef.current;
       if (np && audio.currentTime > 0) {
         localStorage.setItem(posKey(np.chapterPath, np.lang), String(audio.currentTime));
+        // Server-save the position at most once every 5s (cross-device resume);
+        // localStorage above stays per-tick for instant local resume.
+        const now = Date.now();
+        if (now - lastPosPutRef.current > 5000) {
+          lastPosPutRef.current = now;
+          putServerSetting("audio.pos", String(audio.currentTime));
+        }
       }
       // Warm the next chapter's synth shortly before this one ends.
       if (
@@ -316,10 +325,22 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       audio.playbackRate = rateRef.current;
     };
     const onPlay = (): void => setPlaying(true);
-    const onPause = (): void => setPlaying(false);
+    const onPause = (): void => {
+      setPlaying(false);
+      // Flush the current position server-side so a pause is immediately
+      // resumable on another device (bypasses the 5s throttle).
+      if (nowPlayingRef.current && audio.currentTime > 0) {
+        lastPosPutRef.current = Date.now();
+        putServerSetting("audio.pos", String(audio.currentTime));
+      }
+    };
     const onEnded = (): void => {
       const np = nowPlayingRef.current;
       if (np) localStorage.removeItem(posKey(np.chapterPath, np.lang));
+      // Chapter finished: clear the saved position so a resume starts the next
+      // chapter cleanly rather than at the previous chapter's end.
+      lastPosPutRef.current = Date.now();
+      putServerSetting("audio.pos", "0");
       // Book-level continuous playback: roll into the next chapter, else stop.
       if (queueIndexRef.current < queueRef.current.length - 1) {
         goTo(queueIndexRef.current + 1, true);
@@ -367,19 +388,40 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   // restored as the displayed selection (raw setSleepMinutes) — no live
   // countdown starts until playback (see the arm-on-play effect below).
   useEffect(() => {
-    void (async () => {
-      try {
-        const res = await fetch("/api/settings");
-        if (!res.ok) return;
-        const s = (await res.json()) as Record<string, string>;
-        const r = Number(s["audio.rate"]);
-        if (Number.isFinite(r) && r > 0) setRate(r);
-        const sm = Number(s["audio.sleepMinutes"]);
-        if (Number.isFinite(sm) && sm > 0) setSleepMinutes(sm);
-      } catch {
-        // ignore — localStorage fallback already applied
+    void getServerSettings().then((s) => {
+      const r = Number(s["audio.rate"]);
+      if (Number.isFinite(r) && r > 0) setRate(r);
+      const sm = Number(s["audio.sleepMinutes"]);
+      if (Number.isFinite(sm) && sm > 0) setSleepMinutes(sm);
+      // Reconcile the resume pointer (server wins on cross-device). Only reload
+      // when it actually differs from what the localStorage effect already
+      // rehydrated, so an identical session doesn't re-fetch the chapter.
+      const raw = s["audio.session"];
+      if (raw) {
+        try {
+          const sess = JSON.parse(raw) as PersistedSession;
+          const cur = nowPlayingRef.current;
+          const differs =
+            !cur ||
+            cur.chapterPath !== sess.nowPlaying.chapterPath ||
+            cur.bookSlug !== sess.nowPlaying.bookSlug;
+          if (sess.nowPlaying && Array.isArray(sess.queue) && differs) {
+            const pos = Number(s["audio.pos"]);
+            if (Number.isFinite(pos) && pos > 0) {
+              // Seed the per-chapter localStorage pos so loadTrack's existing
+              // restore picks it up.
+              localStorage.setItem(
+                posKey(sess.nowPlaying.chapterPath, sess.nowPlaying.lang),
+                String(pos)
+              );
+            }
+            loadTrack(sess.nowPlaying, sess.queue, sess.queueIndex, false); // PAUSED
+          }
+        } catch {
+          // ignore a corrupt server session blob
+        }
       }
-    })();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -446,7 +488,11 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     (np: Omit<NowPlaying, "chapterLabel">, q: Track[]) => {
       const qi = q.findIndex((tk) => tk.path === np.chapterPath);
       const label = q[qi]?.label ?? np.chapterPath.split("/").pop() ?? np.chapterPath;
-      loadTrack({ ...np, chapterLabel: label }, q, qi >= 0 ? qi : 0, true);
+      // Opening an audiobook loads it PAUSED — the player shows up at the saved
+      // position and the user taps play to start. Chapter navigation
+      // (goTo/next/prev/goToChapter) and auto-advance (onEnded) still autoplay,
+      // since those happen during an active listen.
+      loadTrack({ ...np, chapterLabel: label }, q, qi >= 0 ? qi : 0, false);
     },
     [loadTrack]
   );
@@ -507,6 +553,10 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     }
     setSleepMinutes(0);
     localStorage.removeItem(SESSION_KEY);
+    // Clear the server-side resume pointer too, so a stopped session doesn't
+    // resurrect on this or another device (empty value clears the key).
+    putServerSetting("audio.session", "");
+    putServerSetting("audio.pos", "0");
   }, []);
 
   const value = useMemo<AudioPlayer>(

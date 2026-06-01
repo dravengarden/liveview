@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { createTheme, type Theme as MuiTheme } from "@mui/material/styles";
 import type { Theme } from "@/types";
+import { getServerSettings, putServerSetting } from "@/serverSettings";
 
 const THEME_KEY = "lv-theme";
+const THEME_SETTING_KEY = "ui.theme";
 
 const VALID_THEMES: Theme[] = ["light", "sepia", "dark", "night"];
 
@@ -94,7 +96,7 @@ interface UseThemeResult {
 export function useTheme(): UseThemeResult {
   const [theme, setThemeState] = useState<Theme>(getStoredTheme);
 
-  const setTheme = useCallback((newTheme: Theme) => {
+  const applyTheme = useCallback((newTheme: Theme) => {
     setThemeState(newTheme);
     localStorage.setItem(THEME_KEY, newTheme);
     document.documentElement.setAttribute("data-theme", newTheme);
@@ -105,6 +107,27 @@ export function useTheme(): UseThemeResult {
       "data-color-scheme",
       isDarkTheme(newTheme) ? "dark" : "light"
     );
+  }, []);
+
+  const setTheme = useCallback(
+    (newTheme: Theme) => {
+      applyTheme(newTheme);
+      putServerSetting(THEME_SETTING_KEY, newTheme);
+    },
+    [applyTheme]
+  );
+
+  // Reconcile to the server (cross-device truth) once on mount. localStorage
+  // already gave the first paint; apply the server value only when it differs
+  // (avoids a needless render) and via applyTheme (so we don't echo it back).
+  useEffect(() => {
+    void getServerSettings().then((s) => {
+      const v = s[THEME_SETTING_KEY];
+      if (v !== undefined && VALID_THEMES.includes(v as Theme) && v !== theme) {
+        applyTheme(v as Theme);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleTheme = useCallback(() => {
