@@ -8,7 +8,6 @@ import {
   Slider,
   Select,
   MenuItem,
-  Stack,
 } from "@mui/material";
 import {
   PlayArrow,
@@ -19,16 +18,16 @@ import {
   Forward10,
   MyLocation,
   Bedtime,
-  Speed,
-  Settings as SettingsIcon,
 } from "@mui/icons-material";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
-import { BottomSheet } from "../_shell";
 
 interface AudiobookPlayerProps {
   contentMaxWidth: number;
   lineHeight: number;
+  /** iPhone-class layout (from NowPlayingPopup's breakpoint): controls stack
+   *  into two rows; desktop/iPad keeps a single centred row. */
+  isMobile: boolean;
 }
 
 const RATES = [0.75, 1, 1.25, 1.5, 2, 2.25, 2.5, 2.75, 3];
@@ -46,7 +45,7 @@ function fmtTime(sec: number): string {
  *  with the narrated sentence highlighted, an explicit (cancelable) follow mode,
  *  and the transport. All playback state comes from the root audio engine, so
  *  this view is purely a window onto it — leaving it never stops the audio. */
-export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayerProps): React.JSX.Element {
+export function AudiobookPlayer({ contentMaxWidth, lineHeight, isMobile }: AudiobookPlayerProps): React.JSX.Element {
   const { t } = useI18n();
   const {
     sentences,
@@ -65,6 +64,7 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
     seekToSentence,
     setRate,
     sleepMinutes,
+    sleepRemainingMin,
     setSleepTimer,
     nextChapter,
     prevChapter,
@@ -75,9 +75,6 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
   // scroll GESTURE turns it OFF (we don't fight the reader), and the follow
   // button / a sentence tap turns it back ON.
   const [following, setFollowing] = useState(true);
-  // Playback-settings sheet (speed + sleep timer), opened by the gear — mirrors
-  // cowboy's Settings-icon → BottomSheet pattern (DetentSheet on mobile).
-  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const scrollCurrentIntoView = useCallback(() => {
     const container = scrollRef.current;
@@ -115,6 +112,144 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
       seek(Array.isArray(value) ? (value[0] ?? 0) : value);
     },
     [seek]
+  );
+
+  // The transport pieces, built once and arranged differently per breakpoint.
+  // Chips follow the "no caret, the value IS the tappable affordance" pattern
+  // (ui.md): a standard Select stripped of its underline + dropdown icon, with a
+  // renderValue showing the live value. min-height 44 keeps them touch-friendly.
+  const chipSelectSx = {
+    "& .MuiSelect-select": {
+      py: 0.5,
+      px: 1,
+      minHeight: "44px !important",
+      display: "flex",
+      alignItems: "center",
+      gap: 0.5,
+    },
+  } as const;
+
+  const speedChip = (
+    <Select
+      variant="standard"
+      disableUnderline
+      IconComponent={() => null}
+      value={rate}
+      onChange={(e) => {
+        setRate(Number(e.target.value));
+      }}
+      aria-label={t("audiobook.speed")}
+      renderValue={(v) => (
+        <Typography component="span" variant="body2" fontWeight={700}>
+          {`${v}×`}
+        </Typography>
+      )}
+      sx={chipSelectSx}
+    >
+      {RATES.map((r) => (
+        <MenuItem key={r} value={r}>
+          {r}×
+        </MenuItem>
+      ))}
+    </Select>
+  );
+
+  const sleepActive = sleepRemainingMin > 0;
+  const sleepChip = (
+    <Select
+      variant="standard"
+      disableUnderline
+      IconComponent={() => null}
+      value={sleepMinutes}
+      onChange={(e) => {
+        setSleepTimer(Number(e.target.value));
+      }}
+      aria-label={t("audiobook.sleepTimer")}
+      renderValue={() =>
+        sleepActive ? (
+          <Typography
+            component="span"
+            variant="body2"
+            fontWeight={700}
+            color="primary"
+            sx={{ display: "flex", alignItems: "center", gap: 0.5 }}
+          >
+            <Bedtime sx={{ fontSize: 20 }} />
+            {t("audiobook.sleepMinutes", { n: sleepRemainingMin })}
+          </Typography>
+        ) : (
+          <Bedtime sx={{ fontSize: 22, color: "text.secondary" }} />
+        )
+      }
+      sx={chipSelectSx}
+    >
+      <MenuItem value={0}>{t("audiobook.sleepOff")}</MenuItem>
+      {SLEEP_MINUTES.map((m) => (
+        <MenuItem key={m} value={m}>
+          {t("audiobook.sleepMinutes", { n: m })}
+        </MenuItem>
+      ))}
+    </Select>
+  );
+
+  const followBtn = (
+    <IconButton
+      aria-label={following ? t("audiobook.following") : t("audiobook.follow")}
+      onClick={() => (following ? setFollowing(false) : jumpToCurrent())}
+      color={following ? "primary" : "default"}
+      sx={{ width: 50, height: 50 }}
+    >
+      <MyLocation sx={{ fontSize: 29 }} />
+    </IconButton>
+  );
+
+  const mainCluster = (
+    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0.25 }}>
+      <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev} sx={{ width: 50, height: 50 }}>
+        <SkipPrevious sx={{ fontSize: 33 }} />
+      </IconButton>
+      <IconButton aria-label={t("audiobook.skipBack")} onClick={() => skip(-10)} sx={{ width: 50, height: 50 }}>
+        <Replay10 sx={{ fontSize: 30 }} />
+      </IconButton>
+      <IconButton
+        onClick={togglePlay}
+        disabled={loading}
+        color="primary"
+        aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
+        sx={{ width: 58, height: 58 }}
+      >
+        {loading ? <CircularProgress size={32} /> : playing ? <Pause sx={{ fontSize: 38 }} /> : <PlayArrow sx={{ fontSize: 38 }} />}
+      </IconButton>
+      <IconButton aria-label={t("audiobook.skipForward")} onClick={() => skip(10)} sx={{ width: 50, height: 50 }}>
+        <Forward10 sx={{ fontSize: 30 }} />
+      </IconButton>
+      <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 50, height: 50 }}>
+        <SkipNext sx={{ fontSize: 33 }} />
+      </IconButton>
+    </Box>
+  );
+
+  // iPhone: two rows — a secondary chips/follow row above the big play cluster.
+  // Desktop/iPad: one row — main cluster optically centred, speed+follow pinned
+  // absolute-left, sleep absolute-right.
+  const transportControls = isMobile ? (
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        {speedChip}
+        {followBtn}
+        {sleepChip}
+      </Box>
+      {mainCluster}
+    </Box>
+  ) : (
+    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", position: "relative", minHeight: 58 }}>
+      <Box sx={{ position: "absolute", left: 0, display: "flex", alignItems: "center", gap: 0.25 }}>
+        {speedChip}
+        {followBtn}
+      </Box>
+      {mainCluster}
+      <Box sx={{ position: "absolute", right: 0, display: "flex", alignItems: "center" }}>{sleepChip}</Box>
+    </Box>
   );
 
   return (
@@ -213,102 +348,8 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
             {fmtTime(duration)}
           </Typography>
         </Box>
-        {/* Transport: follow pinned absolute-left so the play cluster stays
-            optically centred; touch-sized controls (from the sizing sweep). */}
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0.25, position: "relative", minHeight: 58 }}>
-          <IconButton
-            aria-label={following ? t("audiobook.following") : t("audiobook.follow")}
-            onClick={() => (following ? setFollowing(false) : jumpToCurrent())}
-            color={following ? "primary" : "default"}
-            sx={{ position: "absolute", left: 0, width: 50, height: 50 }}
-          >
-            <MyLocation sx={{ fontSize: 29 }} />
-          </IconButton>
-          <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev} sx={{ width: 50, height: 50 }}>
-            <SkipPrevious sx={{ fontSize: 33 }} />
-          </IconButton>
-          <IconButton aria-label={t("audiobook.skipBack")} onClick={() => skip(-10)} sx={{ width: 50, height: 50 }}>
-            <Replay10 sx={{ fontSize: 30 }} />
-          </IconButton>
-          <IconButton
-            onClick={togglePlay}
-            disabled={loading}
-            color="primary"
-            aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
-            sx={{ width: 58, height: 58 }}
-          >
-            {loading ? <CircularProgress size={32} /> : playing ? <Pause sx={{ fontSize: 38 }} /> : <PlayArrow sx={{ fontSize: 38 }} />}
-          </IconButton>
-          <IconButton aria-label={t("audiobook.skipForward")} onClick={() => skip(10)} sx={{ width: 50, height: 50 }}>
-            <Forward10 sx={{ fontSize: 30 }} />
-          </IconButton>
-          <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 50, height: 50 }}>
-            <SkipNext sx={{ fontSize: 33 }} />
-          </IconButton>
-          {/* Settings gear — pinned absolute-right (balances the follow button on
-              the left); opens the playback-settings sheet (speed + sleep). */}
-          <IconButton
-            aria-label={t("audiobook.settings")}
-            onClick={() => setSettingsOpen(true)}
-            sx={{ position: "absolute", right: 0, width: 50, height: 50 }}
-          >
-            <SettingsIcon sx={{ fontSize: 27 }} />
-          </IconButton>
-        </Box>
+        {transportControls}
       </Box>
-
-      {/* Playback settings — the shared BottomSheet (DetentSheet momentum sheet
-          on mobile, centred Dialog on desktop), the same affordance as cowboy's
-          Settings. Speed + sleep timer as labeled selector rows. */}
-      <BottomSheet open={settingsOpen} onClose={() => setSettingsOpen(false)} title={t("audiobook.settings")}>
-        <Stack spacing={3} sx={{ py: 1 }}>
-          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <Speed fontSize="small" color="action" />
-              <Typography variant="body2">{t("audiobook.speed")}</Typography>
-            </Stack>
-            <Select
-              size="small"
-              value={rate}
-              onChange={(e) => {
-                setRate(Number(e.target.value));
-              }}
-              aria-label={t("audiobook.speed")}
-              renderValue={(v) => `${v}×`}
-              sx={{ minWidth: 120 }}
-            >
-              {RATES.map((r) => (
-                <MenuItem key={r} value={r}>
-                  {r}×
-                </MenuItem>
-              ))}
-            </Select>
-          </Stack>
-          <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <Bedtime fontSize="small" color="action" />
-              <Typography variant="body2">{t("audiobook.sleepTimer")}</Typography>
-            </Stack>
-            <Select
-              size="small"
-              value={sleepMinutes}
-              onChange={(e) => {
-                setSleepTimer(Number(e.target.value));
-              }}
-              aria-label={t("audiobook.sleepTimer")}
-              renderValue={(v) => (v > 0 ? t("audiobook.sleepMinutes", { n: v }) : t("audiobook.sleepOff"))}
-              sx={{ minWidth: 120 }}
-            >
-              <MenuItem value={0}>{t("audiobook.sleepOff")}</MenuItem>
-              {SLEEP_MINUTES.map((m) => (
-                <MenuItem key={m} value={m}>
-                  {t("audiobook.sleepMinutes", { n: m })}
-                </MenuItem>
-              ))}
-            </Select>
-          </Stack>
-        </Stack>
-      </BottomSheet>
     </Box>
   );
 }

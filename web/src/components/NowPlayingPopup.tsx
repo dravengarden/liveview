@@ -25,6 +25,10 @@ import { AudiobookPlayer } from "./AudiobookPlayer";
 interface NowPlayingPopupProps {
   contentMaxWidth: number;
   lineHeight: number;
+  /** The shared reading-settings affordance (gear + its own theme/font/width
+   *  sheet), rendered in the popup header so appearance can be changed while
+   *  listening — the same dialog as the book reader. */
+  settings: React.ReactNode;
 }
 
 /** Stable hue from a slug → a calm gradient stand-in cover (mirrors the shelf
@@ -122,7 +126,7 @@ function ChapterList({ onPick }: { onPick?: () => void }): React.JSX.Element {
  * centered card over a dimmed scrim (no need to bury the whole desktop for a
  * narrow read-along column). Esc / scrim / the ⌄ button collapse it.
  */
-export function NowPlayingPopup({ contentMaxWidth, lineHeight }: NowPlayingPopupProps): React.JSX.Element | null {
+export function NowPlayingPopup({ contentMaxWidth, lineHeight, settings }: NowPlayingPopupProps): React.JSX.Element | null {
   const { t } = useI18n();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("lg"));
@@ -185,13 +189,18 @@ export function NowPlayingPopup({ contentMaxWidth, lineHeight }: NowPlayingPopup
           </IconButton>
         </Tooltip>
       )}
+      {/* Reading-settings gear (theme / font / line-height / width / language) —
+          the SAME sheet as the book reader, so appearance can be changed while
+          listening. Carries its own icon + sheet, so it shows on both mobile and
+          desktop. */}
+      {settings}
     </Box>
   );
 
   const body = (
     <>
       {header}
-      <AudiobookPlayer contentMaxWidth={contentMaxWidth} lineHeight={lineHeight} />
+      <AudiobookPlayer contentMaxWidth={contentMaxWidth} lineHeight={lineHeight} isMobile={isMobile} />
     </>
   );
 

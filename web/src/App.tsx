@@ -772,6 +772,7 @@ export function App(): React.JSX.Element {
         <NowPlayingPopup
           contentMaxWidth={menuBarSettings.contentMaxWidth}
           lineHeight={menuBarSettings.lineHeight}
+          settings={settingsButton}
         />
         <Snackbar
           open={notice !== null}

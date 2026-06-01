@@ -74,8 +74,12 @@ export interface AudioPlayer {
   seekToSentence: (idx: number) => void;
   /** Jump to a chapter by queue index and play it (the popup TOC). */
   goToChapter: (qi: number) => void;
-  /** Sleep timer: minutes until playback auto-pauses (0 = off). */
+  /** Sleep timer: the chosen option in minutes (0 = off). Drives the menu's
+   *  selected highlight; the visible chip uses `sleepRemainingMin` instead. */
   sleepMinutes: number;
+  /** Sleep timer: whole minutes remaining (ceil), counting down only while
+   *  playing (frozen on pause), WeChat-Reading style. 0 = off. */
+  sleepRemainingMin: number;
   /** Arm/replace/cancel the sleep timer (0 cancels). */
   setSleepTimer: (minutes: number) => void;
   setRate: (r: number) => void;
@@ -140,10 +144,15 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   // Listen-plane UI: is the full read-along popup in focus? Default collapsed so
   // a resumed session (rehydrated below) shows only the bar, never auto-expands.
   const [expanded, setExpanded] = useState(false);
-  // Sleep timer: minutes until auto-pause (0 = off). The pending timeout id lives
-  // in a ref so it survives re-renders and can be cleared/replaced.
+  // Sleep timer (WeChat-Reading style): the chosen option (for the menu
+  // highlight) plus a remaining-minutes display that counts down ONLY while
+  // playing. The live seconds-remaining + last-tick timestamp live in refs so
+  // the once-attached timeupdate handler can decrement without re-subscribing.
   const [sleepMinutes, setSleepMinutes] = useState(0);
-  const sleepTimerRef = useRef<number | null>(null);
+  const [sleepRemainingMin, setSleepRemainingMin] = useState(0);
+  const sleepRemainingRef = useRef(0); // live seconds remaining
+  const lastSleepTickRef = useRef(0); // Date.now() of last decrement; 0 = reseed, don't count
+  const lastSleepPutRef = useRef(0); // throttle for the server save of remaining
 
   // Refs the once-attached <audio> listeners read without re-subscribing.
   const marksRef = useRef<Mark[]>([]);
@@ -269,23 +278,18 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     [goTo]
   );
 
-  // Sleep timer: auto-pause after N minutes (wall-clock from when armed). Picking
-  // a new value restarts the countdown; 0 cancels it. Pauses (not stops) so the
-  // chapter can be resumed where it left off.
+  // Sleep timer: arm N minutes of remaining time (0 cancels). The countdown only
+  // advances while playing (driven by the timeupdate handler), so it freezes on
+  // pause — WeChat-Reading style. Pauses (not stops) at zero so the chapter
+  // resumes where it left off. lastSleepTickRef = 0 means "reseed on the next
+  // playing tick", so the paused/armed gap before play isn't counted.
   const setSleepTimer = useCallback((minutes: number) => {
-    if (sleepTimerRef.current !== null) {
-      window.clearTimeout(sleepTimerRef.current);
-      sleepTimerRef.current = null;
-    }
     setSleepMinutes(minutes);
     persistSetting("audio.sleepMinutes", String(minutes));
-    if (minutes > 0) {
-      sleepTimerRef.current = window.setTimeout(() => {
-        audioRef.current?.pause();
-        sleepTimerRef.current = null;
-        setSleepMinutes(0);
-      }, minutes * 60_000);
-    }
+    sleepRemainingRef.current = minutes * 60;
+    setSleepRemainingMin(minutes);
+    lastSleepTickRef.current = 0;
+    persistSetting("audio.sleepRemaining", String(minutes * 60));
   }, [persistSetting]);
 
   // Attach the element's listeners ONCE. They read refs so they never go stale.
@@ -319,6 +323,39 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
         const next = queueRef.current[queueIndexRef.current + 1];
         if (next) void fetch(`/api/marks?${query(next.path, np.lang, np.rendition)}`).catch(() => {});
       }
+      // Sleep-timer countdown. timeupdate fires only while playing, so pausing
+      // naturally freezes the countdown — we just track real elapsed time
+      // between ticks (reseeding after a pause/arm so the gap isn't charged).
+      if (sleepRemainingRef.current > 0) {
+        const now = Date.now();
+        if (lastSleepTickRef.current === 0) {
+          lastSleepTickRef.current = now; // first tick after arm/resume: reseed, no decrement
+        } else {
+          const dt = (now - lastSleepTickRef.current) / 1000;
+          lastSleepTickRef.current = now;
+          const remaining = sleepRemainingRef.current - dt;
+          if (remaining <= 0) {
+            sleepRemainingRef.current = 0;
+            lastSleepTickRef.current = 0;
+            setSleepRemainingMin(0);
+            setSleepMinutes(0);
+            audio.pause();
+            putServerSetting("audio.sleepRemaining", "0");
+            putServerSetting("audio.sleepMinutes", "0");
+          } else {
+            sleepRemainingRef.current = remaining;
+            const mins = Math.ceil(remaining / 60);
+            // Only re-render when the displayed minute actually changes (the
+            // handler fires ~4×/s).
+            setSleepRemainingMin((prev) => (prev === mins ? prev : mins));
+            // Throttle the server save of remaining to ~once/5s.
+            if (now - lastSleepPutRef.current > 5000) {
+              lastSleepPutRef.current = now;
+              putServerSetting("audio.sleepRemaining", String(Math.round(remaining)));
+            }
+          }
+        }
+      }
     };
     const onMeta = (): void => {
       setDuration(audio.duration);
@@ -332,6 +369,13 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       if (nowPlayingRef.current && audio.currentTime > 0) {
         lastPosPutRef.current = Date.now();
         putServerSetting("audio.pos", String(audio.currentTime));
+      }
+      // Freeze the sleep countdown: reseed so the paused gap isn't charged on
+      // resume, and flush the remaining seconds so another device picks up the
+      // frozen value.
+      lastSleepTickRef.current = 0;
+      if (sleepRemainingRef.current > 0) {
+        putServerSetting("audio.sleepRemaining", String(Math.round(sleepRemainingRef.current)));
       }
     };
     const onEnded = (): void => {
@@ -384,15 +428,21 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   }, []);
 
   // Restore server-persisted player settings once on mount (rate + sleep). The
-  // rate is applied to the audio element via setRate. The sleep duration is only
-  // restored as the displayed selection (raw setSleepMinutes) — no live
-  // countdown starts until playback (see the arm-on-play effect below).
+  // rate is applied to the audio element via setRate. The sleep timer is
+  // restored as remaining SECONDS (frozen until playback resumes the countdown),
+  // plus the chosen option for the menu highlight.
   useEffect(() => {
     void getServerSettings().then((s) => {
       const r = Number(s["audio.rate"]);
       if (Number.isFinite(r) && r > 0) setRate(r);
-      const sm = Number(s["audio.sleepMinutes"]);
-      if (Number.isFinite(sm) && sm > 0) setSleepMinutes(sm);
+      const sr = Number(s["audio.sleepRemaining"]);
+      const smChoice = Number(s["audio.sleepMinutes"]);
+      if (Number.isFinite(sr) && sr > 0) {
+        sleepRemainingRef.current = sr;
+        setSleepRemainingMin(Math.ceil(sr / 60));
+        if (Number.isFinite(smChoice) && smChoice > 0) setSleepMinutes(smChoice);
+        lastSleepTickRef.current = 0; // counts down once playback starts (frozen until then)
+      }
       // Reconcile the resume pointer (server wins on cross-device). Only reload
       // when it actually differs from what the localStorage effect already
       // rehydrated, so an identical session doesn't re-fetch the chapter.
@@ -424,16 +474,6 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // Arm the restored sleep duration once the user actually starts playing, so a
-  // resumed selection takes effect without counting down while paused. The
-  // `=== null` guard (setSleepTimer sets the ref to a timeout id) prevents
-  // re-arming on every render.
-  useEffect(() => {
-    if (playing && sleepMinutes > 0 && sleepTimerRef.current === null) {
-      setSleepTimer(sleepMinutes);
-    }
-  }, [playing, sleepMinutes, setSleepTimer]);
 
   // OS / lock-screen / headphone controls. Metadata follows the chapter; the
   // handlers are wired once.
@@ -547,11 +587,11 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     setQueueIndex(-1);
     queueIndexRef.current = -1;
     setExpanded(false);
-    if (sleepTimerRef.current !== null) {
-      window.clearTimeout(sleepTimerRef.current);
-      sleepTimerRef.current = null;
-    }
+    sleepRemainingRef.current = 0;
+    lastSleepTickRef.current = 0;
+    setSleepRemainingMin(0);
     setSleepMinutes(0);
+    putServerSetting("audio.sleepRemaining", "0");
     localStorage.removeItem(SESSION_KEY);
     // Clear the server-side resume pointer too, so a stopped session doesn't
     // resurrect on this or another device (empty value clears the key).
@@ -583,6 +623,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       seekToSentence,
       goToChapter,
       sleepMinutes,
+      sleepRemainingMin,
       setSleepTimer,
       setRate,
       nextChapter,
@@ -603,6 +644,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       queue,
       queueIndex,
       sleepMinutes,
+      sleepRemainingMin,
       setSleepTimer,
       playChapter,
       togglePlay,
