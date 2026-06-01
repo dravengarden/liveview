@@ -200,7 +200,7 @@ export function NowPlayingPopup({ contentMaxWidth, lineHeight, settings }: NowPl
   const body = (
     <>
       {header}
-      <AudiobookPlayer contentMaxWidth={contentMaxWidth} lineHeight={lineHeight} isMobile={isMobile} />
+      <AudiobookPlayer contentMaxWidth={contentMaxWidth} lineHeight={lineHeight} />
     </>
   );
 

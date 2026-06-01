@@ -25,9 +25,6 @@ import { useI18n } from "@/i18n";
 interface AudiobookPlayerProps {
   contentMaxWidth: number;
   lineHeight: number;
-  /** iPhone-class layout (from NowPlayingPopup's breakpoint): controls stack
-   *  into two rows; desktop/iPad keeps a single centred row. */
-  isMobile: boolean;
 }
 
 const RATES = [0.75, 1, 1.25, 1.5, 2, 2.25, 2.5, 2.75, 3];
@@ -41,11 +38,22 @@ function fmtTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+/** Compact sleep-timer label: 15m / 60→1h / 90→1h30m. Used for both the menu
+ *  options and the live remaining display. */
+function fmtSleep(min: number): string {
+  if (min >= 60) {
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return m === 0 ? `${h}h` : `${h}h${m}m`;
+  }
+  return `${min}m`;
+}
+
 /** The full read-along reader for the currently-playing chapter: the spoken text
  *  with the narrated sentence highlighted, an explicit (cancelable) follow mode,
  *  and the transport. All playback state comes from the root audio engine, so
  *  this view is purely a window onto it — leaving it never stops the audio. */
-export function AudiobookPlayer({ contentMaxWidth, lineHeight, isMobile }: AudiobookPlayerProps): React.JSX.Element {
+export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayerProps): React.JSX.Element {
   const { t } = useI18n();
   const {
     sentences,
@@ -114,18 +122,24 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, isMobile }: Audio
     [seek]
   );
 
-  // The transport pieces, built once and arranged differently per breakpoint.
+  // The transport pieces, built once and arranged into a single row.
   // Chips follow the "no caret, the value IS the tappable affordance" pattern
   // (ui.md): a standard Select stripped of its underline + dropdown icon, with a
-  // renderValue showing the live value. min-height 44 keeps them touch-friendly.
+  // renderValue showing the live value. FIXED width + centred content so the
+  // value changing (1× ↔ 2.25×, 90m ↔ 1m) never shifts the surrounding layout —
+  // the chips are the two "ears" of the centred transport, so any width wobble
+  // would jiggle the whole row.
+  const CHIP_W = 58;
   const chipSelectSx = {
+    width: CHIP_W,
     "& .MuiSelect-select": {
       py: 0.5,
-      px: 1,
+      px: 0,
       minHeight: "44px !important",
       display: "flex",
       alignItems: "center",
-      gap: 0.5,
+      justifyContent: "center",
+      gap: 0.25,
     },
   } as const;
 
@@ -140,7 +154,7 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, isMobile }: Audio
       }}
       aria-label={t("audiobook.speed")}
       renderValue={(v) => (
-        <Typography component="span" variant="body2" fontWeight={700}>
+        <Typography component="span" variant="body2" fontWeight={700} sx={{ fontVariantNumeric: "tabular-nums" }}>
           {`${v}×`}
         </Typography>
       )}
@@ -172,10 +186,10 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, isMobile }: Audio
             variant="body2"
             fontWeight={700}
             color="primary"
-            sx={{ display: "flex", alignItems: "center", gap: 0.5 }}
+            sx={{ display: "flex", alignItems: "center", gap: 0.25, fontVariantNumeric: "tabular-nums" }}
           >
-            <Bedtime sx={{ fontSize: 20 }} />
-            {t("audiobook.sleepMinutes", { n: sleepRemainingMin })}
+            <Bedtime sx={{ fontSize: 18 }} />
+            {fmtSleep(sleepRemainingMin)}
           </Typography>
         ) : (
           <Bedtime sx={{ fontSize: 22, color: "text.secondary" }} />
@@ -186,7 +200,7 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, isMobile }: Audio
       <MenuItem value={0}>{t("audiobook.sleepOff")}</MenuItem>
       {SLEEP_MINUTES.map((m) => (
         <MenuItem key={m} value={m}>
-          {t("audiobook.sleepMinutes", { n: m })}
+          {fmtSleep(m)}
         </MenuItem>
       ))}
     </Select>
@@ -197,9 +211,9 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, isMobile }: Audio
       aria-label={following ? t("audiobook.following") : t("audiobook.follow")}
       onClick={() => (following ? setFollowing(false) : jumpToCurrent())}
       color={following ? "primary" : "default"}
-      sx={{ width: 50, height: 50 }}
+      sx={{ width: 44, height: 44 }}
     >
-      <MyLocation sx={{ fontSize: 29 }} />
+      <MyLocation sx={{ fontSize: 26 }} />
     </IconButton>
   );
 
@@ -229,26 +243,17 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, isMobile }: Audio
     </Box>
   );
 
-  // iPhone: two rows — a secondary chips/follow row above the big play cluster.
-  // Desktop/iPad: one row — main cluster optically centred, speed+follow pinned
-  // absolute-left, sleep absolute-right.
-  const transportControls = isMobile ? (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
-      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        {speedChip}
-        {followBtn}
-        {sleepChip}
-      </Box>
+  // A single control row on every breakpoint: the play cluster centred, with the
+  // speed chip and the sleep chip as the two fixed-width "ears". Follow doesn't
+  // live here — it's an aria-/reading affordance, so it sits at the left of the
+  // scrubber row instead (keeps this row to a width a 375px iPhone fits in one
+  // line). space-between pins the ears to the edges; the cluster stays centred
+  // because both ears are the same fixed width.
+  const transportControls = (
+    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 58 }}>
+      {speedChip}
       {mainCluster}
-    </Box>
-  ) : (
-    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", position: "relative", minHeight: 58 }}>
-      <Box sx={{ position: "absolute", left: 0, display: "flex", alignItems: "center", gap: 0.25 }}>
-        {speedChip}
-        {followBtn}
-      </Box>
-      {mainCluster}
-      <Box sx={{ position: "absolute", right: 0, display: "flex", alignItems: "center" }}>{sleepChip}</Box>
+      {sleepChip}
     </Box>
   );
 
@@ -324,8 +329,13 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, isMobile }: Audio
           pb: "max(calc(env(safe-area-inset-bottom, 0px) - 8px), 4px)",
         }}
       >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
-          <Typography variant="caption" sx={{ minWidth: 40, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          {/* Follow toggle lives on the scrubber row (not the transport row): it
+              governs read-along scrolling, not playback, and parking it here
+              keeps the transport row narrow enough for one line on a 375px
+              iPhone. */}
+          {followBtn}
+          <Typography variant="caption" sx={{ minWidth: 36, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
             {fmtTime(currentTime)}
           </Typography>
           <Slider
