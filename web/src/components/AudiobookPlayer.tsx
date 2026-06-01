@@ -180,15 +180,17 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
       }}
       aria-label={t("audiobook.sleepTimer")}
       renderValue={() =>
+        // Off → just the moon. Armed → only the remaining time (no moon), so the
+        // longest label (e.g. "1h30m") fits the fixed-width chip without being
+        // clipped by the icon.
         sleepActive ? (
           <Typography
             component="span"
             variant="body2"
             fontWeight={700}
             color="primary"
-            sx={{ display: "flex", alignItems: "center", gap: 0.25, fontVariantNumeric: "tabular-nums" }}
+            sx={{ fontVariantNumeric: "tabular-nums" }}
           >
-            <Bedtime sx={{ fontSize: 18 }} />
             {fmtSleep(sleepRemainingMin)}
           </Typography>
         ) : (
