@@ -202,7 +202,14 @@ export function App(): React.JSX.Element {
   // The root audio engine: playback + the popup live above every view, so
   // navigating never stops the audio nor closes the popup. We only need to seed
   // playback (`playChapter`) and raise the popup into focus (`setExpanded`).
-  const { playChapter: audioPlayChapter, setExpanded: setPlayerExpanded } = useAudioPlayer();
+  const { playChapter: audioPlayChapter, setExpanded: setPlayerExpanded, syncNotice } = useAudioPlayer();
+
+  // When a fresh load pulls a newer playback position from another device, the
+  // audio engine raises `syncNotice`; surface it through the shared snackbar
+  // ("已同步…"). Keyed on `seq` so an identical message re-fires the toast.
+  useEffect(() => {
+    if (syncNotice) setNotice(syncNotice.message);
+  }, [syncNotice]);
 
   // The active book is the first path segment; null ⇒ the landing bookshelf.
   const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;

@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { Mark, SpokenContent } from "@/types";
 import { getServerSettings, putServerSetting } from "@/serverSettings";
+import { useI18n } from "@/i18n";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Book-level audio engine.
@@ -86,6 +87,10 @@ export interface AudioPlayer {
   nextChapter: () => void;
   prevChapter: () => void;
   stop: () => void;
+  /** Set when a fresh page load reconciled the resume point to a newer position
+   *  from ANOTHER device — drives the "已同步…" snackbar. `seq` lets an identical
+   *  message re-fire the toast; null until/unless a cross-device sync lands. */
+  syncNotice: { message: string; seq: number } | null;
 }
 
 const RATE_KEY = "lv-audio-rate";
@@ -93,9 +98,32 @@ const SESSION_KEY = "lv-audio-session";
 /** Per-chapter resume position (audio seconds); client-only. */
 const posKey = (path: string, lang: string): string => `lv-audio-pos:${path}:${lang}`;
 
+/** Simple string-valued settings that sync across devices, as
+ *  (serverKey, localStorageKey) pairs — used ONLY to detect a cross-device
+ *  change and toast "已同步设置". Each is owned/applied by its own hook
+ *  (useTheme / useFont / i18n) plus this engine (rate); keep this list in step
+ *  with them. A drift here only mis-fires the toast, never breaks the sync. */
+const SYNCED_SETTING_KEYS: ReadonlyArray<readonly [string, string]> = [
+  ["ui.theme", "lv-theme"],
+  ["ui.font", "lv-font"],
+  ["ui.lang", "lv-lang"],
+  ["audio.rate", RATE_KEY],
+];
+
 /** Warm the next chapter's synthesis this many seconds before the current ends,
  *  so auto-advance doesn't stall on a cold edge-tts cache. */
 const PREFETCH_LEAD_S = 25;
+
+/** A same-chapter resume from another device only "wins" (and toasts) when it's
+ *  meaningfully ahead of this device's local position — a few seconds of drift
+ *  from rounding / last-tick timing shouldn't masquerade as a cross-device sync. */
+const SYNC_POS_LEAD_S = 8;
+
+/** mm:ss for the sync toast. */
+function fmtClock(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
 
 function query(path: string, lang: string, rendition: string): string {
   return `path=${encodeURIComponent(path)}&lang=${encodeURIComponent(lang)}&rendition=${encodeURIComponent(rendition)}`;
@@ -144,6 +172,7 @@ interface PersistedSession {
 const Ctx = createContext<AudioPlayer | null>(null);
 
 export function AudioPlayerProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const { t } = useI18n();
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const [nowPlaying, setNowPlaying] = useState<NowPlaying | null>(null);
@@ -160,6 +189,9 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   const [duration, setDuration] = useState(0);
   const [queue, setQueue] = useState<Track[]>([]);
   const [queueIndex, setQueueIndex] = useState(-1);
+  // Raised once when a fresh load adopts a newer resume point from another
+  // device (see the server-reconcile effect). App reads it to toast "已同步…".
+  const [syncNotice, setSyncNotice] = useState<{ message: string; seq: number } | null>(null);
   // Listen-plane UI: is the full read-along popup in focus? Default collapsed so
   // a resumed session (rehydrated below) shows only the bar, never auto-expands.
   const [expanded, setExpanded] = useState(false);
@@ -455,7 +487,12 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   // restored as remaining SECONDS (frozen until playback resumes the countdown),
   // plus the chosen option for the menu highlight.
   useEffect(() => {
+    // Snapshot the synced settings' local values BEFORE the shared GET resolves
+    // (the per-setting hooks overwrite them on that same resolve), so we can tell
+    // whether the server copy was changed on ANOTHER device.
+    const localSettings = SYNCED_SETTING_KEYS.map(([, ls]) => localStorage.getItem(ls));
     void getServerSettings().then((s) => {
+      let audioSynced = false;
       const r = Number(s["audio.rate"]);
       if (Number.isFinite(r) && r > 0) setRate(r);
       const sr = Number(s["audio.sleepRemaining"]);
@@ -466,33 +503,67 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
         if (Number.isFinite(smChoice) && smChoice > 0) setSleepMinutes(smChoice);
         lastSleepTickRef.current = 0; // counts down once playback starts (frozen until then)
       }
-      // Reconcile the resume pointer (server wins on cross-device). Only reload
-      // when it actually differs from what the localStorage effect already
-      // rehydrated, so an identical session doesn't re-fetch the chapter.
+      // Reconcile the resume pointer (the server reflects the most recent write
+      // from ANY device). Reload when the chapter differs from what the
+      // localStorage effect rehydrated, OR when it's the same chapter but the
+      // server is meaningfully ahead — i.e. another device kept listening past
+      // this one. Either is a genuine cross-device pull, so it also raises the
+      // "已同步…" toast (App renders it via the shared snackbar).
       const raw = s["audio.session"];
       if (raw) {
         try {
           const sess = JSON.parse(raw) as PersistedSession;
-          const cur = nowPlayingRef.current;
-          const differs =
-            !cur ||
-            cur.chapterPath !== sess.nowPlaying.chapterPath ||
-            cur.bookSlug !== sess.nowPlaying.bookSlug;
-          if (sess.nowPlaying && Array.isArray(sess.queue) && differs) {
-            const pos = Number(s["audio.pos"]);
-            if (Number.isFinite(pos) && pos > 0) {
-              // Seed the per-chapter localStorage pos so loadTrack's existing
-              // restore picks it up.
-              localStorage.setItem(
-                posKey(sess.nowPlaying.chapterPath, sess.nowPlaying.lang),
-                String(pos)
-              );
+          if (sess.nowPlaying && Array.isArray(sess.queue)) {
+            const cur = nowPlayingRef.current;
+            const chapterDiffers =
+              !cur ||
+              cur.chapterPath !== sess.nowPlaying.chapterPath ||
+              cur.bookSlug !== sess.nowPlaying.bookSlug;
+            const serverPos = Number(s["audio.pos"]);
+            const localPos = cur
+              ? Number(localStorage.getItem(posKey(cur.chapterPath, cur.lang)) ?? "0")
+              : 0;
+            // Same chapter on both devices, but the server (another device) is
+            // further along → adopt its position rather than this device's. Use a
+            // small lead so timing drift on the same device doesn't false-trigger.
+            const posAhead =
+              !chapterDiffers &&
+              Number.isFinite(serverPos) &&
+              serverPos > localPos + SYNC_POS_LEAD_S;
+            if (chapterDiffers || posAhead) {
+              if (Number.isFinite(serverPos) && serverPos > 0) {
+                // Seed the per-chapter localStorage pos so loadTrack's existing
+                // restore picks it up.
+                localStorage.setItem(
+                  posKey(sess.nowPlaying.chapterPath, sess.nowPlaying.lang),
+                  String(serverPos)
+                );
+              }
+              loadTrack(sess.nowPlaying, sess.queue, sess.queueIndex, false); // PAUSED
+              audioSynced = true;
+              setSyncNotice({
+                seq: Date.now(),
+                message: t("sync.audio", {
+                  book: sess.nowPlaying.bookLabel,
+                  chapter: sess.nowPlaying.chapterLabel,
+                  time: fmtClock(Number.isFinite(serverPos) ? serverPos : 0),
+                }),
+              });
             }
-            loadTrack(sess.nowPlaying, sess.queue, sess.queueIndex, false); // PAUSED
           }
         } catch {
           // ignore a corrupt server session blob
         }
+      }
+      // A simple setting (theme / font / language / rate) changed on another
+      // device → the generic "已同步设置" toast. Audio's richer toast wins when
+      // both moved on the same load.
+      if (!audioSynced) {
+        const changed = SYNCED_SETTING_KEYS.some(([srv], i) => {
+          const v = s[srv];
+          return v != null && v !== localSettings[i];
+        });
+        if (changed) setSyncNotice({ seq: Date.now(), message: t("sync.settings") });
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -655,6 +726,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       nextChapter,
       prevChapter,
       stop,
+      syncNotice,
     }),
     [
       nowPlaying,
@@ -682,6 +754,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       nextChapter,
       prevChapter,
       stop,
+      syncNotice,
     ]
   );
 
