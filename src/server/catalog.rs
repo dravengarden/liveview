@@ -16,6 +16,8 @@ pub struct RenditionMeta {
     pub kind: RenditionKind,
     pub label: String,
     pub default_lang: String,
+    /// audio rendition only — edge-tts voice for on-demand (lazy) synthesis.
+    pub voice: Option<String>,
     pub manifest: bool,
     pub editions: Vec<EditionMeta>,
 }
@@ -72,6 +74,7 @@ impl Catalog {
                     kind: RenditionKind::parse(&r.kind).unwrap_or(RenditionKind::Text),
                     label: r.label,
                     default_lang: r.default_lang,
+                    voice: r.voice,
                     manifest: r.manifest,
                     editions,
                 });

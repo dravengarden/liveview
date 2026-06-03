@@ -52,6 +52,12 @@ pub enum Build {
     Tree(Vec<(String, Build)>),
 }
 
+/// The node hash of a leaf — its content-addressed identity in `merkle_nodes`.
+/// Used by the sync to record "this leaf is applied" for optimistic resume.
+pub fn leaf_hash(l: &Leaf) -> String {
+    hash_leaf(l)
+}
+
 fn hash_leaf(l: &Leaf) -> String {
     let mut h = blake3::Hasher::new();
     h.update(b"leaf\0");

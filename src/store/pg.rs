@@ -62,6 +62,7 @@ pub struct RenditionRow {
     pub kind: String,
     pub label: String,
     pub default_lang: String,
+    pub voice: Option<String>,
     pub manifest: bool,
     pub ord: i32,
 }
@@ -229,7 +230,7 @@ impl PgStore {
 
     pub async fn list_renditions(&self, book_slug: &str) -> Result<Vec<RenditionRow>, sqlx::Error> {
         sqlx::query_as::<_, RenditionRow>(
-            "SELECT kind, label, default_lang, manifest, ord
+            "SELECT kind, label, default_lang, voice, manifest, ord
              FROM renditions WHERE book_slug = $1 ORDER BY ord",
         )
         .bind(book_slug)
@@ -353,6 +354,32 @@ impl PgStore {
         .bind(rel_path)
         .fetch_optional(&self.pool)
         .await
+    }
+
+    /// Record lazily-generated audio blobs onto an existing chapter (the
+    /// on-demand fallback when the backfill hasn't reached it yet).
+    pub async fn set_chapter_audio(
+        &self,
+        book_slug: &str,
+        rendition: &str,
+        lang: &str,
+        rel_path: &str,
+        audio_hash: &str,
+        marks_hash: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE chapters SET audio_hash = $5, marks_hash = $6
+             WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4",
+        )
+        .bind(book_slug)
+        .bind(rendition)
+        .bind(lang)
+        .bind(rel_path)
+        .bind(audio_hash)
+        .bind(marks_hash)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
     }
 
     pub async fn delete_chapter(

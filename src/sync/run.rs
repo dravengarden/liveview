@@ -41,6 +41,8 @@ pub struct SyncCfg {
 pub struct SyncReport {
     pub books: usize,
     pub put: usize,
+    /// Leaves a prior (interrupted) run already applied — skipped this run.
+    pub skipped: usize,
     pub deleted: usize,
     pub orphans_gc: usize,
     pub root: String,
@@ -295,10 +297,34 @@ async fn apply_plan(
     report: &mut SyncReport,
 ) -> Result<(), String> {
     for leaf in &plan.put {
+        // Optimistic resume: a leaf whose node is already recorded was applied by
+        // a prior (possibly interrupted) run — skip its expensive re-apply (the
+        // edge-tts audio especially). This makes the sync resumable per-leaf
+        // instead of all-or-nothing.
+        let node_hash = crate::sync::merkle::leaf_hash(leaf);
+        if store
+            .get_merkle_node(&node_hash)
+            .await
+            .map_err(|e| e.to_string())?
+            .is_some()
+        {
+            report.skipped += 1;
+            continue;
+        }
         let a = applies
             .get(&leaf.path)
             .ok_or_else(|| format!("internal: no apply for {}", leaf.path))?;
         apply_leaf(a, store, obj, cfg).await?;
+        // Commit the leaf node AFTER its content lands (content first, node =
+        // the commit marker), so an interrupted run resumes here.
+        let payload = serde_json::json!({
+            "path": leaf.path, "kind": leaf.kind, "content_hash": leaf.content_hash
+        })
+        .to_string();
+        store
+            .put_merkle_node(&node_hash, "leaf", &payload)
+            .await
+            .map_err(|e| format!("commit leaf node: {e}"))?;
         report.put += 1;
     }
     for leaf in &plan.delete {

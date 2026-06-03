@@ -13,6 +13,10 @@ pub struct AppState {
     pub store: PgStore,
     pub obj: ObjStore,
     pub catalog: RwLock<Catalog>,
+    /// edge-tts executable + default voice for on-demand (lazy) audio synthesis
+    /// when the backfill hasn't pre-generated a chapter yet.
+    pub tts_cmd: String,
+    pub tts_voice: String,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;

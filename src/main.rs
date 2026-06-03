@@ -131,6 +131,7 @@ async fn run_sync(args: cli::SyncArgs) -> Result<(), String> {
     tracing::info!(
         books = report.books,
         put = report.put,
+        skipped = report.skipped,
         deleted = report.deleted,
         orphans_gc = report.orphans_gc,
         root = %report.root,
@@ -138,8 +139,8 @@ async fn run_sync(args: cli::SyncArgs) -> Result<(), String> {
     );
     let root_short = &report.root[..report.root.len().min(12)];
     println!(
-        "sync: {} books, {} put, {} deleted, {} gc'd, root {root_short}",
-        report.books, report.put, report.deleted, report.orphans_gc
+        "sync: {} books, {} put, {} skipped, {} deleted, {} gc'd, root {root_short}",
+        report.books, report.put, report.skipped, report.deleted, report.orphans_gc
     );
     Ok(())
 }
@@ -279,11 +280,14 @@ async fn run(cli: Cli, server: config::ServerCfg) {
     tracing::info!(books = catalog.books.len(), "catalog loaded from postgres");
 
     let (tx, _rx) = broadcast::channel::<String>(64);
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let state: SharedState = Arc::new(AppState {
         tx,
         store,
         obj,
         catalog: RwLock::new(catalog),
+        tts_cmd: env("LIVEVIEW_EDGE_TTS_CMD").unwrap_or_else(|| "edge-tts".to_string()),
+        tts_voice: env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string()),
     });
 
     // Reload the catalog + nudge clients when `liveview sync` issues NOTIFY.
@@ -1049,8 +1053,12 @@ async fn api_audio(
     else {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     };
-    let Some(hash) = row.audio_hash else {
-        return (StatusCode::NOT_FOUND, "no audio for chapter").into_response();
+    let hash = match ensure_chapter_audio(&state, &row).await {
+        Ok((audio_hash, _)) => audio_hash,
+        Err(e) => {
+            tracing::warn!(error = %e, "on-demand audio synth failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "audio synth").into_response();
+        }
     };
     let Ok(data) = state.obj.get(&hash).await else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response();
@@ -1102,13 +1110,70 @@ async fn api_marks(
     else {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     };
-    let Some(hash) = row.marks_hash else {
-        return (StatusCode::NOT_FOUND, "no marks for chapter").into_response();
+    let hash = match ensure_chapter_audio(&state, &row).await {
+        Ok((_, marks_hash)) => marks_hash,
+        Err(e) => {
+            tracing::warn!(error = %e, "on-demand audio synth failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "audio synth").into_response();
+        }
     };
     match state.obj.get(&hash).await {
         Ok(bytes) => ([(header::CONTENT_TYPE, "application/json")], bytes).into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "read marks").into_response(),
     }
+}
+
+/// On-demand audio fallback (ISR-style): if the backfill hasn't pre-generated
+/// this chapter's audio yet, synthesize it now (edge-tts) from the stored spoken
+/// markdown, store mp3 + marks in rustfs, and record them on the chapter.
+/// Already-generated chapters are a no-op. Returns `(audio_hash, marks_hash)`.
+async fn ensure_chapter_audio(
+    state: &AppState,
+    row: &store::pg::ChapterRow,
+) -> Result<(String, String), String> {
+    if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash) {
+        return Ok((a.clone(), m.clone()));
+    }
+    let md = row.markdown.clone().unwrap_or_default();
+    let sentences = server::spoken::spoken_sentences(&md);
+    let voice = {
+        let cat = state.catalog.read().await;
+        cat.book(&row.book_slug)
+            .and_then(|b| b.rendition(RenditionKind::Audio))
+            .and_then(|r| r.voice.clone())
+            .unwrap_or_else(|| state.tts_voice.clone())
+    };
+    let (mp3, marks) = server::audio::synthesize(&state.tts_cmd, &voice, &sentences).await?;
+    let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
+    let audio_hash = store_blob(state, mp3, "audio/mpeg").await?;
+    let marks_hash = store_blob(state, marks_json, "application/json").await?;
+    state
+        .store
+        .set_chapter_audio(
+            &row.book_slug,
+            "audio",
+            &row.lang,
+            &row.rel_path,
+            &audio_hash,
+            &marks_hash,
+        )
+        .await
+        .map_err(|e| format!("record audio: {e}"))?;
+    Ok((audio_hash, marks_hash))
+}
+
+/// Hash + `put_if_absent` a blob to rustfs and record the asset row. Returns the
+/// content hash (the rustfs key).
+async fn store_blob(state: &AppState, bytes: Vec<u8>, mime: &str) -> Result<String, String> {
+    let hash = blake3::hash(&bytes).to_hex().to_string();
+    let size = bytes.len() as i64;
+    state.obj.put_if_absent(&hash, bytes, mime).await?;
+    state
+        .store
+        .upsert_asset(&hash, mime, size)
+        .await
+        .map_err(|e| format!("upsert asset: {e}"))?;
+    Ok(hash)
 }
 
 /// Raw binary (image / PDF) bytes for a chapter, streamed from rustfs.
