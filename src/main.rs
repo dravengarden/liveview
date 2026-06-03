@@ -93,16 +93,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        // Default — run the server.
+        // Default — run the server. It reads only the `[server]` block (host /
+        // port / open) from the config; content comes from pg + rustfs, so it
+        // never resolves or touches the corpus filesystem.
         None => {
-            let resolved = match build_resolved(&cli) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("config error: {e}");
-                    std::process::exit(2);
-                }
-            };
-            rt.block_on(run(cli, resolved));
+            let server = load_server_cfg(cli.config.as_deref());
+            rt.block_on(run(cli, server));
         }
     }
 }
@@ -237,12 +233,12 @@ async fn broadcast_tree(state: &AppState) {
     }
 }
 
-async fn run(cli: Cli, resolved: Resolved) {
-    // The corpus config still supplies the server's host/port/open; content
-    // comes from the stores, not the filesystem.
-    let host = cli.host.clone().unwrap_or(resolved.host);
-    let port = cli.port.or(resolved.port);
-    let should_open = cli.open || resolved.open;
+async fn run(cli: Cli, server: config::ServerCfg) {
+    // The config's [server] block supplies host/port/open; content comes from
+    // the stores, not the filesystem.
+    let host = cli.host.clone().unwrap_or(server.host);
+    let port = cli.port.or(server.port);
+    let should_open = cli.open || server.open;
 
     // Connect the content stores (env-configured; the systemd unit sets these).
     let conf = match store_config_from_env() {
@@ -369,12 +365,29 @@ async fn run(cli: Cli, resolved: Resolved) {
         .expect("Server error");
 }
 
-fn build_resolved(cli: &Cli) -> Result<Resolved, String> {
-    resolve_config(cli.config.as_deref())
+/// Load the `[server]` settings (host/port/open) from the config WITHOUT
+/// resolving the corpus — the server is filesystem-free (no /home access under
+/// `ProtectHome`). Any load error falls back to defaults; the systemd unit
+/// passes `--host`/`--port` explicitly anyway.
+fn load_server_cfg(config: Option<&Path>) -> config::ServerCfg {
+    let path = match config {
+        Some(p) => Some(p.to_path_buf()),
+        None => std::env::current_dir().ok().and_then(|d| auto_discover(&d)),
+    };
+    let Some(path) = path else {
+        return config::ServerCfg::default();
+    };
+    match Config::load(&path) {
+        Ok(c) => c.server,
+        Err(e) => {
+            tracing::warn!(error = %e, "config load failed; using server defaults");
+            config::ServerCfg::default()
+        }
+    }
 }
 
 /// Resolve a corpus config: explicit path → cwd auto-discovery → implicit
-/// single-mount fallback. Shared by the server and `liveview sync`.
+/// single-mount fallback. Used by `liveview sync` (which needs the full corpus).
 fn resolve_config(config: Option<&Path>) -> Result<Resolved, String> {
     if let Some(path) = config {
         return load_explicit(path);

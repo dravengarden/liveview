@@ -314,15 +314,14 @@ impl BookState {
     }
 }
 
-/// Fully resolved server config: per-process state extracted from `Config`
-/// plus per-edition globsets compiled and source paths canonicalized.
+/// The resolved corpus for `liveview sync` (globsets compiled, source paths
+/// canonicalized). Only `books` is consumed; the `[server]` fields ride along
+/// from `Config` but the server reads them via `ServerCfg` directly (sync has
+/// no use for host/port/open/debounce).
+#[allow(dead_code)]
 pub struct Resolved {
     pub host: String,
     pub port: Option<u16>,
-    // Parsed from `[server].debounce_ms` for config back-compat; the live-reload
-    // file-watcher is gone (content now deploys via `liveview sync`), so nothing
-    // reads it.
-    #[allow(dead_code)]
     pub debounce_ms: u64,
     pub open: bool,
     pub books: Vec<BookState>,
