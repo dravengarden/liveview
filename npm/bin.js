@@ -3,7 +3,7 @@
 const { spawn } = require("child_process");
 const path = require("path");
 
-const BIN_NAME = process.platform === "win32" ? "lv.exe" : "lv";
+const BIN_NAME = process.platform === "win32" ? "liveview.exe" : "liveview";
 const binPath = path.join(__dirname, "bin", BIN_NAME);
 
 const child = spawn(binPath, process.argv.slice(2), {

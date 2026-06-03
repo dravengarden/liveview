@@ -2,6 +2,8 @@ mod cli;
 mod config;
 mod server;
 mod shared;
+mod store;
+mod sync;
 
 use axum::{
     body::Body,
@@ -12,16 +14,17 @@ use axum::{
     Extension, Router,
 };
 use clap::Parser;
-use cli::Cli;
-use config::{auto_discover, implicit_resolved, Config, Resolved};
-use server::progress::{ProgressEntry, ProgressStore};
+use cli::{Cli, Command};
+use config::{auto_discover, implicit_resolved, Config, RenditionKind, Resolved};
+use server::catalog::Catalog;
 use server::state::{AppState, SharedState};
-use shared::{FileContent, FileType};
+use shared::{FileContent, FileType, TreeNode, WsMessage};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use store::pg::{PgStore, ProgressEntry};
+use sync::objstore::ObjStore;
 use tokio::sync::{broadcast, RwLock};
-use tokio_util::io::ReaderStream;
 use tracing_subscriber::EnvFilter;
 
 #[cfg(feature = "embedded")]
@@ -80,66 +83,215 @@ fn main() {
     };
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
-    let resolved = match build_resolved(&cli) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("config error: {e}");
-            std::process::exit(2);
-        }
-    };
-
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    rt.block_on(run(cli, resolved));
+
+    match cli.command.clone() {
+        // `liveview sync` — reconcile the corpus into pg + rustfs.
+        Some(Command::Sync(args)) => {
+            if let Err(e) = rt.block_on(run_sync(args)) {
+                eprintln!("sync error: {e}");
+                std::process::exit(1);
+            }
+        }
+        // Default — run the server.
+        None => {
+            let resolved = match build_resolved(&cli) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("config error: {e}");
+                    std::process::exit(2);
+                }
+            };
+            rt.block_on(run(cli, resolved));
+        }
+    }
+}
+
+/// `liveview sync` entry point: resolve the corpus, gather connection params,
+/// reconcile into pg + rustfs.
+async fn run_sync(args: cli::SyncArgs) -> Result<(), String> {
+    let resolved = resolve_config(args.config.as_deref())?;
+    let s3_access_key = read_cred(
+        "access",
+        args.s3_access_key.clone(),
+        args.s3_access_key_file.as_deref(),
+    )?;
+    let s3_secret_key = read_cred(
+        "secret",
+        args.s3_secret_key.clone(),
+        args.s3_secret_key_file.as_deref(),
+    )?;
+    let cfg = sync::run::SyncCfg {
+        database_url: args.database_url,
+        s3_endpoint: args.s3_endpoint,
+        s3_access_key,
+        s3_secret_key,
+        s3_bucket: args.s3_bucket,
+        tts_cmd: args.edge_tts_cmd,
+        tts_voice: args.tts_voice,
+        render_version: args.render_version,
+    };
+    let report = sync::run::run(&resolved, &cfg).await?;
+    tracing::info!(
+        books = report.books,
+        put = report.put,
+        deleted = report.deleted,
+        orphans_gc = report.orphans_gc,
+        root = %report.root,
+        "sync complete"
+    );
+    let root_short = &report.root[..report.root.len().min(12)];
+    println!(
+        "sync: {} books, {} put, {} deleted, {} gc'd, root {root_short}",
+        report.books, report.put, report.deleted, report.orphans_gc
+    );
+    Ok(())
+}
+
+/// Resolve an S3 credential: a key file (rustfs writes its keys to files) wins
+/// over a direct value; error if neither is given.
+fn read_cred(which: &str, direct: Option<String>, file: Option<&Path>) -> Result<String, String> {
+    if let Some(f) = file {
+        return std::fs::read_to_string(f)
+            .map(|s| s.trim().to_string())
+            .map_err(|e| format!("read s3 {which} key file {}: {e}", f.display()));
+    }
+    direct.ok_or_else(|| {
+        format!("missing s3 {which} key (set --s3-{which}-key or --s3-{which}-key-file)")
+    })
+}
+
+/// Server-side content-store connection params, from the env the systemd unit
+/// sets. There is no filesystem fallback — `DATABASE_URL` is required.
+struct StoreConfig {
+    database_url: String,
+    s3_endpoint: String,
+    s3_bucket: String,
+    s3_access_key: String,
+    s3_secret_key: String,
+}
+
+fn store_config_from_env() -> Result<StoreConfig, String> {
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let database_url = env("DATABASE_URL").ok_or("DATABASE_URL not set")?;
+    let s3_endpoint = env("LIVEVIEW_S3_ENDPOINT").unwrap_or_else(|| "http://127.0.0.1:9001".into());
+    let s3_bucket = env("LIVEVIEW_S3_BUCKET").unwrap_or_else(|| "liveview".into());
+    let access_file = env("LIVEVIEW_S3_ACCESS_KEY_FILE");
+    let secret_file = env("LIVEVIEW_S3_SECRET_KEY_FILE");
+    let s3_access_key = read_cred(
+        "access",
+        env("LIVEVIEW_S3_ACCESS_KEY"),
+        access_file.as_deref().map(Path::new),
+    )?;
+    let s3_secret_key = read_cred(
+        "secret",
+        env("LIVEVIEW_S3_SECRET_KEY"),
+        secret_file.as_deref().map(Path::new),
+    )?;
+    Ok(StoreConfig {
+        database_url,
+        s3_endpoint,
+        s3_bucket,
+        s3_access_key,
+        s3_secret_key,
+    })
+}
+
+/// Listen for `liveview sync`'s `NOTIFY liveview_reload`; on each, reload the
+/// catalog and broadcast the new sidebar tree so open readers refresh. Survives
+/// connection drops (reconnect loop) so a postgres restart doesn't kill it.
+fn spawn_reload_listener(state: SharedState, database_url: String) {
+    tokio::spawn(async move {
+        loop {
+            match sqlx::postgres::PgListener::connect(&database_url).await {
+                Ok(mut listener) => {
+                    if listener.listen("liveview_reload").await.is_ok() {
+                        while listener.recv().await.is_ok() {
+                            match Catalog::load(&state.store).await {
+                                Ok(cat) => {
+                                    *state.catalog.write().await = cat;
+                                    broadcast_tree(&state).await;
+                                    tracing::info!("catalog reloaded after sync");
+                                }
+                                Err(e) => tracing::warn!(error = %e, "catalog reload failed"),
+                            }
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "reload listener connect failed"),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    });
+}
+
+/// Broadcast the current text sidebar tree as a `TreeUpdate` (the same shape
+/// the old file-watcher sent) so connected clients refresh after a sync.
+async fn broadcast_tree(state: &AppState) {
+    if let Ok(Some(json)) = state.store.get_site_tree("text").await {
+        if let Ok(tree) = serde_json::from_str::<Vec<TreeNode>>(&json) {
+            if let Ok(s) = serde_json::to_string(&WsMessage::TreeUpdate { tree }) {
+                let _ = state.tx.send(s);
+            }
+        }
+    }
 }
 
 async fn run(cli: Cli, resolved: Resolved) {
+    // The corpus config still supplies the server's host/port/open; content
+    // comes from the stores, not the filesystem.
     let host = cli.host.clone().unwrap_or(resolved.host);
     let port = cli.port.or(resolved.port);
     let should_open = cli.open || resolved.open;
 
-    let initial_tree =
-        server::tree::build_virtual_tree(&resolved.books, config::RenditionKind::Text);
+    // Connect the content stores (env-configured; the systemd unit sets these).
+    let conf = match store_config_from_env() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("content store config error: {e}");
+            std::process::exit(2);
+        }
+    };
+    let store = match PgStore::open(&conf.database_url).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("connect postgres: {e}");
+            std::process::exit(2);
+        }
+    };
+    if let Err(e) = store.migrate().await {
+        eprintln!("migrate: {e}");
+        std::process::exit(2);
+    }
+    let obj = ObjStore::connect(
+        &conf.s3_endpoint,
+        &conf.s3_access_key,
+        &conf.s3_secret_key,
+        &conf.s3_bucket,
+    );
+    if let Err(e) = obj.ensure_bucket().await {
+        eprintln!("rustfs bucket: {e}");
+        std::process::exit(2);
+    }
+    let catalog = match Catalog::load(&store).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("load catalog: {e}");
+            std::process::exit(2);
+        }
+    };
+    tracing::info!(books = catalog.books.len(), "catalog loaded from postgres");
 
     let (tx, _rx) = broadcast::channel::<String>(64);
-
-    let state_dir = resolve_state_dir(&cli);
-    let progress = open_progress_store(state_dir.as_deref()).await;
-    // Derived audiobook cache lives under the writable state dir, never in the
-    // (possibly read-only) source tree. `None` → fall back to beside-the-script.
-    let audio_cache_dir = state_dir.as_ref().map(|d| d.join("audio"));
-
     let state: SharedState = Arc::new(AppState {
         tx,
-        books: resolved.books,
-        file_tree: RwLock::new(initial_tree),
-        rendered_cache: RwLock::new(HashMap::new()),
-        progress,
-        tts_cmd: cli
-            .edge_tts_cmd
-            .clone()
-            .unwrap_or_else(|| "edge-tts".to_owned()),
-        tts_voice: cli
-            .tts_voice
-            .clone()
-            .unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_owned()),
-        audio_cache_dir,
+        store,
+        obj,
+        catalog: RwLock::new(catalog),
     });
 
-    server::watcher::start_watcher(state.clone(), resolved.debounce_ms);
-
-    for b in &state.books {
-        for r in &b.renditions {
-            for e in &r.editions {
-                tracing::info!(
-                    "book /{:<16} [{:<5}/{:<6}]  =>  {}",
-                    b.slug,
-                    r.kind.as_str(),
-                    e.lang,
-                    e.source.display()
-                );
-            }
-        }
-    }
+    // Reload the catalog + nudge clients when `liveview sync` issues NOTIFY.
+    spawn_reload_listener(state.clone(), conf.database_url.clone());
 
     let api_router = Router::new()
         .route("/api/books", get(api_books))
@@ -218,7 +370,13 @@ async fn run(cli: Cli, resolved: Resolved) {
 }
 
 fn build_resolved(cli: &Cli) -> Result<Resolved, String> {
-    if let Some(path) = &cli.config {
+    resolve_config(cli.config.as_deref())
+}
+
+/// Resolve a corpus config: explicit path → cwd auto-discovery → implicit
+/// single-mount fallback. Shared by the server and `liveview sync`.
+fn resolve_config(config: Option<&Path>) -> Result<Resolved, String> {
+    if let Some(path) = config {
         return load_explicit(path);
     }
     let cwd = std::env::current_dir().map_err(|e| format!("cwd: {e}"))?;
@@ -246,25 +404,25 @@ struct TreeQuery {
     rendition: Option<String>,
 }
 
-/// The sidebar forest for a rendition. The default (text) tree is served from
-/// the cached `file_tree`; other renditions are built on demand (books lacking
-/// that rendition are omitted).
+/// The sidebar forest for a rendition — the JSON `liveview sync` precomputed
+/// and stored in `site_tree`, returned verbatim. Empty `[]` when absent.
 async fn api_tree(
     State(state): State<SharedState>,
     Query(q): Query<TreeQuery>,
 ) -> impl IntoResponse {
-    use crate::config::RenditionKind;
     let kind = q
         .rendition
         .as_deref()
         .and_then(RenditionKind::parse)
         .unwrap_or(RenditionKind::Text);
-    if kind == RenditionKind::Text {
-        let tree = state.file_tree.read().await;
-        return axum::Json(tree.clone());
-    }
-    let tree = server::tree::build_virtual_tree(&state.books, kind);
-    axum::Json(tree)
+    let json = state
+        .store
+        .get_site_tree(kind.as_str())
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "[]".to_string());
+    ([(header::CONTENT_TYPE, "application/json")], json)
 }
 
 #[derive(serde::Deserialize)]
@@ -274,20 +432,17 @@ struct ProgressQuery {
 }
 
 /// Reading progress for restoring scroll position / resuming the last-read
-/// chapter. Returns `[]` when progress is disabled (no state dir).
+/// chapter.
 async fn api_progress_get(
     State(state): State<SharedState>,
     Query(q): Query<ProgressQuery>,
 ) -> impl IntoResponse {
-    let Some(store) = &state.progress else {
-        return Json(Vec::<ProgressEntry>::new()).into_response();
-    };
     let Some(slug) = q.book.as_deref() else {
         // `book` is required: the client always restores per-book. Without it,
         // return empty rather than dumping every book's rows.
         return Json(Vec::<ProgressEntry>::new()).into_response();
     };
-    match store.for_book(slug).await {
+    match state.store.progress_for_book(slug).await {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => {
             tracing::warn!(error = %e, "progress read failed");
@@ -297,12 +452,9 @@ async fn api_progress_get(
 }
 
 /// The latest-read chapter per book (newest first), for the landing page's
-/// "continue reading" indicators. `[]` when progress is disabled.
+/// "continue reading" indicators.
 async fn api_progress_recent(State(state): State<SharedState>) -> impl IntoResponse {
-    let Some(store) = &state.progress else {
-        return Json(Vec::<ProgressEntry>::new()).into_response();
-    };
-    match store.recent_per_book().await {
+    match state.store.progress_recent_per_book().await {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => {
             tracing::warn!(error = %e, "progress recent read failed");
@@ -318,16 +470,12 @@ struct ProgressUpdate {
     scroll: f64,
 }
 
-/// Save one document's scroll position (debounced by the client). No-op 204
-/// when progress is disabled.
+/// Save one document's scroll position (debounced by the client).
 async fn api_progress_put(
     State(state): State<SharedState>,
     Json(body): Json<ProgressUpdate>,
 ) -> impl IntoResponse {
-    let Some(store) = &state.progress else {
-        return StatusCode::NO_CONTENT;
-    };
-    match store.upsert(&body.path, body.scroll).await {
+    match state.store.progress_upsert(&body.path, body.scroll).await {
         Ok(()) => StatusCode::NO_CONTENT,
         Err(e) => {
             tracing::warn!(error = %e, "progress write failed");
@@ -343,12 +491,8 @@ struct SettingPut {
 }
 
 /// Player settings (playback rate, sleep-timer, …) for cross-device sync.
-/// Returns `{}` when settings are disabled (no state dir).
 async fn api_settings_get(State(state): State<SharedState>) -> impl IntoResponse {
-    let Some(store) = &state.progress else {
-        return Json(HashMap::<String, String>::new()).into_response();
-    };
-    match store.settings_all().await {
+    match state.store.settings_all().await {
         Ok(rows) => {
             let map: HashMap<String, String> = rows.into_iter().collect();
             Json(map).into_response()
@@ -360,53 +504,16 @@ async fn api_settings_get(State(state): State<SharedState>) -> impl IntoResponse
     }
 }
 
-/// Save one player setting. No-op 204 when settings are disabled.
+/// Save one player setting.
 async fn api_settings_put(
     State(state): State<SharedState>,
     Json(body): Json<SettingPut>,
 ) -> impl IntoResponse {
-    let Some(store) = &state.progress else {
-        return StatusCode::NO_CONTENT;
-    };
-    match store.settings_set(&body.key, &body.value).await {
+    match state.store.settings_set(&body.key, &body.value).await {
         Ok(()) => StatusCode::NO_CONTENT,
         Err(e) => {
             tracing::warn!(error = %e, "settings write failed");
             StatusCode::INTERNAL_SERVER_ERROR
-        }
-    }
-}
-
-/// Resolve the writable state dir: `--state-dir`, else `$STATE_DIRECTORY` from
-/// systemd (a colon-separated list, first entry wins). `None` when neither is
-/// set. Backs both the reading-progress db and the audiobook cache.
-fn resolve_state_dir(cli: &Cli) -> Option<PathBuf> {
-    cli.state_dir.clone().or_else(|| {
-        std::env::var_os("STATE_DIRECTORY").and_then(|v| {
-            std::env::split_paths(&v)
-                .next()
-                .filter(|p| !p.as_os_str().is_empty())
-        })
-    })
-}
-
-/// Open the reading-progress db under `state_dir`. `None` (no dir configured, or
-/// open failed) disables reading-progress.
-async fn open_progress_store(state_dir: Option<&Path>) -> Option<ProgressStore> {
-    let dir = state_dir?;
-    if let Err(e) = std::fs::create_dir_all(dir) {
-        tracing::error!(dir = %dir.display(), error = %e, "create state dir failed; reading-progress disabled");
-        return None;
-    }
-    let db = dir.join("progress.db");
-    match ProgressStore::open(&db).await {
-        Ok(store) => {
-            tracing::info!("reading-progress db: {}", db.display());
-            Some(store)
-        }
-        Err(e) => {
-            tracing::error!(db = %db.display(), error = %e, "open progress db failed; reading-progress disabled");
-            None
         }
     }
 }
@@ -464,7 +571,8 @@ async fn api_version() -> axum::Json<serde_json::Value> {
 /// label, its slug (entry path), an optional blurb, and the available
 /// language editions for the in-book language switcher.
 async fn api_books(State(state): State<SharedState>) -> impl IntoResponse {
-    let lang_infos = |r: &crate::config::RenditionState| -> Vec<LangInfo> {
+    use crate::server::catalog::RenditionMeta;
+    let lang_infos = |r: &RenditionMeta| -> Vec<LangInfo> {
         r.editions
             .iter()
             .map(|e| LangInfo {
@@ -473,7 +581,8 @@ async fn api_books(State(state): State<SharedState>) -> impl IntoResponse {
             })
             .collect()
     };
-    let books: Vec<BookInfo> = state
+    let cat = state.catalog.read().await;
+    let books: Vec<BookInfo> = cat
         .books
         .iter()
         .map(|b| {
@@ -482,7 +591,7 @@ async fn api_books(State(state): State<SharedState>) -> impl IntoResponse {
                 label: b.label.clone(),
                 slug: b.slug.clone(),
                 description: b.description.clone(),
-                cover: b.cover.is_some(),
+                cover: b.cover_hash.is_some(),
                 default_rendition: b.default_rendition.as_str().to_string(),
                 renditions: b
                     .renditions
@@ -509,60 +618,63 @@ struct CoverQuery {
     book: String,
 }
 
-/// Serve a book's cover image (resolved at config time to an abs path under the
-/// book dir). 404 when the book is unknown or has no cover. Streams the file
-/// with a `Content-Type` guessed from its extension — same pattern as /api/raw.
+/// Stream a content-addressed blob from rustfs with its stored MIME.
+async fn blob_response(state: &AppState, hash: &str, cache: &str) -> Option<Response> {
+    let bytes = state.obj.get(hash).await.ok()?;
+    let mime = state
+        .store
+        .get_asset(hash)
+        .await
+        .ok()
+        .flatten()
+        .map(|a| a.mime)
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    Some(
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, mime)
+            .header(header::CACHE_CONTROL, cache)
+            .body(Body::from(bytes))
+            .unwrap()
+            .into_response(),
+    )
+}
+
+/// A book's cover image (from rustfs). 404 when the book is unknown or coverless.
 async fn api_cover(
     State(state): State<SharedState>,
     Query(q): Query<CoverQuery>,
 ) -> impl IntoResponse {
-    let Some(cover) = state.book(&q.book).and_then(|b| b.cover.clone()) else {
-        return (StatusCode::NOT_FOUND, "no cover").into_response();
+    let hash = {
+        let cat = state.catalog.read().await;
+        cat.book(&q.book).and_then(|b| b.cover_hash.clone())
     };
-    let file = match tokio::fs::File::open(&cover).await {
-        Ok(f) => f,
-        Err(_) => return (StatusCode::NOT_FOUND, "no cover").into_response(),
-    };
-    let mime_type = mime_guess::from_path(&cover)
-        .first_or_octet_stream()
-        .to_string();
-    let body = Body::from_stream(ReaderStream::new(file));
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, mime_type)
-        .header(header::CACHE_CONTROL, "public, max-age=3600")
-        .body(body)
-        .unwrap()
-        .into_response()
+    match hash {
+        Some(h) => match blob_response(&state, &h, "public, max-age=3600").await {
+            Some(resp) => resp,
+            None => (StatusCode::NOT_FOUND, "no cover").into_response(),
+        },
+        None => (StatusCode::NOT_FOUND, "no cover").into_response(),
+    }
 }
 
-/// Media Session artwork for a book — the lock-screen / Control Center "Now
-/// Playing" tile on iOS/iPadOS/macOS. Unlike /api/cover (which 404s when a book
-/// has no cover image), this NEVER 404s for a known book: it serves the real
-/// cover when one exists, otherwise a deterministic gradient PNG keyed off the
-/// slug (the same hue the bookshelf uses for its CSS fallback). A real image URL
-/// is required because iOS Safari won't reliably render data:/blob: artwork on
-/// the lock screen, so a blank tile is the only alternative.
+/// Media Session artwork — never 404s for a known book: the real cover from
+/// rustfs, else a deterministic slug-keyed gradient PNG (iOS lock-screen tiles
+/// need a real raster URL, not CSS/data:).
 async fn api_artwork(
     State(state): State<SharedState>,
     Query(q): Query<CoverQuery>,
 ) -> impl IntoResponse {
-    let Some(book) = state.book(&q.book) else {
-        return (StatusCode::NOT_FOUND, "no such book").into_response();
+    let hash = {
+        let cat = state.catalog.read().await;
+        match cat.book(&q.book) {
+            Some(b) => b.cover_hash.clone(),
+            None => return (StatusCode::NOT_FOUND, "no such book").into_response(),
+        }
     };
-    if let Some(cover) = book.cover.clone() {
-        if let Ok(file) = tokio::fs::File::open(&cover).await {
-            let mime_type = mime_guess::from_path(&cover)
-                .first_or_octet_stream()
-                .to_string();
-            let body = Body::from_stream(ReaderStream::new(file));
-            return Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, mime_type)
-                .header(header::CACHE_CONTROL, "public, max-age=3600")
-                .body(body)
-                .unwrap()
-                .into_response();
+    if let Some(h) = hash {
+        if let Some(resp) = blob_response(&state, &h, "public, max-age=3600").await {
+            return resp;
         }
     }
     // No (readable) cover: synthesize the slug's gradient as a PNG.
@@ -570,7 +682,6 @@ async fn api_artwork(
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "image/png")
-        // Deterministic per slug and never changes — cache hard.
         .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
         .body(Body::from(png))
         .unwrap()
@@ -715,167 +826,137 @@ struct FileQuery {
     rendition: Option<String>,
 }
 
-impl FileQuery {
-    /// The rendition kind for this request, defaulting per the book's own
-    /// default. Resolved against the book named by the path's slug; an unknown
-    /// book or unknown token falls back to the book default (or `Text`).
-    fn rendition_kind(&self, state: &AppState) -> crate::config::RenditionKind {
-        use crate::config::RenditionKind;
-        if let Some(tok) = self.rendition.as_deref() {
-            if let Some(k) = RenditionKind::parse(tok) {
-                return k;
-            }
-        }
-        let slug = self.path.split('/').next().unwrap_or("");
-        state
-            .book(slug)
-            .map_or(RenditionKind::Text, |b| b.default_rendition)
-    }
+/// A resolved request: the concrete rendition + the `(lang, default_lang)` pair
+/// for overlay→base, plus the slug and the rest-of-path under the book.
+struct ReqCtx {
+    kind: RenditionKind,
+    lang: String,
+    default_lang: String,
+    slug: String,
+    rest: String,
 }
 
-/// Resolve a virtual-path request (plus optional `lang`) to an on-disk path
-/// using **overlay → base** fallback: try the requested `lang` edition first,
-/// then the book's default (base) edition. Returns the canonical path plus the
-/// language actually served. `Ok(None)` is "not found in any edition" (404);
-/// `Err(())` is "outside an edition source" (403, traversal/symlink escape).
-fn resolve_with_fallback(
-    state: &AppState,
-    virtual_path: &str,
-    rendition: crate::config::RenditionKind,
-    lang: Option<&str>,
-) -> Result<Option<(PathBuf, String)>, ()> {
-    // Candidate editions in priority order: the requested `lang` overlay, then
-    // the book's default (base) edition (`None` ⇒ default). Editions share
-    // structure, so a page/asset absent from the overlay is served from base.
-    let mut candidates: Vec<Option<&str>> = Vec::new();
-    if lang.is_some() {
-        candidates.push(lang);
-    }
-    candidates.push(None);
+/// Resolve `(path, rendition token, lang)` against the catalog: the book picks
+/// the rendition (the token, else its default); the rendition picks the lang
+/// (the query, else its default). `None` ⇒ unknown book.
+async fn resolve_req(state: &AppState, q: &FileQuery) -> Option<ReqCtx> {
+    let (slug, rest) = q.path.split_once('/').unwrap_or((q.path.as_str(), ""));
+    let cat = state.catalog.read().await;
+    let book = cat.book(slug)?;
+    let kind = q
+        .rendition
+        .as_deref()
+        .and_then(RenditionKind::parse)
+        .unwrap_or(book.default_rendition);
+    let rend = book.rendition(kind).unwrap_or(book.default_rendition());
+    Some(ReqCtx {
+        kind: rend.kind,
+        lang: q.lang.clone().unwrap_or_else(|| rend.default_lang.clone()),
+        default_lang: rend.default_lang.clone(),
+        slug: slug.to_string(),
+        rest: rest.to_string(),
+    })
+}
 
-    for cand in candidates {
-        let Some(res) = state.resolve_path(virtual_path, rendition, cand) else {
-            // Unknown slug, or no such edition for `cand` → try the next one.
-            continue;
-        };
-        let joined = res.edition.source.join(res.rest);
-        // Canonicalize fully — this is what makes `..` and symlinks safe. A
-        // syntactic `starts_with` check is NOT sufficient because Path::join
-        // doesn't normalise components.
-        match joined.canonicalize() {
-            Ok(p) => {
-                if !p.starts_with(&res.edition.source) {
-                    return Err(());
-                }
-                return Ok(Some((p, res.edition.lang.clone())));
-            }
-            // Missing in this edition → fall through to the next candidate.
-            Err(_) => continue,
-        }
-    }
-    Ok(None)
+/// Resolve specifically against a book's `audio` rendition (for /api/audio +
+/// /api/marks), independent of the request's rendition token. `None` ⇒ unknown
+/// book or no audio rendition.
+async fn resolve_audio(state: &AppState, q: &FileQuery) -> Option<ReqCtx> {
+    let (slug, rest) = q.path.split_once('/').unwrap_or((q.path.as_str(), ""));
+    let cat = state.catalog.read().await;
+    let book = cat.book(slug)?;
+    let rend = book.rendition(RenditionKind::Audio)?;
+    Some(ReqCtx {
+        kind: RenditionKind::Audio,
+        lang: q.lang.clone().unwrap_or_else(|| rend.default_lang.clone()),
+        default_lang: rend.default_lang.clone(),
+        slug: slug.to_string(),
+        rest: rest.to_string(),
+    })
 }
 
 async fn api_file(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
 ) -> impl IntoResponse {
-    let rendition = query.rendition_kind(&state);
-    let (full_path, served_lang) =
-        match resolve_with_fallback(&state, &query.path, rendition, query.lang.as_deref()) {
-            Ok(Some(x)) => x,
-            Ok(None) => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": "File not found"})),
-                )
-                    .into_response();
-            }
-            Err(()) => {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(serde_json::json!({"error": "Access denied"})),
-                )
-                    .into_response();
-            }
-        };
-
-    let file_type = FileType::from_path(&query.path);
-
-    // Binary files: return metadata only — frontend will use /api/raw.
-    if matches!(file_type, FileType::Image | FileType::Pdf) {
-        return Json(FileContent {
-            path: query.path,
-            lang: served_lang,
-            file_type,
-            content: String::new(),
-        })
-        .into_response();
-    }
-
-    // Cache keys on the *served* edition lang, so en-fallback and a real zh
-    // page never collide.
-    let key = server::state::cache_key(&served_lang, &query.path);
-    {
-        let cache = state.rendered_cache.read().await;
-        if let Some(content) = cache.get(&key) {
-            return Json(FileContent {
-                path: query.path,
-                lang: served_lang,
-                file_type,
-                content: content.clone(),
-            })
-            .into_response();
-        }
-    }
-
-    match tokio::fs::read_to_string(&full_path).await {
-        Ok(source) => {
-            let content = server::renderer::render_file(&source, &file_type);
-            {
-                let mut cache = state.rendered_cache.write().await;
-                cache.insert(key, content.clone());
-            }
-            Json(FileContent {
-                path: query.path,
-                lang: served_lang,
-                file_type,
-                content,
-            })
-            .into_response()
-        }
-        Err(_) => (
+    let not_found = || {
+        (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "File not found"})),
         )
-            .into_response(),
-    }
+            .into_response()
+    };
+    let Some(ctx) = resolve_req(&state, &query).await else {
+        return not_found();
+    };
+    let chapter = state
+        .store
+        .get_chapter_fallback(
+            &ctx.slug,
+            ctx.kind.as_str(),
+            &ctx.lang,
+            &ctx.default_lang,
+            &ctx.rest,
+        )
+        .await;
+    let (row, served_lang) = match chapter {
+        Ok(Some(x)) => x,
+        Ok(None) => return not_found(),
+        Err(e) => {
+            tracing::warn!(error = %e, "chapter read failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "read failed").into_response();
+        }
+    };
+
+    let file_type = FileType::from_path(&query.path);
+    // Binary files: metadata only — frontend uses /api/raw for the bytes.
+    let content = if matches!(file_type, FileType::Image | FileType::Pdf) {
+        String::new()
+    } else {
+        // HTML was pre-rendered at sync time and stored in pg.
+        row.html.unwrap_or_default()
+    };
+    Json(FileContent {
+        path: query.path,
+        lang: served_lang,
+        file_type,
+        content,
+    })
+    .into_response()
 }
 
-/// Resolve a chapter's **narration source**: prefer the LLM-distilled
-/// `<id>.spoken.md` track (an audiobook is a rewrite for the ear, not a strip);
-/// fall back to the raw `<id>.md`, which is then mechanically stripped at
-/// runtime. Both go through overlay → base resolution. Returns
-/// `(path, served_lang)`; `Ok(None)` = neither exists.
-fn resolve_narration(
+/// Resolve a chapter's **narration source** over pg: for the text rendition,
+/// prefer the distilled `<id>.spoken.md` chapter, else the raw `<id>.md`; for
+/// audio, the `<aid>.spoken.md` chapter IS the script. Returns the chapter +
+/// the served lang (overlay → base).
+async fn resolve_narration(
     state: &AppState,
-    virtual_path: &str,
-    rendition: crate::config::RenditionKind,
-    lang: Option<&str>,
-) -> Result<Option<(PathBuf, String)>, ()> {
-    use crate::config::RenditionKind;
-    // The audio rendition's chapters ARE `<aid>.spoken.md` scripts — resolve
-    // the path as given, no `.md` fallback. Only the text rendition's read-along
-    // tries the distilled `.spoken.md` overlay before the raw `.md`.
-    if rendition == RenditionKind::Text {
-        if let Some(stem) = virtual_path.strip_suffix(".md") {
+    ctx: &ReqCtx,
+) -> Option<(store::pg::ChapterRow, String)> {
+    if ctx.kind == RenditionKind::Text {
+        if let Some(stem) = ctx.rest.strip_suffix(".md") {
             let spoken = format!("{stem}.spoken.md");
-            if let Some(hit) = resolve_with_fallback(state, &spoken, rendition, lang)? {
-                return Ok(Some(hit));
+            if let Ok(Some(hit)) = state
+                .store
+                .get_chapter_fallback(&ctx.slug, "text", &ctx.lang, &ctx.default_lang, &spoken)
+                .await
+            {
+                return Some(hit);
             }
         }
     }
-    resolve_with_fallback(state, virtual_path, rendition, lang)
+    state
+        .store
+        .get_chapter_fallback(
+            &ctx.slug,
+            ctx.kind.as_str(),
+            &ctx.lang,
+            &ctx.default_lang,
+            &ctx.rest,
+        )
+        .await
+        .ok()
+        .flatten()
 }
 
 #[derive(serde::Serialize)]
@@ -899,96 +980,20 @@ async fn api_spoken(
     if !matches!(FileType::from_path(&query.path), FileType::Markdown) {
         return (StatusCode::BAD_REQUEST, "not a markdown chapter").into_response();
     }
-    let rendition = query.rendition_kind(&state);
-
-    let (full_path, served_lang) =
-        match resolve_narration(&state, &query.path, rendition, query.lang.as_deref()) {
-            Ok(Some(x)) => x,
-            Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
-            Err(()) => return (StatusCode::FORBIDDEN, "Access denied").into_response(),
-        };
-
-    match tokio::fs::read_to_string(&full_path).await {
-        Ok(source) => Json(SpokenContent {
-            lang: served_lang,
-            sentences: server::spoken::spoken_sentences(&source),
-        })
-        .into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "File not found").into_response(),
+    let Some(ctx) = resolve_req(&state, &query).await else {
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    };
+    match resolve_narration(&state, &ctx).await {
+        Some((row, served_lang)) => {
+            let md = row.markdown.unwrap_or_default();
+            Json(SpokenContent {
+                lang: served_lang,
+                sentences: server::spoken::spoken_sentences(&md),
+            })
+            .into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "File not found").into_response(),
     }
-}
-
-/// Gate + resolve + lazily synthesize a chapter's audio. Returns the cached
-/// `(mp3, marks.json)` paths, or an error response (404 no-audio-rendition /
-/// not-found, 403 traversal, 500 synth failure). Gated on the book having an
-/// `audio` rendition; the mp3 + marks are cached under the writable state-dir
-/// (`<state_dir>/audio/<slug>/<lang>/`), not in the read-only source tree.
-async fn prepare_audio(
-    state: &AppState,
-    query: &FileQuery,
-) -> Result<(PathBuf, PathBuf), (StatusCode, String)> {
-    use crate::config::RenditionKind;
-    let (slug, file) = query
-        .path
-        .split_once('/')
-        .unwrap_or((query.path.as_str(), ""));
-    let book = state
-        .book(slug)
-        .ok_or((StatusCode::NOT_FOUND, "unknown book".to_owned()))?;
-    let audio = book.rendition(RenditionKind::Audio).ok_or((
-        StatusCode::NOT_FOUND,
-        "audio not available for this book".to_owned(),
-    ))?;
-
-    // The audio chapter's wire file is `<aid>.spoken.md`; the cache stem is
-    // `<aid>` (strip the `.spoken.md` suffix so we write `<aid>.mp3`, not
-    // `<aid>.spoken.mp3`).
-    let stem = file
-        .strip_suffix(".spoken.md")
-        .or_else(|| Path::new(file).file_stem().and_then(|s| s.to_str()))
-        .unwrap_or("");
-
-    let (md_path, served_lang) = match resolve_narration(
-        state,
-        &query.path,
-        RenditionKind::Audio,
-        query.lang.as_deref(),
-    ) {
-        Ok(Some(x)) => x,
-        Ok(None) => return Err((StatusCode::NOT_FOUND, "File not found".to_owned())),
-        Err(()) => return Err((StatusCode::FORBIDDEN, "Access denied".to_owned())),
-    };
-    let edition = audio.edition(&served_lang).ok_or((
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "served edition missing".to_owned(),
-    ))?;
-    let md_meta = tokio::fs::metadata(&md_path)
-        .await
-        .map_err(|e| (StatusCode::NOT_FOUND, format!("stat chapter: {e}")))?;
-    let src_mtime = md_meta.modified().ok();
-    let source = tokio::fs::read_to_string(&md_path)
-        .await
-        .map_err(|e| (StatusCode::NOT_FOUND, format!("read chapter: {e}")))?;
-    let sentences = server::spoken::spoken_sentences(&source);
-    let voice = audio.voice.as_deref().unwrap_or(&state.tts_voice);
-
-    // Write the derived mp3/marks under the writable state-dir cache
-    // (`<root>/<slug>/<lang>/`), keeping the source tree read-only. Without a
-    // state dir, fall back to beside the script (the edition source).
-    let cache_dir = match &state.audio_cache_dir {
-        Some(root) => root.join(slug).join(&served_lang),
-        None => edition.source.clone(),
-    };
-    server::audio::ensure_audio(
-        &cache_dir,
-        stem,
-        &sentences,
-        voice,
-        &state.tts_cmd,
-        src_mtime,
-    )
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
 /// Parse an HTTP `Range: bytes=…` value into an inclusive `(start, end)` within
@@ -1011,21 +1016,31 @@ fn parse_range(value: &str, total: u64) -> Option<(u64, u64)> {
     (start <= end && end < total).then_some((start, end))
 }
 
-/// Chapter narration audio (lazy-synth-on-first-play, then cached). MP3 with a
-/// `Content-Length` (so the player can show total duration) and HTTP Range
-/// support (so seeking works). Files are small (a few MB) → read the whole
-/// cached mp3 per request.
+/// Chapter narration audio — the pre-generated MP3 from rustfs, with
+/// `Content-Length` + HTTP Range support (seeking). A few MB → fetch the whole
+/// blob and slice for Range.
 async fn api_audio(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
-    let mp3 = match prepare_audio(&state, &query).await {
-        Ok((mp3, _)) => mp3,
-        Err((code, msg)) => return (code, msg).into_response(),
+    let Some(ctx) = resolve_audio(&state, &query).await else {
+        return (StatusCode::NOT_FOUND, "audio not available").into_response();
     };
-    let Ok(data) = tokio::fs::read(&mp3).await else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "open audio").into_response();
+    let Some((row, _)) = state
+        .store
+        .get_chapter_fallback(&ctx.slug, "audio", &ctx.lang, &ctx.default_lang, &ctx.rest)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    };
+    let Some(hash) = row.audio_hash else {
+        return (StatusCode::NOT_FOUND, "no audio for chapter").into_response();
+    };
+    let Ok(data) = state.obj.get(&hash).await else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response();
     };
     let total = data.len() as u64;
     let range = headers
@@ -1062,340 +1077,56 @@ async fn api_marks(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
 ) -> impl IntoResponse {
-    match prepare_audio(&state, &query).await {
-        Ok((_, marks)) => match tokio::fs::read(&marks).await {
-            Ok(bytes) => ([(header::CONTENT_TYPE, "application/json")], bytes).into_response(),
-            Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "read marks").into_response(),
-        },
-        Err((code, msg)) => (code, msg).into_response(),
+    let Some(ctx) = resolve_audio(&state, &query).await else {
+        return (StatusCode::NOT_FOUND, "audio not available").into_response();
+    };
+    let Some((row, _)) = state
+        .store
+        .get_chapter_fallback(&ctx.slug, "audio", &ctx.lang, &ctx.default_lang, &ctx.rest)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    };
+    let Some(hash) = row.marks_hash else {
+        return (StatusCode::NOT_FOUND, "no marks for chapter").into_response();
+    };
+    match state.obj.get(&hash).await {
+        Ok(bytes) => ([(header::CONTENT_TYPE, "application/json")], bytes).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "read marks").into_response(),
     }
 }
 
+/// Raw binary (image / PDF) bytes for a chapter, streamed from rustfs.
 async fn api_raw(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
 ) -> impl IntoResponse {
-    let rendition = query.rendition_kind(&state);
-    let full_path =
-        match resolve_with_fallback(&state, &query.path, rendition, query.lang.as_deref()) {
-            Ok(Some((p, _served))) => p,
-            Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
-            Err(()) => return (StatusCode::FORBIDDEN, "Access denied").into_response(),
-        };
-
-    let file = match tokio::fs::File::open(&full_path).await {
-        Ok(file) => file,
-        Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+    let Some(ctx) = resolve_req(&state, &query).await else {
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
     };
-
-    let stream = ReaderStream::new(file);
-    let body = Body::from_stream(stream);
-
-    let mime_type = mime_guess::from_path(&full_path)
-        .first_or_octet_stream()
-        .to_string();
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, mime_type)
-        .header(header::CACHE_CONTROL, "public, max-age=3600")
-        .body(body)
-        .unwrap()
-        .into_response()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::{build_globset, BookState, EditionState, RenditionKind, RenditionState};
-    use std::fs;
-    use std::path::PathBuf;
-
-    struct TempDir(PathBuf);
-    impl TempDir {
-        fn new(prefix: &str) -> Self {
-            let mut p = std::env::temp_dir();
-            let suffix = format!(
-                "{prefix}-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            );
-            p.push(suffix);
-            fs::create_dir_all(&p).unwrap();
-            Self(p)
-        }
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    fn mk_state(books: Vec<BookState>) -> AppState {
-        let (tx, _) = broadcast::channel(8);
-        AppState {
-            tx,
-            books,
-            file_tree: RwLock::new(Vec::new()),
-            rendered_cache: RwLock::new(HashMap::new()),
-            progress: None,
-            tts_cmd: "edge-tts".to_string(),
-            tts_voice: "zh-CN-XiaoxiaoNeural".to_string(),
-            audio_cache_dir: None,
-        }
-    }
-
-    /// A single-`text`-rendition book over `source`.
-    fn mk_mount(slug: &str, source: PathBuf) -> BookState {
-        BookState {
-            label: slug.to_string(),
-            slug: slug.to_string(),
-            description: None,
-            cover: None,
-            default_rendition: RenditionKind::Text,
-            renditions: vec![RenditionState {
-                kind: RenditionKind::Text,
-                label: "text".to_string(),
-                default_lang: "default".to_string(),
-                voice: None,
-                layout: None,
-                manifest: false,
-                editions: vec![EditionState {
-                    lang: "default".to_string(),
-                    label: "default".to_string(),
-                    source,
-                    include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
-                    exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
-                }],
-            }],
-        }
-    }
-
-    /// A book with a single `text` rendition wrapping the given editions;
-    /// `default_lang` opens first.
-    fn mk_book_text(slug: &str, default_lang: &str, editions: Vec<EditionState>) -> BookState {
-        BookState {
-            label: slug.to_string(),
-            slug: slug.to_string(),
-            description: None,
-            cover: None,
-            default_rendition: RenditionKind::Text,
-            renditions: vec![RenditionState {
-                kind: RenditionKind::Text,
-                label: "text".to_string(),
-                default_lang: default_lang.to_string(),
-                voice: None,
-                layout: None,
-                manifest: false,
-                editions,
-            }],
-        }
-    }
-
-    #[test]
-    fn resolve_splits_on_first_slash() {
-        let tmp = TempDir::new("lv-resolve");
-        let state = mk_state(vec![mk_mount("docs", tmp.path().to_path_buf())]);
-        let r = state
-            .resolve_path("docs/foo/bar.md", RenditionKind::Text, None)
-            .unwrap();
-        assert_eq!(r.edition.source, tmp.path());
-        assert_eq!(r.rest, "foo/bar.md");
-    }
-
-    #[test]
-    fn resolve_mount_root_no_slash() {
-        let tmp = TempDir::new("lv-resolve");
-        let state = mk_state(vec![mk_mount("docs", tmp.path().to_path_buf())]);
-        let r = state
-            .resolve_path("docs", RenditionKind::Text, None)
-            .unwrap();
-        assert_eq!(r.edition.source, tmp.path());
-        assert_eq!(r.rest, "");
-    }
-
-    #[test]
-    fn resolve_picks_edition_by_lang() {
-        let tmp_en = TempDir::new("lv-en");
-        let tmp_zh = TempDir::new("lv-zh");
-        let mk_ed = |lang: &str, source: PathBuf| EditionState {
-            lang: lang.to_string(),
-            label: lang.to_string(),
-            source,
-            include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
-            exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
-        };
-        let book = mk_book_text(
-            "docs",
-            "en",
-            vec![
-                mk_ed("en", tmp_en.path().to_path_buf()),
-                mk_ed("zh", tmp_zh.path().to_path_buf()),
-            ],
-        );
-        let state = mk_state(vec![book]);
-
-        // Explicit lang selects that edition.
-        assert_eq!(
-            state
-                .resolve_path("docs/x.md", RenditionKind::Text, Some("zh"))
-                .unwrap()
-                .edition
-                .source,
-            tmp_zh.path()
-        );
-        // No lang falls back to the default edition.
-        assert_eq!(
-            state
-                .resolve_path("docs/x.md", RenditionKind::Text, None)
-                .unwrap()
-                .edition
-                .source,
-            tmp_en.path()
-        );
-        // A lang the book doesn't offer resolves to None (→ 404 → frontend fallback).
-        assert!(state
-            .resolve_path("docs/x.md", RenditionKind::Text, Some("ja"))
-            .is_none());
-    }
-
-    #[test]
-    fn resolve_falls_back_to_base_when_overlay_missing() {
-        let tmp_en = TempDir::new("lv-fb-en");
-        let tmp_zh = TempDir::new("lv-fb-zh");
-        fs::write(tmp_en.path().join("a.md"), b"en").unwrap(); // only in base
-        fs::write(tmp_zh.path().join("b.md"), b"zh").unwrap(); // only in overlay
-        let mk_ed = |lang: &str, src: PathBuf| EditionState {
-            lang: lang.to_string(),
-            label: lang.to_string(),
-            source: src,
-            include_set: build_globset(&["**/*.md".to_string()]).unwrap(),
-            exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
-        };
-        let book = mk_book_text(
-            "docs",
-            "en",
-            vec![
-                mk_ed("en", tmp_en.path().canonicalize().unwrap()),
-                mk_ed("zh", tmp_zh.path().canonicalize().unwrap()),
-            ],
-        );
-        let state = mk_state(vec![book]);
-
-        // a.md is absent from the zh overlay → served from the en base.
-        let (_p, served) =
-            resolve_with_fallback(&state, "docs/a.md", RenditionKind::Text, Some("zh"))
-                .unwrap()
-                .unwrap();
-        assert_eq!(served, "en");
-        // b.md exists in the zh overlay → served from zh.
-        let (_p, served) =
-            resolve_with_fallback(&state, "docs/b.md", RenditionKind::Text, Some("zh"))
-                .unwrap()
-                .unwrap();
-        assert_eq!(served, "zh");
-    }
-
-    #[test]
-    fn resolve_returns_none_on_unknown_slug() {
-        let tmp = TempDir::new("lv-resolve");
-        let state = mk_state(vec![mk_mount("docs", tmp.path().to_path_buf())]);
-        assert!(state
-            .resolve_path("nope/x.md", RenditionKind::Text, None)
-            .is_none());
-    }
-
-    #[test]
-    fn resolve_picks_right_mount_among_many() {
-        let tmp_a = TempDir::new("lv-a");
-        let tmp_b = TempDir::new("lv-b");
-        let state = mk_state(vec![
-            mk_mount("docs", tmp_a.path().to_path_buf()),
-            mk_mount("tasks", tmp_b.path().to_path_buf()),
-        ]);
-        let r = state
-            .resolve_path("tasks/x.md", RenditionKind::Text, None)
-            .unwrap();
-        assert_eq!(r.edition.source, tmp_b.path());
-    }
-
-    #[test]
-    fn resolve_safe_unknown_slug_is_not_found() {
-        let tmp = TempDir::new("lv-safe");
-        let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
-        // Ok(None) maps to 404 at the handler layer.
-        assert!(matches!(
-            resolve_with_fallback(&state, "bogus/x.md", RenditionKind::Text, None),
-            Ok(None)
-        ));
-    }
-
-    #[test]
-    fn resolve_safe_missing_file_is_not_found() {
-        let tmp = TempDir::new("lv-safe");
-        let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
-        assert!(matches!(
-            resolve_with_fallback(&state, "docs/missing.md", RenditionKind::Text, None),
-            Ok(None)
-        ));
-    }
-
-    #[test]
-    fn resolve_safe_accepts_legit_file() {
-        let tmp = TempDir::new("lv-safe");
-        fs::write(tmp.path().join("README.md"), b"hi").unwrap();
-        let state = mk_state(vec![mk_mount("docs", tmp.path().canonicalize().unwrap())]);
-        let (out, served) =
-            resolve_with_fallback(&state, "docs/README.md", RenditionKind::Text, None)
-                .unwrap()
-                .unwrap();
-        assert!(out.ends_with("README.md"));
-        assert_eq!(served, "default");
-    }
-
-    #[test]
-    fn resolve_safe_rejects_dotdot_escape() {
-        // Two adjacent temp dirs A and B; build mount over A and try to
-        // reach a file in B via `..`. Must return Err (=> 403).
-        let tmp_a = TempDir::new("lv-safe-a");
-        let tmp_b = TempDir::new("lv-safe-b");
-        fs::write(tmp_b.path().join("secret.md"), b"x").unwrap();
-
-        let a_canon = tmp_a.path().canonicalize().unwrap();
-        let state = mk_state(vec![mk_mount("docs", a_canon.clone())]);
-
-        // Path that joins to A but `..`-s out to B once canonicalized.
-        let b_name = tmp_b.path().file_name().unwrap().to_str().unwrap();
-        let virtual_path = format!("docs/../{b_name}/secret.md");
-        assert!(matches!(
-            resolve_with_fallback(&state, &virtual_path, RenditionKind::Text, None),
-            Err(())
-        ));
-    }
-
-    #[test]
-    fn resolve_safe_rejects_symlink_escape() {
-        // Plant a symlink inside the mount that points to a file outside
-        // the mount; reading via the symlink should be 403.
-        let tmp_a = TempDir::new("lv-safe-sym-a");
-        let tmp_b = TempDir::new("lv-safe-sym-b");
-        let outside = tmp_b.path().join("outside.md");
-        fs::write(&outside, b"leak").unwrap();
-        let link = tmp_a.path().join("link.md");
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&outside, &link).unwrap();
-
-        let a_canon = tmp_a.path().canonicalize().unwrap();
-        let state = mk_state(vec![mk_mount("docs", a_canon)]);
-        assert!(matches!(
-            resolve_with_fallback(&state, "docs/link.md", RenditionKind::Text, None),
-            Err(())
-        ));
+    let Some((row, _)) = state
+        .store
+        .get_chapter_fallback(
+            &ctx.slug,
+            ctx.kind.as_str(),
+            &ctx.lang,
+            &ctx.default_lang,
+            &ctx.rest,
+        )
+        .await
+        .ok()
+        .flatten()
+    else {
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    };
+    let Some(hash) = row.asset_hash else {
+        return (StatusCode::NOT_FOUND, "not a binary asset").into_response();
+    };
+    match blob_response(&state, &hash, "public, max-age=3600").await {
+        Some(resp) => resp,
+        None => (StatusCode::NOT_FOUND, "File not found").into_response(),
     }
 }
+

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import requests
 
-REPO = "USER/lv"
+REPO = "dravengarden/liveview"
 VERSION = "0.1.0"
 
 
@@ -34,7 +34,7 @@ def get_bin_dir():
 
 
 def get_bin_path():
-    bin_name = "lv.exe" if platform.system() == "Windows" else "lv"
+    bin_name = "liveview.exe" if platform.system() == "Windows" else "liveview"
     return get_bin_dir() / bin_name
 
 
@@ -43,13 +43,13 @@ def download_binary():
     is_windows = platform.system() == "Windows"
     ext = "zip" if is_windows else "tar.gz"
 
-    url = f"https://github.com/{REPO}/releases/download/v{VERSION}/lv-{target}.{ext}"
+    url = f"https://github.com/{REPO}/releases/download/v{VERSION}/liveview-{target}.{ext}"
     bin_dir = get_bin_dir()
     bin_dir.mkdir(parents=True, exist_ok=True)
 
-    archive_path = bin_dir / f"lv-{target}.{ext}"
+    archive_path = bin_dir / f"liveview-{target}.{ext}"
 
-    print(f"Downloading lv v{VERSION} for {target}...")
+    print(f"Downloading liveview v{VERSION} for {target}...")
 
     response = requests.get(url, stream=True, allow_redirects=True)
     response.raise_for_status()
@@ -72,7 +72,7 @@ def download_binary():
         bin_path.chmod(bin_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
     archive_path.unlink()
-    print("lv installed successfully!")
+    print("liveview installed successfully!")
 
 
 def ensure_binary():

@@ -1,11 +1,11 @@
-# lv Examples
+# liveview Examples
 
-This directory contains example markdown files for testing **lv**.
+This directory contains example markdown files for testing **liveview**.
 
 ## Quick Start
 
 ```bash
-lv ./examples --open
+liveview ./examples --open
 ```
 
 ## Files
@@ -34,4 +34,4 @@ Here's a [link](https://github.com), an ![Rust logo](https://www.rust-lang.org/l
 
 ---
 
-*Generated for testing lv — Markdown Live Renderer.*
+*Generated for testing liveview — Markdown Live Renderer.*

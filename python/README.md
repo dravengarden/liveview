@@ -12,15 +12,15 @@ pip install liveview
 
 ```bash
 # Preview current directory
-lv
+liveview
 
 # Preview a specific file
-lv README.md
+liveview README.md
 
 # Open browser automatically
-lv -o
+liveview -o
 ```
 
 ## Documentation
 
-See the full documentation at https://github.com/USER/lv
+See the full documentation at https://github.com/dravengarden/liveview

@@ -29,11 +29,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/USER/lv"
-Repository = "https://github.com/USER/lv"
+Homepage = "https://github.com/dravengarden/liveview"
+Repository = "https://github.com/dravengarden/liveview"
 
 [project.scripts]
-lv = "liveview:main"
+liveview = "liveview:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -304,6 +304,9 @@ impl BookState {
     }
 
     /// The default rendition (by `default_rendition`, falling back to the first).
+    // Kept as part of the config model; the thin server resolves via the pg
+    // catalog now, so this accessor has no in-tree caller.
+    #[allow(dead_code)]
     pub fn default_rendition(&self) -> &RenditionState {
         self.rendition(self.default_rendition)
             .or_else(|| self.renditions.first())
@@ -316,6 +319,10 @@ impl BookState {
 pub struct Resolved {
     pub host: String,
     pub port: Option<u16>,
+    // Parsed from `[server].debounce_ms` for config back-compat; the live-reload
+    // file-watcher is gone (content now deploys via `liveview sync`), so nothing
+    // reads it.
+    #[allow(dead_code)]
     pub debounce_ms: u64,
     pub open: bool,
     pub books: Vec<BookState>,

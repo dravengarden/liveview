@@ -1,4 +1,4 @@
-# liveview flake — pure-Nix build of the `lv` binary: the React/MUI SPA
+# liveview flake — pure-Nix build of the `liveview` binary: the React/MUI SPA
 # (deno + vite) and the axum daemon that embeds it via include_dir!.
 #
 # `nix build` produces a binary equivalent to `deno task build` followed by
@@ -7,7 +7,7 @@
 # web build runs in a fixed-output derivation so `deno install` gets network
 # (the box's omega TUN proxies the sandbox egress, same as heimdall-ui).
 {
-  description = "liveview — live-reloading docs previewer (axum + embedded React SPA)";
+  description = "liveview — book reader (axum + embedded React SPA, pg + rustfs backed)";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -30,7 +30,7 @@
       # staged into web/src/_shell/ at build time.
       appShellSrc = app-shell.packages.${system}.components;
 
-      # edge-tts CLI for the audiobook track: `lv` shells out to it to
+      # edge-tts CLI for the audiobook track: `liveview` shells out to it to
       # synthesize chapter narration. Baked onto the binary's PATH (below) so
       # the deployed unit needs no extra wiring, and present in the dev shell.
       edgeTts = pkgs.python3Packages.edge-tts;
@@ -132,7 +132,7 @@
         outputHash = "sha256-AfjKfmYPHdTEUi7V+wp8t5OsT27rpFAXGGzIzjwBquI=";
       };
 
-      # ── lv: axum daemon, embeds the SPA via include_dir! ──────────────
+      # ── liveview: axum daemon, embeds the SPA via include_dir! ────────
       liveview = pkgs.rustPlatform.buildRustPackage {
         pname = "liveview";
         version = "0.1.0";
@@ -152,25 +152,25 @@
             ]);
         };
 
-        # sqlx's sqlite driver links libsqlite3 (via libsqlite3-sys), found at
-        # build time through pkg-config. makeWrapper puts edge-tts on PATH.
+        # makeWrapper puts edge-tts on PATH. sqlx is postgres-only (pure-Rust
+        # driver, no libpq) and the S3 client uses rustls, so no system libs are
+        # linked; pkg-config stays for any transitive build-script probe.
         nativeBuildInputs = [
           pkgs.pkg-config
           pkgs.makeWrapper
         ];
-        buildInputs = [ pkgs.sqlite ];
 
         # The audiobook player shells out to `edge-tts`; bake it onto PATH so
         # the deployed binary is self-contained (no unit-level PATH wiring).
         postInstall = ''
-          wrapProgram $out/bin/lv --prefix PATH : ${lib.makeBinPath [ edgeTts ]}
+          wrapProgram $out/bin/liveview --prefix PATH : ${lib.makeBinPath [ edgeTts ]}
         '';
 
         # Vendor via fetchCargoVendor (cargo's own downloader → sparse index
         # + static.crates.io), NOT importCargoLock: this box's omega proxy
         # 403s the crates.io API download endpoint that importCargoLock uses,
         # while static.crates.io returns 200.
-        cargoHash = "sha256-chO5OPy/KFkU8rqWLG3kcy6X34lKoo/EnRX2zmEwJQs=";
+        cargoHash = "sha256-n4QKt9nPF52s+8zmwK26DysoghuxltSVX7kxsnD2f1A=";
 
         # Build id the binary serves at /version.json for the atlantis portal's
         # update-banner poll. The app's commit SHA changes every deploy; a dirty
@@ -188,7 +188,7 @@
         buildFeatures = [ "embedded" ];
         cargoBuildFlags = [
           "--bin"
-          "lv"
+          "liveview"
         ];
 
         # Tests touch the filesystem / network; not relevant for packaging.
@@ -196,7 +196,7 @@
 
         meta = with lib; {
           description = "Live-reloading docs previewer (axum + embedded React SPA)";
-          mainProgram = "lv";
+          mainProgram = "liveview";
           platforms = platforms.linux;
           license = licenses.mit;
         };

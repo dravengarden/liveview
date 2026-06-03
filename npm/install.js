@@ -5,8 +5,8 @@ const { execSync } = require("child_process");
 const zlib = require("zlib");
 const tar = require("tar");
 
-const REPO = "USER/lv";
-const BIN_NAME = process.platform === "win32" ? "lv.exe" : "lv";
+const REPO = "dravengarden/liveview";
+const BIN_NAME = process.platform === "win32" ? "liveview.exe" : "liveview";
 
 function getPlatformTarget() {
   const platform = process.platform;
@@ -83,11 +83,11 @@ async function install() {
   const isWindows = process.platform === "win32";
   const ext = isWindows ? "zip" : "tar.gz";
 
-  const url = `https://github.com/${REPO}/releases/download/v${version}/lv-${target}.${ext}`;
+  const url = `https://github.com/${REPO}/releases/download/v${version}/liveview-${target}.${ext}`;
   const binDir = path.join(__dirname, "bin");
-  const archivePath = path.join(__dirname, `lv-${target}.${ext}`);
+  const archivePath = path.join(__dirname, `liveview-${target}.${ext}`);
 
-  console.log(`Downloading lv v${version} for ${target}...`);
+  console.log(`Downloading liveview v${version} for ${target}...`);
 
   // Create bin directory
   if (!fs.existsSync(binDir)) {
@@ -113,9 +113,9 @@ async function install() {
     // Cleanup
     fs.unlinkSync(archivePath);
 
-    console.log("lv installed successfully!");
+    console.log("liveview installed successfully!");
   } catch (err) {
-    console.error("Failed to install lv:", err.message);
+    console.error("Failed to install liveview:", err.message);
     console.error(
       "You may need to install manually from: https://github.com/" + REPO
     );

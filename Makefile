@@ -36,7 +36,7 @@ install: build-web
 	cargo install --path . --features embedded
 
 uninstall:
-	cargo uninstall lv
+	cargo uninstall liveview
 
 fmt:
 	cargo fmt

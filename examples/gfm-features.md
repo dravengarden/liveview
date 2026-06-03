@@ -20,10 +20,10 @@ Testing comrak's GFM extensions.
 
 | Command | Description |
 |---------|-------------|
-| `lv` | Watch current directory |
-| `lv ./docs` | Watch specific directory |
-| `lv -p 8080` | Custom port |
-| `lv --open` | Auto-open browser |
+| `liveview` | Watch current directory |
+| `liveview ./docs` | Watch specific directory |
+| `liveview -p 8080` | Custom port |
+| `liveview --open` | Auto-open browser |
 
 ### Alignment
 
