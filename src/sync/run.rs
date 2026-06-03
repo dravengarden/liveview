@@ -200,6 +200,18 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
 
     let new = Dag::build(Build::Tree(book_nodes));
 
+    // Store the sidebar forest now — it's cheap, filesystem-derived, and
+    // independent of the slow content apply below, so the reader's sidebar works
+    // as soon as a sync starts (even while audiobook TTS backfills for minutes).
+    for kind in [RenditionKind::Text, RenditionKind::Audio] {
+        let tree = crate::server::tree::build_virtual_tree(&resolved.books, kind);
+        let json = serde_json::to_string(&tree).map_err(|e| format!("encode tree: {e}"))?;
+        store
+            .set_site_tree(kind.as_str(), &json)
+            .await
+            .map_err(|e| format!("set site_tree {}: {e}", kind.as_str()))?;
+    }
+
     // ── Load the last-deployed DAG and diff. ────────────────────────────────
     let stored = load_stored(&store).await?;
     let plan = plan(&new, &stored);
@@ -233,18 +245,6 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
         obj.delete(&hash).await?;
         store.delete_asset(&hash).await.map_err(|e| e.to_string())?;
         report.orphans_gc += 1;
-    }
-
-    // Pre-build the sidebar forest per rendition (sync has the filesystem
-    // context + H1 titles + layout) and store it as the JSON the thin server
-    // returns verbatim from /api/tree.
-    for kind in [RenditionKind::Text, RenditionKind::Audio] {
-        let tree = crate::server::tree::build_virtual_tree(&resolved.books, kind);
-        let json = serde_json::to_string(&tree).map_err(|e| format!("encode tree: {e}"))?;
-        store
-            .set_site_tree(kind.as_str(), &json)
-            .await
-            .map_err(|e| format!("set site_tree {}: {e}", kind.as_str()))?;
     }
 
     // Advance the root LAST — crash before this and the next run re-reconciles.
