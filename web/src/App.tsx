@@ -9,7 +9,7 @@ import {
   Tooltip,
   Snackbar,
 } from "@mui/material";
-import { Headphones as AudiobookIcon, IosShare as ShareIcon } from "@mui/icons-material";
+import { Headphones as AudiobookIcon, IosShare as ShareIcon, Close as CloseIcon } from "@mui/icons-material";
 import { Sidebar, SettingsButton, ContentViewer, NowPlayingPopup, MiniPlayer, Landing } from "@/components";
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
@@ -824,9 +824,25 @@ export function App(): React.JSX.Element {
         <Snackbar
           open={notice !== null}
           autoHideDuration={3000}
-          onClose={() => setNotice(null)}
+          // MUI close-button pattern: the explicit close action and the
+          // auto-hide timeout dismiss; a click-away does NOT, so the toast
+          // can't vanish on an unrelated tap mid-read.
+          onClose={(_event, reason) => {
+            if (reason === "clickaway") return;
+            setNotice(null);
+          }}
           message={notice}
           anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+          action={
+            <IconButton
+              size="small"
+              aria-label="close"
+              color="inherit"
+              onClick={() => setNotice(null)}
+            >
+              <CloseIcon fontSize="small" />
+            </IconButton>
+          }
         />
     </ThemeProvider>
   );
