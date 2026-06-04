@@ -22,24 +22,53 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="LiveView" />
+    <!-- Heavy renderers are loaded `defer` (not parser-blocking): the document
+         body — and the splash below — paint immediately instead of waiting on
+         ~3 MB of mermaid etc. They expose window globals consumed only after
+         the SPA mounts (well after DOMContentLoaded), so deferring is safe.
+         TODO: load these on demand (only when a chapter needs them) + self-host
+         the CDN ones (jsdelivr is slow/blocked behind the GFW and unreachable
+         offline). -->
     <!-- Syntax highlighting -->
-    <script src="/highlight.min.js"></script>
+    <script defer src="/highlight.min.js"></script>
     <!-- Diagrams -->
-    <script src="/mermaid.min.js"></script>
+    <script defer src="/mermaid.min.js"></script>
     <!-- Math rendering (KaTeX) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css" crossorigin="anonymous">
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js" crossorigin="anonymous"></script>
-    <!-- Monaco Editor -->
-    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
-    <script>
-      require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs' } });
-      require(['vs/editor/editor.main'], function() {
-        window.monaco = monaco;
-      });
-    </script>
+    <!-- Monaco Editor: defer the AMD loader; run require() from its onload so
+         ordering holds without a parser-blocking inline script. -->
+    <script defer src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"
+      onload="require.config({paths:{vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs'}});require(['vs/editor/editor.main'],function(){window.monaco=monaco;});"></script>
+    <!-- App-shell splash: pure HTML/CSS so it paints with the document on any
+         network, before the SPA bundle downloads/parses. React's createRoot
+         replaces #root's children on mount, so it auto-vanishes when the app is
+         ready — no teardown JS. Themed by prefers-color-scheme to avoid a flash
+         on dark. -->
+    <style>
+      #app-splash {
+        position: fixed; inset: 0; z-index: 9999;
+        display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+        background: #fbf7ee; color: #6b5b4b;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", sans-serif;
+      }
+      @media (prefers-color-scheme: dark) { #app-splash { background: #0d1117; color: #8b949e; } }
+      #app-splash .lv-spinner {
+        width: 34px; height: 34px; border: 3px solid currentColor; border-top-color: transparent;
+        border-radius: 50%; opacity: .65; animation: lv-spin .8s linear infinite;
+      }
+      #app-splash .lv-title { font-size: 14px; letter-spacing: .06em; opacity: .75; }
+      @keyframes lv-spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { #app-splash .lv-spinner { animation: none; } }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="app-splash" aria-label="Loading" role="status">
+        <div class="lv-spinner"></div>
+        <div class="lv-title">LiveView</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
