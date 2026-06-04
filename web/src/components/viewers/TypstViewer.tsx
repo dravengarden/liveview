@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Box, Typography, Chip, Stack } from "@mui/material";
 import { Code as CodeIcon } from "@mui/icons-material";
+import { ensureScript } from "@/ensureAsset";
 
 declare global {
   interface Window {
@@ -19,11 +20,17 @@ export function TypstViewer({ content, path }: TypstViewerProps): React.JSX.Elem
   const codeRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    if (codeRef.current && window.hljs) {
-      // Reset highlighting
-      codeRef.current.removeAttribute("data-highlighted");
-      window.hljs.highlightElement(codeRef.current);
-    }
+    const el = codeRef.current;
+    if (!el) return;
+    // highlight.js is loaded on demand (no longer eager in index.html).
+    void ensureScript("/highlight.min.js")
+      .then(() => {
+        el.removeAttribute("data-highlighted");
+        window.hljs?.highlightElement(el);
+      })
+      .catch(() => {
+        // unavailable — leave the code unhighlighted.
+      });
   }, [content]);
 
   if (!content) {

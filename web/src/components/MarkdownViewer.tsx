@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { Box } from "@mui/material";
 import { ImageLightbox } from "./ImageLightbox";
 import { useWakeLock } from "@/hooks/useWakeLock";
+import { ensureScript } from "@/ensureAsset";
 
 declare global {
   interface Window {
@@ -127,56 +128,88 @@ export function MarkdownViewer({
     const container = containerRef.current;
     if (!container) return;
 
-    container.querySelectorAll<HTMLElement>("pre code").forEach((block) => {
-      if (window.hljs && !block.dataset["highlighted"]) {
-        window.hljs.highlightElement(block);
-        block.dataset["highlighted"] = "true";
+    // Code blocks: add the copy button immediately (needs no library), then
+    // syntax-highlight ON DEMAND — load highlight.js only when the page has
+    // code, not on every visit. Plain (unhighlighted) code is the graceful
+    // fallback if it fails to load.
+    const codeBlocks = container.querySelectorAll<HTMLElement>("pre code");
+    if (codeBlocks.length > 0) {
+      codeBlocks.forEach((block) => {
+        const pre = block.parentElement;
+        if (pre && !pre.querySelector(".copy-btn")) {
+          const copyBtn = document.createElement("button");
+          copyBtn.className = "copy-btn";
+          copyBtn.textContent = "Copy";
+          copyBtn.onclick = async () => {
+            await navigator.clipboard.writeText(block.textContent ?? "");
+            copyBtn.textContent = "Copied!";
+            setTimeout(() => {
+              copyBtn.textContent = "Copy";
+            }, 2000);
+          };
+          pre.style.position = "relative";
+          pre.appendChild(copyBtn);
+        }
+      });
+      if ([...codeBlocks].some((b) => !b.dataset["highlighted"])) {
+        void ensureScript("/highlight.min.js")
+          .then(() => {
+            containerRef.current?.querySelectorAll<HTMLElement>("pre code").forEach((block) => {
+              if (window.hljs && !block.dataset["highlighted"]) {
+                window.hljs.highlightElement(block);
+                block.dataset["highlighted"] = "true";
+              }
+            });
+          })
+          .catch(() => {
+            // highlight.js unavailable — leave code as plain text.
+          });
       }
+    }
 
-      const pre = block.parentElement;
-      if (pre && !pre.querySelector(".copy-btn")) {
-        const copyBtn = document.createElement("button");
-        copyBtn.className = "copy-btn";
-        copyBtn.textContent = "Copy";
-        copyBtn.onclick = async () => {
-          await navigator.clipboard.writeText(block.textContent ?? "");
-          copyBtn.textContent = "Copied!";
-          setTimeout(() => {
-            copyBtn.textContent = "Copy";
-          }, 2000);
-        };
-        pre.style.position = "relative";
-        pre.appendChild(copyBtn);
-      }
-    });
-
-    // Mermaid: pinned to one light theme regardless of the app theme (see
-    // mermaidConfig), so there is no theme re-render path to maintain — render
-    // each block once. The light plate behind it (.mermaid in markdown.css)
-    // makes the diagram read identically in every app theme.
+    // Mermaid: the library is ~3 MB, so load it ON DEMAND — only when the
+    // chapter actually has a diagram. Each block becomes a spinner placeholder
+    // while the script downloads, then renders. Pinned to one light theme (see
+    // mermaidConfig) + a light plate, so no per-theme re-render path.
     const mermaidBlocks = container.querySelectorAll<HTMLElement>(
       'pre[lang="mermaid"], code.language-mermaid'
     );
-    if (mermaidBlocks.length > 0 && window.mermaid) {
-      window.mermaid.initialize(mermaidConfig());
-
+    if (mermaidBlocks.length > 0) {
+      const pending: { holder: HTMLElement; code: string }[] = [];
       mermaidBlocks.forEach((block) => {
+        if (block.dataset["mermaid"]) return;
         const code = block.tagName === "CODE" ? block.textContent : block.querySelector("code")?.textContent;
-        if (code && !block.dataset["mermaid"]) {
-          const div = document.createElement("div");
-          div.className = "mermaid";
-          div.textContent = code;
-          block.parentElement?.replaceChild(div, block);
-        }
+        if (!code) return;
+        block.dataset["mermaid"] = "true";
+        const holder = document.createElement("div");
+        holder.className = "lv-diagram-loading";
+        block.parentElement?.replaceChild(holder, block);
+        pending.push({ holder, code });
       });
-
-      const mermaidDivs = container.querySelectorAll<Element>(".mermaid:not([data-processed])");
-      if (mermaidDivs.length > 0) {
-        // Re-wire the lightbox gallery once the SVGs actually exist (run() is
-        // async; see diagramTick).
-        void window.mermaid.run({ nodes: mermaidDivs }).then(() => {
-          setDiagramTick((t) => t + 1);
-        });
+      if (pending.length > 0) {
+        void ensureScript("/mermaid.min.js")
+          .then(() => {
+            if (!window.mermaid) return;
+            window.mermaid.initialize(mermaidConfig());
+            pending.forEach(({ holder, code }) => {
+              const div = document.createElement("div");
+              div.className = "mermaid";
+              div.textContent = code;
+              holder.replaceWith(div);
+            });
+            // Re-wire the lightbox gallery once the SVGs exist (run() is async).
+            const divs = containerRef.current?.querySelectorAll<Element>(".mermaid:not([data-processed])");
+            if (divs && divs.length > 0) {
+              void window.mermaid.run({ nodes: divs }).then(() => {
+                setDiagramTick((tk) => tk + 1);
+              });
+            }
+          })
+          .catch(() => {
+            pending.forEach(({ holder }) => {
+              holder.className = "lv-diagram-error";
+            });
+          });
       }
     }
 

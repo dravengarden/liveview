@@ -22,24 +22,15 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="LiveView" />
-    <!-- Heavy renderers are loaded `defer` (not parser-blocking): the document
-         body — and the splash below — paint immediately instead of waiting on
-         ~3 MB of mermaid etc. They expose window globals consumed only after
-         the SPA mounts (well after DOMContentLoaded), so deferring is safe.
-         TODO: load these on demand (only when a chapter needs them) + self-host
-         the CDN ones (jsdelivr is slow/blocked behind the GFW and unreachable
-         offline). -->
-    <!-- Syntax highlighting -->
-    <script defer src="/highlight.min.js"></script>
-    <!-- Diagrams -->
-    <script defer src="/mermaid.min.js"></script>
+    <!-- Heavy renderers are loaded ON DEMAND (src/ensureAsset.ts), not here:
+         highlight.js + mermaid (~3 MB) load only when a chapter has code /
+         diagrams. Monaco is gone entirely — the JSON viewer pretty-prints
+         instead (it was ~5 MB of CDN for a rarely-opened file type). KaTeX
+         stays CDN-loaded for now (Phase 2: self-host + on-demand; jsdelivr is
+         slow/blocked behind the GFW and dead offline). -->
     <!-- Math rendering (KaTeX) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css" crossorigin="anonymous">
     <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js" crossorigin="anonymous"></script>
-    <!-- Monaco Editor: defer the AMD loader; run require() from its onload so
-         ordering holds without a parser-blocking inline script. -->
-    <script defer src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"
-      onload="require.config({paths:{vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs'}});require(['vs/editor/editor.main'],function(){window.monaco=monaco;});"></script>
     <!-- App-shell splash: pure HTML/CSS so it paints with the document on any
          network, before the SPA bundle downloads/parses. React's createRoot
          replaces #root's children on mount, so it auto-vanishes when the app is

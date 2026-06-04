@@ -85,7 +85,7 @@ export function ContentViewer({
       return <CsvViewer content={content} theme={theme} />;
 
     case "json":
-      return <JsonViewer content={content} theme={theme} />;
+      return <JsonViewer content={content} />;
 
     case "excalidraw":
       return <ExcalidrawViewer content={content} theme={theme} />;
