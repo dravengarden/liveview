@@ -306,7 +306,6 @@ async fn run(cli: Cli, server: config::ServerCfg) {
         .route("/api/progress", get(api_progress_get).put(api_progress_put))
         .route("/api/progress/recent", get(api_progress_recent))
         .route("/api/settings", get(api_settings_get).put(api_settings_put))
-        .route("/version.json", get(api_version))
         .route("/ws", get(server::ws::ws_handler))
         .with_state(state.clone());
 
@@ -572,16 +571,6 @@ struct BookInfo {
     /// sidebar is the raw filesystem tree ("docs" mode). Mirrors the default
     /// rendition. The frontend renders the two modes differently.
     manifest: bool,
-}
-
-/// The deployed build id the atlantis portal polls to raise an update banner
-/// over a kept-alive iframe running a stale bundle (atlantis README → "Update
-/// notifications"). The flake injects the app's commit SHA at build time; a
-/// plain `cargo build` falls back to the crate version.
-async fn api_version() -> axum::Json<serde_json::Value> {
-    axum::Json(serde_json::json!({
-        "version": option_env!("ATLANTIS_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION")),
-    }))
 }
 
 /// Lightweight list of books for the landing page ("bookshelf"): the curated

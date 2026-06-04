@@ -14,7 +14,7 @@ import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hoo
 import { useI18n } from "@/i18n";
 import { useAudioPlayer, type Track } from "@/audio/player";
 import { useAutoUpdate } from "@/hooks/useAutoUpdate";
-import { NavShell, PortalProvider } from "./_shell";
+import { NavShell } from "./_shell";
 import type {
   TreeNode,
   FileType,
@@ -687,8 +687,7 @@ export function App(): React.JSX.Element {
   return (
     <ThemeProvider theme={muiTheme}>
       <CssBaseline />
-      <PortalProvider appId="liveview">
-        {/* The persistent themed backdrop. Returning from a book unmounts the
+      {/* The persistent themed backdrop. Returning from a book unmounts the
             NavShell + its ~900 markdown nodes in one commit; while reading,
             `.markdown-body`'s own opaque background covers the viewport, so
             without a themed colour here the bare body showed through for the
@@ -794,7 +793,6 @@ export function App(): React.JSX.Element {
           message={notice}
           anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
         />
-      </PortalProvider>
     </ThemeProvider>
   );
 }

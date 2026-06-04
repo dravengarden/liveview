@@ -1,10 +1,10 @@
 .PHONY: dev dev-web dev-server build build-web install uninstall clean fmt check shell
 
-# Materialize the shared app-shell SDK into web/src/_shell/ from the Nix
+# Materialize the shared-utils ui SDK into web/src/_shell/ from the Nix
 # package (it is NOT committed in this repo — gitignored). Run once after a
 # fresh checkout and whenever the SDK changes; dev/build targets depend on it.
 shell:
-	nix build .#app-shell-src -o .shell-src
+	nix build .#shared-ui-src -o .shell-src
 	mkdir -p web/src/_shell
 	cp -f .shell-src/* web/src/_shell/
 	chmod -R u+w web/src/_shell

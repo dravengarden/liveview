@@ -11,24 +11,24 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  # The shared atlantis app-shell SDK (contract + UI primitives), referenced as
-  # a Nix package and staged into the web build below — NOT vendored into this
-  # repo's git tree (web/src/_shell/ is gitignored and materialized from here).
-  # Lives in the atlantis project (projects/atlantis/main/components), exposed
-  # as that flake's `components` package.
-  inputs.app-shell.url = "git+file:///home/draven/columbus/projects/atlantis/main";
-  inputs.app-shell.inputs.nixpkgs.follows = "nixpkgs";
+  # The shared @shared-utils/ui SDK (business- and portal-free React + MUI
+  # primitives), referenced as a Nix package and staged into the web build below
+  # — NOT vendored into this repo's git tree (web/src/_shell/ is gitignored and
+  # materialized from here). Lives in the public shared-utils monorepo, exposed
+  # as that flake's `ui` package.
+  inputs.shared-utils.url = "github:dravengarden/shared-utils";
+  inputs.shared-utils.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs =
-    { self, nixpkgs, app-shell }:
+    { self, nixpkgs, shared-utils }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
       lib = pkgs.lib;
 
-      # SDK source tree (contract + UI primitives) from the app-shell package,
-      # staged into web/src/_shell/ at build time.
-      appShellSrc = app-shell.packages.${system}.components;
+      # Shared UI SDK source tree from the shared-utils `ui` package, staged into
+      # web/src/_shell/ at build time.
+      sharedUiSrc = shared-utils.packages.${system}.ui;
 
       # edge-tts CLI for the audiobook track: `liveview` shells out to it to
       # synthesize chapter narration. Baked onto the binary's PATH (below) so
@@ -72,8 +72,8 @@
         version = "0.1.0";
 
         # _shell excluded here: it's not committed in this repo and is staged
-        # fresh from the app-shell package in buildPhase, so the FOD's copy is
-        # pinned by the input, not by whatever a dev materialized locally.
+        # fresh from the shared-utils ui package in buildPhase, so the FOD's copy
+        # is pinned by the input, not by whatever a dev materialized locally.
         src = lib.cleanSourceWith {
           src = ./web;
           filter =
@@ -100,11 +100,11 @@
         buildPhase = ''
           runHook preBuild
           export HOME=$TMPDIR
-          # Stage the shared app-shell SDK into src/_shell/ from the Nix
+          # Stage the shared-utils ui SDK into src/_shell/ from the Nix
           # package (not committed in this repo). chmod: the store source is
           # read-only and the tree must be writable for the build.
           mkdir -p src/_shell
-          cp ${appShellSrc}/* src/_shell/
+          cp ${sharedUiSrc}/* src/_shell/
           chmod -R u+w src/_shell
           # --allow-scripts so esbuild's lifecycle script links its native
           # binary; deno blocks npm lifecycle scripts by default. No
@@ -129,7 +129,7 @@
 
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-df9kSh5F05BSM9cCMRSZbQvMWCvtzuLaXy+nv0zLNBE=";
+        outputHash = "sha256-l9E+cDKTOAygP4lScJ8TBFi4sCDHNe6QvrwbTGZ+4iw=";
       };
 
       # ── liveview: axum daemon, embeds the SPA via include_dir! ────────
@@ -172,12 +172,6 @@
         # while static.crates.io returns 200.
         cargoHash = "sha256-n4QKt9nPF52s+8zmwK26DysoghuxltSVX7kxsnD2f1A=";
 
-        # Build id the binary serves at /version.json for the atlantis portal's
-        # update-banner poll. The app's commit SHA changes every deploy; a dirty
-        # tree (local `nix build`) has no rev, so fall back to the static
-        # version. Read via option_env! in src/main.rs.
-        ATLANTIS_BUILD_VERSION = self.shortRev or "0.1.0";
-
         # include_dir!("$CARGO_MANIFEST_DIR/web/dist") is a compile-time
         # lookup — drop the prebuilt SPA there before cargo runs.
         preBuild = ''
@@ -206,10 +200,10 @@
       packages.${system} = {
         inherit liveview liveview-web;
         default = liveview;
-        # The app-shell SDK source, re-exposed so local dev can materialize
+        # The shared-utils ui SDK source, re-exposed so local dev can materialize
         # web/src/_shell/ via `make shell` (it isn't committed). Pinned by the
-        # same locked app-shell input the web build uses.
-        app-shell-src = appShellSrc;
+        # same locked shared-utils input the web build uses.
+        shared-ui-src = sharedUiSrc;
       };
 
       devShells.${system}.default = pkgs.mkShell {

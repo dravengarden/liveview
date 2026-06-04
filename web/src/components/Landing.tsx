@@ -29,7 +29,6 @@ import {
 import { useMemo, useState, type ReactNode } from "react";
 import type { Book, ReadingProgress } from "@/types";
 import { useI18n } from "@/i18n";
-import { PortalLauncherButton } from "../_shell";
 
 interface LandingProps {
   books: Book[];
@@ -284,7 +283,6 @@ export function Landing({
             </ButtonBase>
             <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
               {settingsSlot}
-              <PortalLauncherButton />
             </Box>
           </Box>
 
