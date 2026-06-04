@@ -25,8 +25,13 @@ function coverGradient(slug: string): string {
  * full popup. Tapping the title/cover expands the popup; the buttons drive
  * playback and chapter nav. Hidden while the popup is already in focus (expanded)
  * and whenever nothing is loaded.
+ *
+ * Scoped to the playing book's own page: `onPlayingPage` is true only when the
+ * book currently being browsed IS the one playing. Anywhere else (another book,
+ * the shelf) the full bar is just in the way, so it yields to the floating
+ * bubble ({@link FloatingBubble}) instead — the two are mutually exclusive.
  */
-export function MiniPlayer(): React.JSX.Element | null {
+export function MiniPlayer({ onPlayingPage }: { onPlayingPage: boolean }): React.JSX.Element | null {
   const { t } = useI18n();
   const {
     nowPlaying,
@@ -43,7 +48,7 @@ export function MiniPlayer(): React.JSX.Element | null {
     prevChapter,
   } = useAudioPlayer();
 
-  if (expanded || !nowPlaying) return null;
+  if (expanded || !nowPlaying || !onPlayingPage) return null;
 
   const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
 

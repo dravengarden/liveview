@@ -1,0 +1,425 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Box, CircularProgress, Grow, IconButton, Typography } from "@mui/material";
+import {
+  PlayArrow,
+  Pause,
+  SkipNext,
+  SkipPrevious,
+  Headphones as AudiobookIcon,
+} from "@mui/icons-material";
+import { useAudioPlayer } from "@/audio/player";
+import { useI18n } from "@/i18n";
+
+/** Stable hue from a slug → a calm gradient cover stand-in (mirrors the shelf
+ *  / mini-player). Kept local on purpose: the same 6-liner lives in
+ *  MiniPlayer / Landing / NowPlayingPopup — the established convention here is
+ *  to duplicate this trivial helper rather than share a module, so a feature
+ *  branch shouldn't be the thing that refactors all four. */
+function coverGradient(slug: string): string {
+  let h = 0;
+  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) | 0;
+  const hue = Math.abs(h) % 360;
+  return `linear-gradient(135deg, hsl(${hue} 52% 52%), hsl(${(hue + 38) % 360} 48% 42%))`;
+}
+
+const SIZE = 56; // bubble diameter (px)
+const MARGIN = 12; // gap kept from the viewport edge
+const DRAG_THRESHOLD = 6; // px a press must travel before it's a drag (vs a tap)
+const IDLE_MS = 4000; // fade + tuck behind the edge after this long untouched
+const PEEK = 0.32; // fraction of the bubble that tucks off-edge when idle
+const CARD_H = 68; // approx control-card height, for bottom-clamping the card
+const POS_KEY = "lv-audio-bubble-pos";
+
+type Side = "left" | "right";
+interface StoredPos {
+  side: Side;
+  /** Vertical position as a 0..1 ratio of the usable height — survives resize /
+   *  rotation better than an absolute px top. */
+  topRatio: number;
+}
+interface Pos {
+  x: number;
+  y: number;
+  side: Side;
+}
+
+function clamp01(n: number): number {
+  return Math.min(1, Math.max(0, n));
+}
+
+function loadPos(): StoredPos {
+  try {
+    const raw = localStorage.getItem(POS_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as Partial<StoredPos>;
+      if ((p.side === "left" || p.side === "right") && typeof p.topRatio === "number") {
+        return { side: p.side, topRatio: clamp01(p.topRatio) };
+      }
+    }
+  } catch {
+    // corrupt / unavailable storage → fall through to the default dock
+  }
+  return { side: "right", topRatio: 0.62 };
+}
+
+/** Resolve a stored (side, ratio) into absolute top-left px against the live
+ *  viewport. The bubble always docks flush to a horizontal edge. */
+function resolve(side: Side, topRatio: number): Pos {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const x = side === "left" ? MARGIN : vw - SIZE - MARGIN;
+  const yMin = MARGIN;
+  const yMax = Math.max(yMin, vh - SIZE - MARGIN);
+  const y = Math.round(yMin + topRatio * (yMax - yMin));
+  return { x, y, side };
+}
+
+/**
+ * The floating now-playing bubble — shown when audio is loaded but the user has
+ * navigated AWAY from the playing book (browsing another book or the shelf),
+ * where the full bottom bar would just be in the way. It's the unobtrusive,
+ * out-of-the-way counterpart to {@link MiniPlayer}: a semi-transparent, draggable
+ * artwork puck (WeChat 浮窗 / iOS AssistiveTouch lineage) that
+ *
+ *  - docks to the nearest left/right edge (magnetic snap on release),
+ *  - remembers where the user parked it (localStorage; device-local on purpose —
+ *    a phone and a desktop want it in different places),
+ *  - fades + tucks half behind the edge when idle so it never fights the text,
+ *  - and on a *tap* (not a drag) opens a compact control card: prev / play-pause
+ *    / next, plus a tap on the artwork/title to jump back into the full player.
+ *
+ * Mutually exclusive with the bottom bar: the bar owns the playing book's page,
+ * this owns everywhere else. Both hide while the popup is expanded.
+ */
+export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): React.JSX.Element | null {
+  const { t } = useI18n();
+  const {
+    nowPlaying,
+    expanded,
+    setExpanded,
+    playing,
+    loading,
+    currentTime,
+    duration,
+    canPrev,
+    canNext,
+    togglePlay,
+    nextChapter,
+    prevChapter,
+  } = useAudioPlayer();
+
+  const stored = useRef<StoredPos>(loadPos());
+  const [pos, setPos] = useState<Pos>(() => resolve(stored.current.side, stored.current.topRatio));
+  const [dragging, setDragging] = useState(false);
+  const [controlsOpen, setControlsOpen] = useState(false);
+  const [idle, setIdle] = useState(false);
+
+  const elRef = useRef<HTMLDivElement | null>(null);
+  const idleTimer = useRef<number | undefined>(undefined);
+  // Mutable drag bookkeeping — kept in a ref so pointermove can update the DOM
+  // directly (no per-move re-render) and only commit to state on release.
+  const drag = useRef({ active: false, moved: false, startX: 0, startY: 0, baseX: 0, baseY: 0, x: 0, y: 0, id: -1 });
+
+  // Any interaction resets the idle fade timer.
+  const poke = useCallback(() => {
+    setIdle(false);
+    if (idleTimer.current !== undefined) clearTimeout(idleTimer.current);
+    idleTimer.current = window.setTimeout(() => setIdle(true), IDLE_MS);
+  }, []);
+
+  useEffect(() => {
+    const onResize = (): void => setPos(resolve(stored.current.side, stored.current.topRatio));
+    window.addEventListener("resize", onResize);
+    poke();
+    return () => {
+      window.removeEventListener("resize", onResize);
+      if (idleTimer.current !== undefined) clearTimeout(idleTimer.current);
+    };
+  }, [poke]);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // no active pointer (synthetic event / odd input device) — drag still
+        // works off the element's own move/up handlers, capture is just nicer
+      }
+      drag.current = {
+        active: true,
+        moved: false,
+        startX: e.clientX,
+        startY: e.clientY,
+        baseX: pos.x,
+        baseY: pos.y,
+        x: pos.x,
+        y: pos.y,
+        id: e.pointerId,
+      };
+      poke();
+    },
+    [pos.x, pos.y, poke],
+  );
+
+  const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const d = drag.current;
+    if (!d.active || e.pointerId !== d.id) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (!d.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+      d.moved = true;
+      setDragging(true);
+    }
+    if (!d.moved) return;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const nx = Math.min(vw - SIZE - MARGIN, Math.max(MARGIN, d.baseX + dx));
+    const ny = Math.min(vh - SIZE - MARGIN, Math.max(MARGIN, d.baseY + dy));
+    d.x = nx;
+    d.y = ny;
+    // Drive the DOM directly during the drag for 1:1 finger tracking; React
+    // state is only updated once, on release (which snaps to the edge).
+    if (elRef.current) {
+      elRef.current.style.left = `${nx}px`;
+      elRef.current.style.top = `${ny}px`;
+    }
+  }, []);
+
+  const onPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const d = drag.current;
+      if (!d.active || e.pointerId !== d.id) return;
+      d.active = false;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // capture may already be lost (pointercancel) — ignore
+      }
+      if (!d.moved) {
+        // A tap, not a drag → toggle the control card.
+        setControlsOpen((o) => !o);
+        poke();
+        return;
+      }
+      setDragging(false);
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const side: Side = d.x + SIZE / 2 < vw / 2 ? "left" : "right";
+      const yMin = MARGIN;
+      const yMax = Math.max(yMin, vh - SIZE - MARGIN);
+      const topRatio = clamp01(yMax > yMin ? (d.y - yMin) / (yMax - yMin) : 0);
+      stored.current = { side, topRatio };
+      try {
+        localStorage.setItem(POS_KEY, JSON.stringify(stored.current));
+      } catch {
+        // storage full / unavailable — position just won't persist this session
+      }
+      setPos(resolve(side, topRatio));
+      poke();
+    },
+    [poke],
+  );
+
+  // Hidden on the playing book's own page (the bottom bar owns it there), when
+  // nothing is loaded, and while the full popup is in focus.
+  if (expanded || !nowPlaying || onPlayingPage) return null;
+
+  const slug = nowPlaying.bookSlug;
+  const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
+  const tucked = idle && !dragging && !controlsOpen;
+  // The card grows out of the docked edge; clamp its top so it never spills off
+  // the bottom of the screen.
+  const cardTop = Math.min(Math.max(MARGIN, pos.y), window.innerHeight - CARD_H - MARGIN);
+
+  return (
+    <>
+      {/* Collapsed bubble: draggable artwork puck with a progress ring. A tap
+          opens the control card; a drag relocates + edge-snaps it. */}
+      <Box
+        ref={elRef}
+        role="button"
+        aria-label={t("audiobook.nowPlaying")}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        onPointerEnter={poke}
+        sx={(theme) => ({
+          position: "fixed",
+          left: pos.x,
+          top: pos.y,
+          width: SIZE,
+          height: SIZE,
+          zIndex: theme.zIndex.fab,
+          touchAction: "none",
+          cursor: dragging ? "grabbing" : "grab",
+          opacity: controlsOpen ? 0 : tucked ? 0.5 : 0.95,
+          pointerEvents: controlsOpen ? "none" : "auto",
+          transform: tucked ? `translateX(${pos.side === "right" ? PEEK * 100 : -PEEK * 100}%)` : "none",
+          transition: dragging
+            ? "none"
+            : "left .26s cubic-bezier(.2,.8,.2,1), top .26s cubic-bezier(.2,.8,.2,1), opacity .3s, transform .3s",
+        })}
+      >
+        <CircularProgress
+          variant="determinate"
+          value={pct}
+          size={SIZE}
+          thickness={2.4}
+          aria-hidden
+          sx={{ position: "absolute", inset: 0, color: "primary.main" }}
+        />
+        <Box
+          sx={{
+            position: "absolute",
+            inset: 5,
+            borderRadius: "50%",
+            overflow: "hidden",
+            background: coverGradient(slug),
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            boxShadow: 2,
+          }}
+        >
+          {nowPlaying.cover ? (
+            <Box
+              component="img"
+              src={`/api/cover?book=${encodeURIComponent(slug)}`}
+              alt=""
+              draggable={false}
+              sx={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+            />
+          ) : (
+            <AudiobookIcon sx={{ fontSize: 22, color: "rgba(255,255,255,0.92)" }} />
+          )}
+          {/* Small corner status badge — a non-interactive indicator, NOT a
+              button: a tap on the puck expands the controls, it doesn't toggle
+              play. Kept in the corner (vs a big centred glyph) so it reads as
+              status and leaves the artwork visible. */}
+          <Box
+            sx={{
+              position: "absolute",
+              right: -1,
+              bottom: -1,
+              width: 20,
+              height: 20,
+              borderRadius: "50%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              bgcolor: "rgba(0,0,0,0.62)",
+              color: "common.white",
+            }}
+          >
+            {loading ? (
+              <CircularProgress size={12} sx={{ color: "common.white" }} />
+            ) : playing ? (
+              <Pause sx={{ fontSize: 13 }} />
+            ) : (
+              <PlayArrow sx={{ fontSize: 14 }} />
+            )}
+          </Box>
+        </Box>
+      </Box>
+
+      {/* Tap-to-dismiss backdrop + control card. */}
+      {controlsOpen && (
+        <Box
+          onPointerDown={() => {
+            setControlsOpen(false);
+            poke();
+          }}
+          sx={(theme) => ({ position: "fixed", inset: 0, zIndex: theme.zIndex.fab - 1 })}
+        />
+      )}
+      <Grow in={controlsOpen} unmountOnExit style={{ transformOrigin: pos.side === "right" ? "right center" : "left center" }}>
+        <Box
+          sx={(theme) => ({
+            position: "fixed",
+            top: cardTop,
+            ...(pos.side === "right" ? { right: MARGIN } : { left: MARGIN }),
+            zIndex: theme.zIndex.fab,
+            display: "flex",
+            alignItems: "center",
+            gap: 0.25,
+            p: 0.5,
+            pl: 0.75,
+            maxWidth: "calc(100vw - 24px)",
+            bgcolor: "background.paper",
+            borderRadius: 7,
+            boxShadow: 8,
+            border: 1,
+            borderColor: "divider",
+          })}
+        >
+          {/* Artwork + title: the "back to the player" handle. */}
+          <Box
+            component="button"
+            aria-label={t("audiobook.openPlayer")}
+            onClick={() => {
+              setExpanded(true);
+              setControlsOpen(false);
+            }}
+            sx={{
+              all: "unset",
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              flex: 1,
+              minWidth: 0,
+              cursor: "pointer",
+              borderRadius: 6,
+              pr: 0.5,
+              "&:hover": { opacity: 0.85 },
+            }}
+          >
+            <Box
+              sx={{
+                flexShrink: 0,
+                width: 38,
+                height: 38,
+                borderRadius: "50%",
+                overflow: "hidden",
+                position: "relative",
+                background: coverGradient(slug),
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {nowPlaying.cover ? (
+                <Box
+                  component="img"
+                  src={`/api/cover?book=${encodeURIComponent(slug)}`}
+                  alt=""
+                  sx={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              ) : (
+                <AudiobookIcon sx={{ fontSize: 20, color: "rgba(255,255,255,0.92)" }} />
+              )}
+            </Box>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="body2" fontWeight={700} noWrap>
+                {nowPlaying.chapterLabel}
+              </Typography>
+              <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+                {nowPlaying.bookLabel}
+              </Typography>
+            </Box>
+          </Box>
+
+          <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev} sx={{ width: 40, height: 40 }}>
+            <SkipPrevious />
+          </IconButton>
+          <IconButton aria-label={playing ? t("audiobook.pause") : t("audiobook.play")} onClick={togglePlay} color="primary" sx={{ width: 46, height: 46 }}>
+            {loading ? <CircularProgress size={22} /> : playing ? <Pause sx={{ fontSize: 30 }} /> : <PlayArrow sx={{ fontSize: 30 }} />}
+          </IconButton>
+          <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 40, height: 40 }}>
+            <SkipNext />
+          </IconButton>
+        </Box>
+      </Grow>
+    </>
+  );
+}

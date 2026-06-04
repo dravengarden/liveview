@@ -5,4 +5,5 @@ export { ContentViewer } from "./ContentViewer";
 export { AudiobookPlayer } from "./AudiobookPlayer";
 export { NowPlayingPopup } from "./NowPlayingPopup";
 export { MiniPlayer } from "./MiniPlayer";
+export { FloatingBubble } from "./FloatingBubble";
 export { Landing } from "./Landing";

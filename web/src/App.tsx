@@ -10,7 +10,7 @@ import {
   Snackbar,
 } from "@mui/material";
 import { Headphones as AudiobookIcon, IosShare as ShareIcon, Close as CloseIcon } from "@mui/icons-material";
-import { Sidebar, SettingsButton, ContentViewer, NowPlayingPopup, MiniPlayer, Landing } from "@/components";
+import { Sidebar, SettingsButton, ContentViewer, NowPlayingPopup, MiniPlayer, FloatingBubble, Landing } from "@/components";
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
 import { useAudioPlayer, type Track } from "@/audio/player";
@@ -204,7 +204,7 @@ export function App(): React.JSX.Element {
   // The root audio engine: playback + the popup live above every view, so
   // navigating never stops the audio nor closes the popup. We only need to seed
   // playback (`playChapter`) and raise the popup into focus (`setExpanded`).
-  const { playChapter: audioPlayChapter, setExpanded: setPlayerExpanded, syncNotice, playing } = useAudioPlayer();
+  const { playChapter: audioPlayChapter, setExpanded: setPlayerExpanded, syncNotice, playing, nowPlaying } = useAudioPlayer();
 
   // Auto-update the installed PWA when a newer bundle is deployed (an iOS
   // home-screen PWA otherwise resumes its frozen page and never picks up a
@@ -221,6 +221,10 @@ export function App(): React.JSX.Element {
   // The active book is the first path segment; null ⇒ the landing bookshelf.
   const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;
   const activeBook = books.find((b) => b.slug === activeSlug) ?? null;
+  // Is the book currently on screen the same one being narrated? The full
+  // bottom bar only belongs on the playing book's own page; everywhere else
+  // (another book, the shelf) it yields to the floating bubble.
+  const onPlayingPage = nowPlaying != null && activeSlug != null && nowPlaying.bookSlug === activeSlug;
   // "book" mode (book.toml-driven) renders a clean titled spine; "docs" mode
   // renders the raw filesystem tree. The flag also drives whether the root
   // folder node is shown (see below) and the per-row styling in the sidebar.
@@ -811,8 +815,13 @@ export function App(): React.JSX.Element {
             </NavShell>
           )}
           </Box>
-          <MiniPlayer />
+          <MiniPlayer onPlayingPage={onPlayingPage} />
         </Box>
+        {/* The floating bubble — the out-of-the-way now-playing handle shown
+            when audio is loaded but the user is browsing AWAY from the playing
+            book. A fixed overlay (never pushes content), mutually exclusive
+            with the bottom bar. */}
+        <FloatingBubble onPlayingPage={onPlayingPage} />
         {/* The listening popup (focus state of the listen plane) floats above
             every browse view, mounted at the root so it survives all navigation
             and is never owned by a book's chrome. */}
