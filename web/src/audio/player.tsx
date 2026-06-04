@@ -676,6 +676,20 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, []);
 
+  // Declare playback intent via the Audio Session API (the web equivalent of
+  // AVAudioSession's `.playback` category). WebKit-only, best-effort: it does
+  // NOT lift the standalone-PWA background/lock restriction (that needs a native
+  // wrapper — see the Tauri shell), but it keeps foreground Safari and the
+  // WKWebView (Tauri) case from ducking/mixing the narration. No-op elsewhere.
+  useEffect(() => {
+    try {
+      const nav = navigator as Navigator & { audioSession?: { type: string } };
+      if (nav.audioSession) nav.audioSession.type = "playback";
+    } catch {
+      // unsupported browser — ignore
+    }
+  }, []);
+
   const playChapter = useCallback(
     (np: Omit<NowPlaying, "chapterLabel">, q: Track[]) => {
       const qi = q.findIndex((tk) => tk.path === np.chapterPath);
