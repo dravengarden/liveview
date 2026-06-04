@@ -13,6 +13,7 @@ import { Sidebar, SettingsButton, ContentViewer, NowPlayingPopup, MiniPlayer, La
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
 import { useAudioPlayer, type Track } from "@/audio/player";
+import { useAutoUpdate } from "@/hooks/useAutoUpdate";
 import { NavShell, PortalProvider } from "./_shell";
 import type {
   TreeNode,
@@ -202,7 +203,12 @@ export function App(): React.JSX.Element {
   // The root audio engine: playback + the popup live above every view, so
   // navigating never stops the audio nor closes the popup. We only need to seed
   // playback (`playChapter`) and raise the popup into focus (`setExpanded`).
-  const { playChapter: audioPlayChapter, setExpanded: setPlayerExpanded, syncNotice } = useAudioPlayer();
+  const { playChapter: audioPlayChapter, setExpanded: setPlayerExpanded, syncNotice, playing } = useAudioPlayer();
+
+  // Auto-update the installed PWA when a newer bundle is deployed (an iOS
+  // home-screen PWA otherwise resumes its frozen page and never picks up a
+  // deploy). Hard-refreshes on foreground; deferred while audio plays.
+  useAutoUpdate(playing);
 
   // When a fresh load pulls a newer playback position from another device, the
   // audio engine raises `syncNotice`; surface it through the shared snackbar
