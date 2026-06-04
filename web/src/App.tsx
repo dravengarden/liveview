@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { flushSync } from "react-dom";
 import {
   ThemeProvider,
   CssBaseline,
@@ -8,7 +9,7 @@ import {
   Tooltip,
   Snackbar,
 } from "@mui/material";
-import { Headphones as AudiobookIcon } from "@mui/icons-material";
+import { Headphones as AudiobookIcon, IosShare as ShareIcon } from "@mui/icons-material";
 import { Sidebar, SettingsButton, ContentViewer, NowPlayingPopup, MiniPlayer, Landing } from "@/components";
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
@@ -354,9 +355,26 @@ export function App(): React.JSX.Element {
         // The server resolves overlay → base and reports the edition it served.
         // If that differs from what we asked for, the page isn't translated yet.
         contentLangRef.current = data.lang;
-        setCurrentFileType(data.file_type);
-        setCurrentContent(data.content);
-        setUntranslated(data.lang !== reqLang ? { requested: reqLang, shown: data.lang } : null);
+        const apply = (): void => {
+          setCurrentFileType(data.file_type);
+          setCurrentContent(data.content);
+          setUntranslated(data.lang !== reqLang ? { requested: reqLang, shown: data.lang } : null);
+        };
+        // Cross-fade the reader between chapters where supported (the content
+        // element carries `view-transition-name: lv-content`, so only it
+        // animates — not the sidebar/chrome). flushSync applies the swap
+        // synchronously inside the transition so it captures the new DOM.
+        // Feature-detected + skipped under prefers-reduced-motion; instant swap
+        // otherwise.
+        const doc = document as Document & { startViewTransition?: (cb: () => void) => unknown };
+        const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+        if (!reduceMotion && typeof doc.startViewTransition === "function") {
+          doc.startViewTransition(() => {
+            flushSync(apply);
+          });
+        } else {
+          apply();
+        }
       } catch (e) {
         console.error("Failed to fetch file:", e);
       }
@@ -669,14 +687,31 @@ export function App(): React.JSX.Element {
     if (activeSlug) openAudiobook(activeSlug);
   }, [activeSlug, openAudiobook]);
 
-  // In-book top-bar actions: a listen button (when the book has audio) + the
-  // shared settings affordance.
+  // Web Share: hand the current deep link (book + chapter + edition, encoded in
+  // the URL hash) to the OS share sheet. Works on iOS Safari/PWA + Android +
+  // some desktop; the button is hidden where unsupported. A user-cancelled
+  // share rejects with AbortError — swallow it.
+  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+  const shareBook = useCallback(() => {
+    if (!navigator.share) return;
+    void navigator.share({ title: bookLabel, url: window.location.href }).catch(() => {});
+  }, [bookLabel]);
+
+  // In-book top-bar actions: a listen button (when the book has audio), a share
+  // button (where supported), + the shared settings affordance.
   const bookActions = (
     <>
       {hasAudio && (
         <Tooltip title={t("audiobook.open")}>
           <IconButton onClick={openActiveAudiobook} aria-label={t("audiobook.open")}>
             <AudiobookIcon />
+          </IconButton>
+        </Tooltip>
+      )}
+      {canShare && (
+        <Tooltip title={t("action.share")}>
+          <IconButton onClick={shareBook} aria-label={t("action.share")}>
+            <ShareIcon />
           </IconButton>
         </Tooltip>
       )}

@@ -103,6 +103,9 @@ export function MarkdownViewer({
   onSaveScroll,
 }: MarkdownViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
+  // Wrapper that hosts the reading-progress bar; carries the --lv-read-progress
+  // CSS var (0..1) the bar scales to, set imperatively on scroll (no re-render).
+  const wrapperRef = useRef<HTMLDivElement>(null);
   // Suppresses the scroll handler while we programmatically restore position,
   // so restoring doesn't immediately overwrite the saved value with itself.
   const restoringRef = useRef(false);
@@ -349,15 +352,18 @@ export function MarkdownViewer({
   // on every event. Coalescing to one read per frame — and bailing if the node
   // has since detached — keeps the scroll handler off the layout-thrash path.
   const handleScroll = useCallback(() => {
-    if (restoringRef.current || !currentPath || !onSaveScroll) return;
+    if (restoringRef.current || !currentPath) return;
     if (scrollRafRef.current !== null) return; // a read is already queued
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null;
       const el = containerRef.current;
-      if (!el || restoringRef.current || !currentPath || !onSaveScroll) return;
+      if (!el || restoringRef.current || !currentPath) return;
       const max = el.scrollHeight - el.clientHeight;
       if (max <= 0) return; // not scrollable yet — don't clobber with 0
-      onSaveScroll(currentPath, el.scrollTop / max);
+      const ratio = el.scrollTop / max;
+      // Drive the progress bar via a CSS var (no React re-render per scroll).
+      wrapperRef.current?.style.setProperty("--lv-read-progress", ratio.toFixed(4));
+      onSaveScroll?.(currentPath, ratio);
     });
   }, [currentPath, onSaveScroll]);
 
@@ -454,6 +460,32 @@ export function MarkdownViewer({
   return (
     <>
     <Box
+      ref={wrapperRef}
+      // `view-transition-name` scopes the chapter cross-fade (App.loadFile) to
+      // the reader area, so the sidebar/chrome don't animate. Only one element
+      // may carry a given name, and one MarkdownViewer is mounted at a time.
+      style={{ viewTransitionName: "lv-content" }}
+      sx={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+    >
+      {/* Reading-progress bar: scales with scroll via --lv-read-progress (set
+          imperatively in handleScroll). Pinned to the top edge of the reader. */}
+      <Box
+        aria-hidden
+        sx={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          height: "3px",
+          zIndex: 4,
+          transformOrigin: "left center",
+          transform: "scaleX(var(--lv-read-progress, 0))",
+          bgcolor: "primary.main",
+          opacity: 0.85,
+          pointerEvents: "none",
+        }}
+      />
+    <Box
       ref={containerRef}
       onClick={handleClick}
       onScroll={handleScroll}
@@ -496,6 +528,7 @@ export function MarkdownViewer({
         sx={innerSx}
         dangerouslySetInnerHTML={{ __html: html }}
       />
+    </Box>
     </Box>
       <ImageLightbox
         images={images}
