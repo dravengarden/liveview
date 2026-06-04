@@ -301,34 +301,29 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
           ) : (
             <AudiobookIcon sx={{ fontSize: 22, color: "rgba(255,255,255,0.92)" }} />
           )}
-          {/* Small corner status badge — a non-interactive indicator, NOT a
-              button: a tap on the puck expands the controls, it doesn't toggle
-              play. Kept in the corner (vs a big centred glyph) so it reads as
-              status and leaves the artwork visible. */}
+          {/* Play/pause state glyph, CENTERED in the puck over a soft scrim (the
+              artwork still reads through it). It's an indicator, not a button —
+              a tap on the puck expands the control card, it doesn't toggle. */}
           <Box
             sx={{
               position: "absolute",
-              right: -1,
-              bottom: -1,
-              width: 20,
-              height: 20,
-              borderRadius: "50%",
+              inset: 0,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              bgcolor: "rgba(0,0,0,0.55)",
+              bgcolor: "rgba(0,0,0,0.34)",
               color: "common.white",
             }}
           >
             {loading ? (
-              <CircularProgress size={12} sx={{ color: "common.white" }} />
+              <CircularProgress size={20} sx={{ color: "common.white" }} />
             ) : playing ? (
-              <Pause sx={{ fontSize: 13 }} />
+              <Pause sx={{ fontSize: 24 }} />
             ) : (
-              // A right-pointing triangle's visual mass sits left of its glyph
-              // box, so dead-centre looks shifted — nudge it right ~1px to read
-              // optically centred in the badge.
-              <PlayArrow sx={{ fontSize: 14, position: "relative", left: "1px" }} />
+              // A right-pointing triangle reads left-heavy when dead-centre
+              // (its tip extends right, its flat base sits left) — nudge it
+              // right ~2px so it looks optically centred.
+              <PlayArrow sx={{ fontSize: 28, transform: "translateX(2px)" }} />
             )}
           </Box>
         </Box>
