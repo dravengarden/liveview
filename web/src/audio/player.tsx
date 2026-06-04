@@ -163,7 +163,16 @@ function updatePositionState(audio: HTMLAudioElement): void {
 function playAudio(audio: HTMLAudioElement, onError?: (e: unknown) => void): void {
   const p = audio.play() as Promise<void> | undefined;
   if (!p || typeof p.catch !== "function") return;
-  p.catch(() => {
+  p.catch((err: unknown) => {
+    // NotAllowedError = playback isn't permitted in this context: no user
+    // gesture (auto-advance to the next chapter), or the iOS standalone-PWA
+    // background/lock restriction. This is benign and EXPECTED — stay paused
+    // silently so the user can tap play. Do NOT reload (that would pointlessly
+    // re-fetch and reset the position) and do NOT surface an error banner.
+    if (err instanceof DOMException && err.name === "NotAllowedError") return;
+    // Any other rejection: assume the media resource was dropped (an iOS
+    // screen-lock interruption evicts the decoded buffer) and re-establish it at
+    // the same position. A retry that's still NotAllowed stays silent too.
     const at = audio.currentTime;
     audio.addEventListener(
       "loadedmetadata",
@@ -175,7 +184,9 @@ function playAudio(audio: HTMLAudioElement, onError?: (e: unknown) => void): voi
             // currentTime not settable yet — resume from 0 rather than fail.
           }
         }
-        void audio.play().catch((e) => onError?.(e));
+        void audio.play().catch((e: unknown) => {
+          if (!(e instanceof DOMException && e.name === "NotAllowedError")) onError?.(e);
+        });
       },
       { once: true }
     );
