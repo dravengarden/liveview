@@ -148,6 +148,45 @@ function updatePositionState(audio: HTMLAudioElement): void {
   }
 }
 
+/** Play with iOS interruption recovery.
+ *
+ * Why: when the screen locks (or the PWA is backgrounded), iOS deactivates the
+ * page's audio session AND drops the element's decoded media buffer. The next
+ * `play()` then rejects (AbortError / a media error) and — if the rejection is
+ * swallowed — the play button silently does nothing. That's the "息屏后点击播放
+ * 无法播放" bug. The first `play()` here runs synchronously so it stays inside
+ * the tap's user-activation window; on rejection we re-establish the (evicted)
+ * resource with `load()`, restore the position once metadata is back, and retry.
+ * iOS keeps media-playback activation alive briefly after a gesture-initiated
+ * play(), so the retry is permitted. `onError` fires ONLY if the retry also
+ * fails, so a normal interruption recovers without flashing an error. */
+function playAudio(audio: HTMLAudioElement, onError?: (e: unknown) => void): void {
+  const p = audio.play() as Promise<void> | undefined;
+  if (!p || typeof p.catch !== "function") return;
+  p.catch(() => {
+    const at = audio.currentTime;
+    audio.addEventListener(
+      "loadedmetadata",
+      () => {
+        if (Number.isFinite(at) && at > 0) {
+          try {
+            audio.currentTime = at;
+          } catch {
+            // currentTime not settable yet — resume from 0 rather than fail.
+          }
+        }
+        void audio.play().catch((e) => onError?.(e));
+      },
+      { once: true }
+    );
+    try {
+      audio.load();
+    } catch (e) {
+      onError?.(e);
+    }
+  });
+}
+
 /** Map playback ms → sentence index via binary search over contiguous marks. */
 function markIndex(marks: Mark[], ms: number): number {
   let lo = 0;
@@ -288,7 +327,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
             audio.load();
             const saved = Number(localStorage.getItem(posKey(np.chapterPath, np.lang)) ?? "");
             if (Number.isFinite(saved) && saved > 0) audio.currentTime = saved;
-            if (autoplay) void audio.play();
+            if (autoplay) playAudio(audio, (e) => setError(e instanceof Error ? e.message : String(e)));
           }
           setLoading(false);
         } catch (e) {
@@ -574,7 +613,10 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   useEffect(() => {
     if (!("mediaSession" in navigator)) return;
     const ms = navigator.mediaSession;
-    ms.setActionHandler("play", () => void audioRef.current?.play());
+    ms.setActionHandler("play", () => {
+      const a = audioRef.current;
+      if (a) playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
+    });
     ms.setActionHandler("pause", () => audioRef.current?.pause());
     ms.setActionHandler("previoustrack", () => prevChapter());
     ms.setActionHandler("nexttrack", () => nextChapter());
@@ -618,6 +660,22 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     navigator.mediaSession.playbackState = playing ? "playing" : nowPlaying ? "paused" : "none";
   }, [playing, nowPlaying]);
 
+  // iOS deactivates the page's audio session AND its lock-screen position state
+  // when the screen locks / the PWA is backgrounded. On return to the
+  // foreground, re-push the element's timeline so the OS transport controls stay
+  // responsive — a stale position state can leave even the lock-screen play
+  // button unresponsive (see updatePositionState). The actual in-app resume is
+  // handled by playAudio's interruption recovery.
+  useEffect(() => {
+    const onVisible = (): void => {
+      if (document.visibilityState !== "visible") return;
+      const a = audioRef.current;
+      if (a) updatePositionState(a);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
+
   const playChapter = useCallback(
     (np: Omit<NowPlaying, "chapterLabel">, q: Track[]) => {
       const qi = q.findIndex((tk) => tk.path === np.chapterPath);
@@ -634,7 +692,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   const togglePlay = useCallback(() => {
     const a = audioRef.current;
     if (!a) return;
-    if (a.paused) void a.play();
+    if (a.paused) playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
     else a.pause();
   }, []);
   const seek = useCallback((sec: number) => {
@@ -650,7 +708,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     const m = marksRef.current[idx];
     if (!a || !m) return;
     a.currentTime = m.start_ms / 1000;
-    void a.play();
+    playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
   const setRate = useCallback((r: number) => {
     setRateState(r);
