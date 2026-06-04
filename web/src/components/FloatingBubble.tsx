@@ -5,6 +5,8 @@ import {
   Pause,
   SkipNext,
   SkipPrevious,
+  Replay10,
+  Forward10,
   Headphones as AudiobookIcon,
 } from "@mui/icons-material";
 import { useAudioPlayer } from "@/audio/player";
@@ -25,9 +27,12 @@ function coverGradient(slug: string): string {
 const SIZE = 56; // bubble diameter (px)
 const MARGIN = 12; // gap kept from the viewport edge
 const DRAG_THRESHOLD = 6; // px a press must travel before it's a drag (vs a tap)
-const IDLE_MS = 4000; // fade + tuck behind the edge after this long untouched
-const PEEK = 0.32; // fraction of the bubble that tucks off-edge when idle
-const CARD_H = 68; // approx control-card height, for bottom-clamping the card
+const IDLE_MS = 3000; // fade + tuck behind the edge after this long untouched
+const PEEK = 0.55; // fraction of the bubble that tucks off-edge when idle
+const IDLE_OPACITY = 0.3; // how faint it gets when idle (kept grabbable, not gone)
+const CARD_H = 116; // approx control-card height, for bottom-clamping the card
+/** Compact speed cycle for the bubble card (the full popup has the long list). */
+const RATE_CYCLE = [1, 1.25, 1.5, 2, 3] as const;
 const POS_KEY = "lv-audio-bubble-pos";
 
 type Side = "left" | "right";
@@ -106,6 +111,9 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
     togglePlay,
     nextChapter,
     prevChapter,
+    skip,
+    rate,
+    setRate,
   } = useAudioPlayer();
 
   const stored = useRef<StoredPos>(loadPos());
@@ -253,7 +261,7 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
           zIndex: theme.zIndex.fab,
           touchAction: "none",
           cursor: dragging ? "grabbing" : "grab",
-          opacity: controlsOpen ? 0 : tucked ? 0.5 : 0.95,
+          opacity: controlsOpen ? 0 : tucked ? IDLE_OPACITY : 0.92,
           pointerEvents: controlsOpen ? "none" : "auto",
           transform: tucked ? `translateX(${pos.side === "right" ? PEEK * 100 : -PEEK * 100}%)` : "none",
           transition: dragging
@@ -308,7 +316,7 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              bgcolor: "rgba(0,0,0,0.62)",
+              bgcolor: "rgba(0,0,0,0.55)",
               color: "common.white",
             }}
           >
@@ -317,7 +325,10 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
             ) : playing ? (
               <Pause sx={{ fontSize: 13 }} />
             ) : (
-              <PlayArrow sx={{ fontSize: 14 }} />
+              // A right-pointing triangle's visual mass sits left of its glyph
+              // box, so dead-centre looks shifted — nudge it right ~1px to read
+              // optically centred in the badge.
+              <PlayArrow sx={{ fontSize: 14, position: "relative", left: "1px" }} />
             )}
           </Box>
         </Box>
@@ -341,19 +352,18 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
             ...(pos.side === "right" ? { right: MARGIN } : { left: MARGIN }),
             zIndex: theme.zIndex.fab,
             display: "flex",
-            alignItems: "center",
-            gap: 0.25,
-            p: 0.5,
-            pl: 0.75,
-            maxWidth: "calc(100vw - 24px)",
+            flexDirection: "column",
+            gap: 0.5,
+            p: 1,
+            width: "min(320px, calc(100vw - 24px))",
             bgcolor: "background.paper",
-            borderRadius: 7,
+            borderRadius: 4,
             boxShadow: 8,
             border: 1,
             borderColor: "divider",
           })}
         >
-          {/* Artwork + title: the "back to the player" handle. */}
+          {/* Row 1 — artwork + title: the "back to the player" handle. */}
           <Box
             component="button"
             aria-label={t("audiobook.openPlayer")}
@@ -366,11 +376,10 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
               display: "flex",
               alignItems: "center",
               gap: 1,
-              flex: 1,
               minWidth: 0,
               cursor: "pointer",
-              borderRadius: 6,
-              pr: 0.5,
+              borderRadius: 2,
+              px: 0.5,
               "&:hover": { opacity: 0.85 },
             }}
           >
@@ -399,7 +408,7 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
                 <AudiobookIcon sx={{ fontSize: 20, color: "rgba(255,255,255,0.92)" }} />
               )}
             </Box>
-            <Box sx={{ minWidth: 0 }}>
+            <Box sx={{ minWidth: 0, flex: 1 }}>
               <Typography variant="body2" fontWeight={700} noWrap>
                 {nowPlaying.chapterLabel}
               </Typography>
@@ -409,15 +418,49 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
             </Box>
           </Box>
 
-          <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev} sx={{ width: 40, height: 40 }}>
-            <SkipPrevious />
-          </IconButton>
-          <IconButton aria-label={playing ? t("audiobook.pause") : t("audiobook.play")} onClick={togglePlay} color="primary" sx={{ width: 46, height: 46 }}>
-            {loading ? <CircularProgress size={22} /> : playing ? <Pause sx={{ fontSize: 30 }} /> : <PlayArrow sx={{ fontSize: 30 }} />}
-          </IconButton>
-          <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 40, height: 40 }}>
-            <SkipNext />
-          </IconButton>
+          {/* Row 2 — transport: prev-chapter · −10s · play/pause · +10s ·
+              next-chapter, with a compact speed cycle pinned to the right. */}
+          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev} sx={{ width: 38, height: 38 }}>
+              <SkipPrevious />
+            </IconButton>
+            <IconButton aria-label={t("audiobook.skipBack")} onClick={() => skip(-10)} sx={{ width: 38, height: 38 }}>
+              <Replay10 />
+            </IconButton>
+            <IconButton aria-label={playing ? t("audiobook.pause") : t("audiobook.play")} onClick={togglePlay} color="primary" sx={{ width: 48, height: 48 }}>
+              {loading ? <CircularProgress size={24} /> : playing ? <Pause sx={{ fontSize: 32 }} /> : <PlayArrow sx={{ fontSize: 32 }} />}
+            </IconButton>
+            <IconButton aria-label={t("audiobook.skipForward")} onClick={() => skip(10)} sx={{ width: 38, height: 38 }}>
+              <Forward10 />
+            </IconButton>
+            <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 38, height: 38 }}>
+              <SkipNext />
+            </IconButton>
+            {/* Tap to cycle playback speed (the full popup keeps the long list). */}
+            <Box
+              component="button"
+              aria-label={t("audiobook.speed")}
+              onClick={() => {
+                const i = RATE_CYCLE.indexOf(rate as (typeof RATE_CYCLE)[number]);
+                setRate(RATE_CYCLE[(i + 1) % RATE_CYCLE.length] ?? 1);
+              }}
+              sx={{
+                all: "unset",
+                cursor: "pointer",
+                minWidth: 38,
+                textAlign: "center",
+                px: 0.5,
+                py: 0.25,
+                borderRadius: 1.5,
+                fontSize: 13,
+                fontWeight: 700,
+                color: "text.secondary",
+                "&:hover": { color: "text.primary", bgcolor: "action.hover" },
+              }}
+            >
+              {rate}×
+            </Box>
+          </Box>
         </Box>
       </Grow>
     </>
