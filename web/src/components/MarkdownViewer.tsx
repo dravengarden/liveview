@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { Box } from "@mui/material";
 import { ImageLightbox } from "./ImageLightbox";
+import { useWakeLock } from "@/hooks/useWakeLock";
 
 declare global {
   interface Window {
@@ -114,6 +115,10 @@ export function MarkdownViewer({
   // diagrams aren't in the DOM yet when the gallery effect first wires click
   // handlers — re-running the effect on this tick picks them up once they are.
   const [diagramTick, setDiagramTick] = useState(0);
+
+  // Keep the screen awake while a chapter is open — a reader may not touch the
+  // screen for minutes. Released automatically when no doc is shown.
+  useWakeLock(!!html);
 
   const processContent = useCallback(() => {
     const container = containerRef.current;

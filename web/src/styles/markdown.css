@@ -23,6 +23,25 @@
   word-wrap: break-word;
 }
 
+/* Typography polish (progressive enhancement — ignored where unsupported,
+   e.g. Safari < 26). `pretty` evens the ragged right edge and prevents orphan
+   last lines in body prose; `balance` keeps short headings off a lonely line.
+   Reading-focused, so scoped to prose + headings, never code blocks. */
+.markdown-body p,
+.markdown-body li,
+.markdown-body blockquote {
+  text-wrap: pretty;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  text-wrap: balance;
+}
+
 .markdown-body a {
   text-decoration: underline;
   text-underline-offset: .2rem;
