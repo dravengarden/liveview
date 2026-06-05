@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { Box } from "@mui/material";
+import { READING_COLUMN_MAX } from "@/types";
 import { ImageLightbox } from "./ImageLightbox";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { ensureScript, ensureStyle } from "@/ensureAsset";
@@ -479,7 +480,9 @@ export function MarkdownViewer({
   // the inner column. `.markdown-body` reads --lv-line-height; max-width is
   // applied directly so layout responds without an extra CSS round-trip.
   const innerSx = {
-    maxWidth: contentMaxWidth > 0 ? `${contentMaxWidth}px` : "none",
+    // Fixed comfortable column cap (centred); the user-controlled value is the
+    // side MARGIN, applied as the scroll container's horizontal padding below.
+    maxWidth: `${READING_COLUMN_MAX}px`,
     mx: "auto",
     // CSS custom prop consumed by markdown.css.
     "--lv-line-height": String(lineHeight),
@@ -540,7 +543,9 @@ export function MarkdownViewer({
         // iOS, where there's no trackpad to mask it).
         minHeight: 0,
         overflow: "auto",
-        p: { xs: 2, md: 4 },
+        // Vertical padding fixed; horizontal padding IS the reading margin.
+        py: { xs: 2, md: 4 },
+        px: `${contentMaxWidth}px`,
         "& img": {
           cursor: "zoom-in",
         },

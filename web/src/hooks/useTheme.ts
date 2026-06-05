@@ -1,19 +1,57 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { createTheme, type Theme as MuiTheme } from "@mui/material/styles";
-import type { Theme } from "@/types";
+import type { Theme, ThemeVariant, ThemeMode } from "@/types";
+import { THEME_VARIANTS } from "@/types";
 import { getServerSettings, putServerSetting } from "@/serverSettings";
 
-const THEME_KEY = "lv-theme";
-const THEME_SETTING_KEY = "ui.theme";
+// Theme is now two axes: a colour VARIANT (classic/warm) and a MODE
+// (auto/light/dark). The flat 4-theme value is derived from them.
+const VARIANT_KEY = "lv-theme-variant";
+const MODE_KEY = "lv-theme-mode";
+const VARIANT_SETTING_KEY = "ui.themeVariant";
+const MODE_SETTING_KEY = "ui.themeMode";
+const LEGACY_THEME_KEY = "lv-theme";
 
-const VALID_THEMES: Theme[] = ["light", "sepia", "dark", "night"];
+const VALID_VARIANTS: ThemeVariant[] = ["classic", "warm"];
+const VALID_MODES: ThemeMode[] = ["auto", "light", "dark"];
 
-function getStoredTheme(): Theme {
-  const stored = localStorage.getItem(THEME_KEY);
-  if (stored !== null && VALID_THEMES.includes(stored as Theme)) {
-    return stored as Theme;
+function systemPrefersDark(): boolean {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+/** Resolve the (variant, mode) pair to one of the 4 flat themes. */
+function resolveTheme(variant: ThemeVariant, mode: ThemeMode, sysDark: boolean): Theme {
+  const effective = mode === "auto" ? (sysDark ? "dark" : "light") : mode;
+  return THEME_VARIANTS[variant][effective];
+}
+
+/** Map a legacy flat-theme choice onto the new (variant, mode) axes, so an
+ *  existing install keeps its look on first load after the upgrade. */
+function migrateLegacy(): { variant: ThemeVariant; mode: ThemeMode } | null {
+  switch (localStorage.getItem(LEGACY_THEME_KEY)) {
+    case "light":
+      return { variant: "classic", mode: "light" };
+    case "dark":
+      return { variant: "classic", mode: "dark" };
+    case "sepia":
+      return { variant: "warm", mode: "light" };
+    case "night":
+      return { variant: "warm", mode: "dark" };
+    default:
+      return null;
   }
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function getStored(): { variant: ThemeVariant; mode: ThemeMode } {
+  // Resolve each axis independently so a partially-persisted state (e.g. only
+  // the mode was changed after a legacy migration) keeps both choices.
+  const legacy = migrateLegacy();
+  const v = localStorage.getItem(VARIANT_KEY);
+  const m = localStorage.getItem(MODE_KEY);
+  return {
+    variant: VALID_VARIANTS.includes(v as ThemeVariant) ? (v as ThemeVariant) : (legacy?.variant ?? "classic"),
+    mode: VALID_MODES.includes(m as ThemeMode) ? (m as ThemeMode) : (legacy?.mode ?? "auto"),
+  };
 }
 
 // Explicit, not name-based: "sepia" is a light theme yet has no "light" in its
@@ -100,55 +138,66 @@ function getThemeColors(theme: Theme): ThemeColors {
 }
 
 interface UseThemeResult {
+  /** The resolved flat theme (variant + mode → one of the 4 palettes). */
   theme: Theme;
   muiTheme: MuiTheme;
-  toggleTheme: () => void;
-  setTheme: (theme: Theme) => void;
+  variant: ThemeVariant;
+  mode: ThemeMode;
+  setVariant: (v: ThemeVariant) => void;
+  setMode: (m: ThemeMode) => void;
 }
 
 export function useTheme(): UseThemeResult {
-  const [theme, setThemeState] = useState<Theme>(getStoredTheme);
+  const [variant, setVariantState] = useState<ThemeVariant>(() => getStored().variant);
+  const [mode, setModeState] = useState<ThemeMode>(() => getStored().mode);
+  const [sysDark, setSysDark] = useState<boolean>(systemPrefersDark);
 
-  const applyTheme = useCallback((newTheme: Theme) => {
-    setThemeState(newTheme);
-    localStorage.setItem(THEME_KEY, newTheme);
-    document.documentElement.setAttribute("data-theme", newTheme);
-    // A theme-agnostic light/dark flag for CSS that only cares about the
-    // scheme (e.g. the dark-mode image plate in markdown.css), so such rules
-    // never have to enumerate theme names.
-    document.documentElement.setAttribute(
-      "data-color-scheme",
-      isDarkTheme(newTheme) ? "dark" : "light"
-    );
+  const theme = resolveTheme(variant, mode, sysDark);
+
+  const setVariant = useCallback((v: ThemeVariant) => {
+    setVariantState(v);
+    localStorage.setItem(VARIANT_KEY, v);
+    putServerSetting(VARIANT_SETTING_KEY, v);
   }, []);
 
-  const setTheme = useCallback(
-    (newTheme: Theme) => {
-      applyTheme(newTheme);
-      putServerSetting(THEME_SETTING_KEY, newTheme);
-    },
-    [applyTheme]
-  );
+  const setMode = useCallback((m: ThemeMode) => {
+    setModeState(m);
+    localStorage.setItem(MODE_KEY, m);
+    putServerSetting(MODE_SETTING_KEY, m);
+  }, []);
 
-  // Reconcile to the server (cross-device truth) once on mount. localStorage
-  // already gave the first paint; apply the server value only when it differs
-  // (avoids a needless render) and via applyTheme (so we don't echo it back).
+  // While mode = auto, follow the OS scheme live (re-resolves to the variant's
+  // light/dark half on system change).
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (e: MediaQueryListEvent): void => setSysDark(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  // Reconcile to the server (cross-device truth) once on mount; localStorage
+  // gave the first paint.
   useEffect(() => {
     void getServerSettings().then((s) => {
-      const v = s[THEME_SETTING_KEY];
-      if (v !== undefined && VALID_THEMES.includes(v as Theme) && v !== theme) {
-        applyTheme(v as Theme);
+      const v = s[VARIANT_SETTING_KEY];
+      const m = s[MODE_SETTING_KEY];
+      if (VALID_VARIANTS.includes(v as ThemeVariant)) {
+        setVariantState(v as ThemeVariant);
+        localStorage.setItem(VARIANT_KEY, v as string);
+      }
+      if (VALID_MODES.includes(m as ThemeMode)) {
+        setModeState(m as ThemeMode);
+        localStorage.setItem(MODE_KEY, m as string);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const toggleTheme = useCallback(() => {
-    setTheme(isDarkTheme(theme) ? "light" : "dark");
-  }, [theme, setTheme]);
-
+  // Apply the resolved theme to the document (data attrs + iOS status-bar colour).
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
+    // A theme-agnostic light/dark flag for CSS that only cares about the scheme
+    // (e.g. the dark-mode image plate in markdown.css).
     document.documentElement.setAttribute(
       "data-color-scheme",
       isDarkTheme(theme) ? "dark" : "light"
@@ -210,5 +259,5 @@ export function useTheme(): UseThemeResult {
     });
   }, [theme]);
 
-  return { theme, muiTheme, toggleTheme, setTheme };
+  return { theme, muiTheme, variant, mode, setVariant, setMode };
 }

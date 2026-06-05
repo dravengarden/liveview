@@ -198,7 +198,7 @@ export function App(): React.JSX.Element {
   const [recentProgress, setRecentProgress] = useState<ProgressEntry[]>([]);
 
   const { t, lang: uiLang } = useI18n();
-  const { theme, muiTheme, setTheme } = useTheme();
+  const { theme, muiTheme, variant, mode, setVariant, setMode } = useTheme();
   const { menuBarSettings, setContentMaxWidth, setLineHeight } = useSettings();
   const { fontId, setFont } = useFont();
   // The root audio engine: playback + the popup live above every view, so
@@ -678,10 +678,12 @@ export function App(): React.JSX.Element {
   // just hand it liveview's settings rows.
   const settingsButton = (
     <SettingsButton
-      theme={theme}
+      variant={variant}
+      mode={mode}
       fontId={fontId}
       menuBarSettings={menuBarSettings}
-      onThemeChange={setTheme}
+      onVariantChange={setVariant}
+      onModeChange={setMode}
       onFontChange={setFont}
       onContentMaxWidthChange={setContentMaxWidth}
       onLineHeightChange={setLineHeight}

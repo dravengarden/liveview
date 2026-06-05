@@ -110,34 +110,47 @@ export type WsMessage =
 // were dropped — they read as IDE chrome, not a book.
 export type Theme = "light" | "sepia" | "dark" | "night";
 
-export interface ThemeOption {
-  value: Theme;
+/** The two independent theme axes (settings exposes them as two controls):
+ *  a colour-palette VARIANT, each a light+dark pair, and a MODE that picks
+ *  which half of the pair to use (auto = follow the OS). */
+export type ThemeVariant = "classic" | "warm";
+export type ThemeMode = "auto" | "light" | "dark";
+
+/** variant → its light/dark pair (the 4 flat themes are derived from these). */
+export const THEME_VARIANTS: Record<ThemeVariant, { light: Theme; dark: Theme }> = {
+  classic: { light: "light", dark: "dark" },
+  warm: { light: "sepia", dark: "night" },
+};
+
+export interface VariantOption {
+  value: ThemeVariant;
   label: string;
 }
 
-export const THEME_OPTIONS: ThemeOption[] = [
-  { value: "light", label: "Light" },
-  { value: "sepia", label: "Sepia" },
-  { value: "dark", label: "Dark" },
-  { value: "night", label: "Night" },
+export const VARIANT_OPTIONS: VariantOption[] = [
+  { value: "classic", label: "Classic" },
+  { value: "warm", label: "Warm" },
 ];
 
 export interface MenuBarSettings {
-  /** Max width of the markdown reading area in px. Smaller = bigger left/right
-   *  margin (WeChat-style 页边距). 0 means "no limit" — use the viewport. */
+  /** Horizontal reading MARGIN in px (left/right padding of the reading
+   *  column). Unlike the old max-width this also works on a phone, where the
+   *  viewport is already narrower than any sensible max-width. (Field name kept
+   *  for storage back-compat; it no longer means a width.) */
   contentMaxWidth: number;
   /** Line height applied to markdown body content. */
   lineHeight: number;
 }
 
-// MIN is deliberately below phone-viewport width (~375px) so the slider visibly
-// narrows the column (= bigger left/right margin, WeChat-style 页边距) even on
-// mobile; with the old 640 floor every value exceeded the viewport and the
-// control appeared to do nothing on a phone.
-export const CONTENT_WIDTH_MIN = 320;
-export const CONTENT_WIDTH_MAX = 1280;
-export const CONTENT_WIDTH_STEP = 20;
-export const CONTENT_WIDTH_DEFAULT = 960;
+// Reading MARGIN range (px of left/right padding). A fixed column cap
+// (READING_COLUMN_MAX) keeps desktop line-length comfortable; the margin then
+// just adds side gutter, and on a phone it directly controls the side whitespace.
+export const CONTENT_WIDTH_MIN = 0;
+export const CONTENT_WIDTH_MAX = 64;
+export const CONTENT_WIDTH_STEP = 4;
+export const CONTENT_WIDTH_DEFAULT = 16;
+/** Fixed max width of the reading column (not user-controlled). */
+export const READING_COLUMN_MAX = 900;
 
 export const LINE_HEIGHT_MIN = 1.3;
 export const LINE_HEIGHT_MAX = 2.2;

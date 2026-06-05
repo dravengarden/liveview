@@ -20,6 +20,7 @@ import {
   Bedtime,
 } from "@mui/icons-material";
 import { useAudioPlayer } from "@/audio/player";
+import { READING_COLUMN_MAX } from "@/types";
 import { useI18n } from "@/i18n";
 
 interface AudiobookPlayerProps {
@@ -278,8 +279,9 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
       >
         <Box
           sx={{
-            maxWidth: contentMaxWidth > 0 ? contentMaxWidth : "none",
+            maxWidth: READING_COLUMN_MAX,
             mx: "auto",
+            px: `${contentMaxWidth}px`,
             fontFamily: "var(--lv-reading-font)",
             lineHeight,
             fontSize: "1.05rem",

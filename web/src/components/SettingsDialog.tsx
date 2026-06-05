@@ -7,9 +7,10 @@ import {
 } from "@mui/material";
 import { Check as CheckIcon } from "@mui/icons-material";
 import { SettingsSheet } from "../_shell";
-import type { Theme, MenuBarSettings } from "@/types";
+import type { Theme, ThemeVariant, ThemeMode, MenuBarSettings } from "@/types";
 import {
-  THEME_OPTIONS,
+  VARIANT_OPTIONS,
+  THEME_VARIANTS,
   CONTENT_WIDTH_MIN,
   CONTENT_WIDTH_MAX,
   CONTENT_WIDTH_STEP,
@@ -21,14 +22,18 @@ import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
 
 interface SettingsButtonProps {
-  theme: Theme;
+  variant: ThemeVariant;
+  mode: ThemeMode;
   fontId: string;
   menuBarSettings: MenuBarSettings;
-  onThemeChange: (theme: Theme) => void;
+  onVariantChange: (v: ThemeVariant) => void;
+  onModeChange: (m: ThemeMode) => void;
   onFontChange: (id: string) => void;
   onContentMaxWidthChange: (width: number) => void;
   onLineHeightChange: (lh: number) => void;
 }
+
+const MODE_OPTIONS: ThemeMode[] = ["auto", "light", "dark"];
 
 interface ThemeColors {
   bg: string;
@@ -50,10 +55,12 @@ function getThemeColors(themeValue: Theme): ThemeColors {
 }
 
 export function SettingsButton({
-  theme,
+  variant,
+  mode,
   menuBarSettings,
   fontId,
-  onThemeChange,
+  onVariantChange,
+  onModeChange,
   onFontChange,
   onContentMaxWidthChange,
   onLineHeightChange,
@@ -80,24 +87,20 @@ export function SettingsButton({
           </ToggleButtonGroup>
         </Box>
 
+        {/* Palette — a light/dark colour pair (each swatch previews both halves). */}
         <Box sx={{ mb: 3 }}>
           <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, mb: 1.5, display: "block" }}>
-            {t("settings.theme")}
+            {t("settings.palette")}
           </Typography>
-          <Box
-            sx={{
-              display: "grid",
-              gridTemplateColumns: "repeat(5, 1fr)",
-              gap: 1,
-            }}
-          >
-            {THEME_OPTIONS.map((option) => {
-              const colors = getThemeColors(option.value);
-              const isSelected = theme === option.value;
+          <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 1 }}>
+            {VARIANT_OPTIONS.map((option) => {
+              const isSelected = variant === option.value;
+              const lightC = getThemeColors(THEME_VARIANTS[option.value].light);
+              const darkC = getThemeColors(THEME_VARIANTS[option.value].dark);
               return (
                 <Box
                   key={option.value}
-                  onClick={() => onThemeChange(option.value)}
+                  onClick={() => onVariantChange(option.value)}
                   sx={{
                     cursor: "pointer",
                     borderRadius: 1,
@@ -105,51 +108,23 @@ export function SettingsButton({
                     borderColor: isSelected ? "primary.main" : "divider",
                     overflow: "hidden",
                     transition: "all 0.15s ease",
-                    "&:hover": {
-                      borderColor: isSelected ? "primary.main" : "text.secondary",
-                    },
+                    "&:hover": { borderColor: isSelected ? "primary.main" : "text.secondary" },
                   }}
                 >
-                  <Box
-                    sx={{
-                      height: 40,
-                      bgcolor: colors.bg,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      position: "relative",
-                    }}
-                  >
-                    <Box
-                      sx={{
-                        width: 20,
-                        height: 3,
-                        bgcolor: colors.accent,
-                        borderRadius: 0.5,
-                        mb: 0.5,
-                      }}
-                    />
-                    <Box
-                      sx={{
-                        position: "absolute",
-                        bottom: 4,
-                        left: "50%",
-                        transform: "translateX(-50%)",
-                        width: 24,
-                        height: 2,
-                        bgcolor: colors.fg,
-                        borderRadius: 0.5,
-                        opacity: 0.5,
-                      }}
-                    />
+                  <Box sx={{ height: 44, display: "flex", position: "relative" }}>
+                    {[lightC, darkC].map((c, i) => (
+                      <Box key={i} sx={{ flex: 1, bgcolor: c.bg, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <Box sx={{ width: 18, height: 3, bgcolor: c.accent, borderRadius: 0.5 }} />
+                      </Box>
+                    ))}
                     {isSelected && (
                       <Box
                         sx={{
                           position: "absolute",
-                          top: 2,
-                          right: 2,
-                          width: 14,
-                          height: 14,
+                          top: 3,
+                          right: 3,
+                          width: 16,
+                          height: 16,
                           borderRadius: "50%",
                           bgcolor: "primary.main",
                           display: "flex",
@@ -157,28 +132,42 @@ export function SettingsButton({
                           justifyContent: "center",
                         }}
                       >
-                        <CheckIcon sx={{ fontSize: 10, color: "white" }} />
+                        <CheckIcon sx={{ fontSize: 11, color: "white" }} />
                       </Box>
                     )}
                   </Box>
                   <Typography
                     variant="caption"
-                    sx={{
-                      display: "block",
-                      textAlign: "center",
-                      py: 0.5,
-                      px: 0.25,
-                      fontSize: "0.65rem",
-                      lineHeight: 1.2,
-                      bgcolor: "background.paper",
-                    }}
+                    sx={{ display: "block", textAlign: "center", py: 0.5, fontSize: "0.72rem", bgcolor: "background.paper" }}
                   >
-                    {option.label}
+                    {t(`theme.${option.value}`)}
                   </Typography>
                 </Box>
               );
             })}
           </Box>
+        </Box>
+
+        {/* Mode — which half of the pair, or follow the OS. */}
+        <Box sx={{ mb: 3 }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, mb: 1.5, display: "block" }}>
+            {t("settings.mode")}
+          </Typography>
+          <ToggleButtonGroup
+            size="small"
+            exclusive
+            value={mode}
+            onChange={(_, value: ThemeMode | null) => {
+              if (value) onModeChange(value);
+            }}
+            sx={{ width: "100%", "& .MuiToggleButton-root": { flex: 1 } }}
+          >
+            {MODE_OPTIONS.map((m) => (
+              <ToggleButton key={m} value={m}>
+                {t(`mode.${m}`)}
+              </ToggleButton>
+            ))}
+          </ToggleButtonGroup>
         </Box>
 
         <Box sx={{ mb: 3 }}>
@@ -234,28 +223,22 @@ export function SettingsButton({
             {t("settings.reading")}
           </Typography>
 
-          {/* Content width — Smaller = bigger left/right margin. The bottom
-              of the slider snaps to "Full width" (0) so users can opt out of
-              any max-width and let prose span the viewport. */}
+          {/* Reading margin — left/right padding of the reading column (works on
+              mobile, unlike a max-width). A fixed column cap keeps desktop lines
+              readable; this just adds side gutter. */}
           <Box sx={{ px: 1, mb: 2 }}>
             <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
-              {t("settings.contentWidth")}
+              {t("settings.margin")}
             </Typography>
             <Slider
-              value={menuBarSettings.contentMaxWidth || CONTENT_WIDTH_MIN}
-              onChange={(_, value) => {
-                const v = value as number;
-                // Snap to "full width" (0) when the user drags past the max.
-                onContentMaxWidthChange(v >= CONTENT_WIDTH_MAX ? 0 : v);
-              }}
+              value={menuBarSettings.contentMaxWidth}
+              onChange={(_, value) => onContentMaxWidthChange(value as number)}
               min={CONTENT_WIDTH_MIN}
               max={CONTENT_WIDTH_MAX}
               step={CONTENT_WIDTH_STEP}
               size="small"
               valueLabelDisplay="auto"
-              valueLabelFormat={(v) =>
-                v >= CONTENT_WIDTH_MAX ? t("settings.contentWidthFull") : `${v}px`
-              }
+              valueLabelFormat={(v) => `${v as number}px`}
             />
           </Box>
 
