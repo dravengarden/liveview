@@ -1,23 +1,15 @@
 import {
   Typography,
   Box,
-  Slider,
+  MenuItem,
+  Select,
   ToggleButton,
   ToggleButtonGroup,
 } from "@mui/material";
 import { Check as CheckIcon } from "@mui/icons-material";
 import { SettingsSheet } from "../_shell";
 import type { Theme, ThemeVariant, ThemeMode, MenuBarSettings } from "@/types";
-import {
-  VARIANT_OPTIONS,
-  THEME_VARIANTS,
-  CONTENT_WIDTH_MIN,
-  CONTENT_WIDTH_MAX,
-  CONTENT_WIDTH_STEP,
-  LINE_HEIGHT_MIN,
-  LINE_HEIGHT_MAX,
-  LINE_HEIGHT_STEP,
-} from "@/types";
+import { VARIANT_OPTIONS, THEME_VARIANTS } from "@/types";
 import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
 
@@ -34,6 +26,17 @@ interface SettingsButtonProps {
 }
 
 const MODE_OPTIONS: ThemeMode[] = ["auto", "light", "dark"];
+
+// Discrete presets for the reading-layout dropdowns — a slider was fiddly on
+// touch and a number field would pop the keyboard; a small set taps cleanly.
+const MARGIN_PRESETS = [0, 8, 16, 24, 32, 48, 64];
+const LINE_HEIGHT_PRESETS = [1.4, 1.5, 1.6, 1.7, 1.8, 2.0, 2.2];
+
+/** Snap a stored value (e.g. from the old slider) to the nearest preset, so the
+ *  dropdown always shows something selected. */
+function nearest(value: number, presets: number[]): number {
+  return presets.reduce((a, b) => (Math.abs(b - value) < Math.abs(a - value) ? b : a), presets[0] ?? value);
+}
 
 interface ThemeColors {
   bg: string;
@@ -226,36 +229,40 @@ export function SettingsButton({
           {/* Reading margin — left/right padding of the reading column (works on
               mobile, unlike a max-width). A fixed column cap keeps desktop lines
               readable; this just adds side gutter. */}
-          <Box sx={{ px: 1, mb: 2 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, mb: 1.5 }}>
+            <Typography variant="caption" color="text.secondary">
               {t("settings.margin")}
             </Typography>
-            <Slider
-              value={menuBarSettings.contentMaxWidth}
-              onChange={(_, value) => onContentMaxWidthChange(value as number)}
-              min={CONTENT_WIDTH_MIN}
-              max={CONTENT_WIDTH_MAX}
-              step={CONTENT_WIDTH_STEP}
+            <Select
               size="small"
-              valueLabelDisplay="auto"
-              valueLabelFormat={(v) => `${v as number}px`}
-            />
+              value={nearest(menuBarSettings.contentMaxWidth, MARGIN_PRESETS)}
+              onChange={(e) => onContentMaxWidthChange(Number(e.target.value))}
+              sx={{ minWidth: 110 }}
+            >
+              {MARGIN_PRESETS.map((v) => (
+                <MenuItem key={v} value={v}>
+                  {v === 0 ? t("settings.marginNone") : `${v}px`}
+                </MenuItem>
+              ))}
+            </Select>
           </Box>
 
-          <Box sx={{ px: 1 }}>
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1 }}>
+            <Typography variant="caption" color="text.secondary">
               {t("settings.lineHeight")}
             </Typography>
-            <Slider
-              value={menuBarSettings.lineHeight}
-              onChange={(_, value) => onLineHeightChange(value as number)}
-              min={LINE_HEIGHT_MIN}
-              max={LINE_HEIGHT_MAX}
-              step={LINE_HEIGHT_STEP}
+            <Select
               size="small"
-              valueLabelDisplay="auto"
-              valueLabelFormat={(v) => (v as number).toFixed(1)}
-            />
+              value={nearest(menuBarSettings.lineHeight, LINE_HEIGHT_PRESETS)}
+              onChange={(e) => onLineHeightChange(Number(e.target.value))}
+              sx={{ minWidth: 110 }}
+            >
+              {LINE_HEIGHT_PRESETS.map((v) => (
+                <MenuItem key={v} value={v}>
+                  {v.toFixed(1)}
+                </MenuItem>
+              ))}
+            </Select>
           </Box>
         </Box>
     </SettingsSheet>
