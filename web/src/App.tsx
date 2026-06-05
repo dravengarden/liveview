@@ -512,12 +512,20 @@ export function App(): React.JSX.Element {
     (slug: string, renditionKind?: string) => {
       const book = books.find((b) => b.slug === slug);
       if (!book) return;
+      // No explicit kind (a shelf-card tap) ⇒ open in the rendition last used for
+      // this book, else its default. An explicit kind (the navbar switch) wins.
+      let persisted: string | null = null;
+      try {
+        persisted = localStorage.getItem(`lv-rendition:${slug}`);
+      } catch {
+        // storage unavailable — fall back to the default
+      }
       const r =
         (renditionKind ? book.renditions.find((x) => x.kind === renditionKind) : undefined) ??
+        (persisted ? book.renditions.find((x) => x.kind === persisted) : undefined) ??
         defaultRendition(book);
       if (!r) return;
-      // An audiobook card opens the listening popup (the listen plane), never a
-      // reading view — the browse plane stays on the shelf behind it.
+      // Audio opens its inline read-along page (sidebar = audio spine).
       if (r.kind === "audio") {
         openAudiobook(slug);
         return;

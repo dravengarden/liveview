@@ -34,8 +34,9 @@ interface LandingProps {
   books: Book[];
   /** Per-book "continue reading" state, keyed by slug; absent ⇒ never opened. */
   progress: Record<string, ReadingProgress>;
-  /** Open a book in a specific rendition kind (the card's text/audio variant). */
-  onOpen: (slug: string, rendition: string) => void;
+  /** Open a book (in its last-used / default rendition; the in-book navbar
+   *  switches text ↔ audio). */
+  onOpen: (slug: string) => void;
   /** Return to a clean bookshelf (clears any deep link) — the title is a home link. */
   onHome: () => void;
   /** The shared SettingsSheet (gear + responsive sheet), placed in the header. */
@@ -50,29 +51,24 @@ interface LandingProps {
  *  audio is a plain "book"; a raw `[[book]]`/`[[mount]]` tree is "docs". */
 type Category = "book" | "audiobook" | "docs";
 
-/** A single shelf card. A book expands to one card PER rendition, so a book that
- *  ships both text and audio shows up as two independent cards — a "book" (its
- *  text rendition) and an "audiobook" (its audio one) — rather than one merged
- *  entry. A raw `[[book]]`/`[[mount]]` tree stays a single "docs" card.
- *  `rendition` is the kind the card opens into. */
+/** A single shelf card — ONE per book. A book that ships both text and audio is
+ *  a single "book" card with an audio badge (`hasAudio`); it opens in whichever
+ *  rendition you last used (the in-book navbar switches between them). An
+ *  audio-ONLY book is an "audiobook" card; a raw `[[book]]`/`[[mount]]` tree is
+ *  a "docs" card. */
 interface ShelfEntry {
   book: Book;
   category: Category;
-  rendition: string;
+  hasAudio: boolean;
 }
 
 function shelfEntries(books: Book[]): ShelfEntry[] {
   const out: ShelfEntry[] = [];
   for (const b of books) {
-    if (!b.manifest) {
-      out.push({ book: b, category: "docs", rendition: b.default_rendition });
-    } else if (b.renditions.length === 0) {
-      out.push({ book: b, category: "book", rendition: b.default_rendition });
-    } else {
-      for (const r of b.renditions) {
-        out.push({ book: b, category: r.kind === "audio" ? "audiobook" : "book", rendition: r.kind });
-      }
-    }
+    const audio = b.renditions.some((r) => r.kind === "audio");
+    const text = b.renditions.some((r) => r.kind === "text");
+    const category: Category = !b.manifest ? "docs" : audio && !text ? "audiobook" : "book";
+    out.push({ book: b, category, hasAudio: audio });
   }
   return out;
 }
@@ -209,25 +205,33 @@ export function Landing({
   // Multi-select kind filter; an empty selection means "all kinds".
   const [kinds, setKinds] = useState<Category[]>([]);
 
-  // Each book fans out to one card per rendition (book / audiobook), docs to one.
+  // One card per book now (audio rides along as a badge on text+audio books).
   const entries = useMemo(() => shelfEntries(books), [books]);
+
+  // A card matches the "audiobook" kind if it has audio AT ALL (text+audio books
+  // included), so the filter surfaces everything listenable — not just
+  // audio-only books. Other kinds match the card's primary category.
+  const matchesKind = (e: ShelfEntry, kind: Category): boolean =>
+    kind === "audiobook" ? e.hasAudio : e.category === kind;
 
   // Per-kind totals for the dropdown, over the WHOLE shelf (not the search
   // result), so each row reads as a stable map of what's available.
   const counts = useMemo(() => {
     const c: Record<Category, number> = { book: 0, audiobook: 0, docs: 0 };
-    for (const e of entries) c[e.category] += 1;
+    for (const e of entries) for (const k of KIND_ORDER) if (matchesKind(e, k)) c[k] += 1;
     return c;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries]);
 
   // The shelf after both narrowing controls: kind filter AND name search.
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return entries.filter((e) => {
-      if (kinds.length > 0 && !kinds.includes(e.category)) return false;
+      if (kinds.length > 0 && !kinds.some((k) => matchesKind(e, k))) return false;
       if (q && !e.book.label.toLowerCase().includes(q) && !e.book.slug.toLowerCase().includes(q)) return false;
       return true;
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, kinds, query]);
 
   // Only offer a kind in the dropdown when the shelf actually has one.
@@ -397,14 +401,12 @@ export function Landing({
               {visible.map((e) => {
                 const b = e.book;
                 const category = e.category;
-                // The edition chips show the languages of THIS card's rendition
-                // (a book's audio edition may offer different langs than its text).
-                const langs = b.renditions.find((r) => r.kind === e.rendition)?.langs ?? b.langs;
+                const langs = b.langs;
                 const p = progress[b.slug];
                 const pct = p ? Math.min(100, Math.max(0, Math.round(p.scroll * 100))) : 0;
                 return (
                   <Card
-                    key={`${b.slug}:${e.rendition}`}
+                    key={b.slug}
                     variant="outlined"
                     sx={{
                       breakInside: "avoid",
@@ -444,13 +446,13 @@ export function Landing({
                         open, which stranded the ripple's exit animation; the
                         shelf now stays painted via opacity:0, so the ripple
                         completes normally.) */}
-                    <CardActionArea onClick={() => onOpen(b.slug, e.rendition)}>
+                    <CardActionArea onClick={() => onOpen(b.slug)}>
                       {/* Cover: the book's own image when it has one, else a
-                          slug-keyed gradient + the kind icon. Audiobooks carry an
-                          audio badge (top-left); books in progress carry a % badge
-                          (top-right). */}
+                          slug-keyed gradient + the kind icon. A book that offers
+                          audio carries a headphones badge (top-left); books in
+                          progress carry a % badge (top-right). */}
                       <BookCover book={b} category={category}>
-                        {category === "audiobook" && (
+                        {e.hasAudio && (
                           <Chip
                             icon={<AudiobookIcon />}
                             label={t("landing.audiobookBadge")}
