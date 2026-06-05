@@ -1,14 +1,29 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Box, CircularProgress, Fade, Grow, IconButton, Menu, MenuItem, Typography } from "@mui/material";
 import {
-  PlayArrow,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import {
+  Box,
+  CircularProgress,
+  Fade,
+  Grow,
+  IconButton,
+  Menu,
+  MenuItem,
+  Typography,
+} from "@mui/material";
+import {
+  Close,
+  Forward10,
+  Headphones as AudiobookIcon,
   Pause,
+  PlayArrow,
+  Replay10,
   SkipNext,
   SkipPrevious,
-  Replay10,
-  Forward10,
-  Close,
-  Headphones as AudiobookIcon,
 } from "@mui/icons-material";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
@@ -22,15 +37,21 @@ function coverGradient(slug: string): string {
   let h = 0;
   for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) | 0;
   const hue = Math.abs(h) % 360;
-  return `linear-gradient(135deg, hsl(${hue} 52% 52%), hsl(${(hue + 38) % 360} 48% 42%))`;
+  return `linear-gradient(135deg, hsl(${hue} 52% 52%), hsl(${
+    (hue + 38) % 360
+  } 48% 42%))`;
 }
 
 const SIZE = 56; // bubble diameter (px)
 const MARGIN = 12; // gap kept from the viewport edge
 const DRAG_THRESHOLD = 6; // px a press must travel before it's a drag (vs a tap)
 const IDLE_MS = 3000; // fade + tuck behind the edge after this long untouched
-const PEEK = 0.55; // fraction of the bubble that tucks off-edge when idle
-const IDLE_OPACITY = 0.3; // how faint it gets when idle (kept grabbable, not gone)
+const PEEK = 0.15; // fraction of the bubble that tucks off-edge when idle —
+// kept small so the idle bubble stays clearly discoverable (most of it
+// visible). It earlier tucked 55% off-screen at 0.3 opacity, which read as
+// "the player disappeared".
+const IDLE_OPACITY = 0.7; // how faint it gets when idle (still recedes, but
+// stays plainly visible, not nearly-gone)
 const CARD_H = 138; // approx control-card height, for bottom-clamping the card
 /** Playback-speed options for the card's speed menu (same list as the full player). */
 const RATES = [0.75, 1, 1.25, 1.5, 2, 2.25, 2.5, 2.75, 3] as const;
@@ -58,7 +79,10 @@ function loadPos(): StoredPos {
     const raw = localStorage.getItem(POS_KEY);
     if (raw) {
       const p = JSON.parse(raw) as Partial<StoredPos>;
-      if ((p.side === "left" || p.side === "right") && typeof p.topRatio === "number") {
+      if (
+        (p.side === "left" || p.side === "right") &&
+        typeof p.topRatio === "number"
+      ) {
         return { side: p.side, topRatio: clamp01(p.topRatio) };
       }
     }
@@ -122,7 +146,9 @@ export function FloatingBubble({
   } = useAudioPlayer();
 
   const stored = useRef<StoredPos>(loadPos());
-  const [pos, setPos] = useState<Pos>(() => resolve(stored.current.side, stored.current.topRatio));
+  const [pos, setPos] = useState<Pos>(() =>
+    resolve(stored.current.side, stored.current.topRatio)
+  );
   const [dragging, setDragging] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
   const [idle, setIdle] = useState(false);
@@ -139,8 +165,28 @@ export function FloatingBubble({
   const [cardDragging, setCardDragging] = useState(false);
   // Mutable drag bookkeeping — kept in a ref so pointermove can update the DOM
   // directly (no per-move re-render) and only commit to state on release.
-  const drag = useRef({ active: false, moved: false, startX: 0, startY: 0, baseX: 0, baseY: 0, x: 0, y: 0, id: -1 });
-  const cardDrag = useRef({ active: false, moved: false, startX: 0, startY: 0, baseX: 0, baseY: 0, x: 0, y: 0, id: -1 });
+  const drag = useRef({
+    active: false,
+    moved: false,
+    startX: 0,
+    startY: 0,
+    baseX: 0,
+    baseY: 0,
+    x: 0,
+    y: 0,
+    id: -1,
+  });
+  const cardDrag = useRef({
+    active: false,
+    moved: false,
+    startX: 0,
+    startY: 0,
+    baseX: 0,
+    baseY: 0,
+    x: 0,
+    y: 0,
+    id: -1,
+  });
 
   // Persist a docked position (side + vertical ratio) to localStorage and state.
   // Shared by the bubble drag and the expanded-card drag so both stay in sync.
@@ -163,7 +209,8 @@ export function FloatingBubble({
   }, []);
 
   useEffect(() => {
-    const onResize = (): void => setPos(resolve(stored.current.side, stored.current.topRatio));
+    const onResize = (): void =>
+      setPos(resolve(stored.current.side, stored.current.topRatio));
     window.addEventListener("resize", onResize);
     poke();
     return () => {
@@ -276,8 +323,21 @@ export function FloatingBubble({
       const vw = window.innerWidth;
       const cw = cardWidth();
       const baseX = pos.side === "right" ? vw - cw - MARGIN : MARGIN;
-      const baseY = Math.min(Math.max(MARGIN, pos.y), window.innerHeight - CARD_H - MARGIN);
-      cardDrag.current = { active: true, moved: false, startX: e.clientX, startY: e.clientY, baseX, baseY, x: baseX, y: baseY, id: e.pointerId };
+      const baseY = Math.min(
+        Math.max(MARGIN, pos.y),
+        window.innerHeight - CARD_H - MARGIN,
+      );
+      cardDrag.current = {
+        active: true,
+        moved: false,
+        startX: e.clientX,
+        startY: e.clientY,
+        baseX,
+        baseY,
+        x: baseX,
+        y: baseY,
+        id: e.pointerId,
+      };
       poke();
     },
     [pos.side, pos.y, poke],
@@ -336,8 +396,15 @@ export function FloatingBubble({
       // left/top the drag wrote with the resolved edge position, so it doesn't
       // sit wherever the finger let go.
       if (cardRef.current) {
-        cardRef.current.style.left = `${side === "right" ? vw - cw - MARGIN : MARGIN}px`;
-        cardRef.current.style.top = `${Math.min(Math.max(MARGIN, resolve(side, topRatio).y), vh - CARD_H - MARGIN)}px`;
+        cardRef.current.style.left = `${
+          side === "right" ? vw - cw - MARGIN : MARGIN
+        }px`;
+        cardRef.current.style.top = `${
+          Math.min(
+            Math.max(MARGIN, resolve(side, topRatio).y),
+            vh - CARD_H - MARGIN,
+          )
+        }px`;
       }
       commitPos(side, topRatio);
       poke();
@@ -355,14 +422,21 @@ export function FloatingBubble({
   // The card docks to the same edge as the bubble; clamp its top so it never
   // spills off the bottom of the screen. Positioned with left (not a right
   // anchor) so a drag and the edge-snap share one coordinate space.
-  const cardTop = Math.min(Math.max(MARGIN, pos.y), window.innerHeight - CARD_H - MARGIN);
+  const cardTop = Math.min(
+    Math.max(MARGIN, pos.y),
+    window.innerHeight - CARD_H - MARGIN,
+  );
   const cardW = cardWidth();
-  const cardLeft = pos.side === "right" ? window.innerWidth - cardW - MARGIN : MARGIN;
+  const cardLeft = pos.side === "right"
+    ? window.innerWidth - cardW - MARGIN
+    : MARGIN;
 
   return (
     <>
-      {/* Collapsed bubble: draggable artwork puck with a progress ring. A tap
-          opens the control card; a drag relocates + edge-snaps it. */}
+      {
+        /* Collapsed bubble: draggable artwork puck with a progress ring. A tap
+          opens the control card; a drag relocates + edge-snaps it. */
+      }
       <Box
         ref={elRef}
         role="button"
@@ -385,7 +459,9 @@ export function FloatingBubble({
           cursor: dragging ? "grabbing" : "grab",
           opacity: controlsOpen ? 0 : tucked ? IDLE_OPACITY : 0.92,
           pointerEvents: controlsOpen ? "none" : "auto",
-          transform: tucked ? `translateX(${pos.side === "right" ? PEEK * 100 : -PEEK * 100}%)` : "none",
+          transform: tucked
+            ? `translateX(${pos.side === "right" ? PEEK * 100 : -PEEK * 100}%)`
+            : "none",
           transition: dragging
             ? "none"
             : "left .26s cubic-bezier(.2,.8,.2,1), top .26s cubic-bezier(.2,.8,.2,1), opacity .3s, transform .3s",
@@ -412,30 +488,44 @@ export function FloatingBubble({
             boxShadow: 2,
           }}
         >
-          {nowPlaying.cover ? (
-            <Box
-              component="img"
-              src={`/api/cover?book=${encodeURIComponent(slug)}`}
-              alt=""
-              draggable={false}
-              sx={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
-            />
-          ) : (
-            <AudiobookIcon sx={{ fontSize: 22, color: "rgba(255,255,255,0.92)" }} />
-          )}
-          {/* Just the artwork + the progress ring around it — no play-state glyph
+          {nowPlaying.cover
+            ? (
+              <Box
+                component="img"
+                src={`/api/cover?book=${encodeURIComponent(slug)}`}
+                alt=""
+                draggable={false}
+                sx={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                }}
+              />
+            )
+            : (
+              <AudiobookIcon
+                sx={{ fontSize: 22, color: "rgba(255,255,255,0.92)" }}
+              />
+            )}
+          {
+            /* Just the artwork + the progress ring around it — no play-state glyph
               over the centre (it read as clutter / a fake button). The ring
-              conveys progress; play/pause lives in the tap-to-open card. */}
+              conveys progress; play/pause lives in the tap-to-open card. */
+          }
         </Box>
       </Box>
 
-      {/* Modal scrim — a dim backdrop (like the settings sheet) that makes the
+      {
+        /* Modal scrim — a dim backdrop (like the settings sheet) that makes the
           card read as a modal; tapping the dark area closes it. Closes on the
           full CLICK, not pointerdown: closing on pointerdown removes the scrim
           before iOS synthesises the tap's click, which then lands on the book
           card underneath and navigates (the click-through / "ghost click" bug).
           Keeping the scrim mounted through the click lets it swallow the tap —
-          exactly what MUI's Modal backdrop does. */}
+          exactly what MUI's Modal backdrop does. */
+      }
       <Fade in={controlsOpen} unmountOnExit>
         <Box
           onPointerDown={() => {
@@ -450,10 +540,23 @@ export function FloatingBubble({
             setControlsOpen(false);
             poke();
           }}
-          sx={(theme) => ({ position: "fixed", inset: 0, zIndex: theme.zIndex.fab - 1, bgcolor: "rgba(0,0,0,0.45)" })}
+          sx={(theme) => ({
+            position: "fixed",
+            inset: 0,
+            zIndex: theme.zIndex.fab - 1,
+            bgcolor: "rgba(0,0,0,0.45)",
+          })}
         />
       </Fade>
-      <Grow in={controlsOpen} unmountOnExit style={{ transformOrigin: pos.side === "right" ? "right center" : "left center" }}>
+      <Grow
+        in={controlsOpen}
+        unmountOnExit
+        style={{
+          transformOrigin: pos.side === "right"
+            ? "right center"
+            : "left center",
+        }}
+      >
         <Box
           ref={cardRef}
           sx={(theme) => ({
@@ -475,8 +578,10 @@ export function FloatingBubble({
             borderColor: "divider",
           })}
         >
-          {/* Drag handle + close: drag the grip to reposition the whole widget
-              (edge-snaps + persists on release); the X dismisses the card. */}
+          {
+            /* Drag handle + close: drag the grip to reposition the whole widget
+              (edge-snaps + persists on release); the X dismisses the card. */
+          }
           <Box
             sx={{
               position: "relative",
@@ -492,7 +597,15 @@ export function FloatingBubble({
             onPointerUp={cardUp}
             onPointerCancel={cardUp}
           >
-            <Box sx={{ width: 34, height: 4, borderRadius: 2, bgcolor: "text.disabled", opacity: 0.5 }} />
+            <Box
+              sx={{
+                width: 34,
+                height: 4,
+                borderRadius: 2,
+                bgcolor: "text.disabled",
+                opacity: 0.5,
+              }}
+            />
             <IconButton
               aria-label={t("audiobook.collapse")}
               onPointerDown={(e) => e.stopPropagation()}
@@ -501,7 +614,12 @@ export function FloatingBubble({
                 poke();
               }}
               size="small"
-              sx={{ position: "absolute", right: -4, top: -2, color: "text.secondary" }}
+              sx={{
+                position: "absolute",
+                right: -4,
+                top: -2,
+                color: "text.secondary",
+              }}
             >
               <Close fontSize="small" />
             </IconButton>
@@ -541,43 +659,93 @@ export function FloatingBubble({
                 justifyContent: "center",
               }}
             >
-              {nowPlaying.cover ? (
-                <Box
-                  component="img"
-                  src={`/api/cover?book=${encodeURIComponent(slug)}`}
-                  alt=""
-                  sx={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
-                />
-              ) : (
-                <AudiobookIcon sx={{ fontSize: 20, color: "rgba(255,255,255,0.92)" }} />
-              )}
+              {nowPlaying.cover
+                ? (
+                  <Box
+                    component="img"
+                    src={`/api/cover?book=${encodeURIComponent(slug)}`}
+                    alt=""
+                    sx={{
+                      position: "absolute",
+                      inset: 0,
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "cover",
+                    }}
+                  />
+                )
+                : (
+                  <AudiobookIcon
+                    sx={{ fontSize: 20, color: "rgba(255,255,255,0.92)" }}
+                  />
+                )}
             </Box>
             <Box sx={{ minWidth: 0, flex: 1 }}>
               <Typography variant="body2" fontWeight={700} noWrap>
                 {nowPlaying.chapterLabel}
               </Typography>
-              <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                noWrap
+                sx={{ display: "block" }}
+              >
                 {nowPlaying.bookLabel}
               </Typography>
             </Box>
           </Box>
 
-          {/* Row 2 — transport: prev-chapter · −10s · play/pause · +10s ·
-              next-chapter, with a compact speed cycle pinned to the right. */}
-          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev} sx={{ width: 38, height: 38 }}>
+          {
+            /* Row 2 — transport: prev-chapter · −10s · play/pause · +10s ·
+              next-chapter, with a compact speed cycle pinned to the right. */
+          }
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <IconButton
+              aria-label={t("audiobook.prevChapter")}
+              onClick={prevChapter}
+              disabled={!canPrev}
+              sx={{ width: 38, height: 38 }}
+            >
               <SkipPrevious />
             </IconButton>
-            <IconButton aria-label={t("audiobook.skipBack")} onClick={() => skip(-10)} sx={{ width: 38, height: 38 }}>
+            <IconButton
+              aria-label={t("audiobook.skipBack")}
+              onClick={() => skip(-10)}
+              sx={{ width: 38, height: 38 }}
+            >
               <Replay10 />
             </IconButton>
-            <IconButton aria-label={playing ? t("audiobook.pause") : t("audiobook.play")} onClick={togglePlay} color="primary" sx={{ width: 48, height: 48 }}>
-              {loading ? <CircularProgress size={24} /> : playing ? <Pause sx={{ fontSize: 32 }} /> : <PlayArrow sx={{ fontSize: 32 }} />}
+            <IconButton
+              aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
+              onClick={togglePlay}
+              color="primary"
+              sx={{ width: 48, height: 48 }}
+            >
+              {loading
+                ? <CircularProgress size={24} />
+                : playing
+                ? <Pause sx={{ fontSize: 32 }} />
+                : <PlayArrow sx={{ fontSize: 32 }} />}
             </IconButton>
-            <IconButton aria-label={t("audiobook.skipForward")} onClick={() => skip(10)} sx={{ width: 38, height: 38 }}>
+            <IconButton
+              aria-label={t("audiobook.skipForward")}
+              onClick={() => skip(10)}
+              sx={{ width: 38, height: 38 }}
+            >
               <Forward10 />
             </IconButton>
-            <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 38, height: 38 }}>
+            <IconButton
+              aria-label={t("audiobook.nextChapter")}
+              onClick={nextChapter}
+              disabled={!canNext}
+              sx={{ width: 38, height: 38 }}
+            >
               <SkipNext />
             </IconButton>
             {/* Tap to open the speed menu (mirrors the full player's list). */}

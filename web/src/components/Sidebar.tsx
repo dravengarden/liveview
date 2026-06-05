@@ -1,27 +1,27 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Box,
+  Collapse,
+  IconButton,
   List,
   ListItemButton,
   ListItemIcon,
   ListItemText,
-  IconButton,
-  Collapse,
-  Tooltip,
-  Typography,
   ToggleButton,
   ToggleButtonGroup,
+  Tooltip,
+  Typography,
 } from "@mui/material";
 import {
+  ArrowBack as BackIcon,
+  ChevronRight as ChevronRightIcon,
+  Description as FileIcon,
+  ExpandMore as ExpandMoreIcon,
   Folder as FolderIcon,
   FolderOpen as FolderOpenIcon,
-  Description as FileIcon,
-  ChevronRight as ChevronRightIcon,
-  ExpandMore as ExpandMoreIcon,
-  UnfoldMore as ExpandAllIcon,
-  UnfoldLess as CollapseAllIcon,
   MyLocation as LocateIcon,
-  ArrowBack as BackIcon,
+  UnfoldLess as CollapseAllIcon,
+  UnfoldMore as ExpandAllIcon,
 } from "@mui/icons-material";
 import type { LangInfo, TreeNode } from "@/types";
 import { useI18n } from "@/i18n";
@@ -56,13 +56,13 @@ function TruncatedLabel({ text }: { text: string }): React.JSX.Element {
 
   // Mount the Tooltip only when truncated, so non-clipped rows don't pop a
   // redundant tooltip on hover.
-  return overflowed ? (
-    <Tooltip title={text} placement="right" enterDelay={400}>
-      {label}
-    </Tooltip>
-  ) : (
-    label
-  );
+  return overflowed
+    ? (
+      <Tooltip title={text} placement="right" enterDelay={400}>
+        {label}
+      </Tooltip>
+    )
+    : label;
 }
 
 interface TreeItemProps {
@@ -92,8 +92,7 @@ function TreeItem({
   // Book-spine chapters carry per-language titles; show the current edition's,
   // falling back to `name` (the default edition's title) for untranslated
   // chapters and for plain file-tree nodes that have no `titles`.
-  const label =
-    (currentLang && node.titles?.[currentLang]) || node.name;
+  const label = (currentLang && node.titles?.[currentLang]) || node.name;
 
   const handleClick = useCallback(() => {
     if (node.is_dir) {
@@ -119,35 +118,38 @@ function TreeItem({
           },
         }}
       >
-        {/* Expand/collapse affordance: a chevron for dirs, an aligning spacer
-            for files so their labels line up with sibling group names. */}
-        {node.is_dir ? (
-          <ListItemIcon sx={{ minWidth: 24 }}>
-            {isExpanded ? (
-              <ExpandMoreIcon fontSize="medium" />
-            ) : (
-              <ChevronRightIcon fontSize="medium" />
-            )}
-          </ListItemIcon>
-        ) : (
-          <ListItemIcon sx={{ minWidth: 24 }} />
-        )}
-        {/* Book mode is a clean reading spine — no folder/file icons. Docs mode
-            keeps the filesystem-tree icons. */}
+        {
+          /* Expand/collapse affordance: a chevron for dirs, an aligning spacer
+            for files so their labels line up with sibling group names. */
+        }
+        {node.is_dir
+          ? (
+            <ListItemIcon sx={{ minWidth: 24 }}>
+              {isExpanded
+                ? <ExpandMoreIcon fontSize="medium" />
+                : <ChevronRightIcon fontSize="medium" />}
+            </ListItemIcon>
+          )
+          : <ListItemIcon sx={{ minWidth: 24 }} />}
+        {
+          /* Book mode is a clean reading spine — no folder/file icons. Docs mode
+            keeps the filesystem-tree icons. */
+        }
         {!bookMode && (
           <ListItemIcon sx={{ minWidth: 28 }}>
-            {node.is_dir ? (
-              isExpanded ? (
-                <FolderOpenIcon fontSize="medium" color="primary" />
-              ) : (
-                <FolderIcon fontSize="medium" color="primary" />
+            {node.is_dir
+              ? (
+                isExpanded
+                  ? <FolderOpenIcon fontSize="medium" color="primary" />
+                  : <FolderIcon fontSize="medium" color="primary" />
               )
-            ) : (
-              <FileIcon fontSize="medium" color="action" />
-            )}
+              : <FileIcon fontSize="medium" color="action" />}
           </ListItemIcon>
         )}
-        <ListItemText disableTypography primary={<TruncatedLabel text={label} />} />
+        <ListItemText
+          disableTypography
+          primary={<TruncatedLabel text={label} />}
+        />
       </ListItemButton>
       {node.is_dir && node.children.length > 0 && (
         <Collapse in={isExpanded} timeout="auto" unmountOnExit>
@@ -223,6 +225,9 @@ interface SidebarProps {
   onSwitchLang?: (lang: string) => void;
   onSelect: (path: string) => void;
   onBackToLanding: () => void;
+  /** Deploy-time stamps (unix ms) of the open book; 0/undefined ⇒ hidden. */
+  createdAt?: number | undefined;
+  updatedAt?: number | undefined;
 }
 
 // The Sidebar is the nav body inside NavShell, which owns the surrounding frame
@@ -230,6 +235,16 @@ interface SidebarProps {
 // the collapse toggle). So this renders only the in-nav controls — back to the
 // bookshelf, expand/collapse-all, reveal current — plus the language switcher
 // and the tree, filling whatever container NavShell gives it.
+/** Format a unix-ms deploy stamp as a locale date, or null when unset (0). */
+function fmtDate(ms: number | undefined, lang: string): string | null {
+  if (!ms) return null;
+  return new Date(ms).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 export function Sidebar({
   tree,
   currentPath,
@@ -239,16 +254,23 @@ export function Sidebar({
   onSwitchLang,
   onSelect,
   onBackToLanding,
+  createdAt,
+  updatedAt,
 }: SidebarProps): React.JSX.Element {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const allDirPaths = useMemo(() => collectAllDirPaths(tree), [tree]);
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() =>
+    new Set()
+  );
   const listContainerRef = useRef<HTMLDivElement>(null);
   const prevCurrentPathRef = useRef<string | null>(null);
 
   // Auto-expand parent directories only when currentPath actually changes
   useEffect(() => {
-    if (currentPath && currentPath !== prevCurrentPathRef.current && tree.length > 0) {
+    if (
+      currentPath && currentPath !== prevCurrentPathRef.current &&
+      tree.length > 0
+    ) {
       const parentPaths = findParentPaths(tree, currentPath);
       if (parentPaths.length > 0) {
         setExpandedPaths((prev) => {
@@ -263,7 +285,8 @@ export function Sidebar({
     prevCurrentPathRef.current = currentPath;
   }, [currentPath, tree]);
 
-  const isAllExpanded = allDirPaths.length > 0 && allDirPaths.every((p) => expandedPaths.has(p));
+  const isAllExpanded = allDirPaths.length > 0 &&
+    allDirPaths.every((p) => expandedPaths.has(p));
 
   const handleToggle = useCallback((path: string) => {
     setExpandedPaths((prev) => {
@@ -302,7 +325,9 @@ export function Sidebar({
 
     // Scroll to the element after a short delay to allow expansion animation
     setTimeout(() => {
-      const element = listContainerRef.current?.querySelector(`[data-path="${CSS.escape(currentPath)}"]`);
+      const element = listContainerRef.current?.querySelector(
+        `[data-path="${CSS.escape(currentPath)}"]`,
+      );
       if (element) {
         element.scrollIntoView({ behavior: "smooth", block: "center" });
       }
@@ -337,21 +362,27 @@ export function Sidebar({
           </IconButton>
         </Tooltip>
         <Box sx={{ display: "flex", flexShrink: 0 }}>
-          <Tooltip title={t(isAllExpanded ? "sidebar.collapseAll" : "sidebar.expandAll")}>
+          <Tooltip
+            title={t(
+              isAllExpanded ? "sidebar.collapseAll" : "sidebar.expandAll",
+            )}
+          >
             <IconButton onClick={handleToggleAll}>
               {isAllExpanded ? <CollapseAllIcon /> : <ExpandAllIcon />}
             </IconButton>
           </Tooltip>
           <Tooltip title={t("sidebar.reveal")}>
             <span>
-              <IconButton onClick={handleRevealCurrentFile} disabled={!currentPath}>
+              <IconButton
+                onClick={handleRevealCurrentFile}
+                disabled={!currentPath}
+              >
                 <LocateIcon />
               </IconButton>
             </span>
           </Tooltip>
         </Box>
       </Box>
-
 
       {langs.length > 1 && (
         <Box
@@ -365,7 +396,11 @@ export function Sidebar({
             borderColor: "divider",
           }}
         >
-          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ flexShrink: 0 }}
+          >
             {t("sidebar.language")}
           </Typography>
           <ToggleButtonGroup
@@ -380,7 +415,11 @@ export function Sidebar({
             sx={{ flexWrap: "wrap" }}
           >
             {langs.map((l) => (
-              <ToggleButton key={l.lang} value={l.lang} sx={{ px: 1, py: 0.25, textTransform: "none" }}>
+              <ToggleButton
+                key={l.lang}
+                value={l.lang}
+                sx={{ px: 1, py: 0.25, textTransform: "none" }}
+              >
                 {l.label}
               </ToggleButton>
             ))}
@@ -405,6 +444,42 @@ export function Sidebar({
           ))}
         </List>
       </Box>
+
+      {
+        /* Book deploy-times footer — created on first appearance, updated on the
+          last sync that changed the book. Hidden when unstamped. */
+      }
+      {(() => {
+        const created = fmtDate(createdAt, lang);
+        const updated = updatedAt !== createdAt
+          ? fmtDate(updatedAt, lang)
+          : null;
+        const stamps = [
+          created && t("landing.added", { date: created }),
+          updated && t("landing.updated", { date: updated }),
+        ].filter((s): s is string => Boolean(s));
+        return stamps.length > 0
+          ? (
+            <Box
+              sx={{
+                flexShrink: 0,
+                px: 1.25,
+                py: 0.75,
+                borderTop: 1,
+                borderColor: "divider",
+              }}
+            >
+              <Typography
+                variant="caption"
+                color="text.disabled"
+                sx={{ display: "block", lineHeight: 1.5 }}
+              >
+                {stamps.join(" · ")}
+              </Typography>
+            </Box>
+          )
+          : null;
+      })()}
     </Box>
   );
 }

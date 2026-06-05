@@ -29,6 +29,9 @@ pub struct BookMeta {
     pub cover_hash: Option<String>,
     pub default_rendition: RenditionKind,
     pub renditions: Vec<RenditionMeta>,
+    /// Deploy-time stamps (unix ms), 0 when unstamped. See `PgStore::mark_book`.
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 impl BookMeta {
@@ -87,6 +90,8 @@ impl Catalog {
                 default_rendition: RenditionKind::parse(&b.default_rendition)
                     .unwrap_or(RenditionKind::Text),
                 renditions,
+                created_at: b.created_at,
+                updated_at: b.updated_at,
             });
         }
         Ok(Self { books })

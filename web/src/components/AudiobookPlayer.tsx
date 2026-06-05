@@ -1,23 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Box,
-  IconButton,
-  CircularProgress,
   Alert,
-  Typography,
-  Slider,
-  Select,
+  Box,
+  CircularProgress,
+  IconButton,
   MenuItem,
+  Select,
+  Slider,
+  Typography,
 } from "@mui/material";
 import {
-  PlayArrow,
-  Pause,
-  SkipNext,
-  SkipPrevious,
-  Replay10,
+  Bedtime,
   Forward10,
   MyLocation,
-  Bedtime,
+  Pause,
+  PlayArrow,
+  Replay10,
+  SkipNext,
+  SkipPrevious,
 } from "@mui/icons-material";
 import { alpha } from "@mui/material/styles";
 import { useAudioPlayer } from "@/audio/player";
@@ -58,7 +58,9 @@ function fmtSleep(min: number): string {
  *  with the narrated sentence highlighted, an explicit (cancelable) follow mode,
  *  and the transport. All playback state comes from the root audio engine, so
  *  this view is purely a window onto it — leaving it never stops the audio. */
-export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: AudiobookPlayerProps): React.JSX.Element {
+export function AudiobookPlayer(
+  { contentMaxWidth, lineHeight, onSaveScroll }: AudiobookPlayerProps,
+): React.JSX.Element {
   const { t } = useI18n();
   const {
     nowPlaying,
@@ -102,7 +104,9 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: A
   const scrollCurrentIntoView = useCallback(() => {
     const container = scrollRef.current;
     if (!container || currentIdx < 0) return;
-    const el = container.querySelector<HTMLElement>(`[data-sent="${currentIdx}"]`);
+    const el = container.querySelector<HTMLElement>(
+      `[data-sent="${currentIdx}"]`,
+    );
     el?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [currentIdx]);
 
@@ -127,14 +131,14 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: A
       setFollowing(true);
       seekToSentence(idx);
     },
-    [seekToSentence]
+    [seekToSentence],
   );
 
   const onSeekBar = useCallback(
     (_e: Event, value: number | number[]) => {
       seek(Array.isArray(value) ? (value[0] ?? 0) : value);
     },
-    [seek]
+    [seek],
   );
 
   // The transport pieces, built once and arranged into a single row.
@@ -172,7 +176,12 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: A
       }}
       aria-label={t("audiobook.speed")}
       renderValue={(v) => (
-        <Typography component="span" variant="body2" fontWeight={700} sx={{ fontVariantNumeric: "tabular-nums" }}>
+        <Typography
+          component="span"
+          variant="body2"
+          fontWeight={700}
+          sx={{ fontVariantNumeric: "tabular-nums" }}
+        >
           {`${v}×`}
         </Typography>
       )}
@@ -201,20 +210,19 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: A
         // Off → just the moon. Armed → only the remaining time (no moon), so the
         // longest label (e.g. "1h30m") fits the fixed-width chip without being
         // clipped by the icon.
-        sleepActive ? (
-          <Typography
-            component="span"
-            variant="body2"
-            fontWeight={700}
-            color="primary"
-            sx={{ fontVariantNumeric: "tabular-nums" }}
-          >
-            {fmtSleep(sleepRemainingMin)}
-          </Typography>
-        ) : (
-          <Bedtime sx={{ fontSize: 22, color: "text.secondary" }} />
-        )
-      }
+        sleepActive
+          ? (
+            <Typography
+              component="span"
+              variant="body2"
+              fontWeight={700}
+              color="primary"
+              sx={{ fontVariantNumeric: "tabular-nums" }}
+            >
+              {fmtSleep(sleepRemainingMin)}
+            </Typography>
+          )
+          : <Bedtime sx={{ fontSize: 22, color: "text.secondary" }} />}
       sx={chipSelectSx}
     >
       <MenuItem value={0}>{t("audiobook.sleepOff")}</MenuItem>
@@ -238,11 +246,27 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: A
   );
 
   const mainCluster = (
-    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 0.25 }}>
-      <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev} sx={{ width: 50, height: 50 }}>
+    <Box
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 0.25,
+      }}
+    >
+      <IconButton
+        aria-label={t("audiobook.prevChapter")}
+        onClick={prevChapter}
+        disabled={!canPrev}
+        sx={{ width: 50, height: 50 }}
+      >
         <SkipPrevious sx={{ fontSize: 33 }} />
       </IconButton>
-      <IconButton aria-label={t("audiobook.skipBack")} onClick={() => skip(-10)} sx={{ width: 50, height: 50 }}>
+      <IconButton
+        aria-label={t("audiobook.skipBack")}
+        onClick={() => skip(-10)}
+        sx={{ width: 50, height: 50 }}
+      >
         <Replay10 sx={{ fontSize: 30 }} />
       </IconButton>
       <IconButton
@@ -252,12 +276,25 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: A
         aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
         sx={{ width: 58, height: 58 }}
       >
-        {loading ? <CircularProgress size={32} /> : playing ? <Pause sx={{ fontSize: 38 }} /> : <PlayArrow sx={{ fontSize: 38 }} />}
+        {loading
+          ? <CircularProgress size={32} />
+          : playing
+          ? <Pause sx={{ fontSize: 38 }} />
+          : <PlayArrow sx={{ fontSize: 38 }} />}
       </IconButton>
-      <IconButton aria-label={t("audiobook.skipForward")} onClick={() => skip(10)} sx={{ width: 50, height: 50 }}>
+      <IconButton
+        aria-label={t("audiobook.skipForward")}
+        onClick={() => skip(10)}
+        sx={{ width: 50, height: 50 }}
+      >
         <Forward10 sx={{ fontSize: 30 }} />
       </IconButton>
-      <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 50, height: 50 }}>
+      <IconButton
+        aria-label={t("audiobook.nextChapter")}
+        onClick={nextChapter}
+        disabled={!canNext}
+        sx={{ width: 50, height: 50 }}
+      >
         <SkipNext sx={{ fontSize: 33 }} />
       </IconButton>
     </Box>
@@ -270,7 +307,14 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: A
   // line). space-between pins the ears to the edges; the cluster stays centred
   // because both ears are the same fixed width.
   const transportControls = (
-    <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 58 }}>
+    <Box
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        minHeight: 58,
+      }}
+    >
       {speedChip}
       {mainCluster}
       {sleepChip}
@@ -278,7 +322,15 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: A
   );
 
   return (
-    <Box sx={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" }}>
+    <Box
+      sx={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        position: "relative",
+      }}
+    >
       {error && (
         <Alert severity="error" square sx={{ py: 0.25 }}>
           {t("audiobook.error", { error })}
@@ -287,6 +339,12 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: A
 
       <Box
         ref={scrollRef}
+        // Tag the audio read-along scroller so the navbar title-tap
+        // (scrollReaderTop in App.tsx, the iOS tap-to-top gesture) finds and
+        // scrolls it — the same `[data-lv-scroller="reader"]` hook the text
+        // reader (MarkdownViewer) uses. Without this the gesture was a no-op on
+        // the audio page.
+        data-lv-scroller="reader"
         onWheel={cancelFollow}
         onTouchMove={cancelFollow}
         sx={{ flex: 1, overflowY: "auto", px: 3, py: 4 }}
@@ -301,41 +359,54 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: A
             fontSize: "1.05rem",
           }}
         >
-          {loading && sentences.length === 0 ? (
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, color: "text.secondary" }}>
-              <CircularProgress size={20} />
-              <Typography>{t("audiobook.loading")}</Typography>
-            </Box>
-          ) : (
-            sentences.map((s, i) => (
+          {loading && sentences.length === 0
+            ? (
               <Box
-                component="span"
-                // Index key is safe: sentence order is stable for a chapter.
-                key={i}
-                data-sent={i}
-                onClick={() => {
-                  handleSentenceClick(i);
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 1.5,
+                  color: "text.secondary",
                 }}
-                sx={(theme) => ({
-                  cursor: "pointer",
-                  borderRadius: 0.5,
-                  transition: "background-color 0.15s ease",
-                  // Themed soft highlight: a tint of the active theme's accent
-                  // (blue / brown / amber per theme) instead of a fixed orange,
-                  // so it never clashes and the text stays readable on top.
-                  bgcolor: i === currentIdx ? alpha(theme.palette.primary.main, 0.28) : "transparent",
-                  color: "inherit",
-                  px: i === currentIdx ? 0.25 : 0,
-                  "&:hover": {
-                    bgcolor:
-                      i === currentIdx ? alpha(theme.palette.primary.main, 0.28) : theme.palette.action.hover,
-                  },
-                })}
               >
-                {s}{" "}
+                <CircularProgress size={20} />
+                <Typography>{t("audiobook.loading")}</Typography>
               </Box>
-            ))
-          )}
+            )
+            : (
+              sentences.map((s, i) => (
+                <Box
+                  component="span"
+                  // Index key is safe: sentence order is stable for a chapter.
+                  key={i}
+                  data-sent={i}
+                  onClick={() => {
+                    handleSentenceClick(i);
+                  }}
+                  sx={(theme) => ({
+                    cursor: "pointer",
+                    borderRadius: 0.5,
+                    transition: "background-color 0.15s ease",
+                    // Themed soft highlight: a tint of the active theme's accent
+                    // (blue / brown / amber per theme) instead of a fixed orange,
+                    // so it never clashes and the text stays readable on top.
+                    bgcolor: i === currentIdx
+                      ? alpha(theme.palette.primary.main, 0.28)
+                      : "transparent",
+                    color: "inherit",
+                    px: i === currentIdx ? 0.25 : 0,
+                    "&:hover": {
+                      bgcolor: i === currentIdx
+                        ? alpha(theme.palette.primary.main, 0.28)
+                        : theme.palette.action.hover,
+                    },
+                  })}
+                >
+                  {s}
+                  {" "}
+                </Box>
+              ))
+            )}
         </Box>
       </Box>
 
@@ -357,12 +428,21 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: A
         }}
       >
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          {/* Follow toggle lives on the scrubber row (not the transport row): it
+          {
+            /* Follow toggle lives on the scrubber row (not the transport row): it
               governs read-along scrolling, not playback, and parking it here
               keeps the transport row narrow enough for one line on a 375px
-              iPhone. */}
+              iPhone. */
+          }
           {followBtn}
-          <Typography variant="caption" sx={{ minWidth: 36, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+          <Typography
+            variant="caption"
+            sx={{
+              minWidth: 36,
+              textAlign: "right",
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
             {fmtTime(currentTime)}
           </Typography>
           <Slider
@@ -381,7 +461,10 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: A
               "& .MuiSlider-rail, & .MuiSlider-track": { height: 6 },
             }}
           />
-          <Typography variant="caption" sx={{ minWidth: 40, fontVariantNumeric: "tabular-nums" }}>
+          <Typography
+            variant="caption"
+            sx={{ minWidth: 40, fontVariantNumeric: "tabular-nums" }}
+          >
             {fmtTime(duration)}
           </Typography>
         </Box>

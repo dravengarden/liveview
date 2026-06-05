@@ -85,6 +85,10 @@ export interface Book {
    *  clean, titled spine (no root folder, no file icons). `false` for a plain
    *  `[[book]]`/`[[mount]]` → "docs" mode: the raw filesystem tree. */
   manifest: boolean;
+  /** Deploy-time stamps (unix ms): when the book first appeared on the shelf,
+   *  and the last sync that changed its content. 0 ⇒ never stamped (hide). */
+  created_at: number;
+  updated_at: number;
 }
 
 /** Read-along narration text: the chapter stripped to speakable sentences.
@@ -102,7 +106,13 @@ export interface Mark {
 }
 
 export type WsMessage =
-  | { type: "ContentUpdate"; path: string; lang: string; file_type: FileType; content: string }
+  | {
+    type: "ContentUpdate";
+    path: string;
+    lang: string;
+    file_type: FileType;
+    content: string;
+  }
   | { type: "TreeUpdate"; tree: TreeNode[] };
 
 // Reading-oriented themes only (Day / Sepia / Dark / Night). The old
@@ -117,7 +127,10 @@ export type ThemeVariant = "classic" | "warm";
 export type ThemeMode = "auto" | "light" | "dark";
 
 /** variant → its light/dark pair (the 4 flat themes are derived from these). */
-export const THEME_VARIANTS: Record<ThemeVariant, { light: Theme; dark: Theme }> = {
+export const THEME_VARIANTS: Record<
+  ThemeVariant,
+  { light: Theme; dark: Theme }
+> = {
   classic: { light: "light", dark: "dark" },
   warm: { light: "sepia", dark: "night" },
 };

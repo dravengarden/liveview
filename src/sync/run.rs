@@ -105,7 +105,8 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
         // the orphan GC spares it (see orphan_asset_hashes).
         let cover_hash = match &book.cover {
             Some(p) => {
-                let bytes = std::fs::read(p).map_err(|e| format!("read cover {}: {e}", p.display()))?;
+                let bytes =
+                    std::fs::read(p).map_err(|e| format!("read cover {}: {e}", p.display()))?;
                 let mime = mime_guess::from_path(p).first_or_octet_stream().to_string();
                 Some(put_blob(&obj, &store, bytes, &mime).await?)
             }
@@ -143,7 +144,9 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 store
                     .upsert_edition(&book.slug, r_kind, &ed.lang, &ed.label, e_ord as i32)
                     .await
-                    .map_err(|e| format!("upsert edition {}/{r_kind}/{}: {e}", book.slug, ed.lang))?;
+                    .map_err(|e| {
+                        format!("upsert edition {}/{r_kind}/{}: {e}", book.slug, ed.lang)
+                    })?;
 
                 // Files included by this edition's globsets, relative to source.
                 let mut files: Vec<(String, PathBuf)> = Vec::new();
@@ -152,8 +155,8 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
 
                 let mut leaf_nodes: Vec<(String, Build)> = Vec::new();
                 for (rel, abs) in files {
-                    let bytes = std::fs::read(&abs)
-                        .map_err(|e| format!("read {}: {e}", abs.display()))?;
+                    let bytes =
+                        std::fs::read(&abs).map_err(|e| format!("read {}: {e}", abs.display()))?;
                     let content_hash = blake3::hash(&bytes).to_hex().to_string();
                     let ft = FileType::from_path(&rel);
                     let is_audio = rend.kind == RenditionKind::Audio && rel.ends_with(".spoken.md");
@@ -163,7 +166,11 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                     // Leaf kind folds the transform + version so a renderer or
                     // voice change re-applies the leaf even with identical source.
                     let kind = if is_audio {
-                        format!("audio:{}:{}", cfg.render_version, voice.as_deref().unwrap_or(""))
+                        format!(
+                            "audio:{}:{}",
+                            cfg.render_version,
+                            voice.as_deref().unwrap_or("")
+                        )
                     } else if is_text(&ft) {
                         format!("text:{}", cfg.render_version)
                     } else {
@@ -218,6 +225,29 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
     let stored = load_stored(&store).await?;
     let plan = plan(&new, &stored);
 
+    // ── Stamp book deploy-times. created_at on a book's first appearance;
+    // updated_at on each sync where its subtree hash differs from the last
+    // deploy (the root's per-book child hash). Pure pg metadata. ─────────────
+    {
+        let now = crate::store::pg::now_millis();
+        let root_children =
+            |dag: &crate::sync::merkle::Dag| -> std::collections::HashMap<String, String> {
+                match dag.nodes.get(&dag.root) {
+                    Some(crate::sync::merkle::Node::Tree(c)) => c.iter().cloned().collect(),
+                    _ => std::collections::HashMap::new(),
+                }
+            };
+        let new_books = root_children(&new);
+        let stored_books = root_children(&stored);
+        for (slug, hash) in &new_books {
+            let changed = stored_books.get(slug) != Some(hash);
+            store
+                .mark_book(slug, now, changed)
+                .await
+                .map_err(|e| format!("mark book {slug}: {e}"))?;
+        }
+    }
+
     // ── Apply. ──────────────────────────────────────────────────────────────
     let mut report = SyncReport {
         books: resolved.books.len(),
@@ -253,7 +283,11 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
     }
 
     // GC blobs no chapter references anymore (in pg and rustfs).
-    for hash in store.orphan_asset_hashes().await.map_err(|e| e.to_string())? {
+    for hash in store
+        .orphan_asset_hashes()
+        .await
+        .map_err(|e| e.to_string())?
+    {
         obj.delete(&hash).await?;
         store.delete_asset(&hash).await.map_err(|e| e.to_string())?;
         report.orphans_gc += 1;
@@ -388,12 +422,20 @@ async fn generate_audio(
         let src = std::fs::read_to_string(&a.source)
             .map_err(|e| format!("read {}: {e}", a.source.display()))?;
         let sentences = spoken::spoken_sentences(&src);
-        let (mp3, marks) = crate::server::audio::synthesize(&cfg.tts_cmd, voice, &sentences).await?;
+        let (mp3, marks) =
+            crate::server::audio::synthesize(&cfg.tts_cmd, voice, &sentences).await?;
         let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
         let audio_hash = put_blob(obj, store, mp3, "audio/mpeg").await?;
         let marks_hash = put_blob(obj, store, marks_json, "application/json").await?;
         store
-            .set_chapter_audio(&a.book_slug, "audio", &a.lang, &a.rel_path, &audio_hash, &marks_hash)
+            .set_chapter_audio(
+                &a.book_slug,
+                "audio",
+                &a.lang,
+                &a.rel_path,
+                &audio_hash,
+                &marks_hash,
+            )
             .await
             .map_err(|e| format!("set chapter audio {}: {e}", a.rel_path))?;
         commit_leaf(store, leaf, &node_hash).await?;
@@ -439,7 +481,8 @@ async fn apply_leaf(
         row.markdown = Some(src);
     } else {
         // Binary asset: bytes → rustfs (key = its blake3 = the leaf hash).
-        let bytes = std::fs::read(&a.source).map_err(|e| format!("read {}: {e}", a.source.display()))?;
+        let bytes =
+            std::fs::read(&a.source).map_err(|e| format!("read {}: {e}", a.source.display()))?;
         let mime = mime_guess::from_path(&a.rel_path)
             .first_or_octet_stream()
             .to_string();
@@ -587,7 +630,10 @@ mod tests {
     }
 
     async fn count(pool: &sqlx::PgPool, sql: &str) -> i64 {
-        sqlx::query_scalar::<_, i64>(sql).fetch_one(pool).await.unwrap()
+        sqlx::query_scalar::<_, i64>(sql)
+            .fetch_one(pool)
+            .await
+            .unwrap()
     }
 
     #[tokio::test]

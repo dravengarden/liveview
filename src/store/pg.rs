@@ -55,6 +55,9 @@ pub struct BookRow {
     pub description: Option<String>,
     pub cover_hash: Option<String>,
     pub default_rendition: String,
+    /// Deploy-time stamps (unix ms); 0 when never stamped. See `mark_book`.
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 #[derive(Clone, Debug, sqlx::FromRow)]
@@ -111,9 +114,8 @@ impl PgStore {
     /// The whole batch runs on one pooled connection, so lock/unlock pair up.
     pub async fn migrate(&self) -> Result<(), sqlx::Error> {
         // Arbitrary fixed key — namespaces this lock to liveview migration.
-        let sql = format!(
-            "SELECT pg_advisory_lock(8147);\n{SCHEMA}\nSELECT pg_advisory_unlock(8147);"
-        );
+        let sql =
+            format!("SELECT pg_advisory_lock(8147);\n{SCHEMA}\nSELECT pg_advisory_unlock(8147);");
         self.pool.execute_many_str(&sql).await
     }
 
@@ -141,6 +143,28 @@ impl PgStore {
         .bind(description)
         .bind(cover_hash)
         .bind(default_rendition)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+    }
+
+    /// Stamp a book's deploy-time `created_at` / `updated_at` (unix ms).
+    ///
+    /// `created_at` is set once, the first time the book is stamped (still 0),
+    /// then preserved. `updated_at` moves to `now` when the book's content
+    /// changed this sync (`changed`), and is also backfilled from 0 on the
+    /// first stamp so pre-existing books don't read as epoch. `upsert_book`
+    /// deliberately leaves both columns alone; this is the only writer.
+    pub async fn mark_book(&self, slug: &str, now: i64, changed: bool) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE books SET
+                 created_at = CASE WHEN created_at = 0 THEN $2 ELSE created_at END,
+                 updated_at = CASE WHEN $3 OR updated_at = 0 THEN $2 ELSE updated_at END
+             WHERE slug = $1",
+        )
+        .bind(slug)
+        .bind(now)
+        .bind(changed)
         .execute(&self.pool)
         .await
         .map(|_| ())
@@ -221,7 +245,7 @@ impl PgStore {
 
     pub async fn list_books(&self) -> Result<Vec<BookRow>, sqlx::Error> {
         sqlx::query_as::<_, BookRow>(
-            "SELECT slug, label, description, cover_hash, default_rendition
+            "SELECT slug, label, description, cover_hash, default_rendition, created_at, updated_at
              FROM books ORDER BY slug",
         )
         .fetch_all(&self.pool)
@@ -263,7 +287,10 @@ impl PgStore {
         default_lang: &str,
         rel_path: &str,
     ) -> Result<Option<(ChapterRow, String)>, sqlx::Error> {
-        if let Some(c) = self.get_chapter(book_slug, rendition, lang, rel_path).await? {
+        if let Some(c) = self
+            .get_chapter(book_slug, rendition, lang, rel_path)
+            .await?
+        {
             return Ok(Some((c, lang.to_string())));
         }
         if lang != default_lang {
@@ -443,7 +470,10 @@ impl PgStore {
 
     // ── Merkle deploy state ───────────────────────────────────────────────────
 
-    pub async fn get_merkle_node(&self, node_hash: &str) -> Result<Option<MerkleNode>, sqlx::Error> {
+    pub async fn get_merkle_node(
+        &self,
+        node_hash: &str,
+    ) -> Result<Option<MerkleNode>, sqlx::Error> {
         sqlx::query_as::<_, MerkleNode>(
             "SELECT node_hash, kind, payload FROM merkle_nodes WHERE node_hash = $1",
         )
@@ -618,7 +648,7 @@ impl ExecuteManyStr for PgPool {
     }
 }
 
-fn now_millis() -> i64 {
+pub(crate) fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
@@ -685,14 +715,23 @@ mod tests {
             render_version: 1,
         };
         s.upsert_chapter(&c).await.unwrap();
-        let got = s.get_chapter("t-book", "text", "zh", "00.md").await.unwrap();
+        let got = s
+            .get_chapter("t-book", "text", "zh", "00.md")
+            .await
+            .unwrap();
         assert_eq!(got.unwrap().html.as_deref(), Some("<p>hi</p>"));
 
         s.upsert_asset("habc", "image/png", 123).await.unwrap();
         assert_eq!(s.get_asset("habc").await.unwrap().unwrap().size, 123);
 
-        s.delete_chapter("t-book", "text", "zh", "00.md").await.unwrap();
-        assert!(s.get_chapter("t-book", "text", "zh", "00.md").await.unwrap().is_none());
+        s.delete_chapter("t-book", "text", "zh", "00.md")
+            .await
+            .unwrap();
+        assert!(s
+            .get_chapter("t-book", "text", "zh", "00.md")
+            .await
+            .unwrap()
+            .is_none());
         s.delete_asset("habc").await.unwrap();
         assert!(s.get_asset("habc").await.unwrap().is_none());
     }
@@ -700,7 +739,9 @@ mod tests {
     #[tokio::test]
     async fn merkle_and_deploy_root_roundtrip() {
         let Some(s) = store().await else { return };
-        s.put_merkle_node("n1", "tree", r#"{"children":[]}"#).await.unwrap();
+        s.put_merkle_node("n1", "tree", r#"{"children":[]}"#)
+            .await
+            .unwrap();
         assert_eq!(s.get_merkle_node("n1").await.unwrap().unwrap().kind, "tree");
         s.set_deploy_root("root-abc").await.unwrap();
         assert_eq!(s.deploy_root().await.unwrap().as_deref(), Some("root-abc"));
@@ -712,7 +753,9 @@ mod tests {
         s.progress_upsert("bk/01", 0.42).await.unwrap();
         s.progress_upsert("bk/01", 0.55).await.unwrap(); // update wins
         let rows = s.progress_for_book("bk").await.unwrap();
-        assert!(rows.iter().any(|r| r.path == "bk/01" && (r.scroll - 0.55).abs() < 1e-9));
+        assert!(rows
+            .iter()
+            .any(|r| r.path == "bk/01" && (r.scroll - 0.55).abs() < 1e-9));
         let recent = s.progress_recent_per_book().await.unwrap();
         assert!(recent.iter().any(|r| r.path.starts_with("bk")));
 

@@ -1,35 +1,48 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
-  ThemeProvider,
-  CssBaseline,
-  Box,
   Alert,
+  Box,
+  CssBaseline,
   IconButton,
+  Snackbar,
+  ThemeProvider,
   ToggleButton,
   ToggleButtonGroup,
-  Snackbar,
 } from "@mui/material";
 import {
+  Close as CloseIcon,
   Headphones as AudiobookIcon,
   MenuBook as ReadIcon,
-  Close as CloseIcon,
 } from "@mui/icons-material";
-import { Sidebar, SettingsButton, ContentViewer, AudiobookPlayer, FloatingBubble, Landing } from "@/components";
-import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
+import {
+  AudiobookPlayer,
+  ContentViewer,
+  FloatingBubble,
+  Landing,
+  SettingsButton,
+  Sidebar,
+} from "@/components";
+import {
+  useFont,
+  useProgress,
+  useSettings,
+  useTheme,
+  useWebSocket,
+} from "@/hooks";
 import { useI18n } from "@/i18n";
 import { getServerSettings, putServerSetting } from "@/serverSettings";
-import { useAudioPlayer, type Track } from "@/audio/player";
+import { type Track, useAudioPlayer } from "@/audio/player";
 import { useAutoUpdate } from "@/hooks/useAutoUpdate";
 import { NavShell } from "./_shell";
 import type {
-  TreeNode,
-  FileType,
-  FileContent,
   Book,
-  RenditionInfo,
+  FileContent,
+  FileType,
   ProgressEntry,
   ReadingProgress,
+  RenditionInfo,
+  TreeNode,
 } from "@/types";
 
 function findReadme(nodes: TreeNode[]): string | null {
@@ -92,7 +105,10 @@ function flattenTracks(nodes: TreeNode[], uiLang: string): Track[] {
   const walk = (ns: TreeNode[]): void => {
     for (const n of ns) {
       if (n.is_dir) walk(n.children);
-      else out.push({ path: n.path, label: (uiLang && n.titles?.[uiLang]) || n.name });
+      else {out.push({
+          path: n.path,
+          label: (uiLang && n.titles?.[uiLang]) || n.name,
+        });}
     }
   };
   walk(nodes);
@@ -133,7 +149,11 @@ function getHashState(): HashState {
   return { path, lang, rendition };
 }
 
-function buildHash(path: string | null, lang: string | null, rendition: string | null): string {
+function buildHash(
+  path: string | null,
+  lang: string | null,
+  rendition: string | null,
+): string {
   if (!path) {
     return "";
   }
@@ -151,7 +171,7 @@ function writeHash(
   path: string | null,
   lang: string | null,
   rendition: string | null,
-  replace: boolean
+  replace: boolean,
 ): void {
   const h = buildHash(path, lang, rendition);
   const url = h || window.location.pathname;
@@ -175,7 +195,9 @@ export function App(): React.JSX.Element {
   // `lang` is the *selected* edition; `untranslated` records when a page is
   // missing there and we fell back to another edition's content.
   const [lang, setLang] = useState<string>("");
-  const [untranslated, setUntranslated] = useState<UntranslatedNotice | null>(null);
+  const [untranslated, setUntranslated] = useState<UntranslatedNotice | null>(
+    null,
+  );
   const [currentFileType, setCurrentFileType] = useState<FileType>("markdown");
   const [currentContent, setCurrentContent] = useState<string | null>(null);
   // The browse plane's reading mode. Audio is no longer a browse view (it's the
@@ -197,7 +219,8 @@ export function App(): React.JSX.Element {
   // arrive as the default text spine) must not clobber a non-text spine.
   const renditionRef = useRef<string>("text");
 
-  const { loadBook, loadRecent, savedScroll, save: saveProgress } = useProgress();
+  const { loadBook, loadRecent, savedScroll, save: saveProgress } =
+    useProgress();
   // Latest-read chapter per book (newest first), for the landing "continue
   // reading" indicators. Refetched whenever the bookshelf is shown so it
   // reflects progress made since the last visit.
@@ -208,22 +231,42 @@ export function App(): React.JSX.Element {
   // in. Keyed by slug; hydrated from /api/settings (`book.<slug>.{rendition,lang}`)
   // and written on every switch. The per-rendition reading position is already
   // server-side (it's keyed by chapter path, and text vs audio chapters differ).
-  const [bookPrefs, setBookPrefs] = useState<Record<string, { rendition?: string; lang?: string }>>({});
+  const [bookPrefs, setBookPrefs] = useState<
+    Record<string, { rendition?: string; lang?: string }>
+  >({});
   useEffect(() => {
     void getServerSettings().then((s) => {
       const out: Record<string, { rendition?: string; lang?: string }> = {};
       for (const [k, v] of Object.entries(s)) {
         const m = /^book\.(.+)\.(rendition|lang)$/.exec(k);
-        if (m?.[1] && m[2]) (out[m[1]] ??= {})[m[2] as "rendition" | "lang"] = v;
+        if (m?.[1] && m[2]) {
+          (out[m[1]] ??= {})[m[2] as "rendition" | "lang"] = v;
+        }
       }
       setBookPrefs(out);
     });
   }, []);
-  const saveBookPref = useCallback((slug: string, patch: { rendition?: string; lang?: string }) => {
-    setBookPrefs((prev) => ({ ...prev, [slug]: { ...prev[slug], ...patch } }));
-    if (patch.rendition !== undefined) putServerSetting(`book.${slug}.rendition`, patch.rendition);
-    if (patch.lang !== undefined) putServerSetting(`book.${slug}.lang`, patch.lang);
-  }, []);
+  const saveBookPref = useCallback(
+    (slug: string, patch: { rendition?: string; lang?: string }) => {
+      setBookPrefs((prev) => ({
+        ...prev,
+        [slug]: { ...prev[slug], ...patch },
+      }));
+      if (patch.rendition !== undefined) {
+        putServerSetting(
+          `book.${slug}.rendition`,
+          patch.rendition,
+        );
+      }
+      if (patch.lang !== undefined) {
+        putServerSetting(
+          `book.${slug}.lang`,
+          patch.lang,
+        );
+      }
+    },
+    [],
+  );
 
   const { t, lang: uiLang } = useI18n();
   const { theme, muiTheme, variant, mode, setVariant, setMode } = useTheme();
@@ -232,7 +275,8 @@ export function App(): React.JSX.Element {
   // The root audio engine: playback + the popup live above every view, so
   // navigating never stops the audio nor closes the popup. We only need to seed
   // playback (`playChapter`) and raise the popup into focus (`setExpanded`).
-  const { playChapter: audioPlayChapter, syncNotice, playing, nowPlaying } = useAudioPlayer();
+  const { playChapter: audioPlayChapter, syncNotice, playing, nowPlaying } =
+    useAudioPlayer();
 
   // Auto-update the installed PWA when a newer bundle is deployed (an iOS
   // home-screen PWA otherwise resumes its frozen page and never picks up a
@@ -252,14 +296,16 @@ export function App(): React.JSX.Element {
   // Are we ON the playing book's inline audio page (where the read-along reader
   // already shows full controls)? If so the floating bubble hides; everywhere
   // else (text page, another book, the shelf) it shows as the now-playing handle.
-  const onPlayingPage = nowPlaying != null && activeSlug === nowPlaying.bookSlug && rendition === "audio";
+  const onPlayingPage = nowPlaying != null &&
+    activeSlug === nowPlaying.bookSlug && rendition === "audio";
 
   // Tap the top bar to jump the reader back to the top — the iOS
   // "tap the status bar" gesture. The reader's scroll container is the one
   // tagged `data-lv-scroller="reader"` (MarkdownViewer); query it lazily so a
   // chapter remount (which swaps the node) never leaves a stale ref.
   const scrollReaderTop = useCallback(() => {
-    document.querySelector<HTMLElement>('[data-lv-scroller="reader"]')?.scrollTo({ top: 0, behavior: "smooth" });
+    document.querySelector<HTMLElement>('[data-lv-scroller="reader"]')
+      ?.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
   // "book" mode (book.toml-driven) renders a clean titled spine; "docs" mode
   // renders the raw filesystem tree. The flag also drives whether the root
@@ -279,8 +325,7 @@ export function App(): React.JSX.Element {
   // language switcher shows the *active rendition's* languages (each rendition
   // carries its own lang list).
   const bookRenditions = activeBook?.renditions ?? [];
-  const activeRendition =
-    bookRenditions.find((r) => r.kind === rendition) ??
+  const activeRendition = bookRenditions.find((r) => r.kind === rendition) ??
     bookRenditions.find((r) => r.kind === activeBook?.default_rendition) ??
     bookRenditions[0] ??
     null;
@@ -290,8 +335,9 @@ export function App(): React.JSX.Element {
   // matching RenditionInfo (falling back to the first).
   const defaultRendition = useCallback(
     (book: Book): RenditionInfo | null =>
-      book.renditions.find((r) => r.kind === book.default_rendition) ?? book.renditions[0] ?? null,
-    []
+      book.renditions.find((r) => r.kind === book.default_rendition) ??
+        book.renditions[0] ?? null,
+    [],
   );
 
   // Initial edition for a rendition: prefer the UI locale if that rendition
@@ -299,7 +345,7 @@ export function App(): React.JSX.Element {
   const pickInitialLang = useCallback(
     (r: RenditionInfo): string =>
       r.langs.some((l) => l.lang === uiLang) ? uiLang : r.default_lang,
-    [uiLang]
+    [uiLang],
   );
 
   // Fetch the book list once, for the landing page + language switcher.
@@ -326,10 +372,11 @@ export function App(): React.JSX.Element {
       const rows = await loadRecent();
       setRecentProgress((prev) =>
         prev.length === rows.length &&
-        prev.every((p, i) => {
-          const r = rows[i];
-          return r !== undefined && p.path === r.path && p.scroll === r.scroll;
-        })
+          prev.every((p, i) => {
+            const r = rows[i];
+            return r !== undefined && p.path === r.path &&
+              p.scroll === r.scroll;
+          })
           ? prev
           : rows
       );
@@ -348,12 +395,13 @@ export function App(): React.JSX.Element {
     for (const r of recentProgress) {
       const slug = r.path.split("/")[0] ?? "";
       const isAudio = r.path.endsWith(".spoken.md");
-      const prefKind =
-        bookPrefs[slug]?.rendition ?? books.find((b) => b.slug === slug)?.default_rendition ?? "text";
+      const prefKind = bookPrefs[slug]?.rendition ?? books.find((b) =>
+        b.slug === slug
+      )?.default_rendition ?? "text";
       const matchesPref = isAudio === (prefKind === "audio");
       const cur = meta[slug];
-      const better =
-        !cur || (matchesPref && !cur.matchesPref) || (matchesPref === cur.matchesPref && r.updated_at > cur.at);
+      const better = !cur || (matchesPref && !cur.matchesPref) ||
+        (matchesPref === cur.matchesPref && r.updated_at > cur.at);
       if (!better) continue;
       meta[slug] = { matchesPref, at: r.updated_at };
       const node = findNode(tree, r.path);
@@ -368,12 +416,14 @@ export function App(): React.JSX.Element {
 
   const handleContentUpdate = useCallback(
     (path: string, msgLang: string, fileType: FileType, content: string) => {
-      if (path === currentPathRef.current && msgLang === contentLangRef.current) {
+      if (
+        path === currentPathRef.current && msgLang === contentLangRef.current
+      ) {
         setCurrentFileType(fileType);
         setCurrentContent(content);
       }
     },
-    []
+    [],
   );
 
   const handleTreeUpdate = useCallback((newTree: TreeNode[]) => {
@@ -398,7 +448,9 @@ export function App(): React.JSX.Element {
       currentPathRef.current = path;
       try {
         const res = await fetch(
-          `/api/file?path=${encodeURIComponent(path)}&lang=${encodeURIComponent(reqLang)}&rendition=${encodeURIComponent(reqRendition)}`
+          `/api/file?path=${encodeURIComponent(path)}&lang=${
+            encodeURIComponent(reqLang)
+          }&rendition=${encodeURIComponent(reqRendition)}`,
         );
         if (!res.ok) {
           console.error("Failed to fetch file:", path, res.status);
@@ -411,7 +463,11 @@ export function App(): React.JSX.Element {
         const apply = (): void => {
           setCurrentFileType(data.file_type);
           setCurrentContent(data.content);
-          setUntranslated(data.lang !== reqLang ? { requested: reqLang, shown: data.lang } : null);
+          setUntranslated(
+            data.lang !== reqLang
+              ? { requested: reqLang, shown: data.lang }
+              : null,
+          );
         };
         // Cross-fade the reader between chapters where supported (the content
         // element carries `view-transition-name: lv-content`, so only it
@@ -419,8 +475,12 @@ export function App(): React.JSX.Element {
         // synchronously inside the transition so it captures the new DOM.
         // Feature-detected + skipped under prefers-reduced-motion; instant swap
         // otherwise.
-        const doc = document as Document & { startViewTransition?: (cb: () => void) => unknown };
-        const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+        const doc = document as Document & {
+          startViewTransition?: (cb: () => void) => unknown;
+        };
+        const reduceMotion = window.matchMedia?.(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
         if (!reduceMotion && typeof doc.startViewTransition === "function") {
           doc.startViewTransition(() => {
             flushSync(apply);
@@ -432,21 +492,30 @@ export function App(): React.JSX.Element {
         console.error("Failed to fetch file:", e);
       }
     },
-    []
+    [],
   );
 
   // Open a file in a given edition + rendition: sync state, URL hash, and (for
   // the text rendition) content. The audio rendition renders in the player off
   // `currentPath`, so it needs no /api/file fetch — just the path + hash.
   const openFile = useCallback(
-    async (path: string, langArg: string, renditionArg: string, replace = false) => {
+    async (
+      path: string,
+      langArg: string,
+      renditionArg: string,
+      replace = false,
+    ) => {
       const slug = path.split("/")[0] ?? "";
       const book = books.find((b) => b.slug === slug);
       const rInfo = book?.renditions.find((r) => r.kind === renditionArg);
       // Omit lang/rendition from the URL when they equal the book/rendition
       // default, keeping deep links clean (mirrors how `lang` already behaves).
-      const langForHash = rInfo && langArg !== rInfo.default_lang ? langArg : null;
-      const renditionForHash = book && renditionArg !== book.default_rendition ? renditionArg : null;
+      const langForHash = rInfo && langArg !== rInfo.default_lang
+        ? langArg
+        : null;
+      const renditionForHash = book && renditionArg !== book.default_rendition
+        ? renditionArg
+        : null;
 
       setLang(langArg);
       setRendition(renditionArg);
@@ -464,7 +533,7 @@ export function App(): React.JSX.Element {
         await loadFile(path, langArg, renditionArg);
       }
     },
-    [books, loadFile]
+    [books, loadFile],
   );
 
   // Sidebar / markdown-link navigation stays within the current edition + mode.
@@ -472,7 +541,7 @@ export function App(): React.JSX.Element {
     (path: string) => {
       void openFile(path, lang, rendition);
     },
-    [openFile, lang, rendition]
+    [openFile, lang, rendition],
   );
 
   // Switch the active book to another language edition, keeping the page +
@@ -484,7 +553,7 @@ export function App(): React.JSX.Element {
         void openFile(currentPath, newLang, rendition);
       }
     },
-    [currentPath, openFile, rendition, activeSlug, saveBookPref]
+    [currentPath, openFile, rendition, activeSlug, saveBookPref],
   );
 
   // The entry chapter of a rendition: resume the last-read chapter if it still
@@ -497,7 +566,7 @@ export function App(): React.JSX.Element {
       const resume = last && hasFilePath(scope, last.path) ? last.path : null;
       return resume ?? findReadme(scope) ?? findFirstFile(scope);
     },
-    [loadBook]
+    [loadBook],
   );
 
   // Open a book's AUDIO rendition INLINE (a normal NavShell page with the audio
@@ -521,10 +590,14 @@ export function App(): React.JSX.Element {
           const spine = (await res.json()) as TreeNode[];
           const root = spine.find((n) => n.path === slug);
           const scope = root ? [root] : spine;
-          let target = chapterPath && hasFilePath(scope, chapterPath) ? chapterPath : null;
+          let target = chapterPath && hasFilePath(scope, chapterPath)
+            ? chapterPath
+            : null;
           if (!target) {
             const last = await loadBook(slug);
-            target = (last && hasFilePath(scope, last.path) ? last.path : null) ?? findFirstFile(scope);
+            target =
+              (last && hasFilePath(scope, last.path) ? last.path : null) ??
+                findFirstFile(scope);
           }
           if (!target) {
             setNotice(t("audiobook.empty"));
@@ -533,14 +606,16 @@ export function App(): React.JSX.Element {
           setTree(spine);
           renditionRef.current = "audio";
           const prefLang = bookPrefs[slug]?.lang;
-          const audioLang = prefLang && r.langs.some((l) => l.lang === prefLang) ? prefLang : pickInitialLang(r);
+          const audioLang = prefLang && r.langs.some((l) => l.lang === prefLang)
+            ? prefLang
+            : pickInitialLang(r);
           void openFile(target, audioLang, "audio", replace);
         } catch (e) {
           console.error("Failed to open audiobook:", e);
         }
       })();
     },
-    [books, bookPrefs, loadBook, pickInitialLang, openFile, t]
+    [books, bookPrefs, loadBook, pickInitialLang, openFile, t],
   );
 
   // Enter a book from the landing page in a specific rendition (the bookshelf
@@ -556,14 +631,20 @@ export function App(): React.JSX.Element {
       // navbar switch) wins.
       const pref = bookPrefs[slug];
       const r =
-        (renditionKind ? book.renditions.find((x) => x.kind === renditionKind) : undefined) ??
-        (pref?.rendition ? book.renditions.find((x) => x.kind === pref.rendition) : undefined) ??
-        defaultRendition(book);
+        (renditionKind
+          ? book.renditions.find((x) => x.kind === renditionKind)
+          : undefined) ??
+          (pref?.rendition
+            ? book.renditions.find((x) => x.kind === pref.rendition)
+            : undefined) ??
+          defaultRendition(book);
       if (!r) return;
       // Restore the last-used edition for this book if it still exists in the
       // rendition, else this rendition's preferred initial edition.
       const initialLang =
-        pref?.lang && r.langs.some((l) => l.lang === pref.lang) ? pref.lang : pickInitialLang(r);
+        pref?.lang && r.langs.some((l) => l.lang === pref.lang)
+          ? pref.lang
+          : pickInitialLang(r);
       // Audio opens its inline read-along page (sidebar = audio spine).
       if (r.kind === "audio") {
         openAudiobook(slug, undefined, replace);
@@ -574,7 +655,9 @@ export function App(): React.JSX.Element {
         // `tree` may hold another rendition's spine (we just left an audio
         // book) or be stale, so we can't trust it for resume/README lookup.
         try {
-          const res = await fetch(`/api/tree?rendition=${encodeURIComponent(r.kind)}`);
+          const res = await fetch(
+            `/api/tree?rendition=${encodeURIComponent(r.kind)}`,
+          );
           const spine = (await res.json()) as TreeNode[];
           setTree(spine);
           renditionRef.current = r.kind;
@@ -587,7 +670,15 @@ export function App(): React.JSX.Element {
         }
       })();
     },
-    [books, bookPrefs, defaultRendition, entryChapter, openFile, pickInitialLang, openAudiobook]
+    [
+      books,
+      bookPrefs,
+      defaultRendition,
+      entryChapter,
+      openFile,
+      pickInitialLang,
+      openAudiobook,
+    ],
   );
 
   // Return to the landing bookshelf.
@@ -610,12 +701,14 @@ export function App(): React.JSX.Element {
     (path: string, hashRendition: string | null): string => {
       const slug = path.split("/")[0] ?? "";
       const book = books.find((b) => b.slug === slug);
-      if (hashRendition && book?.renditions.some((r) => r.kind === hashRendition)) {
+      if (
+        hashRendition && book?.renditions.some((r) => r.kind === hashRendition)
+      ) {
         return hashRendition;
       }
       return book?.default_rendition ?? "text";
     },
-    [books]
+    [books],
   );
 
   const langForHashEntry = useCallback(
@@ -626,7 +719,7 @@ export function App(): React.JSX.Element {
       const rInfo = book?.renditions.find((r) => r.kind === kind);
       return rInfo ? pickInitialLang(rInfo) : "";
     },
-    [books, pickInitialLang]
+    [books, pickInitialLang],
   );
 
   // Restore the view (path, lang, rendition) encoded in the hash. Fetches the
@@ -655,12 +748,18 @@ export function App(): React.JSX.Element {
         const slug = path.split("/")[0] ?? "";
         const book = books.find((b) => b.slug === slug);
         const rInfo = book?.renditions.find((r) => r.kind === kind);
-        const langForHash = rInfo && entryLang !== rInfo.default_lang ? entryLang : null;
-        const renditionForHash = book && kind !== book.default_rendition ? kind : null;
+        const langForHash = rInfo && entryLang !== rInfo.default_lang
+          ? entryLang
+          : null;
+        const renditionForHash = book && kind !== book.default_rendition
+          ? kind
+          : null;
         writeHash(path, langForHash, renditionForHash, true);
       }
       try {
-        const res = await fetch(`/api/tree?rendition=${encodeURIComponent(kind)}`);
+        const res = await fetch(
+          `/api/tree?rendition=${encodeURIComponent(kind)}`,
+        );
         setTree((await res.json()) as TreeNode[]);
       } catch (e) {
         console.error("Failed to fetch rendition tree:", e);
@@ -676,7 +775,7 @@ export function App(): React.JSX.Element {
         void loadFile(path, entryLang, kind);
       }
     },
-    [books, loadFile, langForHashEntry, renditionForHashEntry, loadBook]
+    [books, loadFile, langForHashEntry, renditionForHashEntry, loadBook],
   );
 
   // Fetch the tree once, then restore any deep link from the hash. Waits for
@@ -716,7 +815,10 @@ export function App(): React.JSX.Element {
   //    seeding the queue from the loaded audio spine. A no-op once it's already
   //    that chapter, so re-opening / auto-advancing never restarts it.
   useEffect(() => {
-    if (rendition !== "audio" || !currentPath || !activeBook || activeTree.length === 0) return;
+    if (
+      rendition !== "audio" || !currentPath || !activeBook ||
+      activeTree.length === 0
+    ) return;
     if (nowPlaying?.chapterPath === currentPath) return;
     audioPlayChapter(
       {
@@ -727,9 +829,18 @@ export function App(): React.JSX.Element {
         lang,
         rendition,
       },
-      flattenTracks(activeTree, uiLang)
+      flattenTracks(activeTree, uiLang),
     );
-  }, [rendition, currentPath, activeBook, activeTree, lang, uiLang, nowPlaying, audioPlayChapter]);
+  }, [
+    rendition,
+    currentPath,
+    activeBook,
+    activeTree,
+    lang,
+    uiLang,
+    nowPlaying,
+    audioPlayChapter,
+  ]);
 
   // B) engine → view: when the engine auto-advances into the next chapter while
   //    you're watching THIS book's audio page, follow it (URL + sidebar). Follow
@@ -739,7 +850,9 @@ export function App(): React.JSX.Element {
   const syncedChapterRef = useRef<string | null>(null);
   useEffect(() => {
     const np = nowPlaying;
-    if (!np || activeRendition?.kind !== "audio" || activeSlug !== np.bookSlug) {
+    if (
+      !np || activeRendition?.kind !== "audio" || activeSlug !== np.bookSlug
+    ) {
       syncedChapterRef.current = null;
       return;
     }
@@ -754,10 +867,21 @@ export function App(): React.JSX.Element {
     syncedChapterRef.current = np.chapterPath;
     const rInfo = activeBook?.renditions.find((r) => r.kind === rendition);
     const langForHash = rInfo && lang !== rInfo.default_lang ? lang : null;
-    const renditionForHash = activeBook && rendition !== activeBook.default_rendition ? rendition : null;
+    const renditionForHash =
+      activeBook && rendition !== activeBook.default_rendition
+        ? rendition
+        : null;
     writeHash(np.chapterPath, langForHash, renditionForHash, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nowPlaying, activeRendition, activeSlug, currentPath, activeBook, rendition, lang]);
+  }, [
+    nowPlaying,
+    activeRendition,
+    activeSlug,
+    currentPath,
+    activeBook,
+    rendition,
+    lang,
+  ]);
 
   // One settings affordance reused in both chrome contexts (bookshelf header +
   // in-book NavShell actions). The shared SettingsSheet owns the gear and the
@@ -835,19 +959,32 @@ export function App(): React.JSX.Element {
   return (
     <ThemeProvider theme={muiTheme}>
       <CssBaseline />
-      {/* The persistent themed backdrop. Returning from a book unmounts the
+      {
+        /* The persistent themed backdrop. Returning from a book unmounts the
             NavShell + its ~900 markdown nodes in one commit; while reading,
             `.markdown-body`'s own opaque background covers the viewport, so
             without a themed colour here the bare body showed through for the
             frame of the swap as a white flash. Painting background.default on
             the always-mounted container means the swap happens over a stable,
-            theme-correct surface. */}
-        <Box sx={{ height: "100dvh", overflow: "hidden", display: "flex", flexDirection: "column", bgcolor: "background.default" }}>
-          {/* The view stack (bookshelf + open book) fills the space above the
+            theme-correct surface. */
+      }
+      <Box
+        sx={{
+          height: "100dvh",
+          overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
+          bgcolor: "background.default",
+        }}
+      >
+        {
+          /* The view stack (bookshelf + open book) fills the space above the
               persistent mini-player, which takes its own row below so it pushes
-              content up instead of covering it. */}
-          <Box sx={{ position: "relative", flex: 1, minHeight: 0 }}>
-          {/* The bookshelf stays mounted (just hidden) while a book is open, so
+              content up instead of covering it. */
+        }
+        <Box sx={{ position: "relative", flex: 1, minHeight: 0 }}>
+          {
+            /* The bookshelf stays mounted (just hidden) while a book is open, so
               its scroll position survives the round trip — no remount, no
               restore jump. We hide it with opacity:0 (NOT visibility:hidden):
               a visibility-hidden subtree is "not relevant to the user", so the
@@ -857,7 +994,8 @@ export function App(): React.JSX.Element {
               in-viewport cards rendered (just transparent), so returning is a
               compositor-only opacity flip: instant, flash-free. (Off-screen
               cards are still skipped by content-visibility, and the scroll
-              offset is preserved.) */}
+              offset is preserved.) */
+          }
           <Box
             sx={{
               position: "absolute",
@@ -878,115 +1016,124 @@ export function App(): React.JSX.Element {
           </Box>
           {activeSlug !== null && (
             <NavShell
-            appKey="liveview"
-            title={
-              <Box
-                component="span"
-                role="button"
-                tabIndex={0}
-                aria-label={t("app.scrollTop")}
-                onClick={scrollReaderTop}
-                sx={{
-                  display: "block",
-                  cursor: "pointer",
-                  whiteSpace: "nowrap",
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                }}
-              >
-                {bookLabel}
-              </Box>
-            }
-            nav={(api) => (
-              <Sidebar
-                tree={activeTree}
-                currentPath={currentPath}
-                bookMode={bookMode}
-                langs={bookLangs}
-                currentLang={lang}
-                onSwitchLang={switchLang}
-                onSelect={(path) => {
-                  handleSelect(path);
-                  api.closeMobile();
-                }}
-                onBackToLanding={backToLanding}
-              />
-            )}
-            actions={bookActions}
-          >
-            {untranslated && (
-              <Alert severity="info" square sx={{ py: 0.25 }}>
-                {t("content.untranslated", {
-                  lang: langLabel(untranslated.requested),
-                  fallback: langLabel(untranslated.shown),
-                })}
-              </Alert>
-            )}
-            {activeRendition?.kind === "audio" && currentPath ? (
-              // Audio rendition: the read-along reader, inline in the NavShell
-              // (its own page with the audio spine in the sidebar + history back).
-              <AudiobookPlayer
-                contentMaxWidth={menuBarSettings.contentMaxWidth}
-                lineHeight={menuBarSettings.lineHeight}
-                onSaveScroll={saveProgress}
-              />
-            ) : (
-              <ContentViewer
-                content={currentContent}
-                fileType={currentFileType}
-                currentPath={currentPath}
-                theme={theme}
-                onNavigate={handleSelect}
-                contentMaxWidth={menuBarSettings.contentMaxWidth}
-                lineHeight={menuBarSettings.lineHeight}
-                savedScroll={savedScroll}
-                onSaveScroll={saveProgress}
-              />
-            )}
+              appKey="liveview"
+              title={
+                <Box
+                  component="span"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={t("app.scrollTop")}
+                  onClick={scrollReaderTop}
+                  sx={{
+                    display: "block",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {bookLabel}
+                </Box>
+              }
+              nav={(api) => (
+                <Sidebar
+                  tree={activeTree}
+                  currentPath={currentPath}
+                  bookMode={bookMode}
+                  langs={bookLangs}
+                  currentLang={lang}
+                  onSwitchLang={switchLang}
+                  onSelect={(path) => {
+                    handleSelect(path);
+                    api.closeMobile();
+                  }}
+                  onBackToLanding={backToLanding}
+                  createdAt={activeBook?.created_at}
+                  updatedAt={activeBook?.updated_at}
+                />
+              )}
+              actions={bookActions}
+            >
+              {untranslated && (
+                <Alert severity="info" square sx={{ py: 0.25 }}>
+                  {t("content.untranslated", {
+                    lang: langLabel(untranslated.requested),
+                    fallback: langLabel(untranslated.shown),
+                  })}
+                </Alert>
+              )}
+              {activeRendition?.kind === "audio" && currentPath
+                ? (
+                  // Audio rendition: the read-along reader, inline in the NavShell
+                  // (its own page with the audio spine in the sidebar + history back).
+                  <AudiobookPlayer
+                    contentMaxWidth={menuBarSettings.contentMaxWidth}
+                    lineHeight={menuBarSettings.lineHeight}
+                    onSaveScroll={saveProgress}
+                  />
+                )
+                : (
+                  <ContentViewer
+                    content={currentContent}
+                    fileType={currentFileType}
+                    currentPath={currentPath}
+                    theme={theme}
+                    onNavigate={handleSelect}
+                    contentMaxWidth={menuBarSettings.contentMaxWidth}
+                    lineHeight={menuBarSettings.lineHeight}
+                    savedScroll={savedScroll}
+                    onSaveScroll={saveProgress}
+                  />
+                )}
             </NavShell>
           )}
-          </Box>
         </Box>
-        {/* The floating bubble — the now-playing handle shown when audio is
+      </Box>
+      {
+        /* The floating bubble — the now-playing handle shown when audio is
             playing but you're browsing AWAY from its inline page. A fixed
-            overlay; tapping its artwork navigates back to that page. */}
-        <FloatingBubble onPlayingPage={onPlayingPage} onOpenPlayer={openPlayingAudio} />
-        <Snackbar
-          open={notice !== null}
-          autoHideDuration={3000}
-          // MUI close-button pattern: the explicit close action and the
-          // auto-hide timeout dismiss; a click-away does NOT, so the toast
-          // can't vanish on an unrelated tap mid-read.
-          onClose={(_event, reason) => {
-            if (reason === "clickaway") return;
-            setNotice(null);
-          }}
-          message={notice}
-          anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
-          // Theme-adaptive surface: MUI's default snackbar is a fixed inverted
-          // grey that clashes with sepia/night. Paint it as a themed paper
-          // surface (border + elevation to stay distinct) so it matches the
-          // bars/cards in every theme.
-          ContentProps={{
-            sx: {
-              bgcolor: "background.paper",
-              color: "text.primary",
-              border: 1,
-              borderColor: "divider",
-              boxShadow: 6,
-            },
-          }}
-          action={
-            <IconButton
-              size="small"
-              aria-label="close"
-              color="inherit"
-              onClick={() => setNotice(null)}
-            >
-              <CloseIcon fontSize="medium" />
-            </IconButton>
-          }
-        />
+            overlay; tapping its artwork navigates back to that page. */
+      }
+      <FloatingBubble
+        onPlayingPage={onPlayingPage}
+        onOpenPlayer={openPlayingAudio}
+      />
+      <Snackbar
+        open={notice !== null}
+        autoHideDuration={3000}
+        // MUI close-button pattern: the explicit close action and the
+        // auto-hide timeout dismiss; a click-away does NOT, so the toast
+        // can't vanish on an unrelated tap mid-read.
+        onClose={(_event, reason) => {
+          if (reason === "clickaway") return;
+          setNotice(null);
+        }}
+        message={notice}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        // Theme-adaptive surface: MUI's default snackbar is a fixed inverted
+        // grey that clashes with sepia/night. Paint it as a themed paper
+        // surface (border + elevation to stay distinct) so it matches the
+        // bars/cards in every theme.
+        ContentProps={{
+          sx: {
+            bgcolor: "background.paper",
+            color: "text.primary",
+            border: 1,
+            borderColor: "divider",
+            boxShadow: 6,
+          },
+        }}
+        action={
+          <IconButton
+            size="small"
+            aria-label="close"
+            color="inherit"
+            onClick={() => setNotice(null)}
+          >
+            <CloseIcon fontSize="medium" />
+          </IconButton>
+        }
+      />
     </ThemeProvider>
   );
 }

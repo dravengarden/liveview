@@ -23,9 +23,12 @@ const STRINGS: Record<Language, Dict> = {
     "landing.home": "Back to bookshelf",
     "landing.subtitle": "Pick one to start reading · {n} total",
     "landing.empty": "Nothing to read yet",
-    "landing.noMounts": "No [[book]] in the liveview config — add one and it appears here.",
+    "landing.noMounts":
+      "No [[book]] in the liveview config — add one and it appears here.",
     "landing.noResults": "No matches",
     "landing.continue": "Continue: {chapter}",
+    "landing.added": "Added {date}",
+    "landing.updated": "Updated {date}",
     "landing.search": "Search by name",
     "landing.searchClear": "Clear search",
     "landing.filter": "Filter",
@@ -48,7 +51,8 @@ const STRINGS: Record<Language, Dict> = {
     "action.share": "Share",
     "content.selectFile": "Select a file from the sidebar",
     "content.unsupported": "Unsupported file type: {type}",
-    "content.untranslated": "Not translated to {lang} yet — showing {fallback}.",
+    "content.untranslated":
+      "Not translated to {lang} yet — showing {fallback}.",
     "audiobook.open": "Listen (audiobook)",
     "audiobook.read": "Read (text)",
     "audiobook.close": "Back to reading",
@@ -100,6 +104,8 @@ const STRINGS: Record<Language, Dict> = {
     "landing.noMounts": "liveview 配置里没有 [[book]]——添加后会出现在这里。",
     "landing.noResults": "没有匹配的结果",
     "landing.continue": "继续：{chapter}",
+    "landing.added": "创建于 {date}",
+    "landing.updated": "更新于 {date}",
     "landing.search": "按名称搜索",
     "landing.searchClear": "清除搜索",
     "landing.filter": "筛选",
@@ -176,7 +182,10 @@ function detectLanguage(): Language {
   return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
 }
 
-export type Translate = (key: string, vars?: Record<string, string | number>) => string;
+export type Translate = (
+  key: string,
+  vars?: Record<string, string | number>,
+) => string;
 
 interface I18nValue {
   lang: Language;
@@ -186,7 +195,9 @@ interface I18nValue {
 
 const I18nContext = createContext<I18nValue | null>(null);
 
-export function I18nProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
+export function I18nProvider(
+  { children }: { children: React.ReactNode },
+): React.JSX.Element {
   const [lang, setLangState] = useState<Language>(detectLanguage);
 
   const setLang = useCallback((next: Language) => {
@@ -223,10 +234,14 @@ export function I18nProvider({ children }: { children: React.ReactNode }): React
       }
       return s;
     },
-    [lang]
+    [lang],
   );
 
-  const value = useMemo<I18nValue>(() => ({ lang, setLang, t }), [lang, setLang, t]);
+  const value = useMemo<I18nValue>(() => ({ lang, setLang, t }), [
+    lang,
+    setLang,
+    t,
+  ]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

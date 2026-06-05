@@ -183,6 +183,16 @@ const coverChipSx = {
   "& .MuiChip-icon": { color: "#fff" },
 } as const;
 
+/** Format a unix-ms deploy stamp as a locale date, or null when unset (0). */
+function fmtDate(ms: number, lang: string): string | null {
+  if (!ms) return null;
+  return new Date(ms).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
 /**
  * The "bookshelf" landing page: a sticky navbar (title · search · filters ·
  * settings · launcher) over a masonry of book cards.
@@ -210,7 +220,7 @@ export function Landing({
   onHome,
   settingsSlot,
 }: LandingProps): React.JSX.Element {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [query, setQuery] = useState("");
   // Multi-select kind filter; an empty selection means "all kinds".
   const [kinds, setKinds] = useState<Category[]>([]);
@@ -531,6 +541,18 @@ export function Landing({
                       const pct = p
                         ? Math.min(100, Math.max(0, Math.round(p.scroll * 100)))
                         : 0;
+                      // Deploy-time stamps (hidden when unset). Show "updated"
+                      // only when it differs from "added", so an unchanged book
+                      // doesn't show two identical dates.
+                      const createdStr = fmtDate(b.created_at, lang);
+                      const updatedStr = b.updated_at !== b.created_at
+                        ? fmtDate(b.updated_at, lang)
+                        : null;
+                      const stamps = [
+                        createdStr && t("landing.added", { date: createdStr }),
+                        updatedStr &&
+                        t("landing.updated", { date: updatedStr }),
+                      ].filter((s): s is string => Boolean(s));
                       return (
                         <Card
                           key={b.slug}
@@ -671,6 +693,15 @@ export function Landing({
                                     />
                                   ))}
                                 </Box>
+                              )}
+                              {stamps.length > 0 && (
+                                <Typography
+                                  variant="caption"
+                                  color="text.disabled"
+                                  sx={{ display: "block", mt: 1 }}
+                                >
+                                  {stamps.join(" · ")}
+                                </Typography>
                               )}
                             </Box>
                             {p && (

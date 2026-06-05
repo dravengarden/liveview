@@ -571,6 +571,11 @@ struct BookInfo {
     /// sidebar is the raw filesystem tree ("docs" mode). Mirrors the default
     /// rendition. The frontend renders the two modes differently.
     manifest: bool,
+    /// Deploy-time stamps (unix ms): when the book first appeared on the shelf
+    /// and the last sync that changed its content. 0 ⇒ never stamped (hide in
+    /// the UI). NOT git times.
+    created_at: i64,
+    updated_at: i64,
 }
 
 /// Lightweight list of books for the landing page ("bookshelf"): the curated
@@ -613,6 +618,8 @@ async fn api_books(State(state): State<SharedState>) -> impl IntoResponse {
                 default_lang: default.default_lang.clone(),
                 langs: lang_infos(default),
                 manifest: default.manifest,
+                created_at: b.created_at,
+                updated_at: b.updated_at,
             }
         })
         .collect();
@@ -1196,4 +1203,3 @@ async fn api_raw(
         None => (StatusCode::NOT_FOUND, "File not found").into_response(),
     }
 }
-
