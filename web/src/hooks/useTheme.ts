@@ -29,7 +29,20 @@ function isDarkTheme(theme: Theme): boolean {
 // status bar background with this colour and auto-picks a contrasting glyph
 // colour, so light themes get dark icons and vice versa.
 function applyThemeColor(color: string): void {
-  globalThis.document.querySelector('meta[name="theme-color"]')?.setAttribute("content", color);
+  // iOS standalone PWAs frequently ignore an in-place `content` mutation of an
+  // existing <meta name="theme-color"> — the status bar keeps the colour it read
+  // at launch. REPLACING the node (remove every copy, insert a fresh one) is the
+  // workaround that nudges iOS to re-read it on a runtime theme switch. (On a
+  // hard-limit iOS build the status bar still only updates on relaunch; the rest
+  // of the chrome recolours instantly via the MUI theme regardless.)
+  const head = globalThis.document.head;
+  head.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
+    m.remove();
+  });
+  const meta = globalThis.document.createElement("meta");
+  meta.setAttribute("name", "theme-color");
+  meta.setAttribute("content", color);
+  head.appendChild(meta);
 }
 
 interface ThemeColors {

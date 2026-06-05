@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Box, CircularProgress, Grow, IconButton, Typography } from "@mui/material";
+import { Box, CircularProgress, Fade, Grow, IconButton, Typography } from "@mui/material";
 import {
   PlayArrow,
   Pause,
@@ -115,7 +115,6 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
     skip,
     rate,
     setRate,
-    stop,
   } = useAudioPlayer();
 
   const stored = useRef<StoredPos>(loadPos());
@@ -399,16 +398,17 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
         </Box>
       </Box>
 
-      {/* Tap-to-dismiss backdrop + control card. */}
-      {controlsOpen && (
+      {/* Modal scrim — a dim backdrop (like the settings sheet) that makes the
+          card read as a modal; tapping the dark area closes it. */}
+      <Fade in={controlsOpen} unmountOnExit>
         <Box
           onPointerDown={() => {
             setControlsOpen(false);
             poke();
           }}
-          sx={(theme) => ({ position: "fixed", inset: 0, zIndex: theme.zIndex.fab - 1 })}
+          sx={(theme) => ({ position: "fixed", inset: 0, zIndex: theme.zIndex.fab - 1, bgcolor: "rgba(0,0,0,0.45)" })}
         />
-      )}
+      </Fade>
       <Grow in={controlsOpen} unmountOnExit style={{ transformOrigin: pos.side === "right" ? "right center" : "left center" }}>
         <Box
           ref={cardRef}
@@ -450,10 +450,11 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
           >
             <Box sx={{ width: 34, height: 4, borderRadius: 2, bgcolor: "text.disabled", opacity: 0.5 }} />
             <IconButton
-              aria-label={t("audiobook.stop")}
+              aria-label={t("audiobook.collapse")}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => {
-                stop();
+                setControlsOpen(false);
+                poke();
               }}
               size="small"
               sx={{ position: "absolute", right: -4, top: -2, color: "text.secondary" }}
