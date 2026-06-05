@@ -1,16 +1,25 @@
-import { Box, Typography } from "@mui/material";
+import { lazy, Suspense } from "react";
+import { Box, Typography, CircularProgress } from "@mui/material";
 import { Description as FileIcon } from "@mui/icons-material";
 import type { Theme, FileType } from "@/types";
 import { useI18n } from "@/i18n";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { ImageViewer } from "./viewers/ImageViewer";
-import { PdfViewer } from "./viewers/PdfViewer";
-import { HtmlViewer } from "./viewers/HtmlViewer";
-import { CsvViewer } from "./viewers/CsvViewer";
 import { JsonViewer } from "./viewers/JsonViewer";
-import { ExcalidrawViewer } from "./viewers/ExcalidrawViewer";
-import { LatexViewer } from "./viewers/LatexViewer";
-import { TypstViewer } from "./viewers/TypstViewer";
+
+// Markdown (the common path), the tiny image viewer, and the now-lightweight
+// JSON viewer stay eager. The rest are rare file types backed by heavy libs
+// (PDF.js, Excalidraw, a CSV grid, …); code-split them out of the main bundle
+// so opening a book doesn't ship code for file types it may never show. Named
+// exports → map to a default for React.lazy.
+const PdfViewer = lazy(() => import("./viewers/PdfViewer").then((m) => ({ default: m.PdfViewer })));
+const HtmlViewer = lazy(() => import("./viewers/HtmlViewer").then((m) => ({ default: m.HtmlViewer })));
+const CsvViewer = lazy(() => import("./viewers/CsvViewer").then((m) => ({ default: m.CsvViewer })));
+const ExcalidrawViewer = lazy(() =>
+  import("./viewers/ExcalidrawViewer").then((m) => ({ default: m.ExcalidrawViewer }))
+);
+const LatexViewer = lazy(() => import("./viewers/LatexViewer").then((m) => ({ default: m.LatexViewer })));
+const TypstViewer = lazy(() => import("./viewers/TypstViewer").then((m) => ({ default: m.TypstViewer })));
 
 interface ContentViewerProps {
   content: string | null;
@@ -26,6 +35,15 @@ interface ContentViewerProps {
   savedScroll?: ((path: string) => number | undefined) | undefined;
   /** Reading-progress: report current scroll ratio for a doc path. */
   onSaveScroll?: ((path: string, ratio: number) => void) | undefined;
+}
+
+/** Spinner shown while a code-split viewer chunk downloads. */
+function ViewerLoading(): React.JSX.Element {
+  return (
+    <Box sx={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "text.secondary" }}>
+      <CircularProgress size={28} />
+    </Box>
+  );
 }
 
 export function ContentViewer({
@@ -58,9 +76,10 @@ export function ContentViewer({
     );
   }
 
+  let node: React.JSX.Element;
   switch (fileType) {
     case "markdown":
-      return (
+      node = (
         <MarkdownViewer
           html={content}
           currentPath={currentPath}
@@ -71,30 +90,39 @@ export function ContentViewer({
           onSaveScroll={onSaveScroll}
         />
       );
+      break;
 
     case "image":
-      return <ImageViewer path={currentPath} />;
+      node = <ImageViewer path={currentPath} />;
+      break;
 
     case "pdf":
-      return <PdfViewer path={currentPath} />;
+      node = <PdfViewer path={currentPath} />;
+      break;
 
     case "html":
-      return <HtmlViewer content={content} path={currentPath} />;
+      node = <HtmlViewer content={content} path={currentPath} />;
+      break;
 
     case "csv":
-      return <CsvViewer content={content} theme={theme} />;
+      node = <CsvViewer content={content} theme={theme} />;
+      break;
 
     case "json":
-      return <JsonViewer content={content} />;
+      node = <JsonViewer content={content} />;
+      break;
 
     case "excalidraw":
-      return <ExcalidrawViewer content={content} theme={theme} />;
+      node = <ExcalidrawViewer content={content} theme={theme} />;
+      break;
 
     case "latex":
-      return <LatexViewer content={content} theme={theme} />;
+      node = <LatexViewer content={content} theme={theme} />;
+      break;
 
     case "typst":
-      return <TypstViewer content={content} path={currentPath} />;
+      node = <TypstViewer content={content} path={currentPath} />;
+      break;
 
     default:
       return (
@@ -113,4 +141,8 @@ export function ContentViewer({
         </Box>
       );
   }
+
+  // Eager viewers resolve immediately (no fallback shown); lazy ones display the
+  // spinner while their chunk loads.
+  return <Suspense fallback={<ViewerLoading />}>{node}</Suspense>;
 }
