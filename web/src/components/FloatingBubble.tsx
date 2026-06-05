@@ -115,6 +115,7 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
     skip,
     rate,
     setRate,
+    stop,
   } = useAudioPlayer();
 
   const stored = useRef<StoredPos>(loadPos());
@@ -392,31 +393,9 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
           ) : (
             <AudiobookIcon sx={{ fontSize: 22, color: "rgba(255,255,255,0.92)" }} />
           )}
-          {/* Play/pause state glyph, CENTERED in the puck over a soft scrim (the
-              artwork still reads through it). It's an indicator, not a button —
-              a tap on the puck expands the control card, it doesn't toggle. */}
-          <Box
-            sx={{
-              position: "absolute",
-              inset: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              bgcolor: "rgba(0,0,0,0.34)",
-              color: "common.white",
-            }}
-          >
-            {loading ? (
-              <CircularProgress size={20} sx={{ color: "common.white" }} />
-            ) : playing ? (
-              <Pause sx={{ fontSize: 24 }} />
-            ) : (
-              // A right-pointing triangle reads left-heavy when dead-centre
-              // (its tip extends right, its flat base sits left) — nudge it
-              // right ~2px so it looks optically centred.
-              <PlayArrow sx={{ fontSize: 28, transform: "translateX(2px)" }} />
-            )}
-          </Box>
+          {/* Just the artwork + the progress ring around it — no play-state glyph
+              over the centre (it read as clutter / a fake button). The ring
+              conveys progress; play/pause lives in the tap-to-open card. */}
         </Box>
       </Box>
 
@@ -471,11 +450,10 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
           >
             <Box sx={{ width: 34, height: 4, borderRadius: 2, bgcolor: "text.disabled", opacity: 0.5 }} />
             <IconButton
-              aria-label={t("audiobook.collapse")}
+              aria-label={t("audiobook.stop")}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => {
-                setControlsOpen(false);
-                poke();
+                stop();
               }}
               size="small"
               sx={{ position: "absolute", right: -4, top: -2, color: "text.secondary" }}
