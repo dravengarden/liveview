@@ -129,7 +129,7 @@
 
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-t45z/Iz44yteOVAciz5FDjIdgDukY+z4vpx6c1o7Xpo=";
+        outputHash = "sha256-QKWEg4YN98a7wE1tIpSh1yQrW0Cvg87cj/BHMHAmrZk=";
       };
 
       # ── liveview: axum daemon, embeds the SPA via include_dir! ────────
