@@ -300,7 +300,7 @@ export function Landing({
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
-                      <SearchIcon fontSize="small" />
+                      <SearchIcon fontSize="medium" />
                     </InputAdornment>
                   ),
                   endAdornment: query ? (
@@ -314,7 +314,7 @@ export function Landing({
                         aria-label={t("landing.searchClear")}
                         sx={{ width: { xs: 40, lg: 32 }, height: { xs: 40, lg: 32 } }}
                       >
-                        <ClearIcon fontSize="small" />
+                        <ClearIcon fontSize="medium" />
                       </IconButton>
                     </InputAdornment>
                   ) : null,
@@ -334,7 +334,7 @@ export function Landing({
                       <OutlinedInput
                         startAdornment={
                           <InputAdornment position="start">
-                            <FilterIcon fontSize="small" />
+                            <FilterIcon fontSize="medium" />
                           </InputAdornment>
                         }
                       />

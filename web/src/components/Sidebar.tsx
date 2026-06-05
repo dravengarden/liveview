@@ -126,9 +126,9 @@ function TreeItem({
         {node.is_dir ? (
           <ListItemIcon sx={{ minWidth: 24 }}>
             {isExpanded ? (
-              <ExpandMoreIcon fontSize="small" />
+              <ExpandMoreIcon fontSize="medium" />
             ) : (
-              <ChevronRightIcon fontSize="small" />
+              <ChevronRightIcon fontSize="medium" />
             )}
           </ListItemIcon>
         ) : (
@@ -140,12 +140,12 @@ function TreeItem({
           <ListItemIcon sx={{ minWidth: 28 }}>
             {node.is_dir ? (
               isExpanded ? (
-                <FolderOpenIcon fontSize="small" color="primary" />
+                <FolderOpenIcon fontSize="medium" color="primary" />
               ) : (
-                <FolderIcon fontSize="small" color="primary" />
+                <FolderIcon fontSize="medium" color="primary" />
               )
             ) : (
-              <FileIcon fontSize="small" color="action" />
+              <FileIcon fontSize="medium" color="action" />
             )}
           </ListItemIcon>
         )}

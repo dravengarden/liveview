@@ -222,7 +222,7 @@ export function SettingsButton({
                       {preset.note}
                     </Typography>
                   </Box>
-                  {isSelected && <CheckIcon fontSize="small" color="primary" />}
+                  {isSelected && <CheckIcon fontSize="medium" color="primary" />}
                 </Box>
               );
             })}

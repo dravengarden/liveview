@@ -69,7 +69,7 @@ export function TypstViewer({ content, path }: TypstViewerProps): React.JSX.Elem
           bgcolor: "background.paper",
         }}
       >
-        <CodeIcon fontSize="small" color="action" />
+        <CodeIcon fontSize="medium" color="action" />
         <Typography variant="body2" color="text.secondary">
           {path}
         </Typography>

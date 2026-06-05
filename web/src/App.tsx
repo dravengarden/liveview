@@ -849,7 +849,7 @@ export function App(): React.JSX.Element {
               color="inherit"
               onClick={() => setNotice(null)}
             >
-              <CloseIcon fontSize="small" />
+              <CloseIcon fontSize="medium" />
             </IconButton>
           }
         />
