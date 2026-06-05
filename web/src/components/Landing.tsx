@@ -16,17 +16,19 @@ import {
   type SelectChangeEvent,
   TextField,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from "@mui/material";
 import {
-  AutoStories as ShelfIcon,
-  MenuBook as BookIcon,
   Article as DocsIcon,
-  Headphones as AudiobookIcon,
-  Search as SearchIcon,
+  AutoStories as ShelfIcon,
   Clear as ClearIcon,
   FilterList as FilterIcon,
+  Headphones as AudiobookIcon,
+  MenuBook as BookIcon,
+  Search as SearchIcon,
 } from "@mui/icons-material";
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { type ReactNode, useMemo, useRef, useState } from "react";
 import type { Book, ReadingProgress } from "@/types";
 import { useI18n } from "@/i18n";
 
@@ -67,7 +69,11 @@ function shelfEntries(books: Book[]): ShelfEntry[] {
   for (const b of books) {
     const audio = b.renditions.some((r) => r.kind === "audio");
     const text = b.renditions.some((r) => r.kind === "text");
-    const category: Category = !b.manifest ? "docs" : audio && !text ? "audiobook" : "book";
+    const category: Category = !b.manifest
+      ? "docs"
+      : audio && !text
+      ? "audiobook"
+      : "book";
     out.push({ book: b, category, hasAudio: audio });
   }
   return out;
@@ -95,7 +101,9 @@ function slugHue(slug: string): number {
  *  theme. */
 function coverGradient(slug: string): string {
   const h = slugHue(slug);
-  return `linear-gradient(135deg, hsl(${h} 52% 52%), hsl(${(h + 38) % 360} 48% 42%))`;
+  return `linear-gradient(135deg, hsl(${h} 52% 52%), hsl(${
+    (h + 38) % 360
+  } 48% 42%))`;
 }
 
 /** The kind glyph shown over a coverless card — also the audiobook's defining
@@ -139,27 +147,29 @@ function BookCover({
         overflow: "hidden",
       }}
     >
-      {showImage ? (
-        <Box
-          component="img"
-          src={`/api/cover?book=${encodeURIComponent(book.slug)}`}
-          alt=""
-          loading="lazy"
-          onError={() => {
-            setImgFailed(true);
-          }}
-          sx={{
-            position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-          }}
-        />
-      ) : (
-        // No image (or it failed): show the kind icon over the gradient.
-        <KindIcon sx={{ fontSize: 52, color: "rgba(255,255,255,0.92)" }} />
-      )}
+      {showImage
+        ? (
+          <Box
+            component="img"
+            src={`/api/cover?book=${encodeURIComponent(book.slug)}`}
+            alt=""
+            loading="lazy"
+            onError={() => {
+              setImgFailed(true);
+            }}
+            sx={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+            }}
+          />
+        )
+        : (
+          // No image (or it failed): show the kind icon over the gradient.
+          <KindIcon sx={{ fontSize: 52, color: "rgba(255,255,255,0.92)" }} />
+        )}
       {children}
     </Box>
   );
@@ -218,7 +228,9 @@ export function Landing({
   // result), so each row reads as a stable map of what's available.
   const counts = useMemo(() => {
     const c: Record<Category, number> = { book: 0, audiobook: 0, docs: 0 };
-    for (const e of entries) for (const k of KIND_ORDER) if (matchesKind(e, k)) c[k] += 1;
+    for (const e of entries) {
+      for (const k of KIND_ORDER) if (matchesKind(e, k)) c[k] += 1;
+    }
     return c;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries]);
@@ -227,12 +239,40 @@ export function Landing({
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return entries.filter((e) => {
-      if (kinds.length > 0 && !kinds.some((k) => matchesKind(e, k))) return false;
-      if (q && !e.book.label.toLowerCase().includes(q) && !e.book.slug.toLowerCase().includes(q)) return false;
+      if (kinds.length > 0 && !kinds.some((k) => matchesKind(e, k))) {
+        return false;
+      }
+      if (
+        q && !e.book.label.toLowerCase().includes(q) &&
+        !e.book.slug.toLowerCase().includes(q)
+      ) return false;
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, kinds, query]);
+
+  // Masonry as N independent top-anchored flex columns, NOT CSS multicol.
+  // Why: WebKit (Safari/iPad/iPhone) mis-positions the first card of a
+  // multicol's 2nd+ column — it gets pushed down so column tops don't align
+  // (the `overflow:hidden` cards form BFCs, which WebKit fragments badly at
+  // column boundaries). Chromium aligns them; Safari doesn't, and no CSS
+  // property reliably pins it (the earlier content-visibility scoping only
+  // dodged one variant). A flex row of column stacks gives every column its
+  // own `top:0`, so first-card tops are always flush, in every engine — while
+  // per-card height variance keeps the waterfall look. Column count is fixed
+  // per breakpoint (no JS measuring); cards fan out round-robin (card i →
+  // column i % cols), so reading order runs left→right then down.
+  const theme = useTheme();
+  const upSm = useMediaQuery(theme.breakpoints.up("sm"));
+  const upMd = useMediaQuery(theme.breakpoints.up("md"));
+  const cols = upMd ? 3 : upSm ? 2 : 1;
+  const columns = useMemo(() => {
+    const out: ShelfEntry[][] = Array.from({ length: cols }, () => []);
+    visible.forEach((e, i) => {
+      (out[i % cols] ??= []).push(e);
+    });
+    return out;
+  }, [visible, cols]);
 
   // Only offer a kind in the dropdown when the shelf actually has one.
   const availableKinds = KIND_ORDER.filter((k) => counts[k] > 0);
@@ -251,13 +291,24 @@ export function Landing({
   };
 
   return (
-    <Box ref={scrollerRef} sx={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}>
-      {/* ── Sticky navbar ──────────────────────────────────────────────────
+    <Box
+      ref={scrollerRef}
+      sx={{
+        flex: 1,
+        minHeight: 0,
+        overflow: "auto",
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      {
+        /* ── Sticky navbar ──────────────────────────────────────────────────
           Neutral chrome (background.default + divider, not a saturated bar —
           ui.md §4) that sticks to the top of the scroll container, so settings,
           the launcher, search and the filters stay reachable however far the
           shelf is scrolled. It owns the safe-area top inset so its background
-          covers the notch. */}
+          covers the notch. */
+      }
       <Box
         sx={{
           position: "sticky",
@@ -270,10 +321,29 @@ export function Landing({
           px: { xs: 2, md: 6 },
         }}
       >
-        <Box sx={{ maxWidth: 1000, mx: "auto", display: "flex", flexDirection: "column", gap: 1, pb: 1 }}>
-          {/* Row 1: title (home link) · settings · launcher (rightmost,
-              self-hides when not hosted). */}
-          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, minHeight: 40 }}>
+        <Box
+          sx={{
+            maxWidth: 1000,
+            mx: "auto",
+            display: "flex",
+            flexDirection: "column",
+            gap: 1,
+            pb: 1,
+          }}
+        >
+          {
+            /* Row 1: title (home link) · settings · launcher (rightmost,
+              self-hides when not hosted). */
+          }
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 1,
+              minHeight: 40,
+            }}
+          >
             <ButtonBase
               aria-label={t("landing.home")}
               title={t("landing.home")}
@@ -288,25 +358,37 @@ export function Landing({
                 "&:hover": { opacity: 0.8 },
               }}
             >
-              <ShelfIcon sx={{ fontSize: 30, color: "primary.main", flexShrink: 0 }} />
+              <ShelfIcon
+                sx={{ fontSize: 30, color: "primary.main", flexShrink: 0 }}
+              />
               <Typography variant="h5" fontWeight={700} noWrap>
                 {t("landing.title")}
               </Typography>
             </ButtonBase>
-            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 0.5,
+                flexShrink: 0,
+              }}
+            >
               {settingsSlot}
             </Box>
           </Box>
 
-          {/* Row 2: search + the kind filter share one line to save vertical
+          {
+            /* Row 2: search + the kind filter share one line to save vertical
               space. Search grows to fill; the filter is a compact multi-select
-              dropdown (empty selection = all kinds). */}
+              dropdown (empty selection = all kinds). */
+          }
           {books.length > 0 && (
             <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
               <TextField
                 size="small"
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) =>
+                  setQuery(e.target.value)}
                 placeholder={t("landing.search")}
                 aria-label={t("landing.search")}
                 InputProps={{
@@ -315,26 +397,37 @@ export function Landing({
                       <SearchIcon fontSize="medium" />
                     </InputAdornment>
                   ),
-                  endAdornment: query ? (
-                    // ui.md §7: no edge="end" (negative margin pins the target to the
-                    // iOS back-swipe edge); floor to a ≥40px touch target on phones and
-                    // keep the adornment off the safe-area edge.
-                    <InputAdornment position="end" sx={{ pr: "max(env(safe-area-inset-right), 8px)" }}>
-                      <IconButton
-                        size="small"
-                        onClick={() => setQuery("")}
-                        aria-label={t("landing.searchClear")}
-                        sx={{ width: { xs: 40, lg: 32 }, height: { xs: 40, lg: 32 } }}
+                  endAdornment: query
+                    ? (
+                      // ui.md §7: no edge="end" (negative margin pins the target to the
+                      // iOS back-swipe edge); floor to a ≥40px touch target on phones and
+                      // keep the adornment off the safe-area edge.
+                      <InputAdornment
+                        position="end"
+                        sx={{ pr: "max(env(safe-area-inset-right), 8px)" }}
                       >
-                        <ClearIcon fontSize="medium" />
-                      </IconButton>
-                    </InputAdornment>
-                  ) : null,
+                        <IconButton
+                          size="small"
+                          onClick={() => setQuery("")}
+                          aria-label={t("landing.searchClear")}
+                          sx={{
+                            width: { xs: 40, lg: 32 },
+                            height: { xs: 40, lg: 32 },
+                          }}
+                        >
+                          <ClearIcon fontSize="medium" />
+                        </IconButton>
+                      </InputAdornment>
+                    )
+                    : null,
                 }}
                 sx={{ flexGrow: 1, minWidth: 0 }}
               />
               {availableKinds.length > 0 && (
-                <FormControl size="small" sx={{ flexShrink: 0, width: { xs: 136, sm: 172 } }}>
+                <FormControl
+                  size="small"
+                  sx={{ flexShrink: 0, width: { xs: 136, sm: 172 } }}
+                >
                   <Select
                     multiple
                     displayEmpty
@@ -355,22 +448,34 @@ export function Landing({
                     // otherwise the picked kinds, comma-joined (ellipsized by the
                     // Select when they overflow the compact control).
                     renderValue={(selected) =>
-                      selected.length === 0 ? (
-                        <Box component="span" sx={{ color: "text.secondary" }}>
-                          {t("landing.filterAll")}
-                        </Box>
-                      ) : (
-                        selected.map((k) => t(KIND_LABEL[k])).join(", ")
-                      )
-                    }
+                      selected.length === 0
+                        ? (
+                          <Box
+                            component="span"
+                            sx={{ color: "text.secondary" }}
+                          >
+                            {t("landing.filterAll")}
+                          </Box>
+                        )
+                        : (
+                          selected.map((k) => t(KIND_LABEL[k])).join(", ")
+                        )}
                   >
                     {availableKinds.map((k) => (
                       <MenuItem key={k} value={k} dense>
-                        <Checkbox checked={kinds.includes(k)} size="small" sx={{ py: 0, pl: 0, pr: 1 }} />
+                        <Checkbox
+                          checked={kinds.includes(k)}
+                          size="small"
+                          sx={{ py: 0, pl: 0, pr: 1 }}
+                        />
                         <ListItemText primary={t(KIND_LABEL[k])} />
                         <Box
                           component="span"
-                          sx={{ ml: 3, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}
+                          sx={{
+                            ml: 3,
+                            color: "text.secondary",
+                            fontVariantNumeric: "tabular-nums",
+                          }}
                         >
                           {counts[k]}
                         </Box>
@@ -387,143 +492,203 @@ export function Landing({
       {/* ── Shelf ──────────────────────────────────────────────────────────── */}
       <Box sx={{ px: { xs: 2, md: 6 }, pt: 2, pb: { xs: 4, md: 6 } }}>
         <Box sx={{ maxWidth: 1000, mx: "auto" }}>
-          {books.length === 0 ? (
-            <Typography color="text.secondary">{t("landing.noMounts")}</Typography>
-          ) : visible.length === 0 ? (
-            <Typography color="text.secondary">{t("landing.noResults")}</Typography>
-          ) : (
-            // CSS multi-column = a true vertical waterfall with no JS, but only
-            // from `sm` up: on a phone it's one column anyway, and iOS Safari's
-            // multicol + break-inside is buggy (cards render blank), so drop to
-            // plain block flow (columnWidth:auto) on xs. Cards stay
-            // break-inside:avoid + margin-bottom, which work in both modes.
-            <Box sx={{ columnWidth: { xs: "auto", sm: "260px" }, columnGap: "20px" }}>
-              {visible.map((e) => {
-                const b = e.book;
-                const category = e.category;
-                const langs = b.langs;
-                const p = progress[b.slug];
-                const pct = p ? Math.min(100, Math.max(0, Math.round(p.scroll * 100))) : 0;
-                return (
-                  <Card
-                    key={b.slug}
-                    variant="outlined"
+          {books.length === 0
+            ? (
+              <Typography color="text.secondary">
+                {t("landing.noMounts")}
+              </Typography>
+            )
+            : visible.length === 0
+            ? (
+              <Typography color="text.secondary">
+                {t("landing.noResults")}
+              </Typography>
+            )
+            : (
+              // Flex column stacks (see `columns` above) — a true waterfall with
+              // no JS, where every column shares `top:0` so first-card tops are
+              // flush in every engine (the CSS-multicol version drifted in
+              // WebKit). `alignItems:flex-start` keeps columns top-anchored
+              // regardless of their differing total heights.
+              <Box
+                sx={{ display: "flex", alignItems: "flex-start", gap: "20px" }}
+              >
+                {columns.map((col, ci) => (
+                  <Box
+                    key={ci}
                     sx={{
-                      breakInside: "avoid",
-                      mb: "20px",
-                      borderRadius: 2,
-                      overflow: "hidden",
-                      // Skip layout/paint for off-screen cards. The shelf is a tall
-                      // CSS-multicol list; on a phone (and right after returning
-                      // from a book, when the whole shelf re-lays-out at once) the
-                      // browser was laying out + painting every card every frame,
-                      // which made the first second of scrolling drop inputs.
-                      // content-visibility:auto lets the engine skip cards outside
-                      // the viewport; contain-intrinsic-size reserves a plausible
-                      // box so the scrollbar/column balance stays stable.
-                      //
-                      // xs ONLY: in the sm+ CSS-multicolumn layout, iOS Safari
-                      // mis-places the first card of the 2nd+ column (a stale
-                      // intrinsic-size box collides with multicol fragmentation,
-                      // pushing that card's top down so it doesn't align with
-                      // column 1). The phone is single-column, where the perf win
-                      // matters and the multicol interaction can't happen — so
-                      // scope content-visibility to xs and let sm+ lay out cards
-                      // normally (tops align across columns again).
-                      contentVisibility: { xs: "auto", sm: "visible" },
-                      containIntrinsicSize: { xs: "0 320px", sm: "auto" },
-                      // Hover lift is a pointer affordance; on touch it fires on
-                      // every scroll-tap and forces a repaint mid-scroll, so gate
-                      // the transition + lift behind a real hover-capable pointer.
-                      "@media (hover: hover)": {
-                        transition: "box-shadow 0.18s, transform 0.18s",
-                        "&:hover": { boxShadow: 4, transform: "translateY(-2px)" },
-                      },
+                      flex: 1,
+                      minWidth: 0,
+                      display: "flex",
+                      flexDirection: "column",
                     }}
                   >
-                    {/* Standard MUI ripple. (It was dropped once because the
+                    {col.map((e) => {
+                      const b = e.book;
+                      const category = e.category;
+                      const langs = b.langs;
+                      const p = progress[b.slug];
+                      const pct = p
+                        ? Math.min(100, Math.max(0, Math.round(p.scroll * 100)))
+                        : 0;
+                      return (
+                        <Card
+                          key={b.slug}
+                          variant="outlined"
+                          sx={{
+                            mb: "20px",
+                            borderRadius: 2,
+                            overflow: "hidden",
+                            // Skip layout/paint for off-screen cards. The shelf is a
+                            // tall list; on a phone (and right after returning from a
+                            // book, when the whole shelf re-lays-out at once) the
+                            // browser was laying out + painting every card every frame,
+                            // which made the first second of scrolling drop inputs.
+                            // content-visibility:auto lets the engine skip cards outside
+                            // the viewport; contain-intrinsic-size reserves a plausible
+                            // box so the scrollbar stays stable. Scoped to xs — that's
+                            // where the long single column makes the perf win matter;
+                            // sm+ has fewer cards per column and we keep them painted.
+                            contentVisibility: { xs: "auto", sm: "visible" },
+                            containIntrinsicSize: { xs: "0 320px", sm: "auto" },
+                            // Hover lift is a pointer affordance; on touch it fires on
+                            // every scroll-tap and forces a repaint mid-scroll, so gate
+                            // the transition + lift behind a real hover-capable pointer.
+                            "@media (hover: hover)": {
+                              transition: "box-shadow 0.18s, transform 0.18s",
+                              "&:hover": {
+                                boxShadow: 4,
+                                transform: "translateY(-2px)",
+                              },
+                            },
+                          }}
+                        >
+                          {
+                            /* Standard MUI ripple. (It was dropped once because the
                         shelf was hidden with visibility:hidden while a book was
                         open, which stranded the ripple's exit animation; the
                         shelf now stays painted via opacity:0, so the ripple
-                        completes normally.) */}
-                    <CardActionArea onClick={() => onOpen(b.slug)}>
-                      {/* Cover: the book's own image when it has one, else a
+                        completes normally.) */
+                          }
+                          <CardActionArea onClick={() => onOpen(b.slug)}>
+                            {
+                              /* Cover: the book's own image when it has one, else a
                           slug-keyed gradient + the kind icon. A book that offers
                           audio carries a headphones badge (top-left); books in
-                          progress carry a % badge (top-right). */}
-                      <BookCover book={b} category={category}>
-                        {e.hasAudio && (
-                          <Chip
-                            icon={<AudiobookIcon />}
-                            label={t("landing.audiobookBadge")}
-                            size="small"
-                            sx={{ position: "absolute", top: 8, left: 8, ...coverChipSx }}
-                          />
-                        )}
-                        {p && (
-                          <Chip
-                            label={`${pct}%`}
-                            size="small"
-                            sx={{
-                              position: "absolute",
-                              top: 8,
-                              right: 8,
-                              fontVariantNumeric: "tabular-nums",
-                              ...coverChipSx,
-                            }}
-                          />
-                        )}
-                      </BookCover>
-                      <Box sx={{ p: 1.75 }}>
-                        <Typography variant="subtitle1" fontWeight={700} sx={{ lineHeight: 1.3 }}>
-                          {b.label}
-                        </Typography>
-                        {b.description ? (
-                          <Typography
-                            variant="body2"
-                            color="text.secondary"
-                            sx={{
-                              mt: 0.5,
-                              // Clamp long blurbs but let short ones stay short —
-                              // the height variance is what makes the masonry work.
-                              display: "-webkit-box",
-                              WebkitLineClamp: 5,
-                              WebkitBoxOrient: "vertical",
-                              overflow: "hidden",
-                            }}
-                          >
-                            {b.description}
-                          </Typography>
-                        ) : (
-                          <Typography variant="body2" color="text.disabled" fontStyle="italic" sx={{ mt: 0.5 }}>
-                            /{b.slug}
-                          </Typography>
-                        )}
-                        {p && (
-                          <Typography
-                            variant="caption"
-                            color="text.secondary"
-                            sx={{ display: "block", mt: 1 }}
-                            title={p.chapterLabel}
-                          >
-                            {t("landing.continue", { chapter: p.chapterLabel })}
-                          </Typography>
-                        )}
-                        {langs.length > 1 && (
-                          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 1 }}>
-                            {langs.map((l) => (
-                              <Chip key={l.lang} label={l.label} size="small" variant="outlined" />
-                            ))}
-                          </Box>
-                        )}
-                      </Box>
-                      {p && <LinearProgress variant="determinate" value={pct} aria-hidden sx={{ height: 3 }} />}
-                    </CardActionArea>
-                  </Card>
-                );
-              })}
-            </Box>
-          )}
+                          progress carry a % badge (top-right). */
+                            }
+                            <BookCover book={b} category={category}>
+                              {e.hasAudio && (
+                                <Chip
+                                  icon={<AudiobookIcon />}
+                                  label={t("landing.audiobookBadge")}
+                                  size="small"
+                                  sx={{
+                                    position: "absolute",
+                                    top: 8,
+                                    left: 8,
+                                    ...coverChipSx,
+                                  }}
+                                />
+                              )}
+                              {p && (
+                                <Chip
+                                  label={`${pct}%`}
+                                  size="small"
+                                  sx={{
+                                    position: "absolute",
+                                    top: 8,
+                                    right: 8,
+                                    fontVariantNumeric: "tabular-nums",
+                                    ...coverChipSx,
+                                  }}
+                                />
+                              )}
+                            </BookCover>
+                            <Box sx={{ p: 1.75 }}>
+                              <Typography
+                                variant="subtitle1"
+                                fontWeight={700}
+                                sx={{ lineHeight: 1.3 }}
+                              >
+                                {b.label}
+                              </Typography>
+                              {b.description
+                                ? (
+                                  <Typography
+                                    variant="body2"
+                                    color="text.secondary"
+                                    sx={{
+                                      mt: 0.5,
+                                      // Clamp long blurbs but let short ones stay short —
+                                      // the height variance is what makes the masonry work.
+                                      display: "-webkit-box",
+                                      WebkitLineClamp: 5,
+                                      WebkitBoxOrient: "vertical",
+                                      overflow: "hidden",
+                                    }}
+                                  >
+                                    {b.description}
+                                  </Typography>
+                                )
+                                : (
+                                  <Typography
+                                    variant="body2"
+                                    color="text.disabled"
+                                    fontStyle="italic"
+                                    sx={{ mt: 0.5 }}
+                                  >
+                                    /{b.slug}
+                                  </Typography>
+                                )}
+                              {p && (
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                  sx={{ display: "block", mt: 1 }}
+                                  title={p.chapterLabel}
+                                >
+                                  {t("landing.continue", {
+                                    chapter: p.chapterLabel,
+                                  })}
+                                </Typography>
+                              )}
+                              {langs.length > 1 && (
+                                <Box
+                                  sx={{
+                                    display: "flex",
+                                    flexWrap: "wrap",
+                                    gap: 0.5,
+                                    mt: 1,
+                                  }}
+                                >
+                                  {langs.map((l) => (
+                                    <Chip
+                                      key={l.lang}
+                                      label={l.label}
+                                      size="small"
+                                      variant="outlined"
+                                    />
+                                  ))}
+                                </Box>
+                              )}
+                            </Box>
+                            {p && (
+                              <LinearProgress
+                                variant="determinate"
+                                value={pct}
+                                aria-hidden
+                                sx={{ height: 3 }}
+                              />
+                            )}
+                          </CardActionArea>
+                        </Card>
+                      );
+                    })}
+                  </Box>
+                ))}
+              </Box>
+            )}
         </Box>
       </Box>
     </Box>
