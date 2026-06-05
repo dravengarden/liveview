@@ -97,12 +97,16 @@ function resolve(side: Side, topRatio: number): Pos {
  * Mutually exclusive with the bottom bar: the bar owns the playing book's page,
  * this owns everywhere else. Both hide while the popup is expanded.
  */
-export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): React.JSX.Element | null {
+export function FloatingBubble({
+  onPlayingPage,
+  onOpenPlayer,
+}: {
+  onPlayingPage: boolean;
+  onOpenPlayer: () => void;
+}): React.JSX.Element | null {
   const { t } = useI18n();
   const {
     nowPlaying,
-    expanded,
-    setExpanded,
     playing,
     loading,
     currentTime,
@@ -343,7 +347,7 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
 
   // Hidden on the playing book's own page (the bottom bar owns it there), when
   // nothing is loaded, and while the full popup is in focus.
-  if (expanded || !nowPlaying || onPlayingPage) return null;
+  if (!nowPlaying || onPlayingPage) return null;
 
   const slug = nowPlaying.bookSlug;
   const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
@@ -508,7 +512,7 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
             component="button"
             aria-label={t("audiobook.openPlayer")}
             onClick={() => {
-              setExpanded(true);
+              onOpenPlayer();
               setControlsOpen(false);
             }}
             sx={{

@@ -7,10 +7,17 @@ import {
   Alert,
   IconButton,
   Tooltip,
+  ToggleButton,
+  ToggleButtonGroup,
   Snackbar,
 } from "@mui/material";
-import { Headphones as AudiobookIcon, IosShare as ShareIcon, Close as CloseIcon } from "@mui/icons-material";
-import { Sidebar, SettingsButton, ContentViewer, NowPlayingPopup, MiniPlayer, FloatingBubble, Landing } from "@/components";
+import {
+  Headphones as AudiobookIcon,
+  MenuBook as ReadIcon,
+  IosShare as ShareIcon,
+  Close as CloseIcon,
+} from "@mui/icons-material";
+import { Sidebar, SettingsButton, ContentViewer, AudiobookPlayer, FloatingBubble, Landing } from "@/components";
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
 import { useAudioPlayer, type Track } from "@/audio/player";
@@ -204,7 +211,7 @@ export function App(): React.JSX.Element {
   // The root audio engine: playback + the popup live above every view, so
   // navigating never stops the audio nor closes the popup. We only need to seed
   // playback (`playChapter`) and raise the popup into focus (`setExpanded`).
-  const { playChapter: audioPlayChapter, setExpanded: setPlayerExpanded, syncNotice, playing, nowPlaying } = useAudioPlayer();
+  const { playChapter: audioPlayChapter, syncNotice, playing, nowPlaying } = useAudioPlayer();
 
   // Auto-update the installed PWA when a newer bundle is deployed (an iOS
   // home-screen PWA otherwise resumes its frozen page and never picks up a
@@ -221,10 +228,10 @@ export function App(): React.JSX.Element {
   // The active book is the first path segment; null ⇒ the landing bookshelf.
   const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;
   const activeBook = books.find((b) => b.slug === activeSlug) ?? null;
-  // Is the book currently on screen the same one being narrated? The full
-  // bottom bar only belongs on the playing book's own page; everywhere else
-  // (another book, the shelf) it yields to the floating bubble.
-  const onPlayingPage = nowPlaying != null && activeSlug != null && nowPlaying.bookSlug === activeSlug;
+  // Are we ON the playing book's inline audio page (where the read-along reader
+  // already shows full controls)? If so the floating bubble hides; everywhere
+  // else (text page, another book, the shelf) it shows as the now-playing handle.
+  const onPlayingPage = nowPlaying != null && activeSlug === nowPlaying.bookSlug && rendition === "audio";
 
   // Tap the top bar to jump the reader back to the top — the iOS
   // "tap the status bar" gesture. The reader's scroll container is the one
@@ -411,7 +418,15 @@ export function App(): React.JSX.Element {
       setRendition(renditionArg);
       renditionRef.current = renditionArg;
       writeHash(path, langForHash, renditionForHash, false);
-      await loadFile(path, langArg, renditionArg);
+      if (renditionArg === "audio") {
+        // Audio renders the read-along off the engine (seeded by the
+        // view→engine effect from `currentPath`), so there's no /api/file body
+        // to fetch — just set the path.
+        setCurrentPath(path);
+        currentPathRef.current = path;
+      } else {
+        await loadFile(path, langArg, renditionArg);
+      }
     },
     [books, loadFile]
   );
@@ -448,13 +463,13 @@ export function App(): React.JSX.Element {
     [loadBook]
   );
 
-  // Open a book's AUDIO rendition in the listening popup. This is the listen
-  // plane, fully decoupled from the browse plane: the page you're reading stays
-  // put — we only seed the engine's queue from the audio spine and raise the
-  // popup. Target chapter: an explicit one (deep link), else the resume chapter,
-  // else the first. Audio chapter ids differ from text, so we never map the
-  // current text position across — the popup opens at the audio rendition's own
-  // resume/first chapter.
+  // Open a book's AUDIO rendition INLINE (a normal NavShell page with the audio
+  // spine in the sidebar and the read-along in the content area — not a popup).
+  // Fetches the audio spine, makes it the active tree, and opens the target
+  // chapter; the view→engine effect then seeds playback. Target: an explicit
+  // chapter (deep link / resume from the bubble), else this rendition's resume
+  // chapter, else the first. Audio chapter ids differ from text, so we never map
+  // a text position across — it lands on the audio rendition's own chapter.
   const openAudiobook = useCallback(
     (slug: string, chapterPath?: string) => {
       const book = books.find((b) => b.slug === slug);
@@ -469,7 +484,6 @@ export function App(): React.JSX.Element {
           const spine = (await res.json()) as TreeNode[];
           const root = spine.find((n) => n.path === slug);
           const scope = root ? [root] : spine;
-          const tracks = flattenTracks(scope, uiLang);
           let target = chapterPath && hasFilePath(scope, chapterPath) ? chapterPath : null;
           if (!target) {
             const last = await loadBook(slug);
@@ -479,24 +493,15 @@ export function App(): React.JSX.Element {
             setNotice(t("audiobook.empty"));
             return;
           }
-          audioPlayChapter(
-            {
-              bookSlug: book.slug,
-              bookLabel: book.label,
-              cover: book.cover,
-              chapterPath: target,
-              lang: pickInitialLang(r),
-              rendition: "audio",
-            },
-            tracks
-          );
-          setPlayerExpanded(true);
+          setTree(spine);
+          renditionRef.current = "audio";
+          void openFile(target, pickInitialLang(r), "audio");
         } catch (e) {
           console.error("Failed to open audiobook:", e);
         }
       })();
     },
-    [books, uiLang, loadBook, pickInitialLang, audioPlayChapter, setPlayerExpanded, t]
+    [books, loadBook, pickInitialLang, openFile, t]
   );
 
   // Enter a book from the landing page in a specific rendition (the bookshelf
@@ -593,19 +598,6 @@ export function App(): React.JSX.Element {
         return;
       }
       const kind = renditionForHashEntry(path, hashRendition);
-      // Audio is no longer a browse view: a legacy `&rendition=audio` deep link
-      // opens the listening popup at that chapter and leaves the browse plane on
-      // the shelf (the engine carries its own resume, so this is just re-entry).
-      if (kind === "audio") {
-        const audioSlug = path.split("/")[0];
-        setCurrentPath(null);
-        currentPathRef.current = null;
-        setCurrentContent(null);
-        setUntranslated(null);
-        writeHash(null, null, null, true);
-        if (audioSlug) openAudiobook(audioSlug, path);
-        return;
-      }
       const entryLang = langForHashEntry(path, kind, hashLang);
       setLang(entryLang);
       setRendition(kind);
@@ -629,9 +621,15 @@ export function App(): React.JSX.Element {
       // Load the book's progress first so the doc restores its scroll.
       const slug = path.split("/")[0];
       if (slug) await loadBook(slug);
-      void loadFile(path, entryLang, kind);
+      if (kind === "audio") {
+        // Audio renders off the engine (seeded by the view→engine effect).
+        setCurrentPath(path);
+        currentPathRef.current = path;
+      } else {
+        void loadFile(path, entryLang, kind);
+      }
     },
-    [books, loadFile, langForHashEntry, renditionForHashEntry, loadBook, openAudiobook]
+    [books, loadFile, langForHashEntry, renditionForHashEntry, loadBook]
   );
 
   // Fetch the tree once, then restore any deep link from the hash. Waits for
@@ -666,11 +664,53 @@ export function App(): React.JSX.Element {
     };
   }, [restoreFromHash]);
 
-  // The listen plane (popup + bar) is fully decoupled from the browse plane:
-  // the engine plays, the popup is the focus view, and navigating the browse
-  // plane never touches either. So there is no longer any currentPath ⇄ engine
-  // syncing to do here — opening an audiobook seeds the engine directly
-  // (`openAudiobook`) and the popup reads it off the root.
+  // ── Inline audio: two effects keep the view and the playback engine in sync ──
+  // A) view → engine: viewing an audio chapter makes the engine play it,
+  //    seeding the queue from the loaded audio spine. A no-op once it's already
+  //    that chapter, so re-opening / auto-advancing never restarts it.
+  useEffect(() => {
+    if (rendition !== "audio" || !currentPath || !activeBook || activeTree.length === 0) return;
+    if (nowPlaying?.chapterPath === currentPath) return;
+    audioPlayChapter(
+      {
+        bookSlug: activeBook.slug,
+        bookLabel: activeBook.label,
+        cover: activeBook.cover,
+        chapterPath: currentPath,
+        lang,
+        rendition,
+      },
+      flattenTracks(activeTree, uiLang)
+    );
+  }, [rendition, currentPath, activeBook, activeTree, lang, uiLang, nowPlaying, audioPlayChapter]);
+
+  // B) engine → view: when the engine auto-advances into the next chapter while
+  //    you're watching THIS book's audio page, follow it (URL + sidebar). Follow
+  //    ONLY when we were already in sync (so it's the engine advancing under us),
+  //    never when we just navigated somewhere the engine isn't (effect A brings
+  //    the engine to us there). Away from the audio page, the bubble tracks it.
+  const syncedChapterRef = useRef<string | null>(null);
+  useEffect(() => {
+    const np = nowPlaying;
+    if (!np || activeRendition?.kind !== "audio" || activeSlug !== np.bookSlug) {
+      syncedChapterRef.current = null;
+      return;
+    }
+    if (currentPath === np.chapterPath) {
+      syncedChapterRef.current = np.chapterPath;
+      return;
+    }
+    if (syncedChapterRef.current !== currentPath) return; // we weren't in sync — don't hijack
+    setCurrentPath(np.chapterPath);
+    currentPathRef.current = np.chapterPath;
+    setUntranslated(null);
+    syncedChapterRef.current = np.chapterPath;
+    const rInfo = activeBook?.renditions.find((r) => r.kind === rendition);
+    const langForHash = rInfo && lang !== rInfo.default_lang ? lang : null;
+    const renditionForHash = activeBook && rendition !== activeBook.default_rendition ? rendition : null;
+    writeHash(np.chapterPath, langForHash, renditionForHash, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nowPlaying, activeRendition, activeSlug, currentPath, activeBook, rendition, lang]);
 
   // One settings affordance reused in both chrome contexts (bookshelf header +
   // in-book NavShell actions). The shared SettingsSheet owns the gear and the
@@ -697,9 +737,34 @@ export function App(): React.JSX.Element {
   // affordances (the in-book top-bar headphones + the sidebar button), both of
   // which open the global listening popup for this book.
   const hasAudio = bookRenditions.some((r) => r.kind === "audio");
+  const hasText = bookRenditions.some((r) => r.kind === "text");
+  // Show the read/listen switch only when the book offers both renditions.
+  const showRenditionToggle = hasAudio && hasText;
   const openActiveAudiobook = useCallback(() => {
     if (activeSlug) openAudiobook(activeSlug);
   }, [activeSlug, openAudiobook]);
+
+  // Tapping the floating bubble's artwork returns to the playing book's inline
+  // audio page (re-entering at the chapter it's on).
+  const openPlayingAudio = useCallback(() => {
+    if (nowPlaying) openAudiobook(nowPlaying.bookSlug, nowPlaying.chapterPath);
+  }, [nowPlaying, openAudiobook]);
+
+  // Switch the active book between its text and audio renditions, in place.
+  // Persisted per book so re-opening it from the shelf lands in the same mode.
+  const switchRendition = useCallback(
+    (kind: string) => {
+      if (!activeSlug || kind === rendition) return;
+      try {
+        localStorage.setItem(`lv-rendition:${activeSlug}`, kind);
+      } catch {
+        // storage unavailable — the choice just won't persist
+      }
+      if (kind === "audio") openAudiobook(activeSlug);
+      else enterBook(activeSlug, kind);
+    },
+    [activeSlug, rendition, openAudiobook, enterBook],
+  );
 
   // Web Share: hand the current deep link (book + chapter + edition, encoded in
   // the URL hash) to the OS share sheet. Works on iOS Safari/PWA + Android +
@@ -715,12 +780,22 @@ export function App(): React.JSX.Element {
   // button (where supported), + the shared settings affordance.
   const bookActions = (
     <>
-      {hasAudio && (
-        <Tooltip title={t("audiobook.open")}>
-          <IconButton onClick={openActiveAudiobook} aria-label={t("audiobook.open")}>
-            <AudiobookIcon />
-          </IconButton>
-        </Tooltip>
+      {showRenditionToggle && (
+        <ToggleButtonGroup
+          size="small"
+          exclusive
+          value={rendition}
+          onChange={(_, value: string | null) => {
+            if (value) switchRendition(value);
+          }}
+        >
+          <ToggleButton value="text" aria-label={t("audiobook.read")}>
+            <ReadIcon fontSize="small" />
+          </ToggleButton>
+          <ToggleButton value="audio" aria-label={t("audiobook.open")}>
+            <AudiobookIcon fontSize="small" />
+          </ToggleButton>
+        </ToggleButtonGroup>
       )}
       {canShare && (
         <Tooltip title={t("action.share")}>
@@ -828,35 +903,34 @@ export function App(): React.JSX.Element {
                 })}
               </Alert>
             )}
-            <ContentViewer
-              content={currentContent}
-              fileType={currentFileType}
-              currentPath={currentPath}
-              theme={theme}
-              onNavigate={handleSelect}
-              contentMaxWidth={menuBarSettings.contentMaxWidth}
-              lineHeight={menuBarSettings.lineHeight}
-              savedScroll={savedScroll}
-              onSaveScroll={saveProgress}
-            />
+            {activeRendition?.kind === "audio" && currentPath ? (
+              // Audio rendition: the read-along reader, inline in the NavShell
+              // (its own page with the audio spine in the sidebar + history back).
+              <AudiobookPlayer
+                contentMaxWidth={menuBarSettings.contentMaxWidth}
+                lineHeight={menuBarSettings.lineHeight}
+              />
+            ) : (
+              <ContentViewer
+                content={currentContent}
+                fileType={currentFileType}
+                currentPath={currentPath}
+                theme={theme}
+                onNavigate={handleSelect}
+                contentMaxWidth={menuBarSettings.contentMaxWidth}
+                lineHeight={menuBarSettings.lineHeight}
+                savedScroll={savedScroll}
+                onSaveScroll={saveProgress}
+              />
+            )}
             </NavShell>
           )}
           </Box>
-          <MiniPlayer onPlayingPage={onPlayingPage} />
         </Box>
-        {/* The floating bubble — the out-of-the-way now-playing handle shown
-            when audio is loaded but the user is browsing AWAY from the playing
-            book. A fixed overlay (never pushes content), mutually exclusive
-            with the bottom bar. */}
-        <FloatingBubble onPlayingPage={onPlayingPage} />
-        {/* The listening popup (focus state of the listen plane) floats above
-            every browse view, mounted at the root so it survives all navigation
-            and is never owned by a book's chrome. */}
-        <NowPlayingPopup
-          contentMaxWidth={menuBarSettings.contentMaxWidth}
-          lineHeight={menuBarSettings.lineHeight}
-          settings={settingsButton}
-        />
+        {/* The floating bubble — the now-playing handle shown when audio is
+            playing but you're browsing AWAY from its inline page. A fixed
+            overlay; tapping its artwork navigates back to that page. */}
+        <FloatingBubble onPlayingPage={onPlayingPage} onOpenPlayer={openPlayingAudio} />
         <Snackbar
           open={notice !== null}
           autoHideDuration={3000}
