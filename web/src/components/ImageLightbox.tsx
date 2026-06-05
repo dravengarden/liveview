@@ -52,6 +52,8 @@ export function ImageLightbox({
 }: ImageLightboxProps): React.JSX.Element | null {
   const overlayRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
+  // Drops the `will-change` hint once motion settles (see applyTransform).
+  const settleTimer = useRef<number | undefined>(undefined);
 
   // Live transform, applied imperatively for 60fps gestures.
   const tf = useRef({ scale: 1, x: 0, y: 0 });
@@ -87,6 +89,19 @@ export function ImageLightbox({
     img.style.transition = animate ? "transform 0.22s ease" : "none";
     img.style.transform = `translate(${x}px, ${y}px) scale(${scale})`;
     img.style.cursor = scale > 1 ? "grab" : "zoom-out";
+    // Promote to a compositor layer for smooth gestures, then drop the hint
+    // once motion settles. A permanent `will-change: transform` pins the image
+    // to a raster cached at 1x size, so `scale()` GPU-upscales that low-res
+    // bitmap → blurry zoom. Clearing it lets the browser re-rasterize the image
+    // at the zoomed scale, which is crisp.
+    img.style.willChange = "transform";
+    if (settleTimer.current !== undefined) clearTimeout(settleTimer.current);
+    settleTimer.current = window.setTimeout(
+      () => {
+        img.style.willChange = "auto";
+      },
+      animate ? 260 : 140,
+    );
   }, []);
 
   const setBackdrop = useCallback((dimAlpha: number) => {
@@ -122,6 +137,7 @@ export function ImageLightbox({
     return () => {
       document.body.style.overflow = prevOverflow;
       window.removeEventListener("keydown", onKey);
+      if (settleTimer.current !== undefined) clearTimeout(settleTimer.current);
     };
   }, [open, onClose, goPrev, goNext]);
 
@@ -275,11 +291,23 @@ export function ImageLightbox({
     [onClose, reset, zoomAt, canPrev, canNext, goPrev, goNext],
   );
 
+  // Tapping the black backdrop closes. Guard on the target being the overlay
+  // itself so taps on the image (and on the dock bar, which sits in front) are
+  // not treated as a backdrop tap. The image's own pointer gestures
+  // (pan / swipe / double-tap) are untouched — they fire on the <img>.
+  const onBackdropClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (e.target === overlayRef.current) onClose();
+    },
+    [onClose],
+  );
+
   if (!open || !current) return null;
 
   return createPortal(
     <div
       ref={overlayRef}
+      onClick={onBackdropClick}
       style={{
         position: "fixed",
         inset: 0,
@@ -327,10 +355,10 @@ export function ImageLightbox({
       {/* One bottom dock holds every control, within the thumb's reach on a
           phone (and a single obvious cluster on desktop). Order mirrors how a
           hand sweeps the arc: navigate · zoom · close, split by hairlines so a
-          reach for "next" doesn't fat-finger "close". The backdrop no longer
-          dismisses on tap (too easy to lose the image by accident) — Close is
-          explicit, and Esc / swipe-down still work. The dock is click-through
-          except on the bar itself, so a tap beside it falls to the image. */}
+          reach for "next" doesn't fat-finger "close". Tapping the black backdrop
+          also dismisses (see onBackdropClick); Close, Esc, and swipe-down work
+          too. The dock is click-through except on the bar itself, so a tap
+          beside it falls to the image. */}
       <div style={dockStyle}>
         {current.alt ? <div style={captionStyle}>{current.alt}</div> : null}
         <div style={barStyle}>
