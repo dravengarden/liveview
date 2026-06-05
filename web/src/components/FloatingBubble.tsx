@@ -126,6 +126,11 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
   const elRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const idleTimer = useRef<number | undefined>(undefined);
+  // True only between a pointerdown that landed ON the scrim and its click, so
+  // the scrim closes on a genuine tap of itself — NOT on the synthetic click
+  // iOS fires right after the bubble tap that OPENED the card (whose pointerdown
+  // was on the bubble), which would otherwise close it instantly.
+  const scrimPressed = useRef(false);
   const [cardDragging, setCardDragging] = useState(false);
   // Mutable drag bookkeeping — kept in a ref so pointermove can update the DOM
   // directly (no per-move re-render) and only commit to state on release.
@@ -399,10 +404,23 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
       </Box>
 
       {/* Modal scrim — a dim backdrop (like the settings sheet) that makes the
-          card read as a modal; tapping the dark area closes it. */}
+          card read as a modal; tapping the dark area closes it. Closes on the
+          full CLICK, not pointerdown: closing on pointerdown removes the scrim
+          before iOS synthesises the tap's click, which then lands on the book
+          card underneath and navigates (the click-through / "ghost click" bug).
+          Keeping the scrim mounted through the click lets it swallow the tap —
+          exactly what MUI's Modal backdrop does. */}
       <Fade in={controlsOpen} unmountOnExit>
         <Box
           onPointerDown={() => {
+            scrimPressed.current = true;
+          }}
+          onPointerCancel={() => {
+            scrimPressed.current = false;
+          }}
+          onClick={() => {
+            if (!scrimPressed.current) return;
+            scrimPressed.current = false;
             setControlsOpen(false);
             poke();
           }}
