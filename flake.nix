@@ -3,9 +3,9 @@
 #
 # `nix build` produces a binary equivalent to `deno task build` followed by
 # `cargo build --release --features embedded`, with no external build
-# orchestration (no docker compile sandbox). Mirrors heimdall's flake; the
-# web build runs in a fixed-output derivation so `deno install` gets network
-# (the box's omega TUN proxies the sandbox egress, same as heimdall-ui).
+# orchestration (no docker compile sandbox). The SPA is built through the
+# shared, footgun-free buildDenoViteApp (deps-only FOD + offline build); see
+# its comment below.
 {
   description = "liveview — book reader (axum + embedded React SPA, pg + rustfs backed)";
 
@@ -25,9 +25,11 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
       lib = pkgs.lib;
+      shared = shared-utils.lib.${system};
 
-      # Shared UI SDK source tree from the shared-utils `ui` package, staged into
-      # web/src/_shell/ at build time.
+      # Shared UI SDK source tree from the shared-utils `ui` package, re-exposed
+      # for local dev to materialize web/src/_shell/ (the build itself stages it
+      # via buildDenoViteApp's default shellSrc).
       sharedUiSrc = shared-utils.packages.${system}.ui;
 
       # edge-tts CLI for the audiobook track: `liveview` shells out to it to
@@ -35,101 +37,26 @@
       # the deployed unit needs no extra wiring, and present in the dev shell.
       edgeTts = pkgs.python3Packages.edge-tts;
 
-      # ── deno: pinned to the latest upstream release ───────────────────
-      # nixpkgs trails upstream (nixos-unstable is on 2.7.x); we want the
-      # newest deno, so wrap the official prebuilt x86_64-linux binary
-      # (autoPatchelf'd against glibc/libstdc++) instead of nixpkgs' source
-      # build. Bump `version` + re-prefetch `hash` to upgrade.
-      deno = pkgs.stdenv.mkDerivation rec {
-        pname = "deno";
-        version = "2.8.1";
-        src = pkgs.fetchurl {
-          url = "https://github.com/denoland/deno/releases/download/v${version}/deno-x86_64-unknown-linux-gnu.zip";
-          hash = "sha256-LXu2GVImrIMuC/cQmhFfCvZe5prHl6S73lsnoGzCQtk=";
-        };
-        nativeBuildInputs = [
-          pkgs.unzip
-          pkgs.autoPatchelfHook
-        ];
-        buildInputs = [
-          pkgs.stdenv.cc.cc.lib # libstdc++ / libgcc_s
-          pkgs.glibc
-        ];
-        sourceRoot = ".";
-        installPhase = ''
-          runHook preInstall
-          install -Dm755 deno $out/bin/deno
-          runHook postInstall
-        '';
-        meta.mainProgram = "deno";
-      };
-
-      # ── liveview-web: deno install + vite build → dist/ ───────────────
-      # Single fixed-output derivation: `deno install` needs the npm
-      # registry (FODs are allowed network), then an offline vite build.
-      liveview-web = pkgs.stdenv.mkDerivation {
-        pname = "liveview-web";
+      # ── liveview-web: the SPA, built via the shared, footgun-free builder ──
+      # A deps-only FOD (vendored npm cache keyed by web/deno.lock + package.json
+      # → depsHash below) + a normal content-addressed offline build. Any source
+      # edit rebuilds automatically; only refresh depsHash when the lockfiles
+      # change (lib.fakeHash → build → copy "got"). Replaces the old single FOD
+      # whose outputHash addressed the WHOLE build — so a source-only change
+      # silently reused a stale bundle until the hash was hand-rebumped.
+      #
+      # installArgs = "--allow-scripts" (NOT "--frozen"): deno.lock is gitignored
+      # here, so a frozen install would fail; --allow-scripts lets esbuild's
+      # lifecycle script link its native binary. The build runs `deno task
+      # build`, which web/deno.json maps to a vite-only build (no tsc pass), as
+      # the old FOD did. shellSrc defaults to the shared-utils ui SDK — exactly
+      # what liveview already staged — so it's omitted.
+      liveview-web = shared.buildDenoViteApp {
+        pname = "liveview";
         version = "0.1.0";
-
-        # _shell excluded here: it's not committed in this repo and is staged
-        # fresh from the shared-utils ui package in buildPhase, so the FOD's copy
-        # is pinned by the input, not by whatever a dev materialized locally.
-        src = lib.cleanSourceWith {
-          src = ./web;
-          filter =
-            path: _type:
-            let
-              base = baseNameOf (toString path);
-            in
-            !(builtins.elem base [
-              "node_modules"
-              "dist"
-              "_shell"
-            ]);
-        };
-
-        # nodejs because some npm postinstall scripts (esbuild, which vite
-        # pulls in) run `node install.js` — deno's `--allow-scripts` execs
-        # them via node. cacert for npm registry TLS.
-        nativeBuildInputs = [
-          deno
-          pkgs.nodejs
-          pkgs.cacert
-        ];
-
-        buildPhase = ''
-          runHook preBuild
-          export HOME=$TMPDIR
-          # Stage the shared-utils ui SDK into src/_shell/ from the Nix
-          # package (not committed in this repo). chmod: the store source is
-          # read-only and the tree must be writable for the build.
-          mkdir -p src/_shell
-          cp ${sharedUiSrc}/* src/_shell/
-          chmod -R u+w src/_shell
-          # --allow-scripts so esbuild's lifecycle script links its native
-          # binary; deno blocks npm lifecycle scripts by default. No
-          # --frozen: deno.lock is gitignored (not in the flake source),
-          # the outputHash is what pins reproducibility here.
-          deno install --allow-scripts
-          # Invoke vite directly: the package.json `build` script is
-          # `tsc && vite build`; the embedded bundle only needs vite's
-          # esbuild output, so skip the tsc type-check pass.
-          deno run -A ./node_modules/vite/bin/vite.js build
-          runHook postBuild
-        '';
-
-        installPhase = ''
-          runHook preInstall
-          cp -r dist $out
-          runHook postInstall
-        '';
-
-        dontPatchShebangs = true;
-        dontFixup = true;
-
-        outputHashMode = "recursive";
-        outputHashAlgo = "sha256";
-        outputHash = "sha256-TuSdTyaEQm0irM+5B8nOxaIWZcItlHACHK/e3Vo5ow4=";
+        src = lib.cleanSource ./.;
+        installArgs = "--allow-scripts";
+        depsHash = "sha256-i5d3UsRxVMST59WfirpTf/RcJenTFOeau0z9Hd9U2GQ=";
       };
 
       # ── liveview: axum daemon, embeds the SPA via include_dir! ────────
@@ -214,7 +141,7 @@
           # cargo fmt) doesn't fall back to a mismatched rustup toolchain.
           pkgs.clippy
           pkgs.rustfmt
-          deno
+          shared.deno
           pkgs.nodejs
           pkgs.pkg-config
           pkgs.sqlite
