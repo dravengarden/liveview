@@ -439,7 +439,7 @@ export function App(): React.JSX.Element {
   // the text rendition) content. The audio rendition renders in the player off
   // `currentPath`, so it needs no /api/file fetch — just the path + hash.
   const openFile = useCallback(
-    async (path: string, langArg: string, renditionArg: string) => {
+    async (path: string, langArg: string, renditionArg: string, replace = false) => {
       const slug = path.split("/")[0] ?? "";
       const book = books.find((b) => b.slug === slug);
       const rInfo = book?.renditions.find((r) => r.kind === renditionArg);
@@ -451,7 +451,9 @@ export function App(): React.JSX.Element {
       setLang(langArg);
       setRendition(renditionArg);
       renditionRef.current = renditionArg;
-      writeHash(path, langForHash, renditionForHash, false);
+      // `replace` for an in-place rendition switch (read ↔ listen) so it doesn't
+      // stack a back-button entry per toggle.
+      writeHash(path, langForHash, renditionForHash, replace);
       if (renditionArg === "audio") {
         // Audio renders the read-along off the engine (seeded by the
         // view→engine effect from `currentPath`), so there's no /api/file body
@@ -506,7 +508,7 @@ export function App(): React.JSX.Element {
   // chapter, else the first. Audio chapter ids differ from text, so we never map
   // a text position across — it lands on the audio rendition's own chapter.
   const openAudiobook = useCallback(
-    (slug: string, chapterPath?: string) => {
+    (slug: string, chapterPath?: string, replace = false) => {
       const book = books.find((b) => b.slug === slug);
       const r = book?.renditions.find((x) => x.kind === "audio");
       if (!book || !r) {
@@ -532,7 +534,7 @@ export function App(): React.JSX.Element {
           renditionRef.current = "audio";
           const prefLang = bookPrefs[slug]?.lang;
           const audioLang = prefLang && r.langs.some((l) => l.lang === prefLang) ? prefLang : pickInitialLang(r);
-          void openFile(target, audioLang, "audio");
+          void openFile(target, audioLang, "audio", replace);
         } catch (e) {
           console.error("Failed to open audiobook:", e);
         }
@@ -546,7 +548,7 @@ export function App(): React.JSX.Element {
   // back to the book's default rendition. Resumes the last-read chapter if there
   // is one (and it still exists), else its README, else its first doc.
   const enterBook = useCallback(
-    (slug: string, renditionKind?: string) => {
+    (slug: string, renditionKind?: string, replace = false) => {
       const book = books.find((b) => b.slug === slug);
       if (!book) return;
       // No explicit kind (a shelf-card tap) ⇒ open in the rendition last used for
@@ -564,7 +566,7 @@ export function App(): React.JSX.Element {
         pref?.lang && r.langs.some((l) => l.lang === pref.lang) ? pref.lang : pickInitialLang(r);
       // Audio opens its inline read-along page (sidebar = audio spine).
       if (r.kind === "audio") {
-        openAudiobook(slug);
+        openAudiobook(slug, undefined, replace);
         return;
       }
       void (async () => {
@@ -578,7 +580,7 @@ export function App(): React.JSX.Element {
           renditionRef.current = r.kind;
           const entry = await entryChapter(slug, spine);
           if (entry) {
-            void openFile(entry, initialLang, r.kind);
+            void openFile(entry, initialLang, r.kind, replace);
           }
         } catch (e) {
           console.error("Failed to enter book:", e);
@@ -785,9 +787,6 @@ export function App(): React.JSX.Element {
   const hasText = bookRenditions.some((r) => r.kind === "text");
   // Show the read/listen switch only when the book offers both renditions.
   const showRenditionToggle = hasAudio && hasText;
-  const openActiveAudiobook = useCallback(() => {
-    if (activeSlug) openAudiobook(activeSlug);
-  }, [activeSlug, openAudiobook]);
 
   // Tapping the floating bubble's artwork returns to the playing book's inline
   // audio page (re-entering at the chapter it's on).
@@ -801,8 +800,9 @@ export function App(): React.JSX.Element {
     (kind: string) => {
       if (!activeSlug || kind === rendition) return;
       saveBookPref(activeSlug, { rendition: kind });
-      if (kind === "audio") openAudiobook(activeSlug);
-      else enterBook(activeSlug, kind);
+      // replace (not push): switching read ↔ listen is in place, not a new page.
+      if (kind === "audio") openAudiobook(activeSlug, undefined, true);
+      else enterBook(activeSlug, kind, true);
     },
     [activeSlug, rendition, openAudiobook, enterBook, saveBookPref],
   );
@@ -905,11 +905,6 @@ export function App(): React.JSX.Element {
                 langs={bookLangs}
                 currentLang={lang}
                 onSwitchLang={switchLang}
-                hasAudio={hasAudio}
-                onOpenAudiobook={() => {
-                  openActiveAudiobook();
-                  api.closeMobile();
-                }}
                 onSelect={(path) => {
                   handleSelect(path);
                   api.closeMobile();

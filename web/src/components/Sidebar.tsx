@@ -11,7 +11,6 @@ import {
   Typography,
   ToggleButton,
   ToggleButtonGroup,
-  Button,
 } from "@mui/material";
 import {
   Folder as FolderIcon,
@@ -23,7 +22,6 @@ import {
   UnfoldLess as CollapseAllIcon,
   MyLocation as LocateIcon,
   ArrowBack as BackIcon,
-  Headphones as AudiobookIcon,
 } from "@mui/icons-material";
 import type { LangInfo, TreeNode } from "@/types";
 import { useI18n } from "@/i18n";
@@ -223,10 +221,6 @@ interface SidebarProps {
   langs?: LangInfo[];
   currentLang?: string;
   onSwitchLang?: (lang: string) => void;
-  /** Whether the book offers an audio rendition — shows the "听书" button that
-   *  opens the global listening popup (audio is no longer a sidebar view mode). */
-  hasAudio?: boolean;
-  onOpenAudiobook?: () => void;
   onSelect: (path: string) => void;
   onBackToLanding: () => void;
 }
@@ -243,8 +237,6 @@ export function Sidebar({
   langs = [],
   currentLang,
   onSwitchLang,
-  hasAudio = false,
-  onOpenAudiobook,
   onSelect,
   onBackToLanding,
 }: SidebarProps): React.JSX.Element {
@@ -360,24 +352,6 @@ export function Sidebar({
         </Box>
       </Box>
 
-      {/* "听书" — opens the global listening popup for this book. Audio is no
-          longer a sidebar view mode (a whole-book toggle), but a floating
-          popup, so this is just a quick entry into it (mirrored by the in-book
-          top-bar headphones button). */}
-      {hasAudio && onOpenAudiobook && (
-        <Box sx={{ px: 1, py: 0.75, borderBottom: 1, borderColor: "divider" }}>
-          <Button
-            size="small"
-            fullWidth
-            variant="outlined"
-            startIcon={<AudiobookIcon />}
-            onClick={onOpenAudiobook}
-            sx={{ textTransform: "none", justifyContent: "flex-start" }}
-          >
-            {t("audiobook.open")}
-          </Button>
-        </Box>
-      )}
 
       {langs.length > 1 && (
         <Box
