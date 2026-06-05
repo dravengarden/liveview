@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Box, CircularProgress, Fade, Grow, IconButton, Menu, MenuItem, Typography } from "@mui/material";
 import {
   PlayArrow,
@@ -168,6 +168,18 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
     };
   }, [poke]);
 
+  // Single source of truth for the bubble's position: inline left/top. Applied
+  // here whenever `pos` settles (mount, edge-snap on release, resize) — the drag
+  // handler writes inline directly mid-gesture and skips this (dragging guard),
+  // so a release always animates from the finger to the snapped edge.
+  useLayoutEffect(() => {
+    const el = elRef.current;
+    if (el && !dragging) {
+      el.style.left = `${pos.x}px`;
+      el.style.top = `${pos.y}px`;
+    }
+  }, [pos.x, pos.y, dragging]);
+
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       try {
@@ -316,6 +328,13 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
       const yMin = MARGIN;
       const yMax = Math.max(yMin, vh - SIZE - MARGIN);
       const topRatio = yMax > yMin ? (d.y - yMin) / (yMax - yMin) : 0;
+      // Snap the (still-open) card to the docked edge: overwrite the inline
+      // left/top the drag wrote with the resolved edge position, so it doesn't
+      // sit wherever the finger let go.
+      if (cardRef.current) {
+        cardRef.current.style.left = `${side === "right" ? vw - cw - MARGIN : MARGIN}px`;
+        cardRef.current.style.top = `${Math.min(Math.max(MARGIN, resolve(side, topRatio).y), vh - CARD_H - MARGIN)}px`;
+      }
       commitPos(side, topRatio);
       poke();
     },
@@ -351,8 +370,10 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
         onPointerEnter={poke}
         sx={(theme) => ({
           position: "fixed",
-          left: pos.x,
-          top: pos.y,
+          // left/top are NOT set here: they're driven solely by inline style
+          // (the layout effect below + the drag handler). Putting them in `sx`
+          // too made the leftover inline value from a drag override the emotion
+          // class, so the bubble froze mid-screen instead of snapping to the edge.
           width: SIZE,
           height: SIZE,
           zIndex: theme.zIndex.fab,
