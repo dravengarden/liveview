@@ -19,6 +19,7 @@ import {
   MyLocation,
   Bedtime,
 } from "@mui/icons-material";
+import { alpha } from "@mui/material/styles";
 import { useAudioPlayer } from "@/audio/player";
 import { READING_COLUMN_MAX } from "@/types";
 import { useI18n } from "@/i18n";
@@ -26,6 +27,9 @@ import { useI18n } from "@/i18n";
 interface AudiobookPlayerProps {
   contentMaxWidth: number;
   lineHeight: number;
+  /** Persist playback progress (chapter path + 0..1 fraction) — same store as
+   *  text reading, so the shelf card can show an audio %. */
+  onSaveScroll?: (path: string, ratio: number) => void;
 }
 
 const RATES = [0.75, 1, 1.25, 1.5, 2, 2.25, 2.5, 2.75, 3];
@@ -54,9 +58,10 @@ function fmtSleep(min: number): string {
  *  with the narrated sentence highlighted, an explicit (cancelable) follow mode,
  *  and the transport. All playback state comes from the root audio engine, so
  *  this view is purely a window onto it — leaving it never stops the audio. */
-export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayerProps): React.JSX.Element {
+export function AudiobookPlayer({ contentMaxWidth, lineHeight, onSaveScroll }: AudiobookPlayerProps): React.JSX.Element {
   const { t } = useI18n();
   const {
+    nowPlaying,
     sentences,
     currentIdx,
     playing,
@@ -78,6 +83,15 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
     nextChapter,
     prevChapter,
   } = useAudioPlayer();
+
+  // Mirror playback position into the shared progress store (debounced upstream
+  // per path), so the shelf card shows an audio % like the text reader does. The
+  // engine keeps its own second-accurate resume separately; this is just the
+  // 0..1 fraction for display.
+  useEffect(() => {
+    if (!nowPlaying || !onSaveScroll || duration <= 0) return;
+    onSaveScroll(nowPlaying.chapterPath, Math.min(1, currentTime / duration));
+  }, [currentTime, duration, nowPlaying, onSaveScroll]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   // Explicit follow: ON auto-scrolls the spoken line to centre; a genuine user
@@ -302,15 +316,21 @@ export function AudiobookPlayer({ contentMaxWidth, lineHeight }: AudiobookPlayer
                 onClick={() => {
                   handleSentenceClick(i);
                 }}
-                sx={{
+                sx={(theme) => ({
                   cursor: "pointer",
                   borderRadius: 0.5,
                   transition: "background-color 0.15s ease",
-                  bgcolor: i === currentIdx ? "warning.main" : "transparent",
-                  color: i === currentIdx ? "warning.contrastText" : "inherit",
+                  // Themed soft highlight: a tint of the active theme's accent
+                  // (blue / brown / amber per theme) instead of a fixed orange,
+                  // so it never clashes and the text stays readable on top.
+                  bgcolor: i === currentIdx ? alpha(theme.palette.primary.main, 0.28) : "transparent",
+                  color: "inherit",
                   px: i === currentIdx ? 0.25 : 0,
-                  "&:hover": { bgcolor: i === currentIdx ? "warning.main" : "action.hover" },
-                }}
+                  "&:hover": {
+                    bgcolor:
+                      i === currentIdx ? alpha(theme.palette.primary.main, 0.28) : theme.palette.action.hover,
+                  },
+                })}
               >
                 {s}{" "}
               </Box>
