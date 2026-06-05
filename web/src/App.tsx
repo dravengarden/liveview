@@ -225,6 +225,14 @@ export function App(): React.JSX.Element {
   // bottom bar only belongs on the playing book's own page; everywhere else
   // (another book, the shelf) it yields to the floating bubble.
   const onPlayingPage = nowPlaying != null && activeSlug != null && nowPlaying.bookSlug === activeSlug;
+
+  // Tap the top bar to jump the reader back to the top — the iOS
+  // "tap the status bar" gesture. The reader's scroll container is the one
+  // tagged `data-lv-scroller="reader"` (MarkdownViewer); query it lazily so a
+  // chapter remount (which swaps the node) never leaves a stale ref.
+  const scrollReaderTop = useCallback(() => {
+    document.querySelector<HTMLElement>('[data-lv-scroller="reader"]')?.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
   // "book" mode (book.toml-driven) renders a clean titled spine; "docs" mode
   // renders the raw filesystem tree. The flag also drives whether the root
   // folder node is shown (see below) and the per-row styling in the sidebar.
@@ -770,7 +778,24 @@ export function App(): React.JSX.Element {
           {activeSlug !== null && (
             <NavShell
             appKey="liveview"
-            title={bookLabel}
+            title={
+              <Box
+                component="span"
+                role="button"
+                tabIndex={0}
+                aria-label={t("app.scrollTop")}
+                onClick={scrollReaderTop}
+                sx={{
+                  display: "block",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {bookLabel}
+              </Box>
+            }
             nav={(api) => (
               <Sidebar
                 tree={activeTree}

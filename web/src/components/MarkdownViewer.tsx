@@ -530,6 +530,7 @@ export function MarkdownViewer({
       />
     <Box
       ref={containerRef}
+      data-lv-scroller="reader"
       onClick={handleClick}
       onScroll={handleScroll}
       sx={{

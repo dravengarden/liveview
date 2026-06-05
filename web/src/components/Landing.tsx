@@ -26,7 +26,7 @@ import {
   Clear as ClearIcon,
   FilterList as FilterIcon,
 } from "@mui/icons-material";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import type { Book, ReadingProgress } from "@/types";
 import { useI18n } from "@/i18n";
 
@@ -238,8 +238,16 @@ export function Landing({
     setKinds(typeof v === "string" ? (v.split(",") as Category[]) : v);
   };
 
+  // Tapping the "Bookshelf" title scrolls the shelf back to the top (iOS
+  // tap-the-status-bar gesture) in addition to its home action.
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const onTitleTap = (): void => {
+    scrollerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    onHome();
+  };
+
   return (
-    <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}>
+    <Box ref={scrollerRef} sx={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}>
       {/* ── Sticky navbar ──────────────────────────────────────────────────
           Neutral chrome (background.default + divider, not a saturated bar —
           ui.md §4) that sticks to the top of the scroll container, so settings,
@@ -265,7 +273,7 @@ export function Landing({
             <ButtonBase
               aria-label={t("landing.home")}
               title={t("landing.home")}
-              onClick={onHome}
+              onClick={onTitleTap}
               sx={{
                 display: "inline-flex",
                 alignItems: "center",
