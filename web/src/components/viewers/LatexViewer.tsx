@@ -1,6 +1,7 @@
-import { useMemo } from "react";
-import { Box, Typography } from "@mui/material";
+import { useMemo, useState, useEffect } from "react";
+import { Box, Typography, CircularProgress } from "@mui/material";
 import type { Theme } from "@/types";
+import { ensureScript, ensureStyle } from "@/ensureAsset";
 
 // katex type is declared in MarkdownViewer.tsx
 
@@ -14,8 +15,30 @@ function isDarkTheme(theme: Theme): boolean {
 }
 
 export function LatexViewer({ content, theme }: LatexViewerProps): React.JSX.Element {
+  // KaTeX is self-hosted + loaded on demand (no CDN). Render once it's ready.
+  const [katexReady, setKatexReady] = useState<boolean>(
+    typeof window !== "undefined" && !!window.katex
+  );
+  useEffect(() => {
+    if (window.katex) {
+      setKatexReady(true);
+      return;
+    }
+    let cancelled = false;
+    void Promise.all([ensureScript("/katex/katex.min.js"), ensureStyle("/katex/katex.min.css")])
+      .then(() => {
+        if (!cancelled) setKatexReady(true);
+      })
+      .catch(() => {
+        if (!cancelled) setKatexReady(true); // surface the raw-LaTeX fallback
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const renderedHtml = useMemo(() => {
-    if (!content || !window.katex) return null;
+    if (!content || !katexReady || !window.katex) return null;
 
     // Simple LaTeX document parsing - extract content between \begin{document} and \end{document}
     let mathContent = content;
@@ -116,7 +139,7 @@ export function LatexViewer({ content, theme }: LatexViewerProps): React.JSX.Ele
       .join("");
 
     return html;
-  }, [content]);
+  }, [content, katexReady]);
 
   const dark = isDarkTheme(theme);
 
@@ -132,6 +155,14 @@ export function LatexViewer({ content, theme }: LatexViewerProps): React.JSX.Ele
         }}
       >
         Loading...
+      </Box>
+    );
+  }
+
+  if (!katexReady) {
+    return (
+      <Box sx={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "text.secondary" }}>
+        <CircularProgress size={28} />
       </Box>
     );
   }

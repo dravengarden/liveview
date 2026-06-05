@@ -22,15 +22,12 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="LiveView" />
-    <!-- Heavy renderers are loaded ON DEMAND (src/ensureAsset.ts), not here:
-         highlight.js + mermaid (~3 MB) load only when a chapter has code /
-         diagrams. Monaco is gone entirely — the JSON viewer pretty-prints
-         instead (it was ~5 MB of CDN for a rarely-opened file type). KaTeX
-         stays CDN-loaded for now (Phase 2: self-host + on-demand; jsdelivr is
-         slow/blocked behind the GFW and dead offline). -->
-    <!-- Math rendering (KaTeX) -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.css" crossorigin="anonymous">
-    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.21/dist/katex.min.js" crossorigin="anonymous"></script>
+    <!-- No render libraries here: highlight.js, mermaid AND KaTeX all load ON
+         DEMAND (src/ensureAsset.ts) only when a chapter needs them, and are
+         fully SELF-HOSTED (/highlight.min.js, /mermaid.min.js, /katex/*) — no
+         CDN at all, so nothing depends on jsdelivr (slow/blocked behind the GFW)
+         and everything works offline. Monaco was dropped (JSON pretty-prints). -->
+
     <!-- App-shell splash: pure HTML/CSS so it paints with the document on any
          network, before the SPA bundle downloads/parses. React's createRoot
          replaces #root's children on mount, so it auto-vanishes when the app is

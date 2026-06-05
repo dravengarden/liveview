@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { Box } from "@mui/material";
 import { ImageLightbox } from "./ImageLightbox";
 import { useWakeLock } from "@/hooks/useWakeLock";
-import { ensureScript } from "@/ensureAsset";
+import { ensureScript, ensureStyle } from "@/ensureAsset";
 
 declare global {
   interface Window {
@@ -213,40 +213,50 @@ export function MarkdownViewer({
       }
     }
 
-    // Process KaTeX math blocks (comrak outputs <span data-math-style="...">...</span>)
-    if (window.katex) {
-      container.querySelectorAll<HTMLElement>('[data-math-style]:not([data-katex-rendered])').forEach((el) => {
-        const tex = el.textContent ?? "";
-        const displayMode = el.dataset["mathStyle"] === "display";
-        try {
-          el.innerHTML = window.katex!.renderToString(tex, {
-            displayMode,
-            throwOnError: false,
+    // KaTeX math (comrak emits <span data-math-style>…</span> + code.language-math).
+    // Self-hosted + loaded ON DEMAND — only when the chapter has math. No CDN
+    // (jsdelivr is slow/blocked behind the GFW + dead offline); assets live in
+    // /katex/ (woff2 fonts resolve relative to the stylesheet).
+    const mathEls = container.querySelectorAll<HTMLElement>(
+      '[data-math-style]:not([data-katex-rendered]), code.language-math:not([data-katex-rendered])'
+    );
+    if (mathEls.length > 0) {
+      void Promise.all([
+        ensureScript("/katex/katex.min.js"),
+        ensureStyle("/katex/katex.min.css"),
+      ])
+        .then(() => {
+          const c = containerRef.current;
+          if (!c || !window.katex) return;
+          c.querySelectorAll<HTMLElement>('[data-math-style]:not([data-katex-rendered])').forEach((el) => {
+            const tex = el.textContent ?? "";
+            const displayMode = el.dataset["mathStyle"] === "display";
+            try {
+              el.innerHTML = window.katex!.renderToString(tex, { displayMode, throwOnError: false });
+              el.dataset["katexRendered"] = "true";
+            } catch {
+              // Keep original content on error
+            }
           });
-          el.dataset["katexRendered"] = "true";
-        } catch {
-          // Keep original content on error
-        }
-      });
-
-      // Also handle code blocks with language "math"
-      container.querySelectorAll<HTMLElement>('code.language-math:not([data-katex-rendered])').forEach((el) => {
-        const tex = el.textContent ?? "";
-        const pre = el.parentElement;
-        if (pre?.tagName === "PRE") {
-          try {
-            const div = document.createElement("div");
-            div.className = "katex-display-block";
-            div.innerHTML = window.katex!.renderToString(tex, {
-              displayMode: true,
-              throwOnError: false,
-            });
-            pre.replaceWith(div);
-          } catch {
-            // Keep original content on error
-          }
-        }
-      });
+          // Also handle fenced code blocks with language "math".
+          c.querySelectorAll<HTMLElement>('code.language-math:not([data-katex-rendered])').forEach((el) => {
+            const tex = el.textContent ?? "";
+            const pre = el.parentElement;
+            if (pre?.tagName === "PRE") {
+              try {
+                const div = document.createElement("div");
+                div.className = "katex-display-block";
+                div.innerHTML = window.katex!.renderToString(tex, { displayMode: true, throwOnError: false });
+                pre.replaceWith(div);
+              } catch {
+                // Keep original content on error
+              }
+            }
+          });
+        })
+        .catch(() => {
+          // KaTeX unavailable — leave the raw TeX source visible.
+        });
     }
   }, []);
 
