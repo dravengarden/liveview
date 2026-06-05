@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Box, CircularProgress, Fade, Grow, IconButton, Typography } from "@mui/material";
+import { Box, CircularProgress, Fade, Grow, IconButton, Menu, MenuItem, Typography } from "@mui/material";
 import {
   PlayArrow,
   Pause,
@@ -32,8 +32,8 @@ const IDLE_MS = 3000; // fade + tuck behind the edge after this long untouched
 const PEEK = 0.55; // fraction of the bubble that tucks off-edge when idle
 const IDLE_OPACITY = 0.3; // how faint it gets when idle (kept grabbable, not gone)
 const CARD_H = 138; // approx control-card height, for bottom-clamping the card
-/** Compact speed cycle for the bubble card (the full popup has the long list). */
-const RATE_CYCLE = [1, 1.25, 1.5, 2, 3] as const;
+/** Playback-speed options for the card's speed menu (same list as the full player). */
+const RATES = [0.75, 1, 1.25, 1.5, 2, 2.25, 2.5, 2.75, 3] as const;
 const POS_KEY = "lv-audio-bubble-pos";
 
 type Side = "left" | "right";
@@ -122,6 +122,7 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
   const [dragging, setDragging] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(false);
   const [idle, setIdle] = useState(false);
+  const [speedAnchor, setSpeedAnchor] = useState<HTMLElement | null>(null);
 
   const elRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -554,14 +555,12 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
             <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 38, height: 38 }}>
               <SkipNext />
             </IconButton>
-            {/* Tap to cycle playback speed (the full popup keeps the long list). */}
+            {/* Tap to open the speed menu (mirrors the full player's list). */}
             <Box
               component="button"
               aria-label={t("audiobook.speed")}
-              onClick={() => {
-                const i = RATE_CYCLE.indexOf(rate as (typeof RATE_CYCLE)[number]);
-                setRate(RATE_CYCLE[(i + 1) % RATE_CYCLE.length] ?? 1);
-              }}
+              aria-haspopup="true"
+              onClick={(e) => setSpeedAnchor(e.currentTarget)}
               sx={{
                 all: "unset",
                 cursor: "pointer",
@@ -581,6 +580,28 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
           </Box>
         </Box>
       </Grow>
+
+      {/* Playback-speed menu — a popup over the card (above the fab z-index). */}
+      <Menu
+        anchorEl={speedAnchor}
+        open={speedAnchor !== null}
+        onClose={() => setSpeedAnchor(null)}
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        {RATES.map((r) => (
+          <MenuItem
+            key={r}
+            selected={r === rate}
+            onClick={() => {
+              setRate(r);
+              setSpeedAnchor(null);
+            }}
+          >
+            {r}×
+          </MenuItem>
+        ))}
+      </Menu>
     </>
   );
 }

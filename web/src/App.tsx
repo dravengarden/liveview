@@ -867,6 +867,19 @@ export function App(): React.JSX.Element {
           }}
           message={notice}
           anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+          // Theme-adaptive surface: MUI's default snackbar is a fixed inverted
+          // grey that clashes with sepia/night. Paint it as a themed paper
+          // surface (border + elevation to stay distinct) so it matches the
+          // bars/cards in every theme.
+          ContentProps={{
+            sx: {
+              bgcolor: "background.paper",
+              color: "text.primary",
+              border: 1,
+              borderColor: "divider",
+              boxShadow: 6,
+            },
+          }}
           action={
             <IconButton
               size="small"
