@@ -7,6 +7,7 @@ import {
   SkipPrevious,
   Replay10,
   Forward10,
+  Close,
   Headphones as AudiobookIcon,
 } from "@mui/icons-material";
 import { useAudioPlayer } from "@/audio/player";
@@ -30,7 +31,7 @@ const DRAG_THRESHOLD = 6; // px a press must travel before it's a drag (vs a tap
 const IDLE_MS = 3000; // fade + tuck behind the edge after this long untouched
 const PEEK = 0.55; // fraction of the bubble that tucks off-edge when idle
 const IDLE_OPACITY = 0.3; // how faint it gets when idle (kept grabbable, not gone)
-const CARD_H = 116; // approx control-card height, for bottom-clamping the card
+const CARD_H = 138; // approx control-card height, for bottom-clamping the card
 /** Compact speed cycle for the bubble card (the full popup has the long list). */
 const RATE_CYCLE = [1, 1.25, 1.5, 2, 3] as const;
 const POS_KEY = "lv-audio-bubble-pos";
@@ -123,10 +124,26 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
   const [idle, setIdle] = useState(false);
 
   const elRef = useRef<HTMLDivElement | null>(null);
+  const cardRef = useRef<HTMLDivElement | null>(null);
   const idleTimer = useRef<number | undefined>(undefined);
+  const [cardDragging, setCardDragging] = useState(false);
   // Mutable drag bookkeeping — kept in a ref so pointermove can update the DOM
   // directly (no per-move re-render) and only commit to state on release.
   const drag = useRef({ active: false, moved: false, startX: 0, startY: 0, baseX: 0, baseY: 0, x: 0, y: 0, id: -1 });
+  const cardDrag = useRef({ active: false, moved: false, startX: 0, startY: 0, baseX: 0, baseY: 0, x: 0, y: 0, id: -1 });
+
+  // Persist a docked position (side + vertical ratio) to localStorage and state.
+  // Shared by the bubble drag and the expanded-card drag so both stay in sync.
+  const commitPos = useCallback((side: Side, topRatio: number) => {
+    const r = clamp01(topRatio);
+    stored.current = { side, topRatio: r };
+    try {
+      localStorage.setItem(POS_KEY, JSON.stringify(stored.current));
+    } catch {
+      // storage full / unavailable — position just won't persist this session
+    }
+    setPos(resolve(side, r));
+  }, []);
 
   // Any interaction resets the idle fade timer.
   const poke = useCallback(() => {
@@ -215,17 +232,88 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
       const side: Side = d.x + SIZE / 2 < vw / 2 ? "left" : "right";
       const yMin = MARGIN;
       const yMax = Math.max(yMin, vh - SIZE - MARGIN);
-      const topRatio = clamp01(yMax > yMin ? (d.y - yMin) / (yMax - yMin) : 0);
-      stored.current = { side, topRatio };
-      try {
-        localStorage.setItem(POS_KEY, JSON.stringify(stored.current));
-      } catch {
-        // storage full / unavailable — position just won't persist this session
-      }
-      setPos(resolve(side, topRatio));
+      const topRatio = yMax > yMin ? (d.y - yMin) / (yMax - yMin) : 0;
+      commitPos(side, topRatio);
       poke();
     },
-    [poke],
+    [commitPos, poke],
+  );
+
+  // ── Expanded-card drag — the card has its OWN grab handle so the user can
+  // reposition it while it's open; on release it edge-snaps and writes the same
+  // shared docked position the bubble reads, so collapsing lands it in place. ──
+  const cardWidth = (): number => Math.min(320, window.innerWidth - 24);
+
+  const cardDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // synthetic / odd pointer — handle's own move/up still drive the drag
+      }
+      const vw = window.innerWidth;
+      const cw = cardWidth();
+      const baseX = pos.side === "right" ? vw - cw - MARGIN : MARGIN;
+      const baseY = Math.min(Math.max(MARGIN, pos.y), window.innerHeight - CARD_H - MARGIN);
+      cardDrag.current = { active: true, moved: false, startX: e.clientX, startY: e.clientY, baseX, baseY, x: baseX, y: baseY, id: e.pointerId };
+      poke();
+    },
+    [pos.side, pos.y, poke],
+  );
+
+  const cardMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const d = cardDrag.current;
+    if (!d.active || e.pointerId !== d.id) return;
+    const dx = e.clientX - d.startX;
+    const dy = e.clientY - d.startY;
+    if (!d.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+      d.moved = true;
+      setCardDragging(true);
+    }
+    if (!d.moved) return;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const cw = cardWidth();
+    const nx = Math.min(vw - cw - MARGIN, Math.max(MARGIN, d.baseX + dx));
+    const ny = Math.min(vh - CARD_H - MARGIN, Math.max(MARGIN, d.baseY + dy));
+    d.x = nx;
+    d.y = ny;
+    if (cardRef.current) {
+      cardRef.current.style.left = `${nx}px`;
+      cardRef.current.style.top = `${ny}px`;
+    }
+  }, []);
+
+  const cardUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const d = cardDrag.current;
+      if (!d.active || e.pointerId !== d.id) return;
+      d.active = false;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        // capture may already be lost — ignore
+      }
+      setCardDragging(false);
+      // A tap on the handle (no movement) is a no-op — it must NOT close the
+      // card (that's the X / backdrop's job).
+      if (!d.moved) {
+        poke();
+        return;
+      }
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const cw = cardWidth();
+      const side: Side = d.x + cw / 2 < vw / 2 ? "left" : "right";
+      // Map the card's top onto the bubble's vertical range so the collapsed
+      // bubble re-appears where the card was parked.
+      const yMin = MARGIN;
+      const yMax = Math.max(yMin, vh - SIZE - MARGIN);
+      const topRatio = yMax > yMin ? (d.y - yMin) / (yMax - yMin) : 0;
+      commitPos(side, topRatio);
+      poke();
+    },
+    [commitPos, poke],
   );
 
   // Hidden on the playing book's own page (the bottom bar owns it there), when
@@ -235,9 +323,12 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
   const slug = nowPlaying.bookSlug;
   const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
   const tucked = idle && !dragging && !controlsOpen;
-  // The card grows out of the docked edge; clamp its top so it never spills off
-  // the bottom of the screen.
+  // The card docks to the same edge as the bubble; clamp its top so it never
+  // spills off the bottom of the screen. Positioned with left (not a right
+  // anchor) so a drag and the edge-snap share one coordinate space.
   const cardTop = Math.min(Math.max(MARGIN, pos.y), window.innerHeight - CARD_H - MARGIN);
+  const cardW = cardWidth();
+  const cardLeft = pos.side === "right" ? window.innerWidth - cardW - MARGIN : MARGIN;
 
   return (
     <>
@@ -341,16 +432,19 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
       )}
       <Grow in={controlsOpen} unmountOnExit style={{ transformOrigin: pos.side === "right" ? "right center" : "left center" }}>
         <Box
+          ref={cardRef}
           sx={(theme) => ({
             position: "fixed",
-            top: cardTop,
-            ...(pos.side === "right" ? { right: MARGIN } : { left: MARGIN }),
+            top: cardDragging ? cardDrag.current.y : cardTop,
+            left: cardDragging ? cardDrag.current.x : cardLeft,
             zIndex: theme.zIndex.fab,
             display: "flex",
             flexDirection: "column",
             gap: 0.5,
-            p: 1,
-            width: "min(320px, calc(100vw - 24px))",
+            px: 1,
+            pb: 1,
+            pt: 0.25,
+            width: cardW,
             bgcolor: "background.paper",
             borderRadius: 4,
             boxShadow: 8,
@@ -358,6 +452,38 @@ export function FloatingBubble({ onPlayingPage }: { onPlayingPage: boolean }): R
             borderColor: "divider",
           })}
         >
+          {/* Drag handle + close: drag the grip to reposition the whole widget
+              (edge-snaps + persists on release); the X dismisses the card. */}
+          <Box
+            sx={{
+              position: "relative",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              height: 22,
+              touchAction: "none",
+              cursor: cardDragging ? "grabbing" : "grab",
+            }}
+            onPointerDown={cardDown}
+            onPointerMove={cardMove}
+            onPointerUp={cardUp}
+            onPointerCancel={cardUp}
+          >
+            <Box sx={{ width: 34, height: 4, borderRadius: 2, bgcolor: "text.disabled", opacity: 0.5 }} />
+            <IconButton
+              aria-label={t("audiobook.collapse")}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                setControlsOpen(false);
+                poke();
+              }}
+              size="small"
+              sx={{ position: "absolute", right: -4, top: -2, color: "text.secondary" }}
+            >
+              <Close fontSize="small" />
+            </IconButton>
+          </Box>
+
           {/* Row 1 — artwork + title: the "back to the player" handle. */}
           <Box
             component="button"
