@@ -1,10 +1,27 @@
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
+import { splashHtml } from "./src/_shell/splash";
 
 const ReactCompilerConfig = {
   target: "19",
 };
+
+// Inject the shared pre-mount app-shell splash (from @shared-utils/ui, staged
+// into _shell) into index.html at build time: the <style> before </head> and
+// the spinner markup inside #root. One source across all atlantis apps; React's
+// createRoot replaces it on mount.
+function splashInjector(): Plugin {
+  const { head, body } = splashHtml({ title: "LiveView" });
+  return {
+    name: "lv-splash-injector",
+    transformIndexHtml(html: string): string {
+      return html
+        .replace("</head>", `${head}\n  </head>`)
+        .replace('<div id="root"></div>', `<div id="root">${body}</div>`);
+    },
+  };
+}
 
 export default defineConfig({
   plugins: [
@@ -13,6 +30,7 @@ export default defineConfig({
         plugins: [["babel-plugin-react-compiler", ReactCompilerConfig]],
       },
     }),
+    splashInjector(),
   ],
   resolve: {
     alias: {
