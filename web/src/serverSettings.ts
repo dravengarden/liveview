@@ -13,6 +13,9 @@ export function getServerSettings(): Promise<Record<string, string>> {
 }
 
 export function putServerSetting(key: string, value: string): void {
+  // Keep the memoized cache current so a later getServerSettings() in this same
+  // session reflects our own write (the GET is fetched once and never refetched).
+  if (cache !== null) cache = cache.then((s) => ({ ...s, [key]: value }));
   void fetch("/api/settings", {
     method: "PUT",
     headers: { "content-type": "application/json" },

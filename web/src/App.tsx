@@ -6,7 +6,6 @@ import {
   Box,
   Alert,
   IconButton,
-  Tooltip,
   ToggleButton,
   ToggleButtonGroup,
   Snackbar,
@@ -14,12 +13,12 @@ import {
 import {
   Headphones as AudiobookIcon,
   MenuBook as ReadIcon,
-  IosShare as ShareIcon,
   Close as CloseIcon,
 } from "@mui/icons-material";
 import { Sidebar, SettingsButton, ContentViewer, AudiobookPlayer, FloatingBubble, Landing } from "@/components";
 import { useWebSocket, useTheme, useSettings, useFont, useProgress } from "@/hooks";
 import { useI18n } from "@/i18n";
+import { getServerSettings, putServerSetting } from "@/serverSettings";
 import { useAudioPlayer, type Track } from "@/audio/player";
 import { useAutoUpdate } from "@/hooks/useAutoUpdate";
 import { NavShell } from "./_shell";
@@ -204,6 +203,28 @@ export function App(): React.JSX.Element {
   // reflects progress made since the last visit.
   const [recentProgress, setRecentProgress] = useState<ProgressEntry[]>([]);
 
+  // Per-book card state, SERVER-side (cross-device, survives a reload): which
+  // rendition (read/listen) and which language edition the book was last opened
+  // in. Keyed by slug; hydrated from /api/settings (`book.<slug>.{rendition,lang}`)
+  // and written on every switch. The per-rendition reading position is already
+  // server-side (it's keyed by chapter path, and text vs audio chapters differ).
+  const [bookPrefs, setBookPrefs] = useState<Record<string, { rendition?: string; lang?: string }>>({});
+  useEffect(() => {
+    void getServerSettings().then((s) => {
+      const out: Record<string, { rendition?: string; lang?: string }> = {};
+      for (const [k, v] of Object.entries(s)) {
+        const m = /^book\.(.+)\.(rendition|lang)$/.exec(k);
+        if (m?.[1] && m[2]) (out[m[1]] ??= {})[m[2] as "rendition" | "lang"] = v;
+      }
+      setBookPrefs(out);
+    });
+  }, []);
+  const saveBookPref = useCallback((slug: string, patch: { rendition?: string; lang?: string }) => {
+    setBookPrefs((prev) => ({ ...prev, [slug]: { ...prev[slug], ...patch } }));
+    if (patch.rendition !== undefined) putServerSetting(`book.${slug}.rendition`, patch.rendition);
+    if (patch.lang !== undefined) putServerSetting(`book.${slug}.lang`, patch.lang);
+  }, []);
+
   const { t, lang: uiLang } = useI18n();
   const { theme, muiTheme, variant, mode, setVariant, setMode } = useTheme();
   const { menuBarSettings, setContentMaxWidth, setLineHeight } = useSettings();
@@ -320,8 +341,21 @@ export function App(): React.JSX.Element {
   // name) plus the in-chapter scroll ratio. Keyed by book slug for the landing.
   const progressBySlug = useMemo(() => {
     const out: Record<string, ReadingProgress> = {};
+    // Per book, show the progress of the rendition the card opens into (its
+    // pref/default), so a text+audio book's % matches what you'll resume. Fall
+    // back to the most-recent of any rendition if that one was never read.
+    const meta: Record<string, { matchesPref: boolean; at: number }> = {};
     for (const r of recentProgress) {
       const slug = r.path.split("/")[0] ?? "";
+      const isAudio = r.path.endsWith(".spoken.md");
+      const prefKind =
+        bookPrefs[slug]?.rendition ?? books.find((b) => b.slug === slug)?.default_rendition ?? "text";
+      const matchesPref = isAudio === (prefKind === "audio");
+      const cur = meta[slug];
+      const better =
+        !cur || (matchesPref && !cur.matchesPref) || (matchesPref === cur.matchesPref && r.updated_at > cur.at);
+      if (!better) continue;
+      meta[slug] = { matchesPref, at: r.updated_at };
       const node = findNode(tree, r.path);
       const chapterLabel =
         (node && ((uiLang && node.titles?.[uiLang]) || node.name)) ||
@@ -330,7 +364,7 @@ export function App(): React.JSX.Element {
       out[slug] = { path: r.path, chapterLabel, scroll: r.scroll };
     }
     return out;
-  }, [recentProgress, tree, uiLang]);
+  }, [recentProgress, tree, uiLang, bookPrefs, books]);
 
   const handleContentUpdate = useCallback(
     (path: string, msgLang: string, fileType: FileType, content: string) => {
@@ -444,10 +478,11 @@ export function App(): React.JSX.Element {
   const switchLang = useCallback(
     (newLang: string) => {
       if (currentPath) {
+        if (activeSlug) saveBookPref(activeSlug, { lang: newLang });
         void openFile(currentPath, newLang, rendition);
       }
     },
-    [currentPath, openFile, rendition]
+    [currentPath, openFile, rendition, activeSlug, saveBookPref]
   );
 
   // The entry chapter of a rendition: resume the last-read chapter if it still
@@ -495,13 +530,15 @@ export function App(): React.JSX.Element {
           }
           setTree(spine);
           renditionRef.current = "audio";
-          void openFile(target, pickInitialLang(r), "audio");
+          const prefLang = bookPrefs[slug]?.lang;
+          const audioLang = prefLang && r.langs.some((l) => l.lang === prefLang) ? prefLang : pickInitialLang(r);
+          void openFile(target, audioLang, "audio");
         } catch (e) {
           console.error("Failed to open audiobook:", e);
         }
       })();
     },
-    [books, loadBook, pickInitialLang, openFile, t]
+    [books, bookPrefs, loadBook, pickInitialLang, openFile, t]
   );
 
   // Enter a book from the landing page in a specific rendition (the bookshelf
@@ -513,18 +550,18 @@ export function App(): React.JSX.Element {
       const book = books.find((b) => b.slug === slug);
       if (!book) return;
       // No explicit kind (a shelf-card tap) ⇒ open in the rendition last used for
-      // this book, else its default. An explicit kind (the navbar switch) wins.
-      let persisted: string | null = null;
-      try {
-        persisted = localStorage.getItem(`lv-rendition:${slug}`);
-      } catch {
-        // storage unavailable — fall back to the default
-      }
+      // this book (server-side pref), else its default. An explicit kind (the
+      // navbar switch) wins.
+      const pref = bookPrefs[slug];
       const r =
         (renditionKind ? book.renditions.find((x) => x.kind === renditionKind) : undefined) ??
-        (persisted ? book.renditions.find((x) => x.kind === persisted) : undefined) ??
+        (pref?.rendition ? book.renditions.find((x) => x.kind === pref.rendition) : undefined) ??
         defaultRendition(book);
       if (!r) return;
+      // Restore the last-used edition for this book if it still exists in the
+      // rendition, else this rendition's preferred initial edition.
+      const initialLang =
+        pref?.lang && r.langs.some((l) => l.lang === pref.lang) ? pref.lang : pickInitialLang(r);
       // Audio opens its inline read-along page (sidebar = audio spine).
       if (r.kind === "audio") {
         openAudiobook(slug);
@@ -541,14 +578,14 @@ export function App(): React.JSX.Element {
           renditionRef.current = r.kind;
           const entry = await entryChapter(slug, spine);
           if (entry) {
-            void openFile(entry, pickInitialLang(r), r.kind);
+            void openFile(entry, initialLang, r.kind);
           }
         } catch (e) {
           console.error("Failed to enter book:", e);
         }
       })();
     },
-    [books, defaultRendition, entryChapter, openFile, pickInitialLang, openAudiobook]
+    [books, bookPrefs, defaultRendition, entryChapter, openFile, pickInitialLang, openAudiobook]
   );
 
   // Return to the landing bookshelf.
@@ -763,29 +800,15 @@ export function App(): React.JSX.Element {
   const switchRendition = useCallback(
     (kind: string) => {
       if (!activeSlug || kind === rendition) return;
-      try {
-        localStorage.setItem(`lv-rendition:${activeSlug}`, kind);
-      } catch {
-        // storage unavailable — the choice just won't persist
-      }
+      saveBookPref(activeSlug, { rendition: kind });
       if (kind === "audio") openAudiobook(activeSlug);
       else enterBook(activeSlug, kind);
     },
-    [activeSlug, rendition, openAudiobook, enterBook],
+    [activeSlug, rendition, openAudiobook, enterBook, saveBookPref],
   );
 
-  // Web Share: hand the current deep link (book + chapter + edition, encoded in
-  // the URL hash) to the OS share sheet. Works on iOS Safari/PWA + Android +
-  // some desktop; the button is hidden where unsupported. A user-cancelled
-  // share rejects with AbortError — swallow it.
-  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
-  const shareBook = useCallback(() => {
-    if (!navigator.share) return;
-    void navigator.share({ title: bookLabel, url: window.location.href }).catch(() => {});
-  }, [bookLabel]);
-
-  // In-book top-bar actions: a listen button (when the book has audio), a share
-  // button (where supported), + the shared settings affordance.
+  // In-book top-bar actions: the read/listen switch (when the book has both
+  // renditions) + the shared settings affordance.
   const bookActions = (
     <>
       {showRenditionToggle && (
@@ -804,13 +827,6 @@ export function App(): React.JSX.Element {
             <AudiobookIcon fontSize="small" />
           </ToggleButton>
         </ToggleButtonGroup>
-      )}
-      {canShare && (
-        <Tooltip title={t("action.share")}>
-          <IconButton onClick={shareBook} aria-label={t("action.share")}>
-            <ShareIcon />
-          </IconButton>
-        </Tooltip>
       )}
       {settingsButton}
     </>
