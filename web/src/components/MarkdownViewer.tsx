@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { Box } from "@mui/material";
 import { READING_COLUMN_MAX } from "@/types";
-import { ImageLightbox } from "./ImageLightbox";
+import { ImageLightbox } from "../_shell";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { ensureScript, ensureStyle } from "@/ensureAsset";
 

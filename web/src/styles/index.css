@@ -17,25 +17,6 @@ body {
   padding: 0;
 }
 
-/* Image lightbox entrance (see components/ImageLightbox.tsx). */
-@keyframes liveview-lightbox-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  @keyframes liveview-lightbox-in {
-    from,
-    to {
-      opacity: 1;
-    }
-  }
-}
-
 /* Mobile: keep wide content (tables, code, images) inside the viewport
    instead of forcing the whole page to scroll sideways. */
 @media (max-width: 900px) {
