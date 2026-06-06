@@ -277,6 +277,12 @@ export function App(): React.JSX.Element {
   // playback (`playChapter`) and raise the popup into focus (`setExpanded`).
   const { playChapter: audioPlayChapter, syncNotice, playing, nowPlaying } =
     useAudioPlayer();
+  // Mirror of `nowPlaying` for the view→engine effect's guard. That effect must
+  // react ONLY to view-led navigation (currentPath), never to engine-led chapter
+  // changes — reading nowPlaying through a ref keeps it out of the dep array so
+  // the two sync effects can't leapfrog (see the effect below for the full why).
+  const nowPlayingRef = useRef(nowPlaying);
+  nowPlayingRef.current = nowPlaying;
 
   // Auto-update the installed PWA when a newer bundle is deployed (an iOS
   // home-screen PWA otherwise resumes its frozen page and never picks up a
@@ -814,12 +820,22 @@ export function App(): React.JSX.Element {
   // A) view → engine: viewing an audio chapter makes the engine play it,
   //    seeding the queue from the loaded audio spine. A no-op once it's already
   //    that chapter, so re-opening / auto-advancing never restarts it.
+  //
+  //    Triggers on VIEW-led changes only (`currentPath`): opening a book, a
+  //    sidebar/TOC tap, a deep link, browser back/forward. It must NOT depend on
+  //    `nowPlaying`, or an ENGINE-led chapter change (transport next/prev, or
+  //    auto-advance) would re-fire it mid-transition — while `currentPath` still
+  //    points at the old chapter — and drag the engine back. That fights effect
+  //    B (which is moving `currentPath` forward), and the two leapfrog forever:
+  //    `replaceState` hammers the history API, Chrome throttles it, and the tab
+  //    freezes/crashes. So the guard reads `nowPlaying` through a ref, keeping it
+  //    out of the dep array; engine-led changes are effect B's job, not this one.
   useEffect(() => {
     if (
       rendition !== "audio" || !currentPath || !activeBook ||
       activeTree.length === 0
     ) return;
-    if (nowPlaying?.chapterPath === currentPath) return;
+    if (nowPlayingRef.current?.chapterPath === currentPath) return;
     audioPlayChapter(
       {
         bookSlug: activeBook.slug,
@@ -838,7 +854,6 @@ export function App(): React.JSX.Element {
     activeTree,
     lang,
     uiLang,
-    nowPlaying,
     audioPlayChapter,
   ]);
 
