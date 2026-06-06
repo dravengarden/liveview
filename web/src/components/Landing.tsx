@@ -195,6 +195,31 @@ function fmtDate(ms: number, lang: string): string | null {
   });
 }
 
+/** The largest [unit, seconds-per-unit] step a delta fits into, coarsest last. */
+const REL_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
+  ["year", 31536000],
+  ["month", 2592000],
+  ["day", 86400],
+  ["hour", 3600],
+  ["minute", 60],
+];
+
+/** Format a unix-ms timestamp as a locale relative time ("3 hours ago" /
+ *  "3小时前"), or null when unset (0). `now` is passed in so every card on one
+ *  render shares a single clock read. */
+function fmtRelative(ms: number, now: number, lang: string): string | null {
+  if (!ms) return null;
+  const rtf = new Intl.RelativeTimeFormat(lang === "zh" ? "zh-CN" : "en-US", {
+    numeric: "auto",
+  });
+  const sec = (ms - now) / 1000; // negative ⇒ in the past
+  const abs = Math.abs(sec);
+  for (const [unit, per] of REL_STEPS) {
+    if (abs >= per) return rtf.format(Math.round(sec / per), unit);
+  }
+  return rtf.format(Math.round(sec), "second");
+}
+
 /**
  * The "bookshelf" landing page: a sticky navbar (title · search · filters ·
  * settings · launcher) over a masonry of book cards.
@@ -227,8 +252,35 @@ export function Landing({
   // Multi-select kind filter; an empty selection means "all kinds".
   const [kinds, setKinds] = useState<Category[]>([]);
 
-  // One card per book now (audio rides along as a badge on text+audio books).
-  const entries = useMemo(() => shelfEntries(books), [books]);
+  // One clock read per render, shared by every card's relative "last opened"
+  // stamp. The shelf re-renders on each return from a book, so the relative
+  // times refresh then without a per-second ticker.
+  const now = Date.now();
+
+  // The most-recent reading/listening time for a book (newest of its
+  // renditions), or 0 if never opened.
+  const lastReadMs = (slug: string): number => {
+    const bp = progress[slug];
+    return Math.max(bp?.text?.updatedAt ?? 0, bp?.audio?.updatedAt ?? 0);
+  };
+
+  // One card per book (audio rides along as a badge on text+audio books),
+  // ordered most-recently-active first by default: books you've opened sort to
+  // the top, newest first; never-opened books follow, ordered by their content
+  // stamp (last sync, then creation) so freshly-added books still surface near
+  // the top. This makes the shelf a "continue where you left off" list without
+  // any explicit sort control.
+  const entries = useMemo(() => {
+    const stamp = (b: Book): number => b.updated_at || b.created_at || 0;
+    return shelfEntries(books).sort((a, z) => {
+      const ra = lastReadMs(a.book.slug);
+      const rz = lastReadMs(z.book.slug);
+      if (ra && rz) return rz - ra; // both opened: newest activity first
+      if (ra !== rz) return rz - ra; // opened (nonzero) ranks above never-opened
+      return stamp(z.book) - stamp(a.book); // both unopened: newest content first
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [books, progress]);
 
   // A card matches the "audiobook" kind if it has audio AT ALL (text+audio books
   // included), so the filter surfaces everything listenable — not just
@@ -559,14 +611,24 @@ export function Landing({
                       ].filter((c): c is { kind: "text" | "audio"; r: ReadingProgress } =>
                         Boolean(c)
                       );
-                      // Deploy-time stamps (hidden when unset). Show "updated"
-                      // only when it differs from "added", so an unchanged book
-                      // doesn't show two identical dates.
+                      // Stamps line: how recently you opened the book (relative,
+                      // the shelf's default sort key), then its deploy-time
+                      // created/updated dates. "Last opened" only shows once the
+                      // book has progress; "updated" only when it differs from
+                      // "added", so an unchanged book doesn't show two identical
+                      // dates.
+                      const lastOpenedMs = Math.max(
+                        textP?.updatedAt ?? 0,
+                        audioP?.updatedAt ?? 0,
+                      );
+                      const lastOpenedStr = fmtRelative(lastOpenedMs, now, lang);
                       const createdStr = fmtDate(b.created_at, lang);
                       const updatedStr = b.updated_at !== b.created_at
                         ? fmtDate(b.updated_at, lang)
                         : null;
                       const stamps = [
+                        lastOpenedStr &&
+                        t("landing.lastOpened", { time: lastOpenedStr }),
                         createdStr && t("landing.added", { date: createdStr }),
                         updatedStr &&
                         t("landing.updated", { date: updatedStr }),

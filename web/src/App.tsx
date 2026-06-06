@@ -431,6 +431,7 @@ export function App(): React.JSX.Element {
         path: r.path,
         chapterLabel,
         scroll: r.scroll,
+        updatedAt: r.updated_at,
       };
     }
     return out;

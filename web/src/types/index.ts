@@ -47,6 +47,9 @@ export interface ReadingProgress {
   chapterLabel: string;
   /** Scroll position within the chapter, 0..1. */
   scroll: number;
+  /** When this position was last written (Unix epoch ms) — drives the shelf's
+   *  "last opened" stamp and its default most-recent-first ordering. */
+  updatedAt: number;
 }
 
 /** A book's continue state split by rendition, for the shelf card. A text+audio
