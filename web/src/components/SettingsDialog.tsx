@@ -47,9 +47,21 @@ const MODE_OPTIONS: ThemeMode[] = ["auto", "light", "dark"];
 // touch and a number field would pop the keyboard; a small set taps cleanly.
 const MARGIN_PRESETS = [0, 8, 16, 24, 32, 48, 64];
 const LINE_HEIGHT_PRESETS = [1.4, 1.5, 1.6, 1.7, 1.8, 2.0, 2.2];
-// Reading font-size multipliers (1 = unchanged). Mostly an enlarge range, since
-// readers reach for this to make body text bigger; shown as percentages.
-const FONT_SCALE_PRESETS = [0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6];
+// App-wide font-size multipliers (1 = unchanged), shown as percentages. The
+// exact set cowboy offers, so the two apps' font controls line up.
+const FONT_SCALE_PRESETS = [
+  0.55,
+  0.6,
+  0.65,
+  0.7,
+  0.75,
+  0.8,
+  0.85,
+  0.9,
+  1,
+  1.1,
+  1.25,
+];
 
 /** Snap a stored value (e.g. from the old slider) to the nearest preset, so the
  *  dropdown always shows something selected. */

@@ -186,9 +186,11 @@ export const LINE_HEIGHT_MAX = 2.2;
 export const LINE_HEIGHT_STEP = 0.1;
 export const LINE_HEIGHT_DEFAULT = 1.8;
 
-// Reading font-size multiplier. Default 1 = unchanged (so existing readers see
-// no jump); the clamp band is wider than the picker's presets so a hand-edited
-// value is honoured but garbage snaps back.
-export const FONT_SCALE_MIN = 0.6;
+// App-wide font-size multiplier, applied as the root <html> font-size so every
+// rem/em surface — reading prose, MUI typography, AND icons — scales together
+// (mirrors cowboy's useGlobalFontScale). Default 1 = unchanged; the clamp band
+// matches cowboy (0.5–2) and is wider than the picker's presets, so a
+// hand-edited value is honoured while garbage snaps back.
+export const FONT_SCALE_MIN = 0.5;
 export const FONT_SCALE_MAX = 2.0;
 export const FONT_SCALE_DEFAULT = 1.0;

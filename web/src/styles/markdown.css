@@ -16,10 +16,10 @@
      back to a neutral system stack before the font system mounts. Code blocks
      below override this with a monospace stack. */
   font-family: var(--lv-reading-font, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif), "Apple Color Emoji", "Segoe UI Emoji";
-  /* Reader-controlled font size (Settings → Reading → Font size): a multiplier
-     on the 16px base, so the body and its em-relative headings/code scale
-     together while the surrounding chrome keeps its fixed size. */
-  font-size: calc(16px * var(--lv-reading-scale, 1));
+  /* Reading prose size in rem, so it scales with the app-wide font-size setting
+     (applied as the root <html> font-size; see App.tsx). Its em-relative
+     headings/code follow. */
+  font-size: 1rem;
   /* Reader-controlled line-height (Settings → READING LAYOUT). Default mirrors
      the prior hardcoded value so untouched preferences read identically. */
   line-height: var(--lv-line-height, 1.5);

@@ -25,7 +25,6 @@ import { AudiobookPlayer } from "./AudiobookPlayer";
 interface NowPlayingPopupProps {
   contentMaxWidth: number;
   lineHeight: number;
-  fontScale: number;
   /** The shared reading-settings affordance (gear + its own theme/font/width
    *  sheet), rendered in the popup header so appearance can be changed while
    *  listening — the same dialog as the book reader. */
@@ -127,7 +126,7 @@ function ChapterList({ onPick }: { onPick?: () => void }): React.JSX.Element {
  * centered card over a dimmed scrim (no need to bury the whole desktop for a
  * narrow read-along column). Esc / scrim / the ⌄ button collapse it.
  */
-export function NowPlayingPopup({ contentMaxWidth, lineHeight, fontScale, settings }: NowPlayingPopupProps): React.JSX.Element | null {
+export function NowPlayingPopup({ contentMaxWidth, lineHeight, settings }: NowPlayingPopupProps): React.JSX.Element | null {
   const { t } = useI18n();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("lg"));
@@ -201,7 +200,7 @@ export function NowPlayingPopup({ contentMaxWidth, lineHeight, fontScale, settin
   const body = (
     <>
       {header}
-      <AudiobookPlayer contentMaxWidth={contentMaxWidth} lineHeight={lineHeight} fontScale={fontScale} />
+      <AudiobookPlayer contentMaxWidth={contentMaxWidth} lineHeight={lineHeight} />
     </>
   );
 

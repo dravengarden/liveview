@@ -277,6 +277,15 @@ export function App(): React.JSX.Element {
   // On the compact tier with the "bottom" navbar preference, both the in-book
   // NavShell and the bookshelf bar drop to the bottom (mobile-browser style).
   const navbarAtBottom = useNavbarAtBottom();
+  // Apply the font-size setting GLOBALLY: scale the root <html> font-size so
+  // every rem/em surface — reading prose, MUI typography, AND icons — tracks it
+  // together (cowboy's useGlobalFontScale). px layout (MUI spacing, safe-area
+  // insets, breakpoints) is unaffected, so the responsive tiers stay put.
+  useEffect(() => {
+    document.documentElement.style.fontSize = `${
+      menuBarSettings.fontScale * 100
+    }%`;
+  }, [menuBarSettings.fontScale]);
   const { fontId, setFont } = useFont();
   // The root audio engine: playback + the popup live above every view, so
   // navigating never stops the audio nor closes the popup. We only need to seed
@@ -1138,7 +1147,6 @@ export function App(): React.JSX.Element {
                   <AudiobookPlayer
                     contentMaxWidth={menuBarSettings.contentMaxWidth}
                     lineHeight={menuBarSettings.lineHeight}
-                    fontScale={menuBarSettings.fontScale}
                     onSaveScroll={saveProgress}
                   />
                 )
@@ -1151,7 +1159,6 @@ export function App(): React.JSX.Element {
                     onNavigate={handleSelect}
                     contentMaxWidth={menuBarSettings.contentMaxWidth}
                     lineHeight={menuBarSettings.lineHeight}
-                    fontScale={menuBarSettings.fontScale}
                     savedScroll={savedScroll}
                     onSaveScroll={saveProgress}
                   />

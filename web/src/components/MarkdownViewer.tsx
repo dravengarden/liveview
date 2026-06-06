@@ -36,9 +36,6 @@ interface MarkdownViewerProps {
   contentMaxWidth: number;
   /** Line height applied to .markdown-body via the --lv-line-height CSS var. */
   lineHeight: number;
-  /** Font-size multiplier for the reading column (1 = unchanged), applied via
-   *  the --lv-reading-scale CSS var. */
-  fontScale: number;
   /** Saved scroll ratio (0..1) for a doc path, to restore on open. */
   savedScroll?: ((path: string) => number | undefined) | undefined;
   /** Report the current scroll ratio (0..1) for a doc path (debounced upstream). */
@@ -105,7 +102,6 @@ export function MarkdownViewer({
   onNavigate,
   contentMaxWidth,
   lineHeight,
-  fontScale,
   savedScroll,
   onSaveScroll,
 }: MarkdownViewerProps): React.JSX.Element {
@@ -489,11 +485,9 @@ export function MarkdownViewer({
     // side MARGIN, applied as the scroll container's horizontal padding below.
     maxWidth: `${READING_COLUMN_MAX}px`,
     mx: "auto",
-    // CSS custom props consumed by markdown.css: line-height, and a font-size
-    // multiplier that scales the reading prose (and its em-relative headings /
-    // code) without touching the surrounding chrome.
+    // CSS custom prop consumed by markdown.css. (Font size scales globally via
+    // the root font-size, so there's no per-reader scale var here.)
     "--lv-line-height": String(lineHeight),
-    "--lv-reading-scale": String(fontScale),
   } as const;
 
   if (!html) {
