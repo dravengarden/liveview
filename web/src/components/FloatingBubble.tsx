@@ -219,6 +219,17 @@ export function FloatingBubble({
     };
   }, [poke]);
 
+  // Re-resolve the dock against the CURRENT viewport each time the bubble
+  // becomes visible. It stays mounted (returns null while hidden) the whole
+  // session, so `pos` can be stale from an earlier/taller viewport (and the
+  // resize listener can't update an absent element) — without this the bubble
+  // reappears docked off the bottom edge on phones. `resolve` clamps to the
+  // live innerHeight, so the dock is always on-screen on show.
+  const shown = nowPlaying != null && !onPlayingPage;
+  useLayoutEffect(() => {
+    if (shown) setPos(resolve(stored.current.side, stored.current.topRatio));
+  }, [shown]);
+
   // Single source of truth for the bubble's position: inline left/top. Applied
   // here whenever `pos` settles (mount, edge-snap on release, resize) — the drag
   // handler writes inline directly mid-gesture and skips this (dragging guard),
@@ -226,8 +237,21 @@ export function FloatingBubble({
   useLayoutEffect(() => {
     const el = elRef.current;
     if (el && !dragging) {
-      el.style.left = `${pos.x}px`;
-      el.style.top = `${pos.y}px`;
+      // Clamp to the LIVE viewport on apply: `pos` may have been resolved
+      // against a taller innerHeight (the app opened at a different height, an
+      // iOS address-bar/rotation change, a PWA standalone height), which would
+      // otherwise dock the bubble below the bottom edge — invisible, the "no
+      // bubble on my phone" bug.
+      const x = Math.min(
+        Math.max(MARGIN, pos.x),
+        Math.max(MARGIN, window.innerWidth - SIZE - MARGIN),
+      );
+      const y = Math.min(
+        Math.max(MARGIN, pos.y),
+        Math.max(MARGIN, window.innerHeight - SIZE - MARGIN),
+      );
+      el.style.left = `${x}px`;
+      el.style.top = `${y}px`;
     }
   }, [pos.x, pos.y, dragging]);
 
