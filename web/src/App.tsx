@@ -315,6 +315,17 @@ export function App(): React.JSX.Element {
     document.querySelector<HTMLElement>('[data-lv-scroller="reader"]')
       ?.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
+  // Scroll whichever view is showing back to the top. Every scrollable view
+  // tags its container `data-lv-scroller` (the shelf, and the book/audiobook
+  // reader), so scrolling them all is safe — the hidden one is a no-op. Drives
+  // the status-bar tap target below.
+  const scrollAllTop = useCallback(() => {
+    for (
+      const el of document.querySelectorAll<HTMLElement>("[data-lv-scroller]")
+    ) {
+      el.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, []);
   // "book" mode (book.toml-driven) renders a clean titled spine; "docs" mode
   // renders the raw filesystem tree. The flag also drives whether the root
   // folder node is shown (see below) and the per-row styling in the sidebar.
@@ -994,6 +1005,30 @@ export function App(): React.JSX.Element {
           bgcolor: "background.default",
         }}
       >
+        {
+          /* iOS "tap the status bar to scroll to top" gesture. The app scrolls
+              an inner overflow container, not the document/window, so the native
+              gesture (which only drives the window's scroll view) does nothing
+              here. This invisible tap target spans the status-bar / notch strip
+              (the safe-area top inset) and, when tapped, scrolls whichever view
+              is showing — shelf, book, or audiobook read-along — back to the
+              top. It's exactly the inset tall, so off-notch (desktop) it's
+              zero-height and catches nothing. Sits just above the app bar so it
+              wins over the navbar's notch background, but below the modal sheets
+              (settings / now-playing), whose own top strip stays interactive. */
+        }
+        <Box
+          aria-hidden
+          onClick={scrollAllTop}
+          sx={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            height: "env(safe-area-inset-top, 0px)",
+            zIndex: (t) => t.zIndex.appBar + 1,
+          }}
+        />
         {
           /* Connection / version banner, above everything so it spans the width
               and pushes the view stack + mini-player down when shown. */

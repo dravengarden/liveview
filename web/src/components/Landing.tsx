@@ -303,6 +303,10 @@ export function Landing({
   return (
     <Box
       ref={scrollerRef}
+      // Tagged so the app-level status-bar tap target (App.tsx) can scroll the
+      // shelf to top — the iOS "tap the status bar" gesture, which the native OS
+      // can't drive here because we scroll this inner container, not the window.
+      data-lv-scroller="shelf"
       sx={{
         flex: 1,
         minHeight: 0,
