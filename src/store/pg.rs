@@ -581,9 +581,15 @@ impl PgStore {
         .await
     }
 
-    /// The most-recently-read chapter per book (one row per first path segment),
-    /// newest first. Dedup happens in Rust — paths may be a bare `<slug>`.
-    pub async fn progress_recent_per_book(&self) -> Result<Vec<ProgressEntry>, sqlx::Error> {
+    /// The most-recently-read chapter per (book, rendition), newest first —
+    /// dedup happens in Rust. A text+audio book keeps BOTH its newest text
+    /// chapter and its newest audio (`.spoken.md`) chapter, so the shelf card
+    /// can show reading AND listening progress side by side; deduping by slug
+    /// alone dropped whichever rendition was touched less recently. Paths may be
+    /// a bare `<slug>` (no chapter), which classifies as the text rendition.
+    pub async fn progress_recent_per_rendition(
+        &self,
+    ) -> Result<Vec<ProgressEntry>, sqlx::Error> {
         let rows = sqlx::query_as::<_, ProgressEntry>(
             "SELECT path, scroll, updated_at FROM progress ORDER BY updated_at DESC",
         )
@@ -594,7 +600,8 @@ impl PgStore {
             .into_iter()
             .filter(|r| {
                 let slug = r.path.split('/').next().unwrap_or("").to_string();
-                seen.insert(slug)
+                let is_audio = r.path.ends_with(".spoken.md");
+                seen.insert((slug, is_audio))
             })
             .collect())
     }
@@ -756,8 +763,20 @@ mod tests {
         assert!(rows
             .iter()
             .any(|r| r.path == "bk/01" && (r.scroll - 0.55).abs() < 1e-9));
-        let recent = s.progress_recent_per_book().await.unwrap();
-        assert!(recent.iter().any(|r| r.path.starts_with("bk")));
+        // A text + audio chapter for the same book must BOTH survive the
+        // per-rendition dedup (the shelf shows reading and listening progress
+        // side by side), while two text chapters collapse to the newest.
+        s.progress_upsert("bk/02", 0.30).await.unwrap();
+        s.progress_upsert("bk/00.spoken.md", 0.20).await.unwrap();
+        let recent = s.progress_recent_per_rendition().await.unwrap();
+        assert!(recent.iter().any(|r| r.path == "bk/00.spoken.md"));
+        assert_eq!(
+            recent.iter().filter(|r| !r.path.ends_with(".spoken.md")
+                && r.path.split('/').next() == Some("bk"))
+                .count(),
+            1,
+            "the book's text chapters must dedup to one row",
+        );
 
         s.settings_set("ui.rate", "1.5").await.unwrap();
         let all = s.settings_all().await.unwrap();

@@ -49,6 +49,15 @@ export interface ReadingProgress {
   scroll: number;
 }
 
+/** A book's continue state split by rendition, for the shelf card. A text+audio
+ *  book carries BOTH (read 35% / listen 13%) so the card shows them side by
+ *  side; a text-only or audio-only book carries just the one. Either side is
+ *  absent when that rendition was never opened. */
+export interface BookProgress {
+  text?: ReadingProgress;
+  audio?: ReadingProgress;
+}
+
 /** A language edition of a book, for the in-book language switcher. */
 export interface LangInfo {
   lang: string;

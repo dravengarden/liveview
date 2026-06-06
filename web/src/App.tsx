@@ -38,10 +38,10 @@ import { useAutoUpdate } from "@/hooks/useAutoUpdate";
 import { NavShell } from "./_shell";
 import type {
   Book,
+  BookProgress,
   FileContent,
   FileType,
   ProgressEntry,
-  ReadingProgress,
   RenditionInfo,
   TreeNode,
 } from "@/types";
@@ -402,36 +402,39 @@ export function App(): React.JSX.Element {
     })();
   }, [activeSlug, loadRecent]);
 
-  // Resolve each book's latest-read chapter into a display-ready entry: chapter
+  // Resolve each book's latest-read chapter into a display-ready entry — chapter
   // title (current UI edition, falling back to the node name, then the file
-  // name) plus the in-chapter scroll ratio. Keyed by book slug for the landing.
+  // name) plus the in-chapter scroll ratio — split by rendition. A text+audio
+  // book carries BOTH its newest text position and its newest audio
+  // (`.spoken.md`) position, so the shelf card shows reading and listening
+  // progress side by side; within a rendition the most-recent chapter wins.
+  // Keyed by book slug for the landing.
   const progressBySlug = useMemo(() => {
-    const out: Record<string, ReadingProgress> = {};
-    // Per book, show the progress of the rendition the card opens into (its
-    // pref/default), so a text+audio book's % matches what you'll resume. Fall
-    // back to the most-recent of any rendition if that one was never read.
-    const meta: Record<string, { matchesPref: boolean; at: number }> = {};
+    const out: Record<string, BookProgress> = {};
+    const at: Record<string, { text: number; audio: number }> = {};
     for (const r of recentProgress) {
       const slug = r.path.split("/")[0] ?? "";
-      const isAudio = r.path.endsWith(".spoken.md");
-      const prefKind = bookPrefs[slug]?.rendition ?? books.find((b) =>
-        b.slug === slug
-      )?.default_rendition ?? "text";
-      const matchesPref = isAudio === (prefKind === "audio");
-      const cur = meta[slug];
-      const better = !cur || (matchesPref && !cur.matchesPref) ||
-        (matchesPref === cur.matchesPref && r.updated_at > cur.at);
-      if (!better) continue;
-      meta[slug] = { matchesPref, at: r.updated_at };
+      const kind: "text" | "audio" = r.path.endsWith(".spoken.md")
+        ? "audio"
+        : "text";
+      const seen = (at[slug] ??= { text: 0, audio: 0 });
+      // Backend already returns one row per (book, rendition), but guard anyway
+      // so the newest chapter wins if that ever changes.
+      if (seen[kind] && r.updated_at <= seen[kind]) continue;
+      seen[kind] = r.updated_at;
       const node = findNode(tree, r.path);
       const chapterLabel =
         (node && ((uiLang && node.titles?.[uiLang]) || node.name)) ||
         r.path.split("/").pop() ||
         r.path;
-      out[slug] = { path: r.path, chapterLabel, scroll: r.scroll };
+      (out[slug] ??= {})[kind] = {
+        path: r.path,
+        chapterLabel,
+        scroll: r.scroll,
+      };
     }
     return out;
-  }, [recentProgress, tree, uiLang, bookPrefs, books]);
+  }, [recentProgress, tree, uiLang]);
 
   const handleContentUpdate = useCallback(
     (path: string, msgLang: string, fileType: FileType, content: string) => {

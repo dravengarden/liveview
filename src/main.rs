@@ -511,7 +511,7 @@ async fn api_progress_get(
 /// The latest-read chapter per book (newest first), for the landing page's
 /// "continue reading" indicators.
 async fn api_progress_recent(State(state): State<SharedState>) -> impl IntoResponse {
-    match state.store.progress_recent_per_book().await {
+    match state.store.progress_recent_per_rendition().await {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => {
             tracing::warn!(error = %e, "progress recent read failed");
