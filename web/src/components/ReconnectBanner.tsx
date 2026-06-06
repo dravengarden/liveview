@@ -1,34 +1,84 @@
-import { Box, Button, CircularProgress } from "@mui/material";
+import { Box, CircularProgress } from "@mui/material";
 import CheckIcon from "@mui/icons-material/Check";
+import { useEffect, useState } from "react";
 import { applyUpdate, useConnectionBanner } from "@/connectionStore";
 
-// Full-width banner tracking the live-reload WebSocket + build version, driven
-// by connectionStore. Three states: red "down" on a sustained reconnect failure,
-// green "reconnected" on recovery (auto-dismissed), blue "update" when a redeploy
-// is detected — the update banner is clickable and force-reloads into the new
-// build. Mounted at the very top of the layout so it spans the width and pushes
-// content down when shown.
+// Seconds the update overlay counts down before reloading on its own.
+const UPDATE_COUNTDOWN_SECS = 3;
+
+// Floating overlay shown when a redeploy is detected. Unlike the status bar it
+// never participates in layout — `position: fixed` keeps it on top of everything
+// without pushing the page down, so it never disturbs whatever the user is
+// reading/listening to. It counts 3→0 and then hard-reloads into the new build
+// by itself; there's no button to click.
+function UpdateOverlay(): React.JSX.Element {
+  const [secs, setSecs] = useState(UPDATE_COUNTDOWN_SECS);
+  useEffect(() => {
+    if (secs < 0) {
+      void applyUpdate();
+      return;
+    }
+    const t = setTimeout(() => setSecs((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [secs]);
+  return (
+    <Box
+      role="status"
+      aria-live="polite"
+      sx={{
+        position: "fixed",
+        left: 0,
+        right: 0,
+        // Clear the notch; floored so it still hangs off the top edge off-device.
+        top: "calc(env(safe-area-inset-top, 0px) + 12px)",
+        display: "flex",
+        justifyContent: "center",
+        // The overlay is purely informational — never eat taps meant for the UI
+        // underneath it.
+        pointerEvents: "none",
+        zIndex: (t) => t.zIndex.tooltip + 1,
+      }}
+    >
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          px: 2,
+          py: 0.875,
+          borderRadius: 999,
+          bgcolor: "info.main",
+          color: "info.contrastText",
+          fontSize: "0.8125rem",
+          fontWeight: 500,
+          boxShadow: 6,
+        }}
+      >
+        <span>New version · reloading in {Math.max(0, secs)}s</span>
+      </Box>
+    </Box>
+  );
+}
+
+// Full-width status bar tracking the live-reload WebSocket: red "down" on a
+// sustained reconnect failure, green "reconnected" on recovery (auto-dismissed).
+// Mounted at the very top of the layout so it spans the width and pushes content
+// down when shown. The blue "update" state instead renders as a non-intrusive
+// floating overlay (see UpdateOverlay) that reloads on its own.
 export function ReconnectBanner(): React.JSX.Element | null {
   const banner = useConnectionBanner();
   if (!banner) return null;
+  if (banner.kind === "update") return <UpdateOverlay />;
 
-  const isUpdate = banner.kind === "update";
-  const palette = banner.kind === "down"
-    ? "error"
-    : banner.kind === "reconnected"
-    ? "success"
-    : "info";
+  const palette = banner.kind === "down" ? "error" : "success";
   const label = banner.kind === "down"
     ? "Connection lost — reconnecting…"
-    : banner.kind === "reconnected"
-    ? "Reconnected"
-    : "A new version is available";
+    : "Reconnected";
 
   return (
     <Box
-      role={isUpdate ? "button" : "status"}
+      role="status"
       aria-live="polite"
-      onClick={isUpdate ? () => void applyUpdate() : undefined}
       sx={{
         flexShrink: 0,
         display: "flex",
@@ -43,28 +93,12 @@ export function ReconnectBanner(): React.JSX.Element | null {
         color: `${palette}.contrastText`,
         fontSize: "0.8125rem",
         fontWeight: 500,
-        cursor: isUpdate ? "pointer" : "default",
         zIndex: (t) => t.zIndex.appBar + 1,
       }}
     >
       {banner.kind === "down" && <CircularProgress size={14} color="inherit" thickness={5} />}
       {banner.kind === "reconnected" && <CheckIcon sx={{ fontSize: 18 }} />}
       <span>{label}</span>
-      {isUpdate && (
-        <Button
-          size="small"
-          variant="outlined"
-          color="inherit"
-          onClick={(e) => {
-            // Stop the bubble so we don't double-fire with the bar's onClick.
-            e.stopPropagation();
-            void applyUpdate();
-          }}
-          sx={{ ml: 1, py: 0, minWidth: 0 }}
-        >
-          Reload
-        </Button>
-      )}
     </Box>
   );
 }

@@ -7,7 +7,8 @@
 //                           retry stays silent);
 //   - green "reconnected" — the socket came back after a surfaced outage;
 //                           auto-dismissed after RECONNECTED_DISMISS_MS;
-//   - blue "update"       — a redeploy was detected; sticky, click force-reloads.
+//   - blue "update"       — a redeploy was detected; a floating overlay counts
+//                           down and hard-reloads on its own (no click needed).
 //
 // Only the banner is shared React state (read via useConnectionBanner); the
 // WebSocket itself stays in the single useWebSocket hook, which just reports
@@ -101,9 +102,9 @@ export function connectionLost(): number {
   return Math.min(RECONNECT_BACKOFF_MAX_MS, 1000 * 2 ** Math.max(0, attempts - 1));
 }
 
-// The blue banner's confirm action: clear every cache (so a service worker can't
-// re-serve the old bundle) then hard-reload into the new build. Ported from the
-// old useAutoUpdate hardRefresh.
+// The update overlay's reload action (fired when its countdown elapses): clear
+// every cache (so a service worker can't re-serve the old bundle) then hard-reload
+// into the new build. Ported from the old useAutoUpdate hardRefresh.
 export async function applyUpdate(): Promise<void> {
   try {
     if ("caches" in globalThis) {
