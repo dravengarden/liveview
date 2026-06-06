@@ -31,6 +31,7 @@ import {
 import { type ReactNode, useMemo, useRef, useState } from "react";
 import type { Book, BookProgress, ReadingProgress } from "@/types";
 import { useI18n } from "@/i18n";
+import { ScrollToTopButton } from "./ScrollToTopButton";
 
 interface LandingProps {
   books: Book[];
@@ -615,280 +616,312 @@ export function Landing({
 
       {
         /* ── Shelf (the scroll area) ──────────────────────────────────────────
-          Tagged + ref'd so the title tap and the app-level status-bar tap
-          (App.tsx) scroll it to top — the iOS gesture the OS can't drive on an
-          inner container. When the navbar is at the bottom, this area reaches
-          the top of the screen, so it must clear the notch itself. */
+          Wrapped in a relative box so the back-to-top button can sit absolute
+          above a bottom nav bar (which is a sibling of this area, not inside).
+          The scroller is tagged + ref'd so the title tap scrolls it to top.
+          When the navbar is at the bottom, this area reaches the top of the
+          screen, so it must clear the notch itself. */
       }
       <Box
-        ref={scrollerRef}
-        data-lv-scroller="shelf"
         sx={{
           order: navbarAtBottom ? 1 : 0,
+          position: "relative",
           flex: 1,
           minHeight: 0,
-          overflow: "auto",
-          px: { xs: 2, md: 6 },
-          pt: navbarAtBottom
-            ? "calc(env(safe-area-inset-top, 0px) + 16px)"
-            : 2,
-          pb: { xs: 4, md: 6 },
+          display: "flex",
+          flexDirection: "column",
         }}
       >
-        <Box sx={{ maxWidth: 1000, mx: "auto" }}>
-          {books.length === 0
-            ? (
-              <Typography color="text.secondary">
-                {t("landing.noMounts")}
-              </Typography>
-            )
-            : visible.length === 0
-            ? (
-              <Typography color="text.secondary">
-                {t("landing.noResults")}
-              </Typography>
-            )
-            : (
-              // Flex column stacks (see `columns` above) — a true waterfall with
-              // no JS, where every column shares `top:0` so first-card tops are
-              // flush in every engine (the CSS-multicol version drifted in
-              // WebKit). `alignItems:flex-start` keeps columns top-anchored
-              // regardless of their differing total heights.
-              <Box
-                sx={{ display: "flex", alignItems: "flex-start", gap: "20px" }}
-              >
-                {columns.map((col, ci) => (
-                  <Box
-                    key={ci}
-                    sx={{
-                      flex: 1,
-                      minWidth: 0,
-                      display: "flex",
-                      flexDirection: "column",
-                    }}
-                  >
-                    {col.map((e) => {
-                      const b = e.book;
-                      const category = e.category;
-                      const langs = b.langs;
-                      // Progress is split by rendition: a text+audio book shows
-                      // BOTH a reading and a listening meter; single-rendition
-                      // books show just the one. The "continue" line resumes the
-                      // most-recently-opened rendition.
-                      const bp = progress[b.slug];
-                      const textP = bp?.text;
-                      const audioP = bp?.audio;
-                      const pctOf = (r: ReadingProgress): number =>
-                        Math.min(100, Math.max(0, Math.round(r.scroll * 100)));
-                      const resume = textP && audioP
-                        ? (textP.updatedAt >= audioP.updatedAt ? textP : audioP)
-                        : (textP ?? audioP);
-                      // Stamps line: the book's content recency (the shelf's
-                      // default sort key) — when it was last added/edited, shown
-                      // relative. "Updated" when it changed after first
-                      // appearing, else "Added". The absolute creation date
-                      // trails as a second fact only when the book has since
-                      // been updated (otherwise it duplicates the line above).
-                      const changedAfterAdd = Boolean(
-                        b.updated_at && b.updated_at !== b.created_at,
-                      );
-                      const changedRel = fmtRelative(
-                        b.updated_at || b.created_at,
-                        now,
-                        lang,
-                      );
-                      const createdStr = fmtDate(b.created_at, lang);
-                      const stamps = [
-                        changedRel &&
-                        t(
-                          changedAfterAdd ? "landing.updatedRel" : "landing.addedRel",
-                          { time: changedRel },
-                        ),
-                        changedAfterAdd && createdStr &&
-                        t("landing.added", { date: createdStr }),
-                      ].filter((s): s is string => Boolean(s));
-                      return (
-                        <Card
-                          key={b.slug}
-                          variant="outlined"
-                          sx={{
-                            mb: "20px",
-                            borderRadius: 2,
-                            overflow: "hidden",
-                            // Skip layout/paint for off-screen cards. The shelf is a
-                            // tall list; on a phone (and right after returning from a
-                            // book, when the whole shelf re-lays-out at once) the
-                            // browser was laying out + painting every card every frame,
-                            // which made the first second of scrolling drop inputs.
-                            // content-visibility:auto lets the engine skip cards outside
-                            // the viewport; contain-intrinsic-size reserves a plausible
-                            // box so the scrollbar stays stable. Scoped to xs — that's
-                            // where the long single column makes the perf win matter;
-                            // sm+ has fewer cards per column and we keep them painted.
-                            contentVisibility: { xs: "auto", sm: "visible" },
-                            containIntrinsicSize: { xs: "0 320px", sm: "auto" },
-                            // Hover lift is a pointer affordance; on touch it fires on
-                            // every scroll-tap and forces a repaint mid-scroll, so gate
-                            // the transition + lift behind a real hover-capable pointer.
-                            "@media (hover: hover)": {
-                              transition: "box-shadow 0.18s, transform 0.18s",
-                              "&:hover": {
-                                boxShadow: 4,
-                                transform: "translateY(-2px)",
+        <Box
+          ref={scrollerRef}
+          data-lv-scroller="shelf"
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            overflow: "auto",
+            px: { xs: 2, md: 6 },
+            pt: navbarAtBottom
+              ? "calc(env(safe-area-inset-top, 0px) + 16px)"
+              : 2,
+            pb: { xs: 4, md: 6 },
+          }}
+        >
+          <Box sx={{ maxWidth: 1000, mx: "auto" }}>
+            {books.length === 0
+              ? (
+                <Typography color="text.secondary">
+                  {t("landing.noMounts")}
+                </Typography>
+              )
+              : visible.length === 0
+              ? (
+                <Typography color="text.secondary">
+                  {t("landing.noResults")}
+                </Typography>
+              )
+              : (
+                // Flex column stacks (see `columns` above) — a true waterfall with
+                // no JS, where every column shares `top:0` so first-card tops are
+                // flush in every engine (the CSS-multicol version drifted in
+                // WebKit). `alignItems:flex-start` keeps columns top-anchored
+                // regardless of their differing total heights.
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "20px",
+                  }}
+                >
+                  {columns.map((col, ci) => (
+                    <Box
+                      key={ci}
+                      sx={{
+                        flex: 1,
+                        minWidth: 0,
+                        display: "flex",
+                        flexDirection: "column",
+                      }}
+                    >
+                      {col.map((e) => {
+                        const b = e.book;
+                        const category = e.category;
+                        const langs = b.langs;
+                        // Progress is split by rendition: a text+audio book shows
+                        // BOTH a reading and a listening meter; single-rendition
+                        // books show just the one. The "continue" line resumes the
+                        // most-recently-opened rendition.
+                        const bp = progress[b.slug];
+                        const textP = bp?.text;
+                        const audioP = bp?.audio;
+                        const pctOf = (r: ReadingProgress): number =>
+                          Math.min(
+                            100,
+                            Math.max(0, Math.round(r.scroll * 100)),
+                          );
+                        const resume = textP && audioP
+                          ? (textP.updatedAt >= audioP.updatedAt
+                            ? textP
+                            : audioP)
+                          : (textP ?? audioP);
+                        // Stamps line: the book's content recency (the shelf's
+                        // default sort key) — when it was last added/edited, shown
+                        // relative. "Updated" when it changed after first
+                        // appearing, else "Added". The absolute creation date
+                        // trails as a second fact only when the book has since
+                        // been updated (otherwise it duplicates the line above).
+                        const changedAfterAdd = Boolean(
+                          b.updated_at && b.updated_at !== b.created_at,
+                        );
+                        const changedRel = fmtRelative(
+                          b.updated_at || b.created_at,
+                          now,
+                          lang,
+                        );
+                        const createdStr = fmtDate(b.created_at, lang);
+                        const stamps = [
+                          changedRel &&
+                          t(
+                            changedAfterAdd
+                              ? "landing.updatedRel"
+                              : "landing.addedRel",
+                            { time: changedRel },
+                          ),
+                          changedAfterAdd && createdStr &&
+                          t("landing.added", { date: createdStr }),
+                        ].filter((s): s is string => Boolean(s));
+                        return (
+                          <Card
+                            key={b.slug}
+                            variant="outlined"
+                            sx={{
+                              mb: "20px",
+                              borderRadius: 2,
+                              overflow: "hidden",
+                              // Skip layout/paint for off-screen cards. The shelf is a
+                              // tall list; on a phone (and right after returning from a
+                              // book, when the whole shelf re-lays-out at once) the
+                              // browser was laying out + painting every card every frame,
+                              // which made the first second of scrolling drop inputs.
+                              // content-visibility:auto lets the engine skip cards outside
+                              // the viewport; contain-intrinsic-size reserves a plausible
+                              // box so the scrollbar stays stable. Scoped to xs — that's
+                              // where the long single column makes the perf win matter;
+                              // sm+ has fewer cards per column and we keep them painted.
+                              contentVisibility: { xs: "auto", sm: "visible" },
+                              containIntrinsicSize: {
+                                xs: "0 320px",
+                                sm: "auto",
                               },
-                            },
-                          }}
-                        >
-                          {
-                            /* Standard MUI ripple. (It was dropped once because the
+                              // Hover lift is a pointer affordance; on touch it fires on
+                              // every scroll-tap and forces a repaint mid-scroll, so gate
+                              // the transition + lift behind a real hover-capable pointer.
+                              "@media (hover: hover)": {
+                                transition: "box-shadow 0.18s, transform 0.18s",
+                                "&:hover": {
+                                  boxShadow: 4,
+                                  transform: "translateY(-2px)",
+                                },
+                              },
+                            }}
+                          >
+                            {
+                              /* Standard MUI ripple. (It was dropped once because the
                         shelf was hidden with visibility:hidden while a book was
                         open, which stranded the ripple's exit animation; the
                         shelf now stays painted via opacity:0, so the ripple
                         completes normally.) */
-                          }
-                          <CardActionArea onClick={() => onOpen(b.slug)}>
-                            {
-                              /* Cover: the book's own image when it has one, else a
+                            }
+                            <CardActionArea onClick={() => onOpen(b.slug)}>
+                              {
+                                /* Cover: the book's own image when it has one, else a
                           slug-keyed gradient + the kind icon. A book that offers
                           audio carries a headphones badge (top-left). Progress no
                           longer rides the cover — it's a labeled meter row in the
                           body (cleaner than stacked cover chips). */
-                            }
-                            <BookCover book={b} category={category}>
-                              {e.hasAudio && (
-                                <Chip
-                                  icon={<AudiobookIcon />}
-                                  label={t("landing.audiobookBadge")}
-                                  size="small"
-                                  sx={{
-                                    position: "absolute",
-                                    top: 8,
-                                    left: 8,
-                                    ...coverChipSx,
-                                  }}
-                                />
-                              )}
-                            </BookCover>
-                            <Box sx={{ p: 1.75 }}>
-                              <Typography
-                                variant="subtitle1"
-                                fontWeight={700}
-                                sx={{ lineHeight: 1.3 }}
-                              >
-                                {b.label}
-                              </Typography>
-                              {b.description
-                                ? (
-                                  <Typography
-                                    variant="body2"
-                                    color="text.secondary"
+                              }
+                              <BookCover book={b} category={category}>
+                                {e.hasAudio && (
+                                  <Chip
+                                    icon={<AudiobookIcon />}
+                                    label={t("landing.audiobookBadge")}
+                                    size="small"
                                     sx={{
-                                      mt: 0.5,
-                                      // Clamp long blurbs but let short ones stay short —
-                                      // the height variance is what makes the masonry work.
-                                      display: "-webkit-box",
-                                      WebkitLineClamp: 5,
-                                      WebkitBoxOrient: "vertical",
-                                      overflow: "hidden",
+                                      position: "absolute",
+                                      top: 8,
+                                      left: 8,
+                                      ...coverChipSx,
                                     }}
-                                  >
-                                    {b.description}
-                                  </Typography>
-                                )
-                                : (
-                                  <Typography
-                                    variant="body2"
-                                    color="text.disabled"
-                                    fontStyle="italic"
-                                    sx={{ mt: 0.5 }}
-                                  >
-                                    /{b.slug}
-                                  </Typography>
+                                  />
                                 )}
-                              {
-                                /* Progress as a labeled meter per rendition —
+                              </BookCover>
+                              <Box sx={{ p: 1.75 }}>
+                                <Typography
+                                  variant="subtitle1"
+                                  fontWeight={700}
+                                  sx={{ lineHeight: 1.3 }}
+                                >
+                                  {b.label}
+                                </Typography>
+                                {b.description
+                                  ? (
+                                    <Typography
+                                      variant="body2"
+                                      color="text.secondary"
+                                      sx={{
+                                        mt: 0.5,
+                                        // Clamp long blurbs but let short ones stay short —
+                                        // the height variance is what makes the masonry work.
+                                        display: "-webkit-box",
+                                        WebkitLineClamp: 5,
+                                        WebkitBoxOrient: "vertical",
+                                        overflow: "hidden",
+                                      }}
+                                    >
+                                      {b.description}
+                                    </Typography>
+                                  )
+                                  : (
+                                    <Typography
+                                      variant="body2"
+                                      color="text.disabled"
+                                      fontStyle="italic"
+                                      sx={{ mt: 0.5 }}
+                                    >
+                                      /{b.slug}
+                                    </Typography>
+                                  )}
+                                {
+                                  /* Progress as a labeled meter per rendition —
                                   reading and/or listening, side by side. The
                                   mode icon names each; the fill + % show how
                                   far. A clean per-item meter (Audiobookshelf /
                                   Plex idiom) instead of stacked naked bars. */
-                              }
-                              {(textP || audioP) && (
-                                <Box sx={{ display: "flex", gap: 1, mt: 1.25 }}>
-                                  {textP && (
-                                    <ProgressMeter
-                                      icon={<BookIcon sx={{ fontSize: 15 }} />}
-                                      pct={pctOf(textP)}
-                                    />
-                                  )}
-                                  {audioP && (
-                                    <ProgressMeter
-                                      icon={
-                                        <AudiobookIcon sx={{ fontSize: 15 }} />
-                                      }
-                                      pct={pctOf(audioP)}
-                                    />
-                                  )}
-                                </Box>
-                              )}
-                              {
-                                /* Resume the most-recently-opened rendition. */
-                              }
-                              {resume && (
-                                <Typography
-                                  variant="caption"
-                                  color="text.secondary"
-                                  sx={{
-                                    display: "block",
-                                    mt: 1,
-                                    overflow: "hidden",
-                                    textOverflow: "ellipsis",
-                                    whiteSpace: "nowrap",
-                                  }}
-                                  title={resume.chapterLabel}
-                                >
-                                  {t("landing.continue", {
-                                    chapter: resume.chapterLabel,
-                                  })}
-                                </Typography>
-                              )}
-                              {langs.length > 1 && (
-                                <Box
-                                  sx={{
-                                    display: "flex",
-                                    flexWrap: "wrap",
-                                    gap: 0.5,
-                                    mt: 1,
-                                  }}
-                                >
-                                  {langs.map((l) => (
-                                    <Chip
-                                      key={l.lang}
-                                      label={l.label}
-                                      size="small"
-                                      variant="outlined"
-                                    />
-                                  ))}
-                                </Box>
-                              )}
-                              {stamps.length > 0 && (
-                                <Typography
-                                  variant="caption"
-                                  color="text.disabled"
-                                  sx={{ display: "block", mt: 1 }}
-                                >
-                                  {stamps.join(" · ")}
-                                </Typography>
-                              )}
-                            </Box>
-                          </CardActionArea>
-                        </Card>
-                      );
-                    })}
-                  </Box>
-                ))}
-              </Box>
-            )}
+                                }
+                                {(textP || audioP) && (
+                                  <Box
+                                    sx={{ display: "flex", gap: 1, mt: 1.25 }}
+                                  >
+                                    {textP && (
+                                      <ProgressMeter
+                                        icon={
+                                          <BookIcon sx={{ fontSize: 15 }} />
+                                        }
+                                        pct={pctOf(textP)}
+                                      />
+                                    )}
+                                    {audioP && (
+                                      <ProgressMeter
+                                        icon={
+                                          <AudiobookIcon
+                                            sx={{ fontSize: 15 }}
+                                          />
+                                        }
+                                        pct={pctOf(audioP)}
+                                      />
+                                    )}
+                                  </Box>
+                                )}
+                                {
+                                  /* Resume the most-recently-opened rendition. */
+                                }
+                                {resume && (
+                                  <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    sx={{
+                                      display: "block",
+                                      mt: 1,
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                      whiteSpace: "nowrap",
+                                    }}
+                                    title={resume.chapterLabel}
+                                  >
+                                    {t("landing.continue", {
+                                      chapter: resume.chapterLabel,
+                                    })}
+                                  </Typography>
+                                )}
+                                {langs.length > 1 && (
+                                  <Box
+                                    sx={{
+                                      display: "flex",
+                                      flexWrap: "wrap",
+                                      gap: 0.5,
+                                      mt: 1,
+                                    }}
+                                  >
+                                    {langs.map((l) => (
+                                      <Chip
+                                        key={l.lang}
+                                        label={l.label}
+                                        size="small"
+                                        variant="outlined"
+                                      />
+                                    ))}
+                                  </Box>
+                                )}
+                                {stamps.length > 0 && (
+                                  <Typography
+                                    variant="caption"
+                                    color="text.disabled"
+                                    sx={{ display: "block", mt: 1 }}
+                                  >
+                                    {stamps.join(" · ")}
+                                  </Typography>
+                                )}
+                              </Box>
+                            </CardActionArea>
+                          </Card>
+                        );
+                      })}
+                    </Box>
+                  ))}
+                </Box>
+              )}
+          </Box>
         </Box>
+        <ScrollToTopButton targetRef={scrollerRef} />
       </Box>
     </Box>
   );

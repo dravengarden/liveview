@@ -8,3 +8,4 @@ export { MiniPlayer } from "./MiniPlayer";
 export { FloatingBubble } from "./FloatingBubble";
 export { Landing } from "./Landing";
 export { ReconnectBanner } from "./ReconnectBanner";
+export { ScrollToTopButton } from "./ScrollToTopButton";

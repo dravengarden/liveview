@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { Box } from "@mui/material";
 import { READING_COLUMN_MAX } from "@/types";
 import { ImageLightbox } from "../_shell";
+import { ScrollToTopButton } from "./ScrollToTopButton";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { ensureScript, ensureStyle } from "@/ensureAsset";
 
@@ -585,6 +586,10 @@ export function MarkdownViewer({
         dangerouslySetInnerHTML={{ __html: html }}
       />
     </Box>
+      {/* Back-to-top — absolute within this relative wrapper, so it rides above
+          a bottom nav bar and the reading-progress bar without overlapping the
+          transport. */}
+      <ScrollToTopButton targetRef={containerRef} />
     </Box>
       <ImageLightbox
         images={images}
