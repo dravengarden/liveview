@@ -253,6 +253,27 @@ export function useTheme(): UseThemeResult {
         MuiToggleButton: {
           styleOverrides: {
             sizeSmall: { "@media (pointer: coarse)": { minHeight: 40, minWidth: 40 } },
+            // Selected state must be unmistakable in EVERY theme. MUI's default
+            // selected look is only a ~8–16% action tint, which all but vanishes
+            // on the dark/night palettes — the read/listen toggle (and the
+            // language / theme-mode toggles) read almost the same whether on or
+            // off. Give the selected segment a solid accent fill with a computed
+            // contrast-text glyph, against a muted (text.secondary) unselected
+            // segment: clearly "you-are-here", contrast-safe on all four
+            // palettes, without becoming a saturated bar (ui.md §6 — the accent
+            // already encodes which app you're in). MUI derives `primary.dark`
+            // and `primary.contrastText` from the per-theme `primary.main`, so
+            // this stays correct as the palette changes.
+            root: ({ theme }) => ({
+              color: theme.palette.text.secondary,
+              "&.Mui-selected": {
+                color: theme.palette.primary.contrastText,
+                backgroundColor: theme.palette.primary.main,
+                "&:hover": {
+                  backgroundColor: theme.palette.primary.dark,
+                },
+              },
+            }),
           },
         },
       },
