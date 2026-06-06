@@ -23,14 +23,35 @@ const DEFAULT_SETTINGS: MenuBarSettings = {
   lineHeight: LINE_HEIGHT_DEFAULT,
 };
 
+/** Coerce a stored value into a valid setting, falling back to `def` when it's
+ *  missing or out of range. Crucial for migration: `contentMaxWidth` used to be
+ *  an absolute reading-column width (hundreds–thousands of px) and is now a
+ *  small left/right MARGIN (0–64). A stale large value (e.g. 1000) applied as
+ *  `px` padding collapses the reading column to ~1 glyph wide, so any
+ *  out-of-band value must snap back to the default rather than be trusted. */
+function sanitize(n: unknown, min: number, max: number, def: number): number {
+  const v = Number(n);
+  return inRange(v, min, max) ? v : def;
+}
+
 function getStoredSettings(): MenuBarSettings {
   try {
     const stored = localStorage.getItem(SETTINGS_KEY);
     if (stored) {
       const parsed = JSON.parse(stored) as Partial<MenuBarSettings>;
       return {
-        contentMaxWidth: parsed.contentMaxWidth ?? DEFAULT_SETTINGS.contentMaxWidth,
-        lineHeight: parsed.lineHeight ?? DEFAULT_SETTINGS.lineHeight,
+        contentMaxWidth: sanitize(
+          parsed.contentMaxWidth,
+          CONTENT_WIDTH_MIN,
+          CONTENT_WIDTH_MAX,
+          DEFAULT_SETTINGS.contentMaxWidth,
+        ),
+        lineHeight: sanitize(
+          parsed.lineHeight,
+          LINE_HEIGHT_MIN,
+          LINE_HEIGHT_MAX,
+          DEFAULT_SETTINGS.lineHeight,
+        ),
       };
     }
   } catch {
@@ -46,7 +67,9 @@ interface UseSettingsResult {
 }
 
 export function useSettings(): UseSettingsResult {
-  const [menuBarSettings, setMenuBarSettings] = useState<MenuBarSettings>(getStoredSettings);
+  const [menuBarSettings, setMenuBarSettings] = useState<MenuBarSettings>(
+    getStoredSettings,
+  );
 
   const persist = useCallback((next: MenuBarSettings) => {
     setMenuBarSettings(next);
@@ -58,7 +81,7 @@ export function useSettings(): UseSettingsResult {
       persist({ ...getStoredSettings(), contentMaxWidth: width });
       putServerSetting(CONTENT_WIDTH_SETTING_KEY, String(width));
     },
-    [persist]
+    [persist],
   );
 
   const setLineHeight = useCallback(
@@ -66,7 +89,7 @@ export function useSettings(): UseSettingsResult {
       persist({ ...getStoredSettings(), lineHeight: lh });
       putServerSetting(LINE_HEIGHT_SETTING_KEY, String(lh));
     },
-    [persist]
+    [persist],
   );
 
   // Reconcile to the server (cross-device truth) once on mount. Apply only the
