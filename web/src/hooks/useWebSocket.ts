@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from "react";
 import type { WsMessage, TreeNode, FileType } from "@/types";
+import { connectionLost, connectionReady } from "@/connectionStore";
 
 interface UseWebSocketOptions {
   onContentUpdate: (path: string, lang: string, fileType: FileType, content: string) => void;
@@ -15,7 +16,9 @@ export function useWebSocket({ onContentUpdate, onTreeUpdate }: UseWebSocketOpti
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
 
     ws.onopen = () => {
-      console.log("WebSocket connected");
+      // Resets the reconnect counter, flashes the green banner if an outage was
+      // surfaced, and probes /version for a redeploy (see connectionStore).
+      connectionReady();
     };
 
     ws.onmessage = (event: MessageEvent<string>) => {
@@ -32,8 +35,9 @@ export function useWebSocket({ onContentUpdate, onTreeUpdate }: UseWebSocketOpti
     };
 
     ws.onclose = () => {
-      console.log("WebSocket disconnected, reconnecting...");
-      reconnectTimeoutRef.current = setTimeout(connect, 1000);
+      // Raises the red banner past the failure threshold and hands back the
+      // exponential-backoff delay to wait before retrying.
+      reconnectTimeoutRef.current = setTimeout(connect, connectionLost());
     };
 
     ws.onerror = (error) => {

@@ -73,6 +73,43 @@ mod embedded_assets {
     }
 }
 
+/// `GET /api/version` — a build id the SPA polls after each WS reconnect (and when
+/// the tab returns to the foreground) to notice a redeploy. We return the
+/// content-hashed entry-bundle name Vite stamps into index.html
+/// (`assets/index-<hash>.js`): it changes iff the shipped UI changes, so a tab
+/// can compare it against the one it loaded with and, on a mismatch, surface the
+/// blue "new version" banner that force-reloads on confirm. No hashing of our
+/// own — the bundle name already IS a content hash. Mirrors cowboy's `/version`.
+async fn version() -> Response {
+    match index_html_source().as_deref().and_then(entry_bundle) {
+        Some(v) => Json(serde_json::json!({ "version": v })).into_response(),
+        None => (StatusCode::NOT_FOUND, "UI not built").into_response(),
+    }
+}
+
+/// Pull Vite's content-hashed entry-bundle name out of index.html. Returns e.g.
+/// `assets/index-D4f8aB2c.js`.
+fn entry_bundle(html: &str) -> Option<String> {
+    let start = html.find("assets/index-")?;
+    let end = html[start..].find(".js")?;
+    Some(html[start..start + end + 3].to_owned())
+}
+
+/// Read the current index.html so `/version` can extract the bundle id. Embedded
+/// builds (the deployed binary) read it from the compiled-in dist; dev builds
+/// (`cargo run` without the `embedded` feature, behind `vite dev`) read it off
+/// disk — there the bundle id only changes after a `vite build`, but the
+/// endpoint stays well-defined in both modes.
+#[cfg(feature = "embedded")]
+fn index_html_source() -> Option<String> {
+    embedded_assets::index_html().map(str::to_owned)
+}
+
+#[cfg(not(feature = "embedded"))]
+fn index_html_source() -> Option<String> {
+    std::fs::read_to_string("web/dist/index.html").ok()
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -306,6 +343,10 @@ async fn run(cli: Cli, server: config::ServerCfg) {
         .route("/api/progress", get(api_progress_get).put(api_progress_put))
         .route("/api/progress/recent", get(api_progress_recent))
         .route("/api/settings", get(api_settings_get).put(api_settings_put))
+        // Under /api/ so the service worker treats it network-first (sw.js):
+        // a top-level /version would fall into the cache-first bucket and serve
+        // a stale build id right after a deploy, defeating the whole check.
+        .route("/api/version", get(version))
         .route("/ws", get(server::ws::ws_handler))
         .with_state(state.clone());
 

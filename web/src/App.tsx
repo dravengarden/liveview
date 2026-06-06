@@ -20,6 +20,7 @@ import {
   ContentViewer,
   FloatingBubble,
   Landing,
+  ReconnectBanner,
   SettingsButton,
   Sidebar,
 } from "@/components";
@@ -275,7 +276,7 @@ export function App(): React.JSX.Element {
   // The root audio engine: playback + the popup live above every view, so
   // navigating never stops the audio nor closes the popup. We only need to seed
   // playback (`playChapter`) and raise the popup into focus (`setExpanded`).
-  const { playChapter: audioPlayChapter, syncNotice, playing, nowPlaying } =
+  const { playChapter: audioPlayChapter, syncNotice, nowPlaying } =
     useAudioPlayer();
   // Mirror of `nowPlaying` for the view→engine effect's guard. That effect must
   // react ONLY to view-led navigation (currentPath), never to engine-led chapter
@@ -284,10 +285,11 @@ export function App(): React.JSX.Element {
   const nowPlayingRef = useRef(nowPlaying);
   nowPlayingRef.current = nowPlaying;
 
-  // Auto-update the installed PWA when a newer bundle is deployed (an iOS
-  // home-screen PWA otherwise resumes its frozen page and never picks up a
-  // deploy). Hard-refreshes on foreground; deferred while audio plays.
-  useAutoUpdate(playing);
+  // Detect a deploy when the tab returns to the foreground (an iOS home-screen
+  // PWA otherwise resumes its frozen page and never picks one up) and raise the
+  // blue "new version" banner instead of yanking the page out from under the
+  // reader/listener. See connectionStore + ReconnectBanner.
+  useAutoUpdate();
 
   // When a fresh load pulls a newer playback position from another device, the
   // audio engine raises `syncNotice`; surface it through the shared snackbar
@@ -992,6 +994,11 @@ export function App(): React.JSX.Element {
           bgcolor: "background.default",
         }}
       >
+        {
+          /* Connection / version banner, above everything so it spans the width
+              and pushes the view stack + mini-player down when shown. */
+        }
+        <ReconnectBanner />
         {
           /* The view stack (bookshelf + open book) fills the space above the
               persistent mini-player, which takes its own row below so it pushes
