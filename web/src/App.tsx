@@ -26,6 +26,7 @@ import {
 } from "@/components";
 import {
   useFont,
+  useNavbarAtBottom,
   useProgress,
   useSettings,
   useTheme,
@@ -273,6 +274,9 @@ export function App(): React.JSX.Element {
   const { theme, muiTheme, variant, mode, setVariant, setMode } = useTheme();
   const { menuBarSettings, setContentMaxWidth, setLineHeight, setFontScale } =
     useSettings();
+  // On the compact tier with the "bottom" navbar preference, both the in-book
+  // NavShell and the bookshelf bar drop to the bottom (mobile-browser style).
+  const navbarAtBottom = useNavbarAtBottom();
   const { fontId, setFont } = useFont();
   // The root audio engine: playback + the popup live above every view, so
   // navigating never stops the audio nor closes the popup. We only need to seed
@@ -1075,11 +1079,13 @@ export function App(): React.JSX.Element {
               onOpen={enterBook}
               onHome={backToLanding}
               settingsSlot={settingsButton}
+              navbarAtBottom={navbarAtBottom}
             />
           </Box>
           {activeSlug !== null && (
             <NavShell
               appKey="liveview"
+              barPosition={navbarAtBottom ? "bottom" : "top"}
               title={
                 <Box
                   component="span"

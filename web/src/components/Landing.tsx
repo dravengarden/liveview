@@ -45,6 +45,9 @@ interface LandingProps {
   onHome: () => void;
   /** The shared SettingsSheet (gear + responsive sheet), placed in the header. */
   settingsSlot: ReactNode;
+  /** On the mobile tier with the "bottom" navbar preference, the bookshelf bar
+   *  drops below the shelf (mobile-browser style), matching the in-book bar. */
+  navbarAtBottom: boolean;
 }
 
 /** The shelf splits into three mutually-exclusive kinds, each with its own card
@@ -307,6 +310,7 @@ export function Landing({
   onOpen,
   onHome,
   settingsSlot,
+  navbarAtBottom,
 }: LandingProps): React.JSX.Element {
   const { t, lang } = useI18n();
   const [query, setQuery] = useState("");
@@ -404,36 +408,40 @@ export function Landing({
 
   return (
     <Box
-      ref={scrollerRef}
-      // Tagged so the app-level status-bar tap target (App.tsx) can scroll the
-      // shelf to top — the iOS "tap the status bar" gesture, which the native OS
-      // can't drive here because we scroll this inner container, not the window.
-      data-lv-scroller="shelf"
       sx={{
         flex: 1,
         minHeight: 0,
-        overflow: "auto",
+        overflow: "hidden",
         display: "flex",
         flexDirection: "column",
       }}
     >
       {
-        /* ── Sticky navbar ──────────────────────────────────────────────────
+        /* ── Navbar ──────────────────────────────────────────────────────────
           Neutral chrome (background.default + divider, not a saturated bar —
-          ui.md §4) that sticks to the top of the scroll container, so settings,
-          the launcher, search and the filters stay reachable however far the
-          shelf is scrolled. It owns the safe-area top inset so its background
-          covers the notch. */
+          ui.md §4), a pinned flex sibling of the scroll area so settings,
+          search and the filters stay reachable however far the shelf scrolls.
+          On the mobile tier with the "bottom" preference it drops below the
+          shelf via flex `order` (mobile-browser style), owning the
+          home-indicator inset instead of the notch. */
       }
       <Box
         sx={{
-          position: "sticky",
-          top: 0,
+          order: navbarAtBottom ? 2 : 0,
+          flexShrink: 0,
           zIndex: 5,
           bgcolor: "background.default",
-          borderBottom: 1,
           borderColor: "divider",
-          pt: "calc(env(safe-area-inset-top, 0px) + 8px)",
+          ...(navbarAtBottom
+            ? {
+              borderTop: 1,
+              pt: 1,
+              pb: "calc(env(safe-area-inset-bottom, 0px) + 8px)",
+            }
+            : {
+              borderBottom: 1,
+              pt: "calc(env(safe-area-inset-top, 0px) + 8px)",
+            }),
           px: { xs: 2, md: 6 },
         }}
       >
@@ -605,8 +613,28 @@ export function Landing({
         </Box>
       </Box>
 
-      {/* ── Shelf ──────────────────────────────────────────────────────────── */}
-      <Box sx={{ px: { xs: 2, md: 6 }, pt: 2, pb: { xs: 4, md: 6 } }}>
+      {
+        /* ── Shelf (the scroll area) ──────────────────────────────────────────
+          Tagged + ref'd so the title tap and the app-level status-bar tap
+          (App.tsx) scroll it to top — the iOS gesture the OS can't drive on an
+          inner container. When the navbar is at the bottom, this area reaches
+          the top of the screen, so it must clear the notch itself. */
+      }
+      <Box
+        ref={scrollerRef}
+        data-lv-scroller="shelf"
+        sx={{
+          order: navbarAtBottom ? 1 : 0,
+          flex: 1,
+          minHeight: 0,
+          overflow: "auto",
+          px: { xs: 2, md: 6 },
+          pt: navbarAtBottom
+            ? "calc(env(safe-area-inset-top, 0px) + 16px)"
+            : 2,
+          pb: { xs: 4, md: 6 },
+        }}
+      >
         <Box sx={{ maxWidth: 1000, mx: "auto" }}>
           {books.length === 0
             ? (
