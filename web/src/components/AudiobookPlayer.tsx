@@ -347,13 +347,15 @@ export function AudiobookPlayer(
         data-lv-scroller="reader"
         onWheel={cancelFollow}
         onTouchMove={cancelFollow}
-        sx={{ flex: 1, overflowY: "auto", px: 3, py: 4 }}
+        // Horizontal padding IS the reading MARGIN setting (same as the text
+        // reader's MarkdownViewer), so the read-along gutter tracks Settings →
+        // Reading → Margin instead of a hardcoded value.
+        sx={{ flex: 1, overflowY: "auto", px: `${contentMaxWidth}px`, py: 4 }}
       >
         <Box
           sx={{
             maxWidth: READING_COLUMN_MAX,
             mx: "auto",
-            px: `${contentMaxWidth}px`,
             fontFamily: "var(--lv-reading-font)",
             lineHeight,
             // rem so it tracks the app-wide font-size (root font-size) setting.
