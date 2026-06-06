@@ -27,6 +27,9 @@ import { useI18n } from "@/i18n";
 interface AudiobookPlayerProps {
   contentMaxWidth: number;
   lineHeight: number;
+  /** Font-size multiplier for the read-along text (1 = unchanged), shared with
+   *  the text reader so both honour the same Reading → Font size setting. */
+  fontScale: number;
   /** Persist playback progress (chapter path + 0..1 fraction) — same store as
    *  text reading, so the shelf card can show an audio %. */
   onSaveScroll?: (path: string, ratio: number) => void;
@@ -59,7 +62,7 @@ function fmtSleep(min: number): string {
  *  and the transport. All playback state comes from the root audio engine, so
  *  this view is purely a window onto it — leaving it never stops the audio. */
 export function AudiobookPlayer(
-  { contentMaxWidth, lineHeight, onSaveScroll }: AudiobookPlayerProps,
+  { contentMaxWidth, lineHeight, fontScale, onSaveScroll }: AudiobookPlayerProps,
 ): React.JSX.Element {
   const { t } = useI18n();
   const {
@@ -356,7 +359,8 @@ export function AudiobookPlayer(
             px: `${contentMaxWidth}px`,
             fontFamily: "var(--lv-reading-font)",
             lineHeight,
-            fontSize: "1.05rem",
+            // Read-along base size × the reader's font-size setting.
+            fontSize: `${1.05 * fontScale}rem`,
           }}
         >
           {loading && sentences.length === 0

@@ -31,6 +31,7 @@ interface SettingsButtonProps {
   onFontChange: (id: string) => void;
   onContentMaxWidthChange: (width: number) => void;
   onLineHeightChange: (lh: number) => void;
+  onFontScaleChange: (scale: number) => void;
 }
 
 const MODE_OPTIONS: ThemeMode[] = ["auto", "light", "dark"];
@@ -39,6 +40,9 @@ const MODE_OPTIONS: ThemeMode[] = ["auto", "light", "dark"];
 // touch and a number field would pop the keyboard; a small set taps cleanly.
 const MARGIN_PRESETS = [0, 8, 16, 24, 32, 48, 64];
 const LINE_HEIGHT_PRESETS = [1.4, 1.5, 1.6, 1.7, 1.8, 2.0, 2.2];
+// Reading font-size multipliers (1 = unchanged). Mostly an enlarge range, since
+// readers reach for this to make body text bigger; shown as percentages.
+const FONT_SCALE_PRESETS = [0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6];
 
 /** Snap a stored value (e.g. from the old slider) to the nearest preset, so the
  *  dropdown always shows something selected. */
@@ -122,6 +126,7 @@ export function SettingsButton({
   onFontChange,
   onContentMaxWidthChange,
   onLineHeightChange,
+  onFontScaleChange,
 }: SettingsButtonProps): React.JSX.Element {
   const { t, lang, setLang } = useI18n();
   // The font picker is collapsed by default — its 7 preview cards would
@@ -347,6 +352,27 @@ export function SettingsButton({
                 <ExpandIcon sx={{ color: "text.secondary" }} />
               </Box>
             )}
+
+          {/* Reading font size — a multiplier on the reading column's text
+              (shown as a percentage), leaving the chrome at its fixed size. */}
+          <Row
+            label={t("settings.fontSize")}
+            desc={t("settings.fontSizeDesc")}
+            control={
+              <Select
+                size="small"
+                value={nearest(menuBarSettings.fontScale, FONT_SCALE_PRESETS)}
+                onChange={(e) => onFontScaleChange(Number(e.target.value))}
+                sx={{ minWidth: 104 }}
+              >
+                {FONT_SCALE_PRESETS.map((v) => (
+                  <MenuItem key={v} value={v}>
+                    {`${Math.round(v * 100)}%`}
+                  </MenuItem>
+                ))}
+              </Select>
+            }
+          />
 
           {/* Reading margin — left/right padding of the reading column (works on
               mobile, unlike a max-width). */}

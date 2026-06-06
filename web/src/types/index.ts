@@ -165,6 +165,10 @@ export interface MenuBarSettings {
   contentMaxWidth: number;
   /** Line height applied to markdown body content. */
   lineHeight: number;
+  /** Font-size multiplier for the reading column (1 = unchanged). Scales the
+   *  markdown body and its em-relative headings/code; the surrounding chrome
+   *  keeps its fixed size — same reader-scoped scope as margin/line-height. */
+  fontScale: number;
 }
 
 // Reading MARGIN range (px of left/right padding). A fixed column cap
@@ -181,3 +185,10 @@ export const LINE_HEIGHT_MIN = 1.3;
 export const LINE_HEIGHT_MAX = 2.2;
 export const LINE_HEIGHT_STEP = 0.1;
 export const LINE_HEIGHT_DEFAULT = 1.8;
+
+// Reading font-size multiplier. Default 1 = unchanged (so existing readers see
+// no jump); the clamp band is wider than the picker's presets so a hand-edited
+// value is honoured but garbage snaps back.
+export const FONT_SCALE_MIN = 0.6;
+export const FONT_SCALE_MAX = 2.0;
+export const FONT_SCALE_DEFAULT = 1.0;
