@@ -253,7 +253,12 @@ export function FloatingBubble({
       el.style.left = `${x}px`;
       el.style.top = `${y}px`;
     }
-  }, [pos.x, pos.y, dragging]);
+    // `shown` is a dep so this re-runs when the bubble (un)mounts: it's null
+    // while hidden, so on reappear the freshly-mounted element must get its
+    // inline left/top set even when `pos` is unchanged — otherwise it falls to
+    // its static flow position (the bottom of the page → off-screen), which was
+    // the real "no bubble on my phone" bug.
+  }, [pos.x, pos.y, dragging, shown]);
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
