@@ -8,7 +8,6 @@ import {
   FormControl,
   IconButton,
   InputAdornment,
-  LinearProgress,
   ListItemText,
   MenuItem,
   OutlinedInput,
@@ -19,6 +18,7 @@ import {
   useMediaQuery,
   useTheme,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import {
   Article as DocsIcon,
   AutoStories as ShelfIcon,
@@ -218,6 +218,67 @@ function fmtRelative(ms: number, now: number, lang: string): string | null {
     if (abs >= per) return rtf.format(Math.round(sec / per), unit);
   }
   return rtf.format(Math.round(sec), "second");
+}
+
+/** A compact progress "meter pill": a rounded track with an accent fill to
+ *  `pct`, the mode icon + the % riding on top. Two sit side by side on a
+ *  text+audio card (reading / listening); one fills the row on a single-
+ *  rendition card. This per-item meter (the Audiobookshelf / Plex idiom)
+ *  replaces the old stacked cover chips + naked bottom bars, and stays legible
+ *  in every theme — the fill is a soft accent wash, so the label reads over
+ *  both its filled and unfilled halves. */
+function ProgressMeter(
+  { icon, pct }: { icon: ReactNode; pct: number },
+): React.JSX.Element {
+  return (
+    <Box
+      sx={{
+        position: "relative",
+        flex: 1,
+        minWidth: 0,
+        height: 26,
+        borderRadius: 999,
+        overflow: "hidden",
+        bgcolor: "action.hover",
+        display: "flex",
+        alignItems: "center",
+      }}
+    >
+      <Box
+        sx={{
+          position: "absolute",
+          inset: 0,
+          right: "auto",
+          width: `${pct}%`,
+          bgcolor: (t) => alpha(t.palette.primary.main, 0.3),
+        }}
+      />
+      <Box
+        sx={{
+          position: "relative",
+          display: "flex",
+          alignItems: "center",
+          gap: 0.5,
+          px: 1,
+          width: "100%",
+          color: "text.secondary",
+          "& svg": { flexShrink: 0 },
+        }}
+      >
+        {icon}
+        <Typography
+          variant="caption"
+          sx={{
+            fontWeight: 600,
+            fontVariantNumeric: "tabular-nums",
+            color: "text.primary",
+          }}
+        >
+          {pct}%
+        </Typography>
+      </Box>
+    </Box>
+  );
 }
 
 /**
@@ -596,21 +657,17 @@ export function Landing({
                       const category = e.category;
                       const langs = b.langs;
                       // Progress is split by rendition: a text+audio book shows
-                      // BOTH a reading (book) and a listening (audio) indicator;
-                      // single-rendition books show just the one. `both` drives
-                      // the per-mode icons that disambiguate the two.
+                      // BOTH a reading and a listening meter; single-rendition
+                      // books show just the one. The "continue" line resumes the
+                      // most-recently-opened rendition.
                       const bp = progress[b.slug];
                       const textP = bp?.text;
                       const audioP = bp?.audio;
-                      const both = Boolean(textP && audioP);
                       const pctOf = (r: ReadingProgress): number =>
                         Math.min(100, Math.max(0, Math.round(r.scroll * 100)));
-                      const continues = [
-                        textP && { kind: "text" as const, r: textP },
-                        audioP && { kind: "audio" as const, r: audioP },
-                      ].filter((c): c is { kind: "text" | "audio"; r: ReadingProgress } =>
-                        Boolean(c)
-                      );
+                      const resume = textP && audioP
+                        ? (textP.updatedAt >= audioP.updatedAt ? textP : audioP)
+                        : (textP ?? audioP);
                       // Stamps line: how recently you opened the book (relative,
                       // the shelf's default sort key), then its deploy-time
                       // created/updated dates. "Last opened" only shows once the
@@ -676,11 +733,9 @@ export function Landing({
                             {
                               /* Cover: the book's own image when it has one, else a
                           slug-keyed gradient + the kind icon. A book that offers
-                          audio carries a headphones badge (top-left); progress
-                          rides top-right — a text+audio book shows two stacked %
-                          chips (reading + listening, each with its mode icon so
-                          they're unambiguous), a single-rendition book shows one
-                          plain % chip. */
+                          audio carries a headphones badge (top-left). Progress no
+                          longer rides the cover — it's a labeled meter row in the
+                          body (cleaner than stacked cover chips). */
                             }
                             <BookCover book={b} category={category}>
                               {e.hasAudio && (
@@ -695,42 +750,6 @@ export function Landing({
                                     ...coverChipSx,
                                   }}
                                 />
-                              )}
-                              {(textP || audioP) && (
-                                <Box
-                                  sx={{
-                                    position: "absolute",
-                                    top: 8,
-                                    right: 8,
-                                    display: "flex",
-                                    flexDirection: "column",
-                                    alignItems: "flex-end",
-                                    gap: 0.5,
-                                  }}
-                                >
-                                  {textP && (
-                                    <Chip
-                                      icon={both ? <BookIcon /> : undefined}
-                                      label={`${pctOf(textP)}%`}
-                                      size="small"
-                                      sx={{
-                                        fontVariantNumeric: "tabular-nums",
-                                        ...coverChipSx,
-                                      }}
-                                    />
-                                  )}
-                                  {audioP && (
-                                    <Chip
-                                      icon={both ? <AudiobookIcon /> : undefined}
-                                      label={`${pctOf(audioP)}%`}
-                                      size="small"
-                                      sx={{
-                                        fontVariantNumeric: "tabular-nums",
-                                        ...coverChipSx,
-                                      }}
-                                    />
-                                  )}
-                                </Box>
                               )}
                             </BookCover>
                             <Box sx={{ p: 1.75 }}>
@@ -770,53 +789,51 @@ export function Landing({
                                   </Typography>
                                 )}
                               {
-                                /* "Continue" lines, one per rendition in
-                                  progress. With both, each is prefixed by its
-                                  mode icon (the "Continue:" label is dropped —
-                                  the icon carries it) so reading vs listening
-                                  resume points are distinct; with one, the
-                                  familiar "Continue: <chapter>" line. */
+                                /* Progress as a labeled meter per rendition —
+                                  reading and/or listening, side by side. The
+                                  mode icon names each; the fill + % show how
+                                  far. A clean per-item meter (Audiobookshelf /
+                                  Plex idiom) instead of stacked naked bars. */
                               }
-                              {continues.map(({ kind, r }) => (
+                              {(textP || audioP) && (
+                                <Box sx={{ display: "flex", gap: 1, mt: 1.25 }}>
+                                  {textP && (
+                                    <ProgressMeter
+                                      icon={<BookIcon sx={{ fontSize: 15 }} />}
+                                      pct={pctOf(textP)}
+                                    />
+                                  )}
+                                  {audioP && (
+                                    <ProgressMeter
+                                      icon={
+                                        <AudiobookIcon sx={{ fontSize: 15 }} />
+                                      }
+                                      pct={pctOf(audioP)}
+                                    />
+                                  )}
+                                </Box>
+                              )}
+                              {
+                                /* Resume the most-recently-opened rendition. */
+                              }
+                              {resume && (
                                 <Typography
-                                  key={kind}
                                   variant="caption"
                                   color="text.secondary"
                                   sx={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    gap: 0.5,
+                                    display: "block",
                                     mt: 1,
-                                    minWidth: 0,
+                                    overflow: "hidden",
+                                    textOverflow: "ellipsis",
+                                    whiteSpace: "nowrap",
                                   }}
-                                  title={r.chapterLabel}
+                                  title={resume.chapterLabel}
                                 >
-                                  {both &&
-                                    (kind === "audio"
-                                      ? (
-                                        <AudiobookIcon
-                                          sx={{ fontSize: 15, flexShrink: 0 }}
-                                        />
-                                      )
-                                      : (
-                                        <BookIcon
-                                          sx={{ fontSize: 15, flexShrink: 0 }}
-                                        />
-                                      ))}
-                                  <Box
-                                    component="span"
-                                    sx={{
-                                      overflow: "hidden",
-                                      textOverflow: "ellipsis",
-                                      whiteSpace: "nowrap",
-                                    }}
-                                  >
-                                    {both ? r.chapterLabel : t("landing.continue", {
-                                      chapter: r.chapterLabel,
-                                    })}
-                                  </Box>
+                                  {t("landing.continue", {
+                                    chapter: resume.chapterLabel,
+                                  })}
                                 </Typography>
-                              ))}
+                              )}
                               {langs.length > 1 && (
                                 <Box
                                   sx={{
@@ -846,31 +863,6 @@ export function Landing({
                                 </Typography>
                               )}
                             </Box>
-                            {
-                              /* Bottom progress: one 3px bar per rendition in
-                                progress (reading above listening). When both
-                                show, the listening bar is dimmed to the same
-                                accent at half strength — two intensities of one
-                                hue read clearly in every theme (a distinct
-                                secondary colour would clash with sepia/night),
-                                and the cover chips' icons name which is which. */
-                            }
-                            {textP && (
-                              <LinearProgress
-                                variant="determinate"
-                                value={pctOf(textP)}
-                                aria-hidden
-                                sx={{ height: 3 }}
-                              />
-                            )}
-                            {audioP && (
-                              <LinearProgress
-                                variant="determinate"
-                                value={pctOf(audioP)}
-                                aria-hidden
-                                sx={{ height: 3, opacity: both ? 0.5 : 1 }}
-                              />
-                            )}
                           </CardActionArea>
                         </Card>
                       );
