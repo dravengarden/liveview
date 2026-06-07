@@ -183,14 +183,6 @@ function BookCover({
   );
 }
 
-/** A pill that rides on a card cover (audio badge, progress %). Dark scrim so
- *  white text/icon reads over any gradient or cover image. */
-const coverChipSx = {
-  bgcolor: "rgba(0,0,0,0.4)",
-  color: "#fff",
-  "& .MuiChip-icon": { color: "#fff" },
-} as const;
-
 /** Cover badge for a book that ships BOTH renditions: a compact segmented switch
  *  (📖 Book | 🎧 Audiobook) that shows both supported formats AND which one is
  *  current (the last-used, highlighted). Each segment opens the book directly in
@@ -876,27 +868,50 @@ export function Landing({
                                     />
                                   )
                                   : (
-                                    <Chip
-                                      icon={category === "docs"
-                                        ? <DocsIcon />
-                                        : e.hasAudio
-                                        ? <AudiobookIcon />
-                                        : <BookIcon />}
-                                      label={t(
+                                    // Single-format kind badge — ICON ONLY (no
+                                    // text): the glyph already names the kind and
+                                    // the big cover icon repeats it, so the label
+                                    // was redundant. Matches the icon-only switch.
+                                    <Box
+                                      aria-label={t(
                                         category === "docs"
                                           ? "landing.docsBadge"
                                           : e.hasAudio
                                           ? "landing.audiobookBadge"
                                           : "landing.bookBadge",
                                       )}
-                                      size="small"
                                       sx={{
                                         position: "absolute",
                                         top: 8,
                                         left: 8,
-                                        ...coverChipSx,
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        px: 1,
+                                        py: 0.5,
+                                        borderRadius: 5,
+                                        bgcolor: "rgba(0,0,0,0.45)",
+                                        color: "#fff",
                                       }}
-                                    />
+                                    >
+                                      {category === "docs"
+                                        ? (
+                                          <DocsIcon
+                                            sx={{ fontSize: rem(17) }}
+                                          />
+                                        )
+                                        : e.hasAudio
+                                        ? (
+                                          <AudiobookIcon
+                                            sx={{ fontSize: rem(17) }}
+                                          />
+                                        )
+                                        : (
+                                          <BookIcon
+                                            sx={{ fontSize: rem(17) }}
+                                          />
+                                        )}
+                                    </Box>
                                   )}
                               </BookCover>
                               <Box sx={{ p: 1.75 }}>
