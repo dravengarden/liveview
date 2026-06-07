@@ -237,6 +237,8 @@ function CoverRenditionSwitch({
             key={s.kind}
             role="button"
             tabIndex={0}
+            // Label only for a11y — the switch is icon-only (mirrors the in-book
+            // read↔listen widget); the two glyphs are self-explanatory.
             aria-label={s.label}
             aria-pressed={active}
             onMouseDown={(e) => e.stopPropagation()}
@@ -248,24 +250,16 @@ function CoverRenditionSwitch({
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
-              gap: 0.5,
-              px: 0.85,
-              py: 0.4,
-              color: active ? "#fff" : "rgba(255,255,255,0.62)",
+              justifyContent: "center",
+              px: 1,
+              py: 0.5,
+              color: active ? "#fff" : "rgba(255,255,255,0.6)",
               bgcolor: active ? "primary.main" : "transparent",
               transition: "background-color .15s, color .15s",
               "&:hover": { color: "#fff" },
             }}
           >
-            <s.Icon sx={{ fontSize: rem(15) }} />
-            {active && (
-              <Typography
-                variant="caption"
-                sx={{ fontWeight: 700, lineHeight: 1, color: "inherit" }}
-              >
-                {s.label}
-              </Typography>
-            )}
+            <s.Icon sx={{ fontSize: rem(17) }} />
           </Box>
         );
       })}

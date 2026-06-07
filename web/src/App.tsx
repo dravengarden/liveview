@@ -1007,8 +1007,9 @@ export function App(): React.JSX.Element {
           }}
         >
           {([
-            // Fixed icon size (NOT rem): chrome shouldn't scale with the reading
-            // font-size setting, and a fixed glyph stays centred in the thumb.
+            // Icon-only read ↔ listen switch (no text — the glyphs are clear).
+            // Glyphs are rem so they scale with the font setting like every other
+            // icon; the thumb (px) stays fixed so the tap target holds.
             {
               kind: "text",
               icon: <ReadIcon sx={{ fontSize: rem(20) }} />,
