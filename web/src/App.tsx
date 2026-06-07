@@ -1122,7 +1122,6 @@ export function App(): React.JSX.Element {
               books={books}
               progress={progressBySlug}
               onOpen={enterBook}
-              onHome={backToLanding}
               settingsSlot={settingsButton}
               navbarAtBottom={navbarAtBottom}
             />

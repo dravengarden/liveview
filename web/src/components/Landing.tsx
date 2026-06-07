@@ -1,6 +1,5 @@
 import {
   Box,
-  ButtonBase,
   Card,
   CardActionArea,
   Checkbox,
@@ -21,7 +20,6 @@ import {
 import { alpha } from "@mui/material/styles";
 import {
   Article as DocsIcon,
-  AutoStories as ShelfIcon,
   Clear as ClearIcon,
   FilterList as FilterIcon,
   Headphones as AudiobookIcon,
@@ -43,9 +41,7 @@ interface LandingProps {
   /** Open a book (in its last-used / default rendition; the in-book navbar
    *  switches text ↔ audio). */
   onOpen: (slug: string) => void;
-  /** Return to a clean bookshelf (clears any deep link) — the title is a home link. */
-  onHome: () => void;
-  /** The shared SettingsSheet (gear + responsive sheet), placed in the header. */
+  /** The shared SettingsSheet (gear + responsive sheet), placed in the bar. */
   settingsSlot: ReactNode;
   /** On the mobile tier with the "bottom" navbar preference, the bookshelf bar
    *  drops below the shelf (mobile-browser style), matching the in-book bar. */
@@ -311,7 +307,6 @@ export function Landing({
   books,
   progress,
   onOpen,
-  onHome,
   settingsSlot,
   navbarAtBottom,
 }: LandingProps): React.JSX.Element {
@@ -415,13 +410,9 @@ export function Landing({
     setKinds(typeof v === "string" ? (v.split(",") as Category[]) : v);
   };
 
-  // Tapping the "Bookshelf" title scrolls the shelf back to the top (iOS
-  // tap-the-status-bar gesture) in addition to its home action.
+  // The shelf scroll container — ref'd for the back-to-top button + the
+  // app-level status-bar tap (both scroll it to the top).
   const scrollerRef = useRef<HTMLDivElement>(null);
-  const onTitleTap = (): void => {
-    scrollerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
-    onHome();
-  };
 
   return (
     <Box
@@ -467,64 +458,21 @@ export function Landing({
             maxWidth: 1000,
             mx: "auto",
             display: "flex",
-            flexDirection: "column",
+            alignItems: "center",
             gap: 1,
-            pb: 1,
+            minHeight: 44,
           }}
         >
           {
-            /* Row 1: title (home link) · settings · launcher (rightmost,
-              self-hides when not hosted). */
+            /* One row: search (grows) · kind filter · settings. The old
+              "Bookshelf" title row was dropped — it just ate vertical space;
+              app identity lives in the status bar / launcher, and scroll-to-top
+              is the floating button. An empty shelf shows a spacer so settings
+              still pins to the right. */
           }
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 1,
-              minHeight: 40,
-            }}
-          >
-            <ButtonBase
-              aria-label={t("landing.home")}
-              title={t("landing.home")}
-              onClick={onTitleTap}
-              sx={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 1.25,
-                minWidth: 0,
-                px: 0.5,
-                borderRadius: 1,
-                "&:hover": { opacity: 0.8 },
-              }}
-            >
-              <ShelfIcon
-                sx={{ fontSize: 30, color: "primary.main", flexShrink: 0 }}
-              />
-              <Typography variant="h5" fontWeight={700} noWrap>
-                {t("landing.title")}
-              </Typography>
-            </ButtonBase>
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "center",
-                gap: 0.5,
-                flexShrink: 0,
-              }}
-            >
-              {settingsSlot}
-            </Box>
-          </Box>
-
-          {
-            /* Row 2: search + the kind filter share one line to save vertical
-              space. Search grows to fill; the filter is a compact multi-select
-              dropdown (empty selection = all kinds). */
-          }
+          {books.length === 0 && <Box sx={{ flexGrow: 1 }} />}
           {books.length > 0 && (
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <>
               <TextField
                 size="small"
                 value={query}
@@ -625,8 +573,19 @@ export function Landing({
                   </Select>
                 </FormControl>
               )}
-            </Box>
+            </>
           )}
+          {/* Settings (gear / launcher), pinned at the row's end. */}
+          <Box
+            sx={{
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              gap: 0.5,
+            }}
+          >
+            {settingsSlot}
+          </Box>
         </Box>
       </Box>
 
