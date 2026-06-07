@@ -98,9 +98,10 @@ WKWebView background audio can need device testing. If it still pauses:
   `setPositionState` (liveview already does this);
 - the session may need re-asserting (`setActive:YES`) when playback starts or on
   `AVAudioSessionInterruptionNotification` — add that to the `.mm` if needed;
-- if the linker can't find AVFoundation, add `- sdk: AVFoundation.framework` to
-  the iOS target's `dependencies` in `gen/apple/project.yml` (modern Xcode
-  usually auto-links it from the `#import`).
+- AVFoundation is linked explicitly in `gen/apple/project.yml` (the `#import`
+  does NOT auto-link it — the first build failed on `_AVAudioSession*` undefined
+  symbols until it was added). `cargo tauri ios init` regenerates project.yml and
+  DROPS that line, so re-add it + `xcodegen generate` if you ever re-init.
 
 ## Gotchas (from the cowboy shell, same toolchain)
 

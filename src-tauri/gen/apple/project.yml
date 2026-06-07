@@ -79,6 +79,12 @@ targets:
       - sdk: Security.framework
       - sdk: UIKit.framework
       - sdk: WebKit.framework
+      # AVFoundation: LiveviewNativeTweaks.mm configures an AVAudioSession for
+      # background/lock-screen audiobook playback. NOT auto-linked from the
+      # #import, so it's listed here explicitly. NOTE: `cargo tauri ios init`
+      # regenerates project.yml from a template and DROPS this line — re-add it
+      # (then `xcodegen generate`) if you ever re-init. See src-tauri/README.md.
+      - sdk: AVFoundation.framework
     preBuildScripts:
       - script: cargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code

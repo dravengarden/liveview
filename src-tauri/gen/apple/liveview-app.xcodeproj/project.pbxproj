@@ -10,8 +10,10 @@
 		2B60ECB76C6651E889A6DA86 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3F965BB73BEFC69ECECD6E36 /* Assets.xcassets */; };
 		3116CE482D4C87E49FCB29AE /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 270B9022AF6474DC46D3BADE /* Metal.framework */; };
 		398725876E5BBBDE7BA93471 /* libapp.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 07F4DF120387FCEFF1007F44 /* libapp.a */; };
+		4AC56F217A80C39D647A4CC1 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 37D16CC083FA95C1919BA2F8 /* AVFoundation.framework */; };
 		5A54034A3F8CF3650DA3CABD /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B1E699BB6D3EABA16F401ADC /* MetalKit.framework */; };
 		63E648F342410F4CE9FF1BC4 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 68BE1DE0BF00FE55F0C70216 /* Security.framework */; };
+		6A9C8C79E3F61AB78F1789EA /* libapp.a in Resources */ = {isa = PBXBuildFile; fileRef = 61B453428737DC76218E1103 /* libapp.a */; };
 		739314AAF9A8CD57DEF8BE24 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = E90BC6982E39319785EA7EAA /* main.mm */; };
 		74164363A85B673CEDEDE99B /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4651D08BB638928942C86AC1 /* UIKit.framework */; };
 		7AE10AA7329D55CB90CDC4AC /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C91A283BF233B2AA3F0B2957 /* WebKit.framework */; };
@@ -27,9 +29,11 @@
 		14DBCBC116287F50458175AD /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		180DB7568530415BECA03C95 /* LiveviewNativeTweaks.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = LiveviewNativeTweaks.mm; sourceTree = "<group>"; };
 		270B9022AF6474DC46D3BADE /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		37D16CC083FA95C1919BA2F8 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
 		3F965BB73BEFC69ECECD6E36 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		4651D08BB638928942C86AC1 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
 		5581E3F11F173B0B96955B30 /* liveview-app_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = "liveview-app_iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		61B453428737DC76218E1103 /* libapp.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libapp.a; sourceTree = "<group>"; };
 		68BE1DE0BF00FE55F0C70216 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		7029B6D4F69B05C0792EA800 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		79FA148AE1296465313B9DFB /* main.rs */ = {isa = PBXFileReference; path = main.rs; sourceTree = "<group>"; };
@@ -57,12 +61,21 @@
 				63E648F342410F4CE9FF1BC4 /* Security.framework in Frameworks */,
 				74164363A85B673CEDEDE99B /* UIKit.framework in Frameworks */,
 				7AE10AA7329D55CB90CDC4AC /* WebKit.framework in Frameworks */,
+				4AC56F217A80C39D647A4CC1 /* AVFoundation.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		1B4EA9A0AFBCBA8D03D1287C /* arm64 */ = {
+			isa = PBXGroup;
+			children = (
+				2F81E9DC98EFA66E63C93AC9 /* release */,
+			);
+			path = arm64;
+			sourceTree = "<group>";
+		};
 		1F38990AF89DDBECDC381A78 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
@@ -79,6 +92,14 @@
 			path = bindings;
 			sourceTree = "<group>";
 		};
+		2F81E9DC98EFA66E63C93AC9 /* release */ = {
+			isa = PBXGroup;
+			children = (
+				61B453428737DC76218E1103 /* libapp.a */,
+			);
+			path = release;
+			sourceTree = "<group>";
+		};
 		7A659E8C122819F7E3174654 /* src */ = {
 			isa = PBXGroup;
 			children = (
@@ -92,6 +113,7 @@
 		89DE6706750F96A2BE6AB561 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				37D16CC083FA95C1919BA2F8 /* AVFoundation.framework */,
 				C6379005B3B9D05D8A55C895 /* CoreGraphics.framework */,
 				07F4DF120387FCEFF1007F44 /* libapp.a */,
 				270B9022AF6474DC46D3BADE /* Metal.framework */,
@@ -141,6 +163,7 @@
 		BC5AF7253370728FE38DFDDA /* Externals */ = {
 			isa = PBXGroup;
 			children = (
+				1B4EA9A0AFBCBA8D03D1287C /* arm64 */,
 			);
 			path = Externals;
 			sourceTree = "<group>";
@@ -151,6 +174,13 @@
 				5581E3F11F173B0B96955B30 /* liveview-app_iOS.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		"TEMP_BC7DEB4E-23FE-4D69-9021-B6047EE5E7AE" /* x86_64 */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = x86_64;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -214,6 +244,7 @@
 				2B60ECB76C6651E889A6DA86 /* Assets.xcassets in Resources */,
 				FB4A1443C9C0DB4B4626110C /* LaunchScreen.storyboard in Resources */,
 				D50777B0A0AC1A2377011F02 /* assets in Resources */,
+				6A9C8C79E3F61AB78F1789EA /* libapp.a in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
