@@ -7,8 +7,6 @@ import {
   IconButton,
   Snackbar,
   ThemeProvider,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
 } from "@mui/material";
 import {
@@ -993,21 +991,47 @@ export function App(): React.JSX.Element {
   const bookActions = (
     <>
       {showRenditionToggle && (
-        <ToggleButtonGroup
-          size="small"
-          exclusive
-          value={rendition}
-          onChange={(_, value: string | null) => {
-            if (value) switchRendition(value);
+        // Read ↔ listen as a soft pill segmented control: a subtle rounded
+        // track with two circular thumbs, the active one an accent disc. Lighter
+        // and friendlier than the boxy ToggleButtonGroup it replaces.
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: "3px",
+            p: "3px",
+            borderRadius: 999,
+            bgcolor: "action.hover",
           }}
         >
-          <ToggleButton value="text" aria-label={t("audiobook.read")}>
-            <ReadIcon fontSize="small" />
-          </ToggleButton>
-          <ToggleButton value="audio" aria-label={t("audiobook.open")}>
-            <AudiobookIcon fontSize="small" />
-          </ToggleButton>
-        </ToggleButtonGroup>
+          {([
+            { kind: "text", icon: <ReadIcon fontSize="small" />, label: t("audiobook.read") },
+            { kind: "audio", icon: <AudiobookIcon fontSize="small" />, label: t("audiobook.open") },
+          ] as const).map(({ kind, icon, label }) => {
+            const active = rendition === kind;
+            return (
+              <IconButton
+                key={kind}
+                aria-label={label}
+                aria-pressed={active}
+                onClick={() => switchRendition(kind)}
+                sx={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 999,
+                  color: active ? "primary.contrastText" : "text.secondary",
+                  bgcolor: active ? "primary.main" : "transparent",
+                  transition: "background-color .18s, color .18s",
+                  "&:hover": {
+                    bgcolor: active ? "primary.main" : "action.selected",
+                  },
+                }}
+              >
+                {icon}
+              </IconButton>
+            );
+          })}
+        </Box>
       )}
       {settingsButton}
     </>
