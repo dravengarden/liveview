@@ -457,18 +457,18 @@ export function Landing({
                 background: (t: Theme) =>
                   `linear-gradient(to right, transparent, ${t.palette.divider} 18%, ${t.palette.divider} 82%, transparent)`,
               },
-              // The home-indicator inset is generous; the bar's own content
-              // already clears it, so trim 22px off (floor 6px) to kill the
-              // dead gap below the row. Mirrors NavShell's bottomPad so the
-              // shelf bar and the in-book bar sit at the same height.
+              // The home-indicator inset is generous; trim it down (floor 10px)
+              // to lift the bar off the very bottom without leaving a dead gap.
               pt: 0.75,
-              pb: "max(calc(env(safe-area-inset-bottom, 0px) - 22px), 6px)",
+              pb: "max(calc(env(safe-area-inset-bottom, 0px) - 16px), 10px)",
             }
             : {
               borderBottom: 1,
               pt: "calc(env(safe-area-inset-top, 0px) + 8px)",
             }),
-          px: { xs: 2, md: 6 },
+          // Extra side margin on mobile so the end controls (search box /
+          // settings) clear the iPhone's rounded screen corners.
+          px: { xs: 2.5, md: 6 },
         }}
       >
         <Box
