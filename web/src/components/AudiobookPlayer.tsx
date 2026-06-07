@@ -458,7 +458,19 @@ export function AudiobookPlayer(
               keeps the transport row narrow enough for one line on a 375px
               iPhone. */
           }
-          {followBtn}
+          <Box
+            sx={{
+              // Match the speed chip's width and centre the follow toggle in it,
+              // so the crosshair lines up directly above the "2×" chip on the
+              // transport row below (the two left "ears" share one centre line).
+              width: CHIP_W,
+              flexShrink: 0,
+              display: "flex",
+              justifyContent: "center",
+            }}
+          >
+            {followBtn}
+          </Box>
           <Typography
             variant="caption"
             sx={{
