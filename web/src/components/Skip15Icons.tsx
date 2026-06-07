@@ -7,14 +7,17 @@ import { SvgIcon, type SvgIconProps } from "@mui/material";
 const ARROW =
   "M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z";
 
+// The "15" is drawn in the SVG's own 24-unit space, so it's sized relative to
+// the glyph — NOT the app font-size setting. Kept small + slightly lighter so
+// the two digits don't crowd the inside of the arrow.
 function Label(): React.JSX.Element {
   return (
     <text
       x="12"
-      y="15.75"
+      y="15.25"
       textAnchor="middle"
-      fontSize="8.5"
-      fontWeight="700"
+      fontSize="6.8"
+      fontWeight="600"
       fill="currentColor"
       stroke="none"
     >
