@@ -12,6 +12,18 @@
   box-sizing: border-box;
 }
 
+/* Floating-bubble long-press: a ring that sweeps to full over the hold, so the
+   press reads as "keep holding → about to act". --lv-hold-circ is the circle's
+   circumference (set inline); duration matches LONG_PRESS_MS in FloatingBubble. */
+@keyframes lv-hold-fill {
+  from {
+    stroke-dashoffset: var(--lv-hold-circ, 0);
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
 body {
   margin: 0;
   padding: 0;

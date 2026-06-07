@@ -51,6 +51,8 @@ const SIZE = 56; // bubble diameter (px)
 const MARGIN = 12; // gap kept from the viewport edge
 const DRAG_THRESHOLD = 6; // px a press must travel before it's a drag (vs a tap)
 const LONG_PRESS_MS = 500; // hold this long (without moving) → the context menu
+const HOLD_R = SIZE / 2 - 3; // radius of the long-press "fill" ring
+const HOLD_C = 2 * Math.PI * HOLD_R; // its circumference (for the dash sweep)
 const IDLE_MS = 3000; // fade + tuck behind the edge after this long untouched
 const PEEK = 0.15; // fraction of the bubble that tucks off-edge when idle —
 // kept small so the idle bubble stays clearly discoverable (most of it
@@ -163,10 +165,17 @@ export function FloatingBubble({
   // Long-press the bubble → a small menu (Stop & close), then a confirm sheet.
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // True while a finger is held on the bubble (before it resolves to tap / drag
+  // / long-press): the puck squishes and the hold-ring sweeps to full.
+  const [pressing, setPressing] = useState(false);
   const longPressTimer = useRef<number | undefined>(undefined);
   // Set when a press is held long enough to be a long-press, so the matching
   // pointerup doesn't also fire the tap (which opens the transport card).
   const longPressed = useRef(false);
+  // Hidden <input switch> toggled on long-press: iOS doesn't support
+  // navigator.vibrate, but flipping a switch in a user gesture nudges its
+  // haptic on iOS 17.4+ (best-effort; a no-op where unsupported).
+  const hapticRef = useRef<HTMLInputElement | null>(null);
 
   const elRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -220,6 +229,25 @@ export function FloatingBubble({
     setIdle(false);
     if (idleTimer.current !== undefined) clearTimeout(idleTimer.current);
     idleTimer.current = window.setTimeout(() => setIdle(true), IDLE_MS);
+  }, []);
+
+  // A short haptic on long-press. navigator.vibrate covers Android/Chromium;
+  // iOS ignores it, so we also flip a hidden <input switch> — the one web
+  // affordance that triggers iOS's system haptic (17.4+). Both are best-effort.
+  const haptic = useCallback(() => {
+    try {
+      navigator.vibrate?.(12);
+    } catch {
+      // some engines throw on vibrate without a user gesture — ignore
+    }
+    const el = hapticRef.current;
+    if (el) el.checked = !el.checked;
+  }, []);
+
+  // Mark the hidden checkbox as an iOS "switch" (the `switch` content attribute
+  // isn't a typed React prop, so set it imperatively once mounted).
+  useEffect(() => {
+    hapticRef.current?.setAttribute("switch", "");
   }, []);
 
   useEffect(() => {
@@ -294,20 +322,24 @@ export function FloatingBubble({
         id: e.pointerId,
       };
       // Arm the long-press: if the press is still held (and hasn't become a
-      // drag) after LONG_PRESS_MS, open the context menu instead of a tap.
+      // drag) after LONG_PRESS_MS, open the context menu instead of a tap. The
+      // puck squishes + the hold-ring sweeps while pressed.
       longPressed.current = false;
+      setPressing(true);
       if (longPressTimer.current !== undefined) {
         clearTimeout(longPressTimer.current);
       }
       longPressTimer.current = window.setTimeout(() => {
         longPressed.current = true;
         drag.current.active = false; // cancel the pending tap/drag
+        setPressing(false);
+        haptic();
         setMenuAnchor(elRef.current);
         poke();
       }, LONG_PRESS_MS);
       poke();
     },
-    [pos.x, pos.y, poke],
+    [pos.x, pos.y, poke, haptic],
   );
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -318,6 +350,7 @@ export function FloatingBubble({
     if (!d.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
       d.moved = true;
       setDragging(true);
+      setPressing(false);
       // Moving means it's a drag, not a long-press — disarm the menu timer.
       if (longPressTimer.current !== undefined) {
         clearTimeout(longPressTimer.current);
@@ -342,7 +375,8 @@ export function FloatingBubble({
     (e: React.PointerEvent<HTMLDivElement>) => {
       const d = drag.current;
       // A long-press already fired (it set active=false + opened the menu); the
-      // release must NOT also toggle the card. Clear the timer regardless.
+      // release must NOT also toggle the card. Clear the timer + press state.
+      setPressing(false);
       if (longPressTimer.current !== undefined) {
         clearTimeout(longPressTimer.current);
       }
@@ -528,12 +562,16 @@ export function FloatingBubble({
           cursor: dragging ? "grabbing" : "grab",
           opacity: controlsOpen ? 0 : tucked ? IDLE_OPACITY : 0.92,
           pointerEvents: controlsOpen ? "none" : "auto",
-          transform: tucked
-            ? `translateX(${pos.side === "right" ? PEEK * 100 : -PEEK * 100}%)`
-            : "none",
+          // Compose the idle tuck with a press-squish (scale down while held,
+          // springs back on release / when the menu pops).
+          transform: `${
+            tucked
+              ? `translateX(${pos.side === "right" ? PEEK * 100 : -PEEK * 100}%)`
+              : ""
+          }${pressing ? " scale(0.9)" : ""}`.trim() || "none",
           transition: dragging
             ? "none"
-            : "left .26s cubic-bezier(.2,.8,.2,1), top .26s cubic-bezier(.2,.8,.2,1), opacity .3s, transform .3s",
+            : "left .26s cubic-bezier(.2,.8,.2,1), top .26s cubic-bezier(.2,.8,.2,1), opacity .3s, transform .18s cubic-bezier(.2,.8,.2,1)",
         })}
       >
         <CircularProgress
@@ -584,6 +622,43 @@ export function FloatingBubble({
               conveys progress; play/pause lives in the tap-to-open card. */
           }
         </Box>
+
+        {
+          /* Long-press hold ring: a bright stroke that sweeps to full over
+            LONG_PRESS_MS, so holding reads as "charging" toward the menu. */
+        }
+        {pressing && (
+          <Box
+            component="svg"
+            aria-hidden
+            width={SIZE}
+            height={SIZE}
+            viewBox={`0 0 ${SIZE} ${SIZE}`}
+            sx={{
+              position: "absolute",
+              inset: 0,
+              transform: "rotate(-90deg)",
+              pointerEvents: "none",
+              zIndex: 1,
+            }}
+          >
+            <circle
+              cx={SIZE / 2}
+              cy={SIZE / 2}
+              r={HOLD_R}
+              fill="none"
+              stroke="rgba(255,255,255,0.95)"
+              strokeWidth={3}
+              strokeLinecap="round"
+              style={{
+                strokeDasharray: HOLD_C,
+                strokeDashoffset: HOLD_C,
+                animation: `lv-hold-fill ${LONG_PRESS_MS}ms linear forwards`,
+                "--lv-hold-circ": String(HOLD_C),
+              } as React.CSSProperties}
+            />
+          </Box>
+        )}
       </Box>
 
       {
@@ -998,6 +1073,24 @@ export function FloatingBubble({
           {t("audiobook.stopConfirmBody")}
         </Typography>
       </BottomSheet>
+
+      {
+        /* Hidden iOS-haptic switch (see `haptic`). Off-screen + inert; the
+          `switch` attribute is added imperatively after mount. */
+      }
+      <input
+        ref={hapticRef}
+        type="checkbox"
+        aria-hidden
+        tabIndex={-1}
+        style={{
+          position: "fixed",
+          width: 0,
+          height: 0,
+          opacity: 0,
+          pointerEvents: "none",
+        }}
+      />
     </>
   );
 }
