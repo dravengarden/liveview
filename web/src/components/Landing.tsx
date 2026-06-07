@@ -17,7 +17,7 @@ import {
   useMediaQuery,
   useTheme,
 } from "@mui/material";
-import { alpha } from "@mui/material/styles";
+import { alpha, type Theme } from "@mui/material/styles";
 import {
   Article as DocsIcon,
   Clear as ClearIcon,
@@ -442,7 +442,21 @@ export function Landing({
           borderColor: "divider",
           ...(navbarAtBottom
             ? {
-              borderTop: 1,
+              // A hard, edge-to-edge 1px rule looks like a stray line when the
+              // shelf has scrolled and there's empty page-bg above the bar.
+              // Use a hairline that fades to transparent at both ends so the
+              // seam reads as intentional, not a harsh divider.
+              position: "relative",
+              "&::before": {
+                content: '""',
+                position: "absolute",
+                top: 0,
+                left: 0,
+                right: 0,
+                height: "1px",
+                background: (t: Theme) =>
+                  `linear-gradient(to right, transparent, ${t.palette.divider} 18%, ${t.palette.divider} 82%, transparent)`,
+              },
               // The home-indicator inset is generous; the bar's own content
               // already clears it, so trim 22px off (floor 6px) to kill the
               // dead gap below the row. Mirrors NavShell's bottomPad so the
