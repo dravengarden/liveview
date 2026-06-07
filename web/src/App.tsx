@@ -1005,8 +1005,10 @@ export function App(): React.JSX.Element {
           }}
         >
           {([
-            { kind: "text", icon: <ReadIcon fontSize="small" />, label: t("audiobook.read") },
-            { kind: "audio", icon: <AudiobookIcon fontSize="small" />, label: t("audiobook.open") },
+            // Fixed icon size (NOT rem): chrome shouldn't scale with the reading
+            // font-size setting, and a fixed glyph stays centred in the thumb.
+            { kind: "text", icon: <ReadIcon sx={{ fontSize: 20 }} />, label: t("audiobook.read") },
+            { kind: "audio", icon: <AudiobookIcon sx={{ fontSize: 20 }} />, label: t("audiobook.open") },
           ] as const).map(({ kind, icon, label }) => {
             const active = rendition === kind;
             return (
