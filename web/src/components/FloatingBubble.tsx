@@ -9,7 +9,6 @@ import {
   Box,
   Button,
   CircularProgress,
-  Divider,
   Fade,
   Grow,
   IconButton,
@@ -483,6 +482,22 @@ export function FloatingBubble({
   const tucked = idle && !dragging && !controlsOpen;
   // Fully hidden + inert while its own card or any DetentSheet is open.
   const hidden = controlsOpen || sheetOpen;
+  // One equal segment of the bottom utility bar (speed / sleep / delete) — a
+  // reset <button> that flex-fills its third of the bar and highlights on hover.
+  const segSx = {
+    all: "unset",
+    boxSizing: "border-box",
+    flex: 1,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 0.5,
+    py: 1,
+    cursor: "pointer",
+    color: "text.secondary",
+    transition: "background-color .15s",
+    "&:hover": { bgcolor: "action.selected" },
+  } as const;
   // The card docks to the same edge as the bubble; clamp its top so it never
   // spills off the bottom of the screen. Positioned with left (not a right
   // anchor) so a drag and the edge-snap share one coordinate space.
@@ -849,40 +864,33 @@ export function FloatingBubble({
             </IconButton>
           </Box>
 
-          <Divider sx={{ mx: 0.5 }} />
-
           {
-            /* Row 3 — utilities: speed · sleep timer · delete. The three
-              secondary actions, spaced out; delete sits apart in error red. */
+            /* Row 3 — secondary actions grouped into ONE soft segmented bar
+              (speed · sleep · delete), filling the card width in equal thirds.
+              Replaces a hard divider + three edge-pinned buttons that read as
+              stranded with big gaps; the grouped bar is cohesive and uses the
+              space. Hairline separators sit between segments. */
           }
           <Box
             sx={{
               display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              px: 0.75,
+              alignItems: "stretch",
+              bgcolor: "action.hover",
+              borderRadius: 2,
+              overflow: "hidden",
             }}
           >
-            {/* Speed — tap to open the rate menu (mirrors the full player). */}
+            {/* Speed — opens the rate menu (mirrors the full player). */}
             <Box
               component="button"
               aria-label={t("audiobook.speed")}
               aria-haspopup="true"
               onClick={(e) => setSpeedAnchor(e.currentTarget)}
-              sx={{
-                all: "unset",
-                cursor: "pointer",
-                minWidth: 44,
-                textAlign: "center",
-                py: 0.5,
-                borderRadius: 1.5,
-                fontSize: 14,
-                fontWeight: 700,
-                color: "text.secondary",
-                "&:hover": { color: "text.primary", bgcolor: "action.hover" },
-              }}
+              sx={segSx}
             >
-              {rate}×
+              <Box component="span" sx={{ fontSize: 14, fontWeight: 700 }}>
+                {rate}×
+              </Box>
             </Box>
 
             {/* Sleep timer — moon when off, remaining time (accent) when armed. */}
@@ -891,18 +899,7 @@ export function FloatingBubble({
               aria-label={t("audiobook.sleepTimer")}
               aria-haspopup="true"
               onClick={(e) => setSleepAnchor(e.currentTarget)}
-              sx={{
-                all: "unset",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: 0.5,
-                minWidth: 44,
-                justifyContent: "center",
-                py: 0.5,
-                borderRadius: 1.5,
-                "&:hover": { bgcolor: "action.hover" },
-              }}
+              sx={{ ...segSx, borderLeft: 1, borderColor: "divider" }}
             >
               {sleepRemainingMin > 0
                 ? (
@@ -915,21 +912,23 @@ export function FloatingBubble({
                     {fmtSleep(sleepRemainingMin)}
                   </Typography>
                 )
-                : (
-                  <Bedtime
-                    sx={{ fontSize: 22, color: "text.secondary" }}
-                  />
-                )}
+                : <Bedtime sx={{ fontSize: 22 }} />}
             </Box>
 
             {/* Delete — stop playback + dismiss the bubble (asks first). */}
-            <IconButton
+            <Box
+              component="button"
               aria-label={t("audiobook.stop")}
               onClick={() => setConfirmOpen(true)}
-              sx={{ width: 40, height: 40, color: "error.main" }}
+              sx={{
+                ...segSx,
+                borderLeft: 1,
+                borderColor: "divider",
+                color: "error.main",
+              }}
             >
-              <DeleteIcon sx={{ fontSize: 22 }} />
-            </IconButton>
+              <DeleteIcon sx={{ fontSize: 21 }} />
+            </Box>
           </Box>
         </Box>
       </Grow>
