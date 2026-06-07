@@ -157,25 +157,30 @@ export function AudiobookPlayer(
   // the chips are the two "ears" of the centred transport, so any width wobble
   // would jiggle the whole row.
   const CHIP_W = 72;
+  // Chip is sized to its content (NOT a fixed width) and centred by its CHIP_W
+  // wrapper — the same wrapper the follow toggle uses — so the two left controls
+  // share one true centre line regardless of MUI's internal select sizing. (The
+  // sleep chip adds a fixed width so its variable label doesn't jitter.)
   const chipSelectSx = {
-    width: CHIP_W,
     "& .MuiSelect-select": {
       py: 0.5,
       // MUI reserves padding-right (24px) for the dropdown icon even with
-      // IconComponent removed; force it off both sides so the value is truly
-      // centred and the widest label ("1h30m") isn't clipped.
+      // IconComponent removed; force it off both sides so nothing is clipped.
       px: "0 !important",
       minHeight: "44px !important",
-      // Fill the chip's full width so justify-content actually centres the
-      // value — without this it sizes to content and sits left, which is why
-      // the "2×" didn't line up under the follow toggle.
-      width: "100%",
-      boxSizing: "border-box",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
       gap: 0.25,
     },
+  } as const;
+  // A fixed-width slot that centres one transport "ear" (follow toggle / speed
+  // chip), so they line up in one column on the rows above/below.
+  const earSx = {
+    width: CHIP_W,
+    flexShrink: 0,
+    display: "flex",
+    justifyContent: "center",
   } as const;
 
   const speedChip = (
@@ -236,7 +241,7 @@ export function AudiobookPlayer(
             </Typography>
           )
           : <Bedtime sx={{ fontSize: 22, color: "text.secondary" }} />}
-      sx={chipSelectSx}
+      sx={{ ...chipSelectSx, width: CHIP_W }}
     >
       <MenuItem value={0}>{t("audiobook.sleepOff")}</MenuItem>
       {SLEEP_MINUTES.map((m) => (
@@ -346,7 +351,7 @@ export function AudiobookPlayer(
         minHeight: 58,
       }}
     >
-      {speedChip}
+      <Box sx={earSx}>{speedChip}</Box>
       {mainCluster}
       {sleepChip}
     </Box>
@@ -472,19 +477,11 @@ export function AudiobookPlayer(
               keeps the transport row narrow enough for one line on a 375px
               iPhone. */
           }
-          <Box
-            sx={{
-              // Match the speed chip's width and centre the follow toggle in it,
-              // so the crosshair lines up directly above the "2×" chip on the
-              // transport row below (the two left "ears" share one centre line).
-              width: CHIP_W,
-              flexShrink: 0,
-              display: "flex",
-              justifyContent: "center",
-            }}
-          >
-            {followBtn}
-          </Box>
+          {
+            /* Same CHIP_W centring slot as the speed chip below (earSx), so the
+              crosshair and the "2×" share one true centre line. */
+          }
+          <Box sx={earSx}>{followBtn}</Box>
           <Typography
             variant="caption"
             sx={{
