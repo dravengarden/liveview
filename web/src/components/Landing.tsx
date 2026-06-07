@@ -39,9 +39,10 @@ interface LandingProps {
    *  Split by rendition so a text+audio book shows both reading and listening
    *  progress on its card. */
   progress: Record<string, BookProgress>;
-  /** Open a book (in its last-used / default rendition; the in-book navbar
-   *  switches text ↔ audio). */
-  onOpen: (slug: string) => void;
+  /** Open a book. With no renditionKind it opens in the last-used / default
+   *  rendition (a plain card tap); an explicit kind (the cover format switch on
+   *  a dual-format book) opens straight into that rendition. */
+  onOpen: (slug: string, renditionKind?: string) => void;
   /** The shared SettingsSheet (gear + responsive sheet), placed in the bar. */
   settingsSlot: ReactNode;
   /** On the mobile tier with the "bottom" navbar preference, the bookshelf bar
@@ -189,6 +190,88 @@ const coverChipSx = {
   color: "#fff",
   "& .MuiChip-icon": { color: "#fff" },
 } as const;
+
+/** Cover badge for a book that ships BOTH renditions: a compact segmented switch
+ *  (📖 Book | 🎧 Audiobook) that shows both supported formats AND which one is
+ *  current (the last-used, highlighted). Each segment opens the book directly in
+ *  that rendition — so the card doubles as the format picker. Replaces the single
+ *  static badge on dual-format cards.
+ *
+ *  Rendered inside the CardActionArea's <button>, so the segments are role=button
+ *  DIVs (not nested <button>s, which is invalid HTML); the click + mousedown stop
+ *  propagation so picking a format doesn't also trigger the card's default open. */
+function CoverRenditionSwitch({
+  slug,
+  activeKind,
+  onOpen,
+  bookLabel,
+  audioLabel,
+}: {
+  slug: string;
+  activeKind: "text" | "audio";
+  onOpen: (slug: string, renditionKind?: string) => void;
+  bookLabel: string;
+  audioLabel: string;
+}): React.JSX.Element {
+  const segs = [
+    { kind: "text" as const, Icon: BookIcon, label: bookLabel },
+    { kind: "audio" as const, Icon: AudiobookIcon, label: audioLabel },
+  ];
+  return (
+    <Box
+      sx={{
+        position: "absolute",
+        top: 8,
+        left: 8,
+        display: "flex",
+        alignItems: "stretch",
+        borderRadius: 5,
+        overflow: "hidden",
+        bgcolor: "rgba(0,0,0,0.45)",
+      }}
+    >
+      {segs.map((s) => {
+        const active = activeKind === s.kind;
+        return (
+          <Box
+            key={s.kind}
+            role="button"
+            tabIndex={0}
+            aria-label={s.label}
+            aria-pressed={active}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen(slug, s.kind);
+            }}
+            sx={{
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 0.5,
+              px: 0.85,
+              py: 0.4,
+              color: active ? "#fff" : "rgba(255,255,255,0.62)",
+              bgcolor: active ? "primary.main" : "transparent",
+              transition: "background-color .15s, color .15s",
+              "&:hover": { color: "#fff" },
+            }}
+          >
+            <s.Icon sx={{ fontSize: rem(15) }} />
+            {active && (
+              <Typography
+                variant="caption"
+                sx={{ fontWeight: 700, lineHeight: 1, color: "inherit" }}
+              >
+                {s.label}
+              </Typography>
+            )}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
 
 /** Format a unix-ms deploy stamp as a locale date, or null when unset (0). */
 function fmtDate(ms: number, lang: string): string | null {
@@ -698,6 +781,17 @@ export function Landing({
                             ? textP
                             : audioP)
                           : (textP ?? audioP);
+                        // The dual-format card shows a rendition switch; the
+                        // highlighted "current" segment is the last-used one
+                        // (most-recent progress), defaulting to reading for a
+                        // never-opened book (the default rendition of a "book").
+                        const activeKind: "text" | "audio" = textP && audioP
+                          ? (audioP.updatedAt > textP.updatedAt
+                            ? "audio"
+                            : "text")
+                          : audioP
+                          ? "audio"
+                          : "text";
                         // Stamps line: the book's content recency (the shelf's
                         // default sort key) — when it was last added/edited, shown
                         // relative. "Updated" when it changed after first
@@ -769,33 +863,47 @@ export function Landing({
                             <CardActionArea onClick={() => onOpen(b.slug)}>
                               {
                                 /* Cover: the book's own image when it has one, else a
-                          slug-keyed gradient + the kind icon. Every card carries a
-                          kind badge (top-left): Audiobook for anything listenable,
-                          else Book, else Docs. Progress is a labeled meter row in
-                          the body (cleaner than stacked cover chips). */
+                          slug-keyed gradient + the kind icon. Top-left badge: a
+                          book offering BOTH renditions gets a segmented switch
+                          (📖 | 🎧) showing both formats + the current one, each
+                          opening that rendition; otherwise a single kind badge
+                          (Audiobook-only / Book / Docs). Progress is a labeled
+                          meter row in the body. */
                               }
                               <BookCover book={b} category={category}>
-                                <Chip
-                                  icon={category === "docs"
-                                    ? <DocsIcon />
-                                    : e.hasAudio
-                                    ? <AudiobookIcon />
-                                    : <BookIcon />}
-                                  label={t(
-                                    category === "docs"
-                                      ? "landing.docsBadge"
-                                      : e.hasAudio
-                                      ? "landing.audiobookBadge"
-                                      : "landing.bookBadge",
+                                {e.hasText && e.hasAudio
+                                  ? (
+                                    <CoverRenditionSwitch
+                                      slug={b.slug}
+                                      activeKind={activeKind}
+                                      onOpen={onOpen}
+                                      bookLabel={t("landing.bookBadge")}
+                                      audioLabel={t("landing.audiobookBadge")}
+                                    />
+                                  )
+                                  : (
+                                    <Chip
+                                      icon={category === "docs"
+                                        ? <DocsIcon />
+                                        : e.hasAudio
+                                        ? <AudiobookIcon />
+                                        : <BookIcon />}
+                                      label={t(
+                                        category === "docs"
+                                          ? "landing.docsBadge"
+                                          : e.hasAudio
+                                          ? "landing.audiobookBadge"
+                                          : "landing.bookBadge",
+                                      )}
+                                      size="small"
+                                      sx={{
+                                        position: "absolute",
+                                        top: 8,
+                                        left: 8,
+                                        ...coverChipSx,
+                                      }}
+                                    />
                                   )}
-                                  size="small"
-                                  sx={{
-                                    position: "absolute",
-                                    top: 8,
-                                    left: 8,
-                                    ...coverChipSx,
-                                  }}
-                                />
                               </BookCover>
                               <Box sx={{ p: 1.75 }}>
                                 <Typography
