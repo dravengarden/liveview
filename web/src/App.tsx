@@ -1094,6 +1094,12 @@ export function App(): React.JSX.Element {
             right: 0,
             height: "env(safe-area-inset-top, 0px)",
             zIndex: (t) => t.zIndex.appBar + 1,
+            // iOS WKWebView only delivers `click` to a non-interactive element
+            // (this empty div) when it looks clickable — `cursor: pointer` is the
+            // documented trigger. Without it the status-bar tap-to-top silently
+            // never fired on iOS (React delegates listeners to the root, so the
+            // div has no inline onclick for iOS's heuristic to see).
+            cursor: "pointer",
           }}
         />
         {
