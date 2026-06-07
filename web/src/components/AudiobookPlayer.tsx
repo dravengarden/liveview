@@ -166,6 +166,11 @@ export function AudiobookPlayer(
       // centred and the widest label ("1h30m") isn't clipped.
       px: "0 !important",
       minHeight: "44px !important",
+      // Fill the chip's full width so justify-content actually centres the
+      // value — without this it sizes to content and sits left, which is why
+      // the "2×" didn't line up under the follow toggle.
+      width: "100%",
+      boxSizing: "border-box",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
