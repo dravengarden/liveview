@@ -681,7 +681,16 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     const onVisible = (): void => {
       if (document.visibilityState !== "visible") return;
       const a = audioRef.current;
-      if (a) updatePositionState(a);
+      if (!a) return;
+      updatePositionState(a);
+      // Re-sync the in-app timeline + read-along highlight on return. While
+      // backgrounded the page's JS (and `timeupdate`) is suspended, so
+      // currentTime/currentIdx freeze at the moment we left — the highlight
+      // then lags until the NEXT sentence boundary fires. Snap both to the
+      // real playback position immediately so the highlight (and follow-scroll)
+      // are correct the instant the reader reappears.
+      setCurrentTime(a.currentTime);
+      setCurrentIdx(markIndex(marksRef.current, a.currentTime * 1000));
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
