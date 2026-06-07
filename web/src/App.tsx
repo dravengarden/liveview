@@ -276,16 +276,15 @@ export function App(): React.JSX.Element {
   // On the compact tier with the "bottom" navbar preference, both the in-book
   // NavShell and the bookshelf bar drop to the bottom (mobile-browser style).
   const navbarAtBottom = useNavbarAtBottom();
-  // Reading-text size: expose the multiplier as a CSS var on the root. Only the
-  // reading surfaces (markdown body + read-along) consume `--lv-font-scale`, so
-  // the prose scales while the chrome — icons, nav bars, settings — stays fixed.
-  // This is deliberately NOT a root font-size change (that was a page zoom that
-  // blew up the chrome too).
+  // App-wide font-size: scale the root <html> font-size, so every rem/em surface
+  // tracks the setting — the reading prose AND the MUI-Typography chrome — like
+  // cowboy's useGlobalFontScale. Fixed-px chrome (nav/icon buttons, the settings
+  // gear) stays put; px layout (spacing, safe-area insets) is unaffected, so the
+  // responsive tiers hold.
   useEffect(() => {
-    document.documentElement.style.setProperty(
-      "--lv-font-scale",
-      String(menuBarSettings.fontScale),
-    );
+    document.documentElement.style.fontSize = `${
+      menuBarSettings.fontScale * 100
+    }%`;
   }, [menuBarSettings.fontScale]);
   const { fontId, setFont } = useFont();
   // The root audio engine: playback + the popup live above every view, so

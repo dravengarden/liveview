@@ -402,9 +402,8 @@ export function AudiobookPlayer(
             mx: "auto",
             fontFamily: "var(--lv-reading-font)",
             lineHeight,
-            // Tracks the reading font-size setting via --lv-font-scale (set on
-            // the root by App.tsx), same as the text reader's markdown body.
-            fontSize: "calc(1.05rem * var(--lv-font-scale, 1))",
+            // rem so it tracks the app-wide font-size (root font-size) setting.
+            fontSize: "1.05rem",
           }}
         >
           {loading && sentences.length === 0

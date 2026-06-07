@@ -41,11 +41,25 @@ const SHELF_SORTS: ShelfSort[] = ["updated", "read", "added", "name"];
 
 // Discrete presets for the reading-layout dropdowns — a slider was fiddly on
 // touch and a number field would pop the keyboard; a small set taps cleanly.
-const MARGIN_PRESETS = [0, 8, 16, 24, 32, 48, 64];
-const LINE_HEIGHT_PRESETS = [1.4, 1.5, 1.6, 1.7, 1.8, 2.0, 2.2];
-// Reading-text size multipliers (1 = unchanged), shown as percentages. Scales
-// the prose only — not the chrome.
-const FONT_SCALE_PRESETS = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
+// Values mirror cowboy's latest (margin = its reading padding) so the two apps'
+// reading controls line up.
+const MARGIN_PRESETS = [8, 12, 16, 20, 24, 32, 48];
+const LINE_HEIGHT_PRESETS = [1.3, 1.4, 1.5, 1.6, 1.8, 2.0];
+// App-wide font-size multipliers (1 = unchanged), shown as percentages — the
+// exact set cowboy offers.
+const FONT_SCALE_PRESETS = [
+  0.55,
+  0.6,
+  0.65,
+  0.7,
+  0.75,
+  0.8,
+  0.85,
+  0.9,
+  1,
+  1.1,
+  1.25,
+];
 
 /** Snap a stored value (e.g. from the old slider) to the nearest preset, so the
  *  dropdown always shows something selected. */
@@ -407,7 +421,7 @@ export function SettingsButton({
               >
                 {MARGIN_PRESETS.map((v) => (
                   <MenuItem key={v} value={v}>
-                    {v === 0 ? t("settings.marginNone") : `${v}px`}
+                    {`${v}px`}
                   </MenuItem>
                 ))}
               </Select>
