@@ -156,11 +156,15 @@ export function AudiobookPlayer(
   // value changing (1× ↔ 2.25×, 90m ↔ 1m) never shifts the surrounding layout —
   // the chips are the two "ears" of the centred transport, so any width wobble
   // would jiggle the whole row.
-  const CHIP_W = 72;
+  // Ear width matches the bottom NavShell's edge buttons (40px) so each ear's
+  // centre lands on the same vertical line as the hamburger / gear below it
+  // (paired with the 12px container padding = navbar's). The ear only positions
+  // the centre — content wider than it (the "1h30m" sleep label) overflows into
+  // the empty space around the cluster, it isn't clipped.
+  const CHIP_W = 40;
   // Chip is sized to its content (NOT a fixed width) and centred by its CHIP_W
   // wrapper — the same wrapper the follow toggle uses — so the two left controls
-  // share one true centre line regardless of MUI's internal select sizing. (The
-  // sleep chip adds a fixed width so its variable label doesn't jitter.)
+  // share one true centre line regardless of MUI's internal select sizing.
   const chipSelectSx = {
     "& .MuiSelect-select": {
       py: 0.5,
@@ -460,11 +464,12 @@ export function AudiobookPlayer(
           borderTop: 1,
           borderColor: "divider",
           bgcolor: "background.paper",
-          // Floor the sides off the landscape corner radius (the follow + sleep
-          // controls sit at the edges). Kept tight (8px) so the big-button
-          // transport row still fits a narrow (375px) iPhone.
-          pl: "max(env(safe-area-inset-left, 0px), 8px)",
-          pr: "max(env(safe-area-inset-right, 0px), 8px)",
+          // Match the bottom NavShell's 12px side padding so the transport's
+          // edge "ears" (follow/speed left, sleep right) line up vertically with
+          // the navbar's hamburger / gear below. Also floors the landscape
+          // corner radius.
+          pl: "max(env(safe-area-inset-left, 0px), 12px)",
+          pr: "max(env(safe-area-inset-right, 0px), 12px)",
           pt: 0.25,
           // Bottom inset: when a bottom nav bar sits below us it already clears
           // the home indicator, so just a hair of breathing room (no doubled
