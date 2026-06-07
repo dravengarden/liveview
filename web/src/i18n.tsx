@@ -6,12 +6,9 @@ import {
   useMemo,
   useState,
 } from "react";
-import { getServerSettings, putServerSetting } from "@/serverSettings";
-
 export type Language = "en" | "zh";
 
 const LANG_KEY = "lv-lang";
-const LANG_SETTING_KEY = "ui.lang";
 
 type Dict = Record<string, string>;
 
@@ -100,6 +97,8 @@ const STRINGS: Record<Language, Dict> = {
     "mode.dark": "Dark",
     "settings.font": "Reading font",
     "settings.reading": "Reading",
+    "settings.fontSize": "Font size",
+    "settings.fontSizeDesc": "Size of the reading text",
     "settings.contentWidth": "CONTENT WIDTH",
     "settings.margin": "Margin",
     "settings.marginDesc": "Side gutter of the reading column",
@@ -198,6 +197,8 @@ const STRINGS: Record<Language, Dict> = {
     "mode.dark": "深色",
     "settings.font": "阅读字体",
     "settings.reading": "阅读",
+    "settings.fontSize": "字号",
+    "settings.fontSizeDesc": "正文文字大小",
     "settings.contentWidth": "内容宽度",
     "settings.margin": "页边距",
     "settings.marginDesc": "正文两侧的留白",
@@ -246,26 +247,11 @@ export function I18nProvider(
   const setLang = useCallback((next: Language) => {
     setLangState(next);
     localStorage.setItem(LANG_KEY, next);
-    putServerSetting(LANG_SETTING_KEY, next);
   }, []);
 
   useEffect(() => {
     document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
   }, [lang]);
-
-  // Reconcile to the server (cross-device truth) once on mount. Apply only a
-  // valid value that differs from the current one, and write straight to state
-  // + localStorage (not setLang) so the mount-apply path doesn't re-PUT it.
-  useEffect(() => {
-    void getServerSettings().then((s) => {
-      const v = s[LANG_SETTING_KEY];
-      if ((v === "en" || v === "zh") && v !== lang) {
-        setLangState(v);
-        localStorage.setItem(LANG_KEY, v);
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const t = useCallback<Translate>(
     (key, vars) => {

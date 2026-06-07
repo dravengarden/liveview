@@ -1,18 +1,23 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   CONTENT_WIDTH_DEFAULT,
   CONTENT_WIDTH_MAX,
   CONTENT_WIDTH_MIN,
+  FONT_SCALE_DEFAULT,
+  FONT_SCALE_MAX,
+  FONT_SCALE_MIN,
   LINE_HEIGHT_DEFAULT,
   LINE_HEIGHT_MAX,
   LINE_HEIGHT_MIN,
 } from "@/types";
 import type { MenuBarSettings } from "@/types";
-import { getServerSettings, putServerSetting } from "@/serverSettings";
 
+// Reading-layout preferences. Device-LOCAL on purpose: these (margin, line
+// height, reading font-size) are legitimately per-device — a phone and a tablet
+// want different values — and they're trivially re-set, so they live only in
+// localStorage and are NOT synced to the server. Only reading/playback PROGRESS
+// is cross-device truth.
 const SETTINGS_KEY = "lv-settings";
-const CONTENT_WIDTH_SETTING_KEY = "ui.contentWidth";
-const LINE_HEIGHT_SETTING_KEY = "ui.lineHeight";
 
 function inRange(n: number, min: number, max: number): boolean {
   return Number.isFinite(n) && n >= min && n <= max;
@@ -21,6 +26,7 @@ function inRange(n: number, min: number, max: number): boolean {
 const DEFAULT_SETTINGS: MenuBarSettings = {
   contentMaxWidth: CONTENT_WIDTH_DEFAULT,
   lineHeight: LINE_HEIGHT_DEFAULT,
+  fontScale: FONT_SCALE_DEFAULT,
 };
 
 /** Coerce a stored value into a valid setting, falling back to `def` when it's
@@ -52,6 +58,12 @@ function getStoredSettings(): MenuBarSettings {
           LINE_HEIGHT_MAX,
           DEFAULT_SETTINGS.lineHeight,
         ),
+        fontScale: sanitize(
+          parsed.fontScale,
+          FONT_SCALE_MIN,
+          FONT_SCALE_MAX,
+          DEFAULT_SETTINGS.fontScale,
+        ),
       };
     }
   } catch {
@@ -64,6 +76,7 @@ interface UseSettingsResult {
   menuBarSettings: MenuBarSettings;
   setContentMaxWidth: (width: number) => void;
   setLineHeight: (lh: number) => void;
+  setFontScale: (scale: number) => void;
 }
 
 export function useSettings(): UseSettingsResult {
@@ -79,7 +92,6 @@ export function useSettings(): UseSettingsResult {
   const setContentMaxWidth = useCallback(
     (width: number) => {
       persist({ ...getStoredSettings(), contentMaxWidth: width });
-      putServerSetting(CONTENT_WIDTH_SETTING_KEY, String(width));
     },
     [persist],
   );
@@ -87,47 +99,21 @@ export function useSettings(): UseSettingsResult {
   const setLineHeight = useCallback(
     (lh: number) => {
       persist({ ...getStoredSettings(), lineHeight: lh });
-      putServerSetting(LINE_HEIGHT_SETTING_KEY, String(lh));
     },
     [persist],
   );
 
-  // Reconcile to the server (cross-device truth) once on mount. Apply only the
-  // keys that are present + within the documented bounds and that differ from
-  // the current value, and write straight to localStorage (persist) so the
-  // mount-apply path doesn't re-PUT the value we just read.
-  useEffect(() => {
-    void getServerSettings().then((s) => {
-      const cur = getStoredSettings();
-      const next = { ...cur };
-      let changed = false;
-      const w = Number(s[CONTENT_WIDTH_SETTING_KEY]);
-      if (
-        s[CONTENT_WIDTH_SETTING_KEY] !== undefined &&
-        // 0 = "full width" (a valid choice, outside the slider's min/max band).
-        (w === 0 || inRange(w, CONTENT_WIDTH_MIN, CONTENT_WIDTH_MAX)) &&
-        w !== cur.contentMaxWidth
-      ) {
-        next.contentMaxWidth = w;
-        changed = true;
-      }
-      const lh = Number(s[LINE_HEIGHT_SETTING_KEY]);
-      if (
-        s[LINE_HEIGHT_SETTING_KEY] !== undefined &&
-        inRange(lh, LINE_HEIGHT_MIN, LINE_HEIGHT_MAX) &&
-        lh !== cur.lineHeight
-      ) {
-        next.lineHeight = lh;
-        changed = true;
-      }
-      if (changed) persist(next);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const setFontScale = useCallback(
+    (scale: number) => {
+      persist({ ...getStoredSettings(), fontScale: scale });
+    },
+    [persist],
+  );
 
   return {
     menuBarSettings,
     setContentMaxWidth,
     setLineHeight,
+    setFontScale,
   };
 }

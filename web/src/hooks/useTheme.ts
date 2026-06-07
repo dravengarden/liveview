@@ -1,18 +1,16 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createTheme, type Theme as MuiTheme } from "@mui/material/styles";
-import type { Theme, ThemeVariant, ThemeMode } from "@/types";
+import type { Theme, ThemeMode, ThemeVariant } from "@/types";
 import { THEME_VARIANTS } from "@/types";
-import { getServerSettings, putServerSetting } from "@/serverSettings";
 
-// Theme is now two axes: a colour VARIANT (classic/warm) and a MODE
-// (auto/light/dark). The flat 4-theme value is derived from them.
+// Theme is two axes: a colour VARIANT (classic/warm/purple) and a MODE
+// (auto/light/dark). The flat theme value is derived from them. Persisted
+// device-local in localStorage (not server-synced — only progress is).
 const VARIANT_KEY = "lv-theme-variant";
 const MODE_KEY = "lv-theme-mode";
-const VARIANT_SETTING_KEY = "ui.themeVariant";
-const MODE_SETTING_KEY = "ui.themeMode";
 const LEGACY_THEME_KEY = "lv-theme";
 
-const VALID_VARIANTS: ThemeVariant[] = ["classic", "warm"];
+const VALID_VARIANTS: ThemeVariant[] = ["classic", "warm", "purple"];
 const VALID_MODES: ThemeMode[] = ["auto", "light", "dark"];
 
 function systemPrefersDark(): boolean {
@@ -20,7 +18,11 @@ function systemPrefersDark(): boolean {
 }
 
 /** Resolve the (variant, mode) pair to one of the 4 flat themes. */
-function resolveTheme(variant: ThemeVariant, mode: ThemeMode, sysDark: boolean): Theme {
+function resolveTheme(
+  variant: ThemeVariant,
+  mode: ThemeMode,
+  sysDark: boolean,
+): Theme {
   const effective = mode === "auto" ? (sysDark ? "dark" : "light") : mode;
   return THEME_VARIANTS[variant][effective];
 }
@@ -49,8 +51,12 @@ function getStored(): { variant: ThemeVariant; mode: ThemeMode } {
   const v = localStorage.getItem(VARIANT_KEY);
   const m = localStorage.getItem(MODE_KEY);
   return {
-    variant: VALID_VARIANTS.includes(v as ThemeVariant) ? (v as ThemeVariant) : (legacy?.variant ?? "classic"),
-    mode: VALID_MODES.includes(m as ThemeMode) ? (m as ThemeMode) : (legacy?.mode ?? "auto"),
+    variant: VALID_VARIANTS.includes(v as ThemeVariant)
+      ? (v as ThemeVariant)
+      : (legacy?.variant ?? "classic"),
+    mode: VALID_MODES.includes(m as ThemeMode)
+      ? (m as ThemeMode)
+      : (legacy?.mode ?? "auto"),
   };
 }
 
@@ -170,7 +176,9 @@ interface UseThemeResult {
 }
 
 export function useTheme(): UseThemeResult {
-  const [variant, setVariantState] = useState<ThemeVariant>(() => getStored().variant);
+  const [variant, setVariantState] = useState<ThemeVariant>(() =>
+    getStored().variant
+  );
   const [mode, setModeState] = useState<ThemeMode>(() => getStored().mode);
   const [sysDark, setSysDark] = useState<boolean>(systemPrefersDark);
 
@@ -183,13 +191,11 @@ export function useTheme(): UseThemeResult {
   const setVariant = useCallback((v: ThemeVariant) => {
     setVariantState(v);
     localStorage.setItem(VARIANT_KEY, v);
-    putServerSetting(VARIANT_SETTING_KEY, v);
   }, []);
 
   const setMode = useCallback((m: ThemeMode) => {
     setModeState(m);
     localStorage.setItem(MODE_KEY, m);
-    putServerSetting(MODE_SETTING_KEY, m);
   }, []);
 
   // While mode = auto, follow the OS scheme live (re-resolves to the variant's
@@ -222,24 +228,6 @@ export function useTheme(): UseThemeResult {
     };
   }, []);
 
-  // Reconcile to the server (cross-device truth) once on mount; localStorage
-  // gave the first paint.
-  useEffect(() => {
-    void getServerSettings().then((s) => {
-      const v = s[VARIANT_SETTING_KEY];
-      const m = s[MODE_SETTING_KEY];
-      if (VALID_VARIANTS.includes(v as ThemeVariant)) {
-        setVariantState(v as ThemeVariant);
-        localStorage.setItem(VARIANT_KEY, v as string);
-      }
-      if (VALID_MODES.includes(m as ThemeMode)) {
-        setModeState(m as ThemeMode);
-        localStorage.setItem(MODE_KEY, m as string);
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Apply the resolved theme to the document (data attrs + iOS status-bar colour).
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
@@ -247,7 +235,7 @@ export function useTheme(): UseThemeResult {
     // (e.g. the dark-mode image plate in markdown.css).
     document.documentElement.setAttribute(
       "data-color-scheme",
-      isDarkTheme(theme) ? "dark" : "light"
+      isDarkTheme(theme) ? "dark" : "light",
     );
     // bgPaper is the mobile top nav-bar surface, so the status bar reads as a
     // seamless extension of it.
@@ -289,7 +277,9 @@ export function useTheme(): UseThemeResult {
         // for desktop density — "mobile never small". Desktop keeps the compact size.
         MuiIconButton: {
           styleOverrides: {
-            sizeSmall: { "@media (pointer: coarse)": { width: 40, height: 40 } },
+            sizeSmall: {
+              "@media (pointer: coarse)": { width: 40, height: 40 },
+            },
           },
         },
         MuiButton: {
@@ -299,7 +289,9 @@ export function useTheme(): UseThemeResult {
         },
         MuiToggleButton: {
           styleOverrides: {
-            sizeSmall: { "@media (pointer: coarse)": { minHeight: 40, minWidth: 40 } },
+            sizeSmall: {
+              "@media (pointer: coarse)": { minHeight: 40, minWidth: 40 },
+            },
             // Selected state must be unmistakable in EVERY theme. MUI's default
             // selected look is only a ~8–16% action tint, which all but vanishes
             // on the dark/night palettes — the read/listen toggle (and the

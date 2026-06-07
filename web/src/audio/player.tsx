@@ -96,17 +96,15 @@ export interface AudioPlayer {
 const RATE_KEY = "lv-audio-rate";
 const SESSION_KEY = "lv-audio-session";
 /** Per-chapter resume position (audio seconds); client-only. */
-const posKey = (path: string, lang: string): string => `lv-audio-pos:${path}:${lang}`;
+const posKey = (path: string, lang: string): string =>
+  `lv-audio-pos:${path}:${lang}`;
 
-/** Simple string-valued settings that sync across devices, as
- *  (serverKey, localStorageKey) pairs — used ONLY to detect a cross-device
- *  change and toast "已同步设置". Each is owned/applied by its own hook
- *  (useTheme / useFont / i18n) plus this engine (rate); keep this list in step
- *  with them. A drift here only mis-fires the toast, never breaks the sync. */
+/** Settings that still sync across devices, as (serverKey, localStorageKey)
+ *  pairs — used ONLY to detect a cross-device change and toast "已同步设置".
+ *  The UI prefs (theme / font / language / margin / …) are now device-LOCAL, so
+ *  only the playback rate remains here (owned by this engine). A drift here only
+ *  mis-fires the toast, never breaks the sync. */
 const SYNCED_SETTING_KEYS: ReadonlyArray<readonly [string, string]> = [
-  ["ui.theme", "lv-theme"],
-  ["ui.font", "lv-font"],
-  ["ui.lang", "lv-lang"],
   ["audio.rate", RATE_KEY],
 ];
 
@@ -126,7 +124,9 @@ function fmtClock(sec: number): string {
 }
 
 function query(path: string, lang: string, rendition: string): string {
-  return `path=${encodeURIComponent(path)}&lang=${encodeURIComponent(lang)}&rendition=${encodeURIComponent(rendition)}`;
+  return `path=${encodeURIComponent(path)}&lang=${
+    encodeURIComponent(lang)
+  }&rendition=${encodeURIComponent(rendition)}`;
 }
 
 /** Push the element's timeline to the OS so the lock-screen scrubber tracks
@@ -136,13 +136,19 @@ function query(path: string, lang: string, rendition: string): string {
  *  shows on iOS). iOS also throws and drops the whole state unless every field
  *  is finite with `0 ≤ position ≤ duration` and `playbackRate > 0`, so clamp. */
 function updatePositionState(audio: HTMLAudioElement): void {
-  if (!("mediaSession" in navigator) || !navigator.mediaSession.setPositionState) return;
+  if (
+    !("mediaSession" in navigator) || !navigator.mediaSession.setPositionState
+  ) return;
   const { duration, currentTime } = audio;
   if (!Number.isFinite(duration) || duration <= 0) return;
   const position = Math.min(Math.max(0, currentTime), duration);
   const playbackRate = audio.playbackRate > 0 ? audio.playbackRate : 1;
   try {
-    navigator.mediaSession.setPositionState({ duration, playbackRate, position });
+    navigator.mediaSession.setPositionState({
+      duration,
+      playbackRate,
+      position,
+    });
   } catch {
     // Older/edge WebKit can still reject a valid-looking state — non-fatal.
   }
@@ -160,7 +166,10 @@ function updatePositionState(audio: HTMLAudioElement): void {
  * iOS keeps media-playback activation alive briefly after a gesture-initiated
  * play(), so the retry is permitted. `onError` fires ONLY if the retry also
  * fails, so a normal interruption recovers without flashing an error. */
-function playAudio(audio: HTMLAudioElement, onError?: (e: unknown) => void): void {
+function playAudio(
+  audio: HTMLAudioElement,
+  onError?: (e: unknown) => void,
+): void {
   const p = audio.play() as Promise<void> | undefined;
   if (!p || typeof p.catch !== "function") return;
   p.catch((err: unknown) => {
@@ -185,10 +194,12 @@ function playAudio(audio: HTMLAudioElement, onError?: (e: unknown) => void): voi
           }
         }
         void audio.play().catch((e: unknown) => {
-          if (!(e instanceof DOMException && e.name === "NotAllowedError")) onError?.(e);
+          if (!(e instanceof DOMException && e.name === "NotAllowedError")) {
+            onError?.(e);
+          }
         });
       },
-      { once: true }
+      { once: true },
     );
     try {
       audio.load();
@@ -221,7 +232,9 @@ interface PersistedSession {
 
 const Ctx = createContext<AudioPlayer | null>(null);
 
-export function AudioPlayerProvider({ children }: { children: React.ReactNode }): React.JSX.Element {
+export function AudioPlayerProvider(
+  { children }: { children: React.ReactNode },
+): React.JSX.Element {
   const { t } = useI18n();
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -241,7 +254,9 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   const [queueIndex, setQueueIndex] = useState(-1);
   // Raised once when a fresh load adopts a newer resume point from another
   // device (see the server-reconcile effect). App reads it to toast "已同步…".
-  const [syncNotice, setSyncNotice] = useState<{ message: string; seq: number } | null>(null);
+  const [syncNotice, setSyncNotice] = useState<
+    { message: string; seq: number } | null
+  >(null);
   // Listen-plane UI: is the full read-along popup in focus? Default collapsed so
   // a resumed session (rehydrated below) shows only the bar, never auto-expands.
   const [expanded, setExpanded] = useState(false);
@@ -268,16 +283,25 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
 
   rateRef.current = rate;
 
-  const persistSession = useCallback((np: NowPlaying, q: Track[], qi: number) => {
-    try {
-      localStorage.setItem(SESSION_KEY, JSON.stringify({ nowPlaying: np, queue: q, queueIndex: qi }));
-    } catch {
-      // storage full / disabled — non-fatal, just no resume-on-reload.
-    }
-    // Also persist the resume pointer (book + chapter + queue) server-side so it
-    // syncs across devices; the per-chapter position rides "audio.pos" separately.
-    putServerSetting("audio.session", JSON.stringify({ nowPlaying: np, queue: q, queueIndex: qi }));
-  }, []);
+  const persistSession = useCallback(
+    (np: NowPlaying, q: Track[], qi: number) => {
+      try {
+        localStorage.setItem(
+          SESSION_KEY,
+          JSON.stringify({ nowPlaying: np, queue: q, queueIndex: qi }),
+        );
+      } catch {
+        // storage full / disabled — non-fatal, just no resume-on-reload.
+      }
+      // Also persist the resume pointer (book + chapter + queue) server-side so it
+      // syncs across devices; the per-chapter position rides "audio.pos" separately.
+      putServerSetting(
+        "audio.session",
+        JSON.stringify({ nowPlaying: np, queue: q, queueIndex: qi }),
+      );
+    },
+    [],
+  );
 
   // Fire-and-forget server-side persistence of a player setting (rate, sleep
   // timer). Survives reloads and syncs across devices; localStorage stays as the
@@ -336,9 +360,16 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
             audio.defaultPlaybackRate = rateRef.current;
             audio.playbackRate = rateRef.current;
             audio.load();
-            const saved = Number(localStorage.getItem(posKey(np.chapterPath, np.lang)) ?? "");
+            const saved = Number(
+              localStorage.getItem(posKey(np.chapterPath, np.lang)) ?? "",
+            );
             if (Number.isFinite(saved) && saved > 0) audio.currentTime = saved;
-            if (autoplay) playAudio(audio, (e) => setError(e instanceof Error ? e.message : String(e)));
+            if (autoplay) {
+              playAudio(
+                audio,
+                (e) => setError(e instanceof Error ? e.message : String(e)),
+              );
+            }
           }
           setLoading(false);
         } catch (e) {
@@ -349,7 +380,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
         }
       })();
     },
-    [persistSession]
+    [persistSession],
   );
 
   // Advance/retreat within the queue, carrying the book identity forward.
@@ -359,13 +390,20 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       const track = q[qi];
       const base = nowPlayingRef.current;
       if (!track || !base) return;
-      loadTrack({ ...base, chapterPath: track.path, chapterLabel: track.label }, q, qi, autoplay);
+      loadTrack(
+        { ...base, chapterPath: track.path, chapterLabel: track.label },
+        q,
+        qi,
+        autoplay,
+      );
     },
-    [loadTrack]
+    [loadTrack],
   );
 
   const nextChapter = useCallback(() => {
-    if (queueIndexRef.current < queueRef.current.length - 1) goTo(queueIndexRef.current + 1, true);
+    if (queueIndexRef.current < queueRef.current.length - 1) {
+      goTo(queueIndexRef.current + 1, true);
+    }
   }, [goTo]);
   const prevChapter = useCallback(() => {
     if (queueIndexRef.current > 0) goTo(queueIndexRef.current - 1, true);
@@ -376,7 +414,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     (qi: number) => {
       if (qi >= 0 && qi < queueRef.current.length) goTo(qi, true);
     },
-    [goTo]
+    [goTo],
   );
 
   // Sleep timer: arm N minutes of remaining time (0 cancels). The countdown only
@@ -404,7 +442,10 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       setCurrentIdx(markIndex(marksRef.current, audio.currentTime * 1000));
       const np = nowPlayingRef.current;
       if (np && audio.currentTime > 0) {
-        localStorage.setItem(posKey(np.chapterPath, np.lang), String(audio.currentTime));
+        localStorage.setItem(
+          posKey(np.chapterPath, np.lang),
+          String(audio.currentTime),
+        );
         // Server-save the position at most once every 5s (cross-device resume);
         // localStorage above stays per-tick for instant local resume.
         const now = Date.now();
@@ -423,7 +464,10 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       ) {
         prefetchedFrom.current = np.chapterPath;
         const next = queueRef.current[queueIndexRef.current + 1];
-        if (next) void fetch(`/api/marks?${query(next.path, np.lang, np.rendition)}`).catch(() => {});
+        if (next) {
+          void fetch(`/api/marks?${query(next.path, np.lang, np.rendition)}`)
+            .catch(() => {});
+        }
       }
       // Sleep-timer countdown. timeupdate fires only while playing, so pausing
       // naturally freezes the countdown — we just track real elapsed time
@@ -453,7 +497,10 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
             // Throttle the server save of remaining to ~once/5s.
             if (now - lastSleepPutRef.current > 5000) {
               lastSleepPutRef.current = now;
-              putServerSetting("audio.sleepRemaining", String(Math.round(remaining)));
+              putServerSetting(
+                "audio.sleepRemaining",
+                String(Math.round(remaining)),
+              );
             }
           }
         }
@@ -480,7 +527,10 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       // frozen value.
       lastSleepTickRef.current = 0;
       if (sleepRemainingRef.current > 0) {
-        putServerSetting("audio.sleepRemaining", String(Math.round(sleepRemainingRef.current)));
+        putServerSetting(
+          "audio.sleepRemaining",
+          String(Math.round(sleepRemainingRef.current)),
+        );
       }
     };
     const onEnded = (): void => {
@@ -540,7 +590,9 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     // Snapshot the synced settings' local values BEFORE the shared GET resolves
     // (the per-setting hooks overwrite them on that same resolve), so we can tell
     // whether the server copy was changed on ANOTHER device.
-    const localSettings = SYNCED_SETTING_KEYS.map(([, ls]) => localStorage.getItem(ls));
+    const localSettings = SYNCED_SETTING_KEYS.map(([, ls]) =>
+      localStorage.getItem(ls)
+    );
     void getServerSettings().then((s) => {
       let audioSynced = false;
       const r = Number(s["audio.rate"]);
@@ -550,7 +602,9 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       if (Number.isFinite(sr) && sr > 0) {
         sleepRemainingRef.current = sr;
         setSleepRemainingMin(Math.ceil(sr / 60));
-        if (Number.isFinite(smChoice) && smChoice > 0) setSleepMinutes(smChoice);
+        if (Number.isFinite(smChoice) && smChoice > 0) {
+          setSleepMinutes(smChoice);
+        }
         lastSleepTickRef.current = 0; // counts down once playback starts (frozen until then)
       }
       // Reconcile the resume pointer (the server reflects the most recent write
@@ -565,19 +619,19 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
           const sess = JSON.parse(raw) as PersistedSession;
           if (sess.nowPlaying && Array.isArray(sess.queue)) {
             const cur = nowPlayingRef.current;
-            const chapterDiffers =
-              !cur ||
+            const chapterDiffers = !cur ||
               cur.chapterPath !== sess.nowPlaying.chapterPath ||
               cur.bookSlug !== sess.nowPlaying.bookSlug;
             const serverPos = Number(s["audio.pos"]);
             const localPos = cur
-              ? Number(localStorage.getItem(posKey(cur.chapterPath, cur.lang)) ?? "0")
+              ? Number(
+                localStorage.getItem(posKey(cur.chapterPath, cur.lang)) ?? "0",
+              )
               : 0;
             // Same chapter on both devices, but the server (another device) is
             // further along → adopt its position rather than this device's. Use a
             // small lead so timing drift on the same device doesn't false-trigger.
-            const posAhead =
-              !chapterDiffers &&
+            const posAhead = !chapterDiffers &&
               Number.isFinite(serverPos) &&
               serverPos > localPos + SYNC_POS_LEAD_S;
             if (chapterDiffers || posAhead) {
@@ -586,7 +640,7 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
                 // restore picks it up.
                 localStorage.setItem(
                   posKey(sess.nowPlaying.chapterPath, sess.nowPlaying.lang),
-                  String(serverPos)
+                  String(serverPos),
                 );
               }
               loadTrack(sess.nowPlaying, sess.queue, sess.queueIndex, false); // PAUSED
@@ -613,7 +667,9 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
           const v = s[srv];
           return v != null && v !== localSettings[i];
         });
-        if (changed) setSyncNotice({ seq: Date.now(), message: t("sync.settings") });
+        if (changed) {
+          setSyncNotice({ seq: Date.now(), message: t("sync.settings") });
+        }
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -626,7 +682,12 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     const ms = navigator.mediaSession;
     ms.setActionHandler("play", () => {
       const a = audioRef.current;
-      if (a) playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
+      if (a) {
+        playAudio(
+          a,
+          (e) => setError(e instanceof Error ? e.message : String(e)),
+        );
+      }
     });
     ms.setActionHandler("pause", () => audioRef.current?.pause());
     ms.setActionHandler("previoustrack", () => prevChapter());
@@ -637,7 +698,12 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
     });
     ms.setActionHandler("seekforward", (d) => {
       const a = audioRef.current;
-      if (a) a.currentTime = Math.min(a.duration || a.currentTime, a.currentTime + (d.seekOffset ?? 15));
+      if (a) {
+        a.currentTime = Math.min(
+          a.duration || a.currentTime,
+          a.currentTime + (d.seekOffset ?? 15),
+        );
+      }
     });
     ms.setActionHandler("seekto", (d) => {
       const a = audioRef.current;
@@ -661,14 +727,22 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       // required — iOS Safari is unreliable about rendering inline-encoded
       // artwork on the lock screen.
       artwork: [
-        { src: `/api/artwork?book=${encodeURIComponent(nowPlaying.bookSlug)}`, sizes: "512x512", type: "image/png" },
+        {
+          src: `/api/artwork?book=${encodeURIComponent(nowPlaying.bookSlug)}`,
+          sizes: "512x512",
+          type: "image/png",
+        },
       ],
     });
   }, [nowPlaying]);
 
   useEffect(() => {
     if (!("mediaSession" in navigator)) return;
-    navigator.mediaSession.playbackState = playing ? "playing" : nowPlaying ? "paused" : "none";
+    navigator.mediaSession.playbackState = playing
+      ? "playing"
+      : nowPlaying
+      ? "paused"
+      : "none";
   }, [playing, nowPlaying]);
 
   // iOS deactivates the page's audio session AND its lock-screen position state
@@ -713,21 +787,23 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   const playChapter = useCallback(
     (np: Omit<NowPlaying, "chapterLabel">, q: Track[]) => {
       const qi = q.findIndex((tk) => tk.path === np.chapterPath);
-      const label = q[qi]?.label ?? np.chapterPath.split("/").pop() ?? np.chapterPath;
+      const label = q[qi]?.label ?? np.chapterPath.split("/").pop() ??
+        np.chapterPath;
       // Opening an audiobook loads it PAUSED — the player shows up at the saved
       // position and the user taps play to start. Chapter navigation
       // (goTo/next/prev/goToChapter) and auto-advance (onEnded) still autoplay,
       // since those happen during an active listen.
       loadTrack({ ...np, chapterLabel: label }, q, qi >= 0 ? qi : 0, false);
     },
-    [loadTrack]
+    [loadTrack],
   );
 
   const togglePlay = useCallback(() => {
     const a = audioRef.current;
     if (!a) return;
-    if (a.paused) playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
-    else a.pause();
+    if (a.paused) {
+      playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
+    } else a.pause();
   }, []);
   const seek = useCallback((sec: number) => {
     const a = audioRef.current;
@@ -735,7 +811,12 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
   }, []);
   const skip = useCallback((delta: number) => {
     const a = audioRef.current;
-    if (a) a.currentTime = Math.min(a.duration || a.currentTime + delta, Math.max(0, a.currentTime + delta));
+    if (a) {
+      a.currentTime = Math.min(
+        a.duration || a.currentTime + delta,
+        Math.max(0, a.currentTime + delta),
+      );
+    }
   }, []);
   const seekToSentence = useCallback((idx: number) => {
     const a = audioRef.current;
@@ -847,14 +928,16 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
       prevChapter,
       stop,
       syncNotice,
-    ]
+    ],
   );
 
   return (
     <Ctx.Provider value={value}>
       {children}
-      {/* The single, always-mounted narration element — never unmounts, so
-          playback survives every in-app navigation. */}
+      {
+        /* The single, always-mounted narration element — never unmounts, so
+          playback survives every in-app navigation. */
+      }
       <audio ref={audioRef} preload="metadata" hidden />
     </Ctx.Provider>
   );
@@ -862,6 +945,10 @@ export function AudioPlayerProvider({ children }: { children: React.ReactNode })
 
 export function useAudioPlayer(): AudioPlayer {
   const ctx = useContext(Ctx);
-  if (!ctx) throw new Error("useAudioPlayer must be used within an AudioPlayerProvider");
+  if (!ctx) {
+    throw new Error(
+      "useAudioPlayer must be used within an AudioPlayerProvider",
+    );
+  }
   return ctx;
 }

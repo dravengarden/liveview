@@ -271,10 +271,22 @@ export function App(): React.JSX.Element {
 
   const { t, lang: uiLang } = useI18n();
   const { theme, muiTheme, variant, mode, setVariant, setMode } = useTheme();
-  const { menuBarSettings, setContentMaxWidth, setLineHeight } = useSettings();
+  const { menuBarSettings, setContentMaxWidth, setLineHeight, setFontScale } =
+    useSettings();
   // On the compact tier with the "bottom" navbar preference, both the in-book
   // NavShell and the bookshelf bar drop to the bottom (mobile-browser style).
   const navbarAtBottom = useNavbarAtBottom();
+  // Reading-text size: expose the multiplier as a CSS var on the root. Only the
+  // reading surfaces (markdown body + read-along) consume `--lv-font-scale`, so
+  // the prose scales while the chrome — icons, nav bars, settings — stays fixed.
+  // This is deliberately NOT a root font-size change (that was a page zoom that
+  // blew up the chrome too).
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      "--lv-font-scale",
+      String(menuBarSettings.fontScale),
+    );
+  }, [menuBarSettings.fontScale]);
   const { fontId, setFont } = useFont();
   // The root audio engine: playback + the popup live above every view, so
   // navigating never stops the audio nor closes the popup. We only need to seed
@@ -942,6 +954,7 @@ export function App(): React.JSX.Element {
       onFontChange={setFont}
       onContentMaxWidthChange={setContentMaxWidth}
       onLineHeightChange={setLineHeight}
+      onFontScaleChange={setFontScale}
     />
   );
 
@@ -996,8 +1009,16 @@ export function App(): React.JSX.Element {
           {([
             // Fixed icon size (NOT rem): chrome shouldn't scale with the reading
             // font-size setting, and a fixed glyph stays centred in the thumb.
-            { kind: "text", icon: <ReadIcon sx={{ fontSize: 20 }} />, label: t("audiobook.read") },
-            { kind: "audio", icon: <AudiobookIcon sx={{ fontSize: 20 }} />, label: t("audiobook.open") },
+            {
+              kind: "text",
+              icon: <ReadIcon sx={{ fontSize: 20 }} />,
+              label: t("audiobook.read"),
+            },
+            {
+              kind: "audio",
+              icon: <AudiobookIcon sx={{ fontSize: 20 }} />,
+              label: t("audiobook.open"),
+            },
           ] as const).map(({ kind, icon, label }) => {
             const active = rendition === kind;
             return (

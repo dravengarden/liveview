@@ -353,8 +353,10 @@ export function AudiobookPlayer(
     >
       <Box sx={earSx}>{speedChip}</Box>
       {mainCluster}
-      {/* Same earSx slot as the speed chip — both controls centred in a CHIP_W
-          ear, so the left "2×" and the right sleep button are symmetric. */}
+      {
+        /* Same earSx slot as the speed chip — both controls centred in a CHIP_W
+          ear, so the left "2×" and the right sleep button are symmetric. */
+      }
       <Box sx={earSx}>{sleepChip}</Box>
     </Box>
   );
@@ -396,8 +398,9 @@ export function AudiobookPlayer(
             mx: "auto",
             fontFamily: "var(--lv-reading-font)",
             lineHeight,
-            // rem so it tracks the app-wide font-size (root font-size) setting.
-            fontSize: "1.05rem",
+            // Tracks the reading font-size setting via --lv-font-scale (set on
+            // the root by App.tsx), same as the text reader's markdown body.
+            fontSize: "calc(1.05rem * var(--lv-font-scale, 1))",
           }}
         >
           {loading && sentences.length === 0

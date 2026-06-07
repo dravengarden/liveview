@@ -18,7 +18,7 @@ import { useState } from "react";
 import { SettingsSheet } from "../_shell";
 import type { MenuBarSettings, Theme, ThemeMode, ThemeVariant } from "@/types";
 import { THEME_VARIANTS, VARIANT_OPTIONS } from "@/types";
-import { type ShelfSort, setShelfSort, useShelfSort } from "@/hooks";
+import { setShelfSort, type ShelfSort, useShelfSort } from "@/hooks";
 import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
 
@@ -32,6 +32,7 @@ interface SettingsButtonProps {
   onFontChange: (id: string) => void;
   onContentMaxWidthChange: (width: number) => void;
   onLineHeightChange: (lh: number) => void;
+  onFontScaleChange: (scale: number) => void;
 }
 
 const MODE_OPTIONS: ThemeMode[] = ["auto", "light", "dark"];
@@ -43,6 +44,9 @@ const SHELF_SORTS: ShelfSort[] = ["updated", "read", "added", "name"];
 // touch and a number field would pop the keyboard; a small set taps cleanly.
 const MARGIN_PRESETS = [0, 8, 16, 24, 32, 48, 64];
 const LINE_HEIGHT_PRESETS = [1.4, 1.5, 1.6, 1.7, 1.8, 2.0, 2.2];
+// Reading-text size multipliers (1 = unchanged), shown as percentages. Scales
+// the prose only — not the chrome.
+const FONT_SCALE_PRESETS = [0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2];
 
 /** Snap a stored value (e.g. from the old slider) to the nearest preset, so the
  *  dropdown always shows something selected. */
@@ -130,6 +134,7 @@ export function SettingsButton({
   onFontChange,
   onContentMaxWidthChange,
   onLineHeightChange,
+  onFontScaleChange,
 }: SettingsButtonProps): React.JSX.Element {
   const { t, lang, setLang } = useI18n();
   const shelfSort = useShelfSort();
@@ -274,9 +279,11 @@ export function SettingsButton({
             {t("settings.reading")}
           </Typography>
 
-          {/* Font — collapsible. Collapsed shows the current face previewed in
+          {
+            /* Font — collapsible. Collapsed shows the current face previewed in
               itself; expanding drops the full picker; choosing auto-collapses.
-              Each card previews its own @fontsource woff2 (lazy once selected). */}
+              Each card previews its own @fontsource woff2 (lazy once selected). */
+          }
           {fontOpen
             ? (
               <Stack spacing={0.75}>
@@ -357,8 +364,33 @@ export function SettingsButton({
               </Box>
             )}
 
-          {/* Reading margin — left/right padding of the reading column (works on
-              mobile, unlike a max-width). */}
+          {
+            /* Reading font size — a multiplier on the reading text only (shown
+              as a percentage); the chrome stays at its fixed size. */
+          }
+          <Row
+            label={t("settings.fontSize")}
+            desc={t("settings.fontSizeDesc")}
+            control={
+              <Select
+                size="small"
+                value={nearest(menuBarSettings.fontScale, FONT_SCALE_PRESETS)}
+                onChange={(e) => onFontScaleChange(Number(e.target.value))}
+                sx={{ minWidth: 104 }}
+              >
+                {FONT_SCALE_PRESETS.map((v) => (
+                  <MenuItem key={v} value={v}>
+                    {`${Math.round(v * 100)}%`}
+                  </MenuItem>
+                ))}
+              </Select>
+            }
+          />
+
+          {
+            /* Reading margin — left/right padding of the reading column (works on
+              mobile, unlike a max-width). */
+          }
           <Row
             label={t("settings.margin")}
             desc={t("settings.marginDesc")}
@@ -366,7 +398,8 @@ export function SettingsButton({
               <Select
                 size="small"
                 value={nearest(menuBarSettings.contentMaxWidth, MARGIN_PRESETS)}
-                onChange={(e) => onContentMaxWidthChange(Number(e.target.value))}
+                onChange={(e) =>
+                  onContentMaxWidthChange(Number(e.target.value))}
                 sx={{ minWidth: 104 }}
               >
                 {MARGIN_PRESETS.map((v) => (
