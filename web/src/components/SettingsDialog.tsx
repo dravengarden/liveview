@@ -98,10 +98,14 @@ function getThemeColors(themeValue: Theme): ThemeColors {
       return { bg: "#ffffff", fg: "#1f2328", accent: "#0969da" };
     case "sepia":
       return { bg: "#f4ecd8", fg: "#5b4636", accent: "#9a5b3d" };
+    case "lavender":
+      return { bg: "#f4ecf7", fg: "#1c1428", accent: "#7c3aed" };
     case "dark":
       return { bg: "#0d1117", fg: "#e6edf3", accent: "#58a6ff" };
     case "night":
       return { bg: "#1b1714", fg: "#d6cbbd", accent: "#d9a066" };
+    case "plum":
+      return { bg: "#15111d", fg: "#ede9fe", accent: "#a78bfa" };
   }
 }
 
@@ -169,7 +173,7 @@ export function SettingsButton({
             <Box
               sx={{
                 display: "grid",
-                gridTemplateColumns: "repeat(2, 1fr)",
+                gridTemplateColumns: "repeat(3, 1fr)",
                 gap: 1,
               }}
             >

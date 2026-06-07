@@ -130,21 +130,28 @@ export type WsMessage =
 // Reading-oriented themes only (Day / Sepia / Dark / Night). The old
 // code-editor schemes (solarized, dracula, nord, monokai, one-dark, gruvbox)
 // were dropped — they read as IDE chrome, not a book.
-export type Theme = "light" | "sepia" | "dark" | "night";
+export type Theme =
+  | "light"
+  | "sepia"
+  | "lavender"
+  | "dark"
+  | "night"
+  | "plum";
 
 /** The two independent theme axes (settings exposes them as two controls):
  *  a colour-palette VARIANT, each a light+dark pair, and a MODE that picks
  *  which half of the pair to use (auto = follow the OS). */
-export type ThemeVariant = "classic" | "warm";
+export type ThemeVariant = "classic" | "warm" | "purple";
 export type ThemeMode = "auto" | "light" | "dark";
 
-/** variant → its light/dark pair (the 4 flat themes are derived from these). */
+/** variant → its light/dark pair (the 6 flat themes are derived from these). */
 export const THEME_VARIANTS: Record<
   ThemeVariant,
   { light: Theme; dark: Theme }
 > = {
   classic: { light: "light", dark: "dark" },
   warm: { light: "sepia", dark: "night" },
+  purple: { light: "lavender", dark: "plum" },
 };
 
 export interface VariantOption {
@@ -155,6 +162,7 @@ export interface VariantOption {
 export const VARIANT_OPTIONS: VariantOption[] = [
   { value: "classic", label: "Classic" },
   { value: "warm", label: "Warm" },
+  { value: "purple", label: "Purple" },
 ];
 
 export interface MenuBarSettings {

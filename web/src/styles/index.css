@@ -403,3 +403,222 @@ body {
 [data-theme="night"] .hljs-literal {
   color: #d3a0b0;
 }
+
+/* ========== Lavender Theme (soft light purple, cowboy palette, light) ========== */
+[data-theme="lavender"] .markdown-body {
+  color-scheme: light;
+  color: #1c1428;
+  background-color: #faf6fd;
+}
+
+[data-theme="lavender"] .markdown-body a {
+  color: #7c3aed;
+}
+
+[data-theme="lavender"] .markdown-body h1,
+[data-theme="lavender"] .markdown-body h2 {
+  border-bottom-color: #e2d6f0;
+}
+
+[data-theme="lavender"] .markdown-body h6 {
+  color: #6b5b8a;
+}
+
+[data-theme="lavender"] .markdown-body hr {
+  background-color: #e2d6f0;
+  border-bottom-color: #e2d6f0;
+}
+
+[data-theme="lavender"] .markdown-body blockquote {
+  color: #6b5b8a;
+  border-left-color: #d8c8ec;
+}
+
+[data-theme="lavender"] .markdown-body table th,
+[data-theme="lavender"] .markdown-body table td {
+  border-color: #e2d6f0;
+}
+
+[data-theme="lavender"] .markdown-body table tr {
+  background-color: #faf6fd;
+  border-top-color: #e2d6f0;
+}
+
+[data-theme="lavender"] .markdown-body table tr:nth-child(2n) {
+  background-color: #f3ecfa;
+}
+
+[data-theme="lavender"] .markdown-body code,
+[data-theme="lavender"] .markdown-body tt {
+  background-color: #ece1f7;
+}
+
+[data-theme="lavender"] .markdown-body .highlight pre,
+[data-theme="lavender"] .markdown-body pre {
+  color: #1c1428;
+  background-color: #f3ecfa;
+}
+
+[data-theme="lavender"] .markdown-body .markdown-alert.markdown-alert-note {
+  border-left-color: #7c3aed;
+}
+
+[data-theme="lavender"] .markdown-body .markdown-alert.markdown-alert-note .markdown-alert-title {
+  color: #7c3aed;
+}
+
+/* ========== Plum Theme (deep purple-black, cowboy palette, dark) ========== */
+[data-theme="plum"] .markdown-body {
+  color-scheme: dark;
+  color: #ede9fe;
+  background-color: #15111d;
+}
+
+[data-theme="plum"] .markdown-body a {
+  color: #a78bfa;
+}
+
+[data-theme="plum"] .markdown-body h1,
+[data-theme="plum"] .markdown-body h2 {
+  border-bottom-color: #322a44;
+}
+
+[data-theme="plum"] .markdown-body h6 {
+  color: #a899c4;
+}
+
+[data-theme="plum"] .markdown-body hr {
+  background-color: #322a44;
+  border-bottom-color: #322a44;
+}
+
+[data-theme="plum"] .markdown-body blockquote {
+  color: #a899c4;
+  border-left-color: #322a44;
+}
+
+[data-theme="plum"] .markdown-body table th,
+[data-theme="plum"] .markdown-body table td {
+  border-color: #322a44;
+}
+
+[data-theme="plum"] .markdown-body table tr {
+  background-color: #15111d;
+  border-top-color: #322a44;
+}
+
+[data-theme="plum"] .markdown-body table tr:nth-child(2n) {
+  background-color: #1f1a2c;
+}
+
+[data-theme="plum"] .markdown-body code,
+[data-theme="plum"] .markdown-body tt {
+  background-color: rgba(167, 139, 250, 0.18);
+}
+
+[data-theme="plum"] .markdown-body .highlight pre,
+[data-theme="plum"] .markdown-body pre {
+  color: #ede9fe;
+  background-color: #1f1a2c;
+}
+
+[data-theme="plum"] .markdown-body kbd {
+  color: #ede9fe;
+  background-color: #1f1a2c;
+  border-color: #322a44;
+  box-shadow: inset 0 -1px 0 #322a44;
+}
+
+[data-theme="plum"] .markdown-body mark {
+  background-color: rgba(187, 128, 9, 0.4);
+  color: #ede9fe;
+}
+
+[data-theme="plum"] .markdown-body .footnotes {
+  color: #a899c4;
+  border-top-color: #322a44;
+}
+
+[data-theme="plum"] .markdown-body .markdown-alert {
+  border-left-color: #322a44;
+}
+
+[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-note {
+  border-left-color: #a78bfa;
+}
+
+[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-note .markdown-alert-title {
+  color: #a78bfa;
+}
+
+[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-important {
+  border-left-color: #c4b5fd;
+}
+
+[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-important .markdown-alert-title {
+  color: #c4b5fd;
+}
+
+[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-warning {
+  border-left-color: #d29922;
+}
+
+[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-warning .markdown-alert-title {
+  color: #d29922;
+}
+
+[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-tip {
+  border-left-color: #3fb950;
+}
+
+[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-tip .markdown-alert-title {
+  color: #3fb950;
+}
+
+[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-caution {
+  border-left-color: #f85149;
+}
+
+[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-caution .markdown-alert-title {
+  color: #f85149;
+}
+
+/* Syntax highlighting — the dark-theme hues read cleanly on the purple-black. */
+[data-theme="plum"] .hljs {
+  color: #ede9fe;
+  background: #1f1a2c;
+}
+
+[data-theme="plum"] .hljs-comment,
+[data-theme="plum"] .hljs-quote {
+  color: #a899c4;
+}
+
+[data-theme="plum"] .hljs-keyword,
+[data-theme="plum"] .hljs-selector-tag {
+  color: #ff7b72;
+}
+
+[data-theme="plum"] .hljs-string,
+[data-theme="plum"] .hljs-title,
+[data-theme="plum"] .hljs-name,
+[data-theme="plum"] .hljs-type,
+[data-theme="plum"] .hljs-attribute,
+[data-theme="plum"] .hljs-symbol,
+[data-theme="plum"] .hljs-bullet,
+[data-theme="plum"] .hljs-addition,
+[data-theme="plum"] .hljs-variable,
+[data-theme="plum"] .hljs-template-tag,
+[data-theme="plum"] .hljs-template-variable {
+  color: #a5d6ff;
+}
+
+[data-theme="plum"] .hljs-number,
+[data-theme="plum"] .hljs-literal {
+  color: #79c0ff;
+}
+
+[data-theme="plum"] .hljs-built_in,
+[data-theme="plum"] .hljs-class .hljs-title {
+  color: #ffa657;
+}

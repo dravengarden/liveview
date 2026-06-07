@@ -59,7 +59,7 @@ function getStored(): { variant: ThemeVariant; mode: ThemeMode } {
 // dark-mode image plate in markdown.css). Keep this in sync with the dark
 // `data-color-scheme` the effect sets below.
 function isDarkTheme(theme: Theme): boolean {
-  return theme === "dark" || theme === "night";
+  return theme === "dark" || theme === "night" || theme === "plum";
 }
 
 // Keep the iOS standalone status bar (and Android's) in sync with the active
@@ -133,6 +133,28 @@ function getThemeColors(theme: Theme): ThemeColors {
         textPrimary: "#d6cbbd",
         textSecondary: "#9a8f80",
         divider: "#3a322b",
+      };
+    case "lavender":
+      // Soft lavender light theme (cowboy's palette): a desaturated pinkish
+      // violet page with a violet-600 accent — calm for long reading.
+      return {
+        primary: "#7c3aed",
+        bgDefault: "#f4ecf7",
+        bgPaper: "#faf6fd",
+        textPrimary: "#1c1428",
+        textSecondary: "#6b5b8a",
+        divider: "#e2d6f0",
+      };
+    case "plum":
+      // Deep purple-black dark theme (cowboy's): reads as purple, not black,
+      // with a violet-400 accent and soft off-white text.
+      return {
+        primary: "#a78bfa",
+        bgDefault: "#15111d",
+        bgPaper: "#1f1a2c",
+        textPrimary: "#ede9fe",
+        textSecondary: "#a899c4",
+        divider: "#322a44",
       };
   }
 }
