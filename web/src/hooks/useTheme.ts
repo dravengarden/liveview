@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { createTheme, type Theme as MuiTheme } from "@mui/material/styles";
 import type { Theme, ThemeVariant, ThemeMode } from "@/types";
 import { THEME_VARIANTS } from "@/types";
@@ -153,6 +153,10 @@ export function useTheme(): UseThemeResult {
   const [sysDark, setSysDark] = useState<boolean>(systemPrefersDark);
 
   const theme = resolveTheme(variant, mode, sysDark);
+  // Latest resolved theme for the foreground re-check below (runs from a
+  // listener registered once, so it can't close over the render-time value).
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
 
   const setVariant = useCallback((v: ThemeVariant) => {
     setVariantState(v);
@@ -173,6 +177,27 @@ export function useTheme(): UseThemeResult {
     const onChange = (e: MediaQueryListEvent): void => setSysDark(e.matches);
     mq.addEventListener("change", onChange);
     return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  // When the app returns to the foreground, re-check the OS scheme AND re-assert
+  // the status-bar colour. A system theme change that happens WHILE the PWA is
+  // backgrounded never fires the `change` listener above (the JS is suspended),
+  // so without this the theme stays stale until some other re-render — the
+  // navbar/status bar lag behind the OS. Re-applying theme-color on resume also
+  // nudges iOS to re-read it (a standalone PWA routinely drops the runtime value
+  // across a background/foreground, leaving the status bar on the launch colour).
+  useEffect(() => {
+    const onResume = (): void => {
+      if (document.visibilityState !== "visible") return;
+      setSysDark(systemPrefersDark());
+      applyThemeColor(getThemeColors(themeRef.current).bgPaper);
+    };
+    document.addEventListener("visibilitychange", onResume);
+    window.addEventListener("pageshow", onResume);
+    return () => {
+      document.removeEventListener("visibilitychange", onResume);
+      window.removeEventListener("pageshow", onResume);
+    };
   }, []);
 
   // Reconcile to the server (cross-device truth) once on mount; localStorage
