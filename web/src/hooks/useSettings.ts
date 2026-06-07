@@ -3,9 +3,6 @@ import {
   CONTENT_WIDTH_DEFAULT,
   CONTENT_WIDTH_MAX,
   CONTENT_WIDTH_MIN,
-  FONT_SCALE_DEFAULT,
-  FONT_SCALE_MAX,
-  FONT_SCALE_MIN,
   LINE_HEIGHT_DEFAULT,
   LINE_HEIGHT_MAX,
   LINE_HEIGHT_MIN,
@@ -16,7 +13,6 @@ import { getServerSettings, putServerSetting } from "@/serverSettings";
 const SETTINGS_KEY = "lv-settings";
 const CONTENT_WIDTH_SETTING_KEY = "ui.contentWidth";
 const LINE_HEIGHT_SETTING_KEY = "ui.lineHeight";
-const FONT_SCALE_SETTING_KEY = "ui.fontScale";
 
 function inRange(n: number, min: number, max: number): boolean {
   return Number.isFinite(n) && n >= min && n <= max;
@@ -25,7 +21,6 @@ function inRange(n: number, min: number, max: number): boolean {
 const DEFAULT_SETTINGS: MenuBarSettings = {
   contentMaxWidth: CONTENT_WIDTH_DEFAULT,
   lineHeight: LINE_HEIGHT_DEFAULT,
-  fontScale: FONT_SCALE_DEFAULT,
 };
 
 /** Coerce a stored value into a valid setting, falling back to `def` when it's
@@ -57,12 +52,6 @@ function getStoredSettings(): MenuBarSettings {
           LINE_HEIGHT_MAX,
           DEFAULT_SETTINGS.lineHeight,
         ),
-        fontScale: sanitize(
-          parsed.fontScale,
-          FONT_SCALE_MIN,
-          FONT_SCALE_MAX,
-          DEFAULT_SETTINGS.fontScale,
-        ),
       };
     }
   } catch {
@@ -75,7 +64,6 @@ interface UseSettingsResult {
   menuBarSettings: MenuBarSettings;
   setContentMaxWidth: (width: number) => void;
   setLineHeight: (lh: number) => void;
-  setFontScale: (scale: number) => void;
 }
 
 export function useSettings(): UseSettingsResult {
@@ -100,14 +88,6 @@ export function useSettings(): UseSettingsResult {
     (lh: number) => {
       persist({ ...getStoredSettings(), lineHeight: lh });
       putServerSetting(LINE_HEIGHT_SETTING_KEY, String(lh));
-    },
-    [persist],
-  );
-
-  const setFontScale = useCallback(
-    (scale: number) => {
-      persist({ ...getStoredSettings(), fontScale: scale });
-      putServerSetting(FONT_SCALE_SETTING_KEY, String(scale));
     },
     [persist],
   );
@@ -140,15 +120,6 @@ export function useSettings(): UseSettingsResult {
         next.lineHeight = lh;
         changed = true;
       }
-      const fs = Number(s[FONT_SCALE_SETTING_KEY]);
-      if (
-        s[FONT_SCALE_SETTING_KEY] !== undefined &&
-        inRange(fs, FONT_SCALE_MIN, FONT_SCALE_MAX) &&
-        fs !== cur.fontScale
-      ) {
-        next.fontScale = fs;
-        changed = true;
-      }
       if (changed) persist(next);
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -158,6 +129,5 @@ export function useSettings(): UseSettingsResult {
     menuBarSettings,
     setContentMaxWidth,
     setLineHeight,
-    setFontScale,
   };
 }
