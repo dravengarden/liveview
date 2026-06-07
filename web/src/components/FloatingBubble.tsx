@@ -28,7 +28,7 @@ import {
   SkipNext,
   SkipPrevious,
 } from "@mui/icons-material";
-import { BottomSheet } from "../_shell";
+import { BottomSheet, useAnyDetentSheetOpen } from "../_shell";
 import { Forward15Icon, Replay15Icon } from "./Skip15Icons";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
@@ -165,6 +165,11 @@ export function FloatingBubble({
     setSleepTimer,
     stop,
   } = useAudioPlayer();
+
+  // A DetentSheet (settings / TOC / confirm) renders inline, so its z-index is
+  // trapped below this root-level fixed puck — it would otherwise show through
+  // an open sheet. Recede while any sheet is up.
+  const sheetOpen = useAnyDetentSheetOpen();
 
   const stored = useRef<StoredPos>(loadPos());
   const [pos, setPos] = useState<Pos>(() =>
@@ -476,6 +481,8 @@ export function FloatingBubble({
   const slug = nowPlaying.bookSlug;
   const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
   const tucked = idle && !dragging && !controlsOpen;
+  // Fully hidden + inert while its own card or any DetentSheet is open.
+  const hidden = controlsOpen || sheetOpen;
   // The card docks to the same edge as the bubble; clamp its top so it never
   // spills off the bottom of the screen. Positioned with left (not a right
   // anchor) so a drag and the edge-snap share one coordinate space.
@@ -517,8 +524,8 @@ export function FloatingBubble({
           WebkitUserSelect: "none",
           WebkitTouchCallout: "none",
           cursor: dragging ? "grabbing" : "grab",
-          opacity: controlsOpen ? 0 : tucked ? IDLE_OPACITY : 0.92,
-          pointerEvents: controlsOpen ? "none" : "auto",
+          opacity: hidden ? 0 : tucked ? IDLE_OPACITY : 0.92,
+          pointerEvents: hidden ? "none" : "auto",
           // Idle tuck: slide a sliver off the docked edge when untouched.
           transform: tucked
             ? `translateX(${pos.side === "right" ? PEEK * 100 : -PEEK * 100}%)`

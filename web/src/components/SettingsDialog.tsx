@@ -1,6 +1,5 @@
 import {
   Box,
-  Divider,
   MenuItem,
   Select,
   Stack,
@@ -148,9 +147,15 @@ export function SettingsButton({
 
   return (
     <SettingsSheet title={t("settings.title")} wide>
-      <Stack spacing={3}>
+      {
+        /* A continuous grouped list (iOS-settings rhythm): each section is an
+          overline header + its controls, with a single consistent gap between
+          sections. No floating <Divider>s — they sat in a big gap and read as
+          stray lines / wasted space; the headers do the separating. */
+      }
+      <Stack spacing={2.25}>
         {/* ── Theme: palette pair + light/dark mode ──────────────────────── */}
-        <Stack spacing={2}>
+        <Stack spacing={1.5}>
           <Typography variant="overline" color="text.secondary">
             {t("settings.theme")}
           </Typography>
@@ -271,10 +276,8 @@ export function SettingsButton({
           </Stack>
         </Stack>
 
-        <Divider />
-
         {/* ── Reading: font + layout ─────────────────────────────────────── */}
-        <Stack spacing={2}>
+        <Stack spacing={1.5}>
           <Typography variant="overline" color="text.secondary">
             {t("settings.reading")}
           </Typography>
@@ -431,10 +434,8 @@ export function SettingsButton({
           />
         </Stack>
 
-        <Divider />
-
         {/* ── Library: bookshelf order. */}
-        <Stack spacing={2}>
+        <Stack spacing={1.5}>
           <Typography variant="overline" color="text.secondary">
             {t("settings.layout")}
           </Typography>
@@ -456,10 +457,8 @@ export function SettingsButton({
           />
         </Stack>
 
-        <Divider />
-
         {/* ── Interface language ─────────────────────────────────────────── */}
-        <Stack spacing={1.5}>
+        <Stack spacing={1}>
           <Typography variant="overline" color="text.secondary">
             {t("settings.language")}
           </Typography>
@@ -475,8 +474,6 @@ export function SettingsButton({
             <ToggleButton value="zh">中文</ToggleButton>
           </ToggleButtonGroup>
         </Stack>
-
-        <Divider />
 
         {/* ── About ──────────────────────────────────────────────────────── */}
         <Stack spacing={0.5}>
