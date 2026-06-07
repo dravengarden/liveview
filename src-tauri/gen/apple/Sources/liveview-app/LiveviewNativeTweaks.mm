@@ -9,6 +9,7 @@
 // (init leaves extra Sources/*.mm alone — see src-tauri/README.md gotchas).
 #import <AVFoundation/AVFoundation.h>
 #import <Foundation/Foundation.h>
+#import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
 // (1) THE reason this shell exists: background / lock-screen audiobook playback.
@@ -62,6 +63,36 @@ __attribute__((constructor)) static void liveviewStripKeyboardAccessoryBar(void)
         // touch a shared superclass implementation.
         if (!class_addMethod(cls, sel, nilImp, types)) {
             method_setImplementation(class_getInstanceMethod(cls, sel), nilImp);
+        }
+    }
+}
+
+// (3) Edge-swipe back/forward. WKWebView ships with
+// `allowsBackForwardNavigationGestures` OFF, but Safari / a standalone PWA have
+// it ON — which is why swiping from the screen edge to go "back" worked as a web
+// app but stopped in the native shell. liveview routes entirely via the History
+// API (pushState/popstate), so re-enabling the gesture navigates that SAME
+// history — purely native, zero web change, the PWA is untouched. Swizzle
+// WKWebView's designated initializer so EVERY instance (Tauri's webview
+// included) gets it on; the constructor runs at image load, before any webview
+// is created.
+static id (*lv_orig_wk_init)(id, SEL, CGRect, id) = NULL;
+static id lv_wk_init(id self, SEL _cmd, CGRect frame, id configuration) {
+    id wv = lv_orig_wk_init(self, _cmd, frame, configuration);
+    if (wv) {
+        ((WKWebView *)wv).allowsBackForwardNavigationGestures = YES;
+    }
+    return wv;
+}
+
+__attribute__((constructor)) static void liveviewEnableSwipeBack(void) {
+    @autoreleasepool {
+        Method m = class_getInstanceMethod(
+            [WKWebView class], @selector(initWithFrame:configuration:));
+        if (m) {
+            lv_orig_wk_init =
+                (id (*)(id, SEL, CGRect, id))method_getImplementation(m);
+            method_setImplementation(m, (IMP)lv_wk_init);
         }
     }
 }
