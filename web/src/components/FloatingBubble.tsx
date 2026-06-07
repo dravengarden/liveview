@@ -9,6 +9,7 @@ import {
   Box,
   Button,
   CircularProgress,
+  Divider,
   Fade,
   Grow,
   IconButton,
@@ -864,7 +865,12 @@ export function FloatingBubble({
         ))}
       </Menu>
 
-      {/* Long-press menu: just a destructive "stop & close" for now. */}
+      {
+        /* Long-press popup: a small context card — which book/chapter the
+          action targets, then the destructive "stop & close" row. Styled like
+          the transport card (rounded, bordered, elevated) so it reads as part
+          of the same widget, not a bare system menu. */
+      }
       <Menu
         anchorEl={menuAnchor}
         open={menuAnchor !== null}
@@ -877,15 +883,88 @@ export function FloatingBubble({
           vertical: "center",
           horizontal: pos.side === "right" ? "right" : "left",
         }}
+        slotProps={{
+          paper: {
+            sx: {
+              minWidth: 224,
+              maxWidth: "calc(100vw - 24px)",
+              borderRadius: 3,
+              border: 1,
+              borderColor: "divider",
+              boxShadow: 8,
+              overflow: "hidden",
+            },
+          },
+          list: { sx: { py: 0 } },
+        }}
       >
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1.25,
+            px: 1.5,
+            py: 1.25,
+          }}
+        >
+          <Box
+            sx={{
+              flexShrink: 0,
+              width: 36,
+              height: 36,
+              borderRadius: "50%",
+              overflow: "hidden",
+              position: "relative",
+              background: coverGradient(slug),
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            {nowPlaying.cover
+              ? (
+                <Box
+                  component="img"
+                  src={`/api/cover?book=${encodeURIComponent(slug)}`}
+                  alt=""
+                  sx={{
+                    position: "absolute",
+                    inset: 0,
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                  }}
+                />
+              )
+              : (
+                <AudiobookIcon
+                  sx={{ fontSize: 19, color: "rgba(255,255,255,0.92)" }}
+                />
+              )}
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="body2" fontWeight={700} noWrap>
+              {nowPlaying.chapterLabel}
+            </Typography>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              noWrap
+              sx={{ display: "block" }}
+            >
+              {nowPlaying.bookLabel}
+            </Typography>
+          </Box>
+        </Box>
+        <Divider />
         <MenuItem
           onClick={() => {
             setMenuAnchor(null);
             setConfirmOpen(true);
           }}
-          sx={{ color: "error.main" }}
+          sx={{ color: "error.main", py: 1.25, gap: 0.5 }}
         >
-          <ListItemIcon sx={{ color: "error.main" }}>
+          <ListItemIcon sx={{ color: "error.main", minWidth: 34 }}>
             <DeleteIcon fontSize="small" />
           </ListItemIcon>
           {t("audiobook.stop")}
