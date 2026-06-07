@@ -23,7 +23,10 @@ import { THEME_VARIANTS, VARIANT_OPTIONS } from "@/types";
 import {
   type NavbarPosition,
   setNavbarPosition,
+  type ShelfSort,
+  setShelfSort,
   useNavbarPosition,
+  useShelfSort,
 } from "@/hooks";
 import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
@@ -42,6 +45,9 @@ interface SettingsButtonProps {
 }
 
 const MODE_OPTIONS: ThemeMode[] = ["auto", "light", "dark"];
+
+// Bookshelf sort options, in display order (labels via `sort.<key>`).
+const SHELF_SORTS: ShelfSort[] = ["updated", "read", "added", "name"];
 
 // Discrete presets for the reading-layout dropdowns — a slider was fiddly on
 // touch and a number field would pop the keyboard; a small set taps cleanly.
@@ -153,6 +159,7 @@ export function SettingsButton({
   const theme = useTheme();
   const mobile = useMediaQuery(theme.breakpoints.down("lg"));
   const navbarPosition = useNavbarPosition();
+  const shelfSort = useShelfSort();
   // The font picker is collapsed by default — its 7 preview cards would
   // otherwise dominate the sheet. Collapsed shows just the current face,
   // previewed in itself; expanding drops the full list, and picking a face
@@ -439,34 +446,49 @@ export function SettingsButton({
           />
         </Stack>
 
-        {/* ── Layout (mobile only): where the nav bar sits ─────────────────
-            Offered on the compact tier only — desktop is always a top bar. */}
-        {mobile && (
-          <>
-            <Divider />
-            <Stack spacing={2}>
-              <Typography variant="overline" color="text.secondary">
-                {t("settings.layout")}
-              </Typography>
-              <Row
-                label={t("settings.navbar")}
-                desc={t("settings.navbarDesc")}
-                control={
-                  <Select
-                    size="small"
-                    value={navbarPosition}
-                    onChange={(e) =>
-                      setNavbarPosition(e.target.value as NavbarPosition)}
-                    sx={{ minWidth: 104 }}
-                  >
-                    <MenuItem value="top">{t("navbar.top")}</MenuItem>
-                    <MenuItem value="bottom">{t("navbar.bottom")}</MenuItem>
-                  </Select>
-                }
-              />
-            </Stack>
-          </>
-        )}
+        <Divider />
+
+        {/* ── Layout: shelf order (all tiers) + nav bar position (mobile, since
+            desktop is always a top bar). */}
+        <Stack spacing={2}>
+          <Typography variant="overline" color="text.secondary">
+            {t("settings.layout")}
+          </Typography>
+          <Row
+            label={t("settings.sort")}
+            desc={t("settings.sortDesc")}
+            control={
+              <Select
+                size="small"
+                value={shelfSort}
+                onChange={(e) => setShelfSort(e.target.value as ShelfSort)}
+                sx={{ minWidth: 132 }}
+              >
+                {SHELF_SORTS.map((s) => (
+                  <MenuItem key={s} value={s}>{t(`sort.${s}`)}</MenuItem>
+                ))}
+              </Select>
+            }
+          />
+          {mobile && (
+            <Row
+              label={t("settings.navbar")}
+              desc={t("settings.navbarDesc")}
+              control={
+                <Select
+                  size="small"
+                  value={navbarPosition}
+                  onChange={(e) =>
+                    setNavbarPosition(e.target.value as NavbarPosition)}
+                  sx={{ minWidth: 104 }}
+                >
+                  <MenuItem value="top">{t("navbar.top")}</MenuItem>
+                  <MenuItem value="bottom">{t("navbar.bottom")}</MenuItem>
+                </Select>
+              }
+            />
+          )}
+        </Stack>
 
         <Divider />
 

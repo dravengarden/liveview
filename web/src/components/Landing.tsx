@@ -30,6 +30,7 @@ import {
 } from "@mui/icons-material";
 import { type ReactNode, useMemo, useRef, useState } from "react";
 import type { Book, BookProgress, ReadingProgress } from "@/types";
+import { type ShelfSort, useShelfSort } from "@/hooks";
 import { useI18n } from "@/i18n";
 import { ScrollToTopButton } from "./ScrollToTopButton";
 
@@ -314,6 +315,7 @@ export function Landing({
   navbarAtBottom,
 }: LandingProps): React.JSX.Element {
   const { t, lang } = useI18n();
+  const sort = useShelfSort();
   const [query, setQuery] = useState("");
   // Multi-select kind filter; an empty selection means "all kinds".
   const [kinds, setKinds] = useState<Category[]>([]);
@@ -324,16 +326,29 @@ export function Landing({
   const now = Date.now();
 
   // One card per book (audio rides along as a badge on text+audio books),
-  // ordered by the book's most-recent content change first: the last sync that
-  // added/removed/edited it (`updated_at`), falling back to when it first
-  // appeared (`created_at`). So a freshly-synced or newly-added book surfaces at
-  // the top; this is a content-recency shelf, not a reading-history one.
+  // ordered by the Settings → Library → Sort preference. Default "updated":
+  // most-recent content change first (the last sync that added/removed/edited
+  // it, falling back to first appearance) — a content-recency shelf.
   const entries = useMemo(() => {
     const changedAt = (b: Book): number => b.updated_at || b.created_at || 0;
-    return shelfEntries(books).sort((a, z) =>
-      changedAt(z.book) - changedAt(a.book)
-    );
-  }, [books]);
+    const readAt = (slug: string): number => {
+      const bp = progress[slug];
+      return Math.max(bp?.text?.updatedAt ?? 0, bp?.audio?.updatedAt ?? 0);
+    };
+    const cmp: Record<ShelfSort, (a: ShelfEntry, z: ShelfEntry) => number> = {
+      updated: (a, z) => changedAt(z.book) - changedAt(a.book),
+      added: (a, z) => (z.book.created_at || 0) - (a.book.created_at || 0),
+      name: (a, z) =>
+        a.book.label.localeCompare(z.book.label, lang === "zh" ? "zh" : "en"),
+      // Most-recently opened first; never-opened books fall to the bottom,
+      // tie-broken by content recency.
+      read: (a, z) => {
+        const d = readAt(z.book.slug) - readAt(a.book.slug);
+        return d !== 0 ? d : changedAt(z.book) - changedAt(a.book);
+      },
+    };
+    return shelfEntries(books).sort(cmp[sort]);
+  }, [books, sort, progress, lang]);
 
   // A card matches the "audiobook" kind if it has audio AT ALL (text+audio books
   // included), so the filter surfaces everything listenable — not just

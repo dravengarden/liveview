@@ -10,3 +10,4 @@ export {
   useNavbarAtBottom,
   useNavbarPosition,
 } from "./useNavbarPosition";
+export { type ShelfSort, setShelfSort, useShelfSort } from "./useShelfSort";
