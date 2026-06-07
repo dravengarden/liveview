@@ -1147,6 +1147,7 @@ export function App(): React.JSX.Element {
                   <AudiobookPlayer
                     contentMaxWidth={menuBarSettings.contentMaxWidth}
                     lineHeight={menuBarSettings.lineHeight}
+                    navbarAtBottom={navbarAtBottom}
                     onSaveScroll={saveProgress}
                   />
                 )

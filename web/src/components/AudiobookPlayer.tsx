@@ -26,6 +26,10 @@ import { useI18n } from "@/i18n";
 interface AudiobookPlayerProps {
   contentMaxWidth: number;
   lineHeight: number;
+  /** True when a bottom nav bar sits below the player and already owns the
+   *  home-indicator safe area, so the transport drops its own bottom inset
+   *  (otherwise the inset is reserved twice — a dead gap above the bar). */
+  navbarAtBottom?: boolean;
   /** Persist playback progress (chapter path + 0..1 fraction) — same store as
    *  text reading, so the shelf card can show an audio %. */
   onSaveScroll?: (path: string, ratio: number) => void;
@@ -58,7 +62,8 @@ function fmtSleep(min: number): string {
  *  and the transport. All playback state comes from the root audio engine, so
  *  this view is purely a window onto it — leaving it never stops the audio. */
 export function AudiobookPlayer(
-  { contentMaxWidth, lineHeight, onSaveScroll }: AudiobookPlayerProps,
+  { contentMaxWidth, lineHeight, navbarAtBottom = false, onSaveScroll }:
+    AudiobookPlayerProps,
 ): React.JSX.Element {
   const { t } = useI18n();
   const {
@@ -445,10 +450,14 @@ export function AudiobookPlayer(
           // transport row still fits a narrow (375px) iPhone.
           pl: "max(env(safe-area-inset-left, 0px), 8px)",
           pr: "max(env(safe-area-inset-right, 0px), 8px)",
-          pt: 0.5,
-          // Trimmed bottom: sit ~8px tighter than the home-indicator inset
-          // (floored to 4px on devices without one) so the bar isn't bottom-heavy.
-          pb: "max(calc(env(safe-area-inset-bottom, 0px) - 8px), 4px)",
+          pt: 0.25,
+          // Bottom inset: when a bottom nav bar sits below us it already clears
+          // the home indicator, so just a hair of breathing room (no doubled
+          // gap). Otherwise (nav bar on top, player at the screen edge) sit ~8px
+          // tighter than the inset so the bar isn't bottom-heavy.
+          pb: navbarAtBottom
+            ? 0.5
+            : "max(calc(env(safe-area-inset-bottom, 0px) - 8px), 4px)",
         }}
       >
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
