@@ -17,6 +17,23 @@ body {
   padding: 0;
 }
 
+/* Mobile (bottom-navbar) reading view: the in-book reader runs full-height with
+   the navbar at the bottom, so its top would sit UNDER the iOS status bar /
+   Dynamic Island. Add a scroll-WITH-content spacer of the top safe-area inset at
+   the head of every reader scroller, so the first line clears the status bar at
+   rest yet scrolls up under the frosted strip (App.tsx). env() is 0 in a normal
+   browser tab and on no-notch screens, so this costs nothing off-device and the
+   PWA/standalone behaves the same as the native shell. Matches the lg breakpoint
+   that drives `useNavbarAtBottom` (bottom navbar). */
+@media (max-width: 1199.95px) {
+  [data-lv-scroller="reader"]::before {
+    content: "";
+    display: block;
+    flex: none;
+    height: env(safe-area-inset-top, 0px);
+  }
+}
+
 /* Mobile: keep wide content (tables, code, images) inside the viewport
    instead of forcing the whole page to scroll sideways. */
 @media (max-width: 900px) {

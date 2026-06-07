@@ -10,6 +10,7 @@ import {
   ThemeProvider,
   Typography,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import {
   Close as CloseIcon,
   Headphones as AudiobookIcon,
@@ -1095,6 +1096,34 @@ export function App(): React.JSX.Element {
             zIndex: (t) => t.zIndex.appBar + 1,
           }}
         />
+        {
+          /* Frosted-glass strip over the iOS status-bar / Dynamic Island. In the
+            native shell (and a standalone PWA) the reader runs full-height with
+            the navbar at the bottom, so content scrolls UNDER the status bar. A
+            blurred + saturated strip over the safe-area-top fixes it the iOS way:
+            the status bar sits on frosted glass and content scrolls under it (the
+            reader scrollers' matching ::before inset — index.css — clears it at
+            rest). `pointer-events:none` so the tap target above still works; only
+            shown in bottom-navbar mode (top mode: the NavShell bar owns that
+            edge); height collapses to 0 off-device, so it costs nothing there. */
+        }
+        {navbarAtBottom && (
+          <Box
+            aria-hidden
+            sx={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              right: 0,
+              height: "env(safe-area-inset-top, 0px)",
+              zIndex: (t) => t.zIndex.appBar,
+              pointerEvents: "none",
+              bgcolor: (t) => alpha(t.palette.background.default, 0.5),
+              backdropFilter: "blur(24px) saturate(180%)",
+              WebkitBackdropFilter: "blur(24px) saturate(180%)",
+            }}
+          />
+        )}
         {
           /* Connection / version banner, above everything so it spans the width
               and pushes the view stack + mini-player down when shown. */
