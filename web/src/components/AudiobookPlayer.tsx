@@ -241,7 +241,7 @@ export function AudiobookPlayer(
             </Typography>
           )
           : <Bedtime sx={{ fontSize: 22, color: "text.secondary" }} />}
-      sx={{ ...chipSelectSx, width: CHIP_W }}
+      sx={chipSelectSx}
     >
       <MenuItem value={0}>{t("audiobook.sleepOff")}</MenuItem>
       {SLEEP_MINUTES.map((m) => (
@@ -353,7 +353,9 @@ export function AudiobookPlayer(
     >
       <Box sx={earSx}>{speedChip}</Box>
       {mainCluster}
-      {sleepChip}
+      {/* Same earSx slot as the speed chip — both controls centred in a CHIP_W
+          ear, so the left "2×" and the right sleep button are symmetric. */}
+      <Box sx={earSx}>{sleepChip}</Box>
     </Box>
   );
 
