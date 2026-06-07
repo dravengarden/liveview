@@ -1,10 +1,18 @@
-import { Box, ButtonBase, IconButton, LinearProgress, Typography, CircularProgress } from "@mui/material";
+import { rem } from "@/px";
 import {
-  PlayArrow,
+  Box,
+  ButtonBase,
+  CircularProgress,
+  IconButton,
+  LinearProgress,
+  Typography,
+} from "@mui/material";
+import {
+  Headphones as AudiobookIcon,
   Pause,
+  PlayArrow,
   SkipNext,
   SkipPrevious,
-  Headphones as AudiobookIcon,
 } from "@mui/icons-material";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
@@ -14,7 +22,9 @@ function coverGradient(slug: string): string {
   let h = 0;
   for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) | 0;
   const hue = Math.abs(h) % 360;
-  return `linear-gradient(135deg, hsl(${hue} 52% 52%), hsl(${(hue + 38) % 360} 48% 42%))`;
+  return `linear-gradient(135deg, hsl(${hue} 52% 52%), hsl(${
+    (hue + 38) % 360
+  } 48% 42%))`;
 }
 
 /**
@@ -31,7 +41,9 @@ function coverGradient(slug: string): string {
  * the shelf) the full bar is just in the way, so it yields to the floating
  * bubble ({@link FloatingBubble}) instead — the two are mutually exclusive.
  */
-export function MiniPlayer({ onPlayingPage }: { onPlayingPage: boolean }): React.JSX.Element | null {
+export function MiniPlayer(
+  { onPlayingPage }: { onPlayingPage: boolean },
+): React.JSX.Element | null {
   const { t } = useI18n();
   const {
     nowPlaying,
@@ -77,8 +89,10 @@ export function MiniPlayer({ onPlayingPage }: { onPlayingPage: boolean }): React
         sx={{ position: "absolute", top: 0, left: 0, right: 0, height: 2 }}
       />
       <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-        {/* Cover + title: the tap target that re-opens the reader. ButtonBase so
-            it's a real MUI button with a ripple. */}
+        {
+          /* Cover + title: the tap target that re-opens the reader. ButtonBase so
+            it's a real MUI button with a ripple. */
+        }
         <ButtonBase
           aria-label={t("audiobook.openPlayer")}
           onClick={() => setExpanded(true)}
@@ -109,33 +123,64 @@ export function MiniPlayer({ onPlayingPage }: { onPlayingPage: boolean }): React
               justifyContent: "center",
             }}
           >
-            {nowPlaying.cover ? (
-              <Box
-                component="img"
-                src={`/api/cover?book=${encodeURIComponent(nowPlaying.bookSlug)}`}
-                alt=""
-                sx={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }}
-              />
-            ) : (
-              <AudiobookIcon sx={{ fontSize: 22, color: "rgba(255,255,255,0.92)" }} />
-            )}
+            {nowPlaying.cover
+              ? (
+                <Box
+                  component="img"
+                  src={`/api/cover?book=${
+                    encodeURIComponent(nowPlaying.bookSlug)
+                  }`}
+                  alt=""
+                  sx={{
+                    position: "absolute",
+                    inset: 0,
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                  }}
+                />
+              )
+              : (
+                <AudiobookIcon
+                  sx={{ fontSize: rem(22), color: "rgba(255,255,255,0.92)" }}
+                />
+              )}
           </Box>
           <Box sx={{ minWidth: 0 }}>
             <Typography variant="body2" fontWeight={700} noWrap>
               {nowPlaying.chapterLabel}
             </Typography>
-            <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              noWrap
+              sx={{ display: "block" }}
+            >
               {nowPlaying.bookLabel}
             </Typography>
           </Box>
         </ButtonBase>
 
-        {/* Transport: prev / play-pause / next chapter. Uniform 40px targets
+        {
+          /* Transport: prev / play-pause / next chapter. Uniform 40px targets
             (play 44px for emphasis) with a gap so they aren't cramped on iOS —
-            the same touch ergonomics as cowboy's composer action row. */}
-        <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0, gap: 0.5 }}>
-          <IconButton aria-label={t("audiobook.prevChapter")} onClick={prevChapter} disabled={!canPrev} sx={{ width: 52, height: 52 }}>
-            <SkipPrevious sx={{ fontSize: 34 }} />
+            the same touch ergonomics as cowboy's composer action row. */
+        }
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            flexShrink: 0,
+            gap: 0.5,
+          }}
+        >
+          <IconButton
+            aria-label={t("audiobook.prevChapter")}
+            onClick={prevChapter}
+            disabled={!canPrev}
+            sx={{ width: 52, height: 52 }}
+          >
+            <SkipPrevious sx={{ fontSize: rem(34) }} />
           </IconButton>
           <IconButton
             aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
@@ -143,10 +188,19 @@ export function MiniPlayer({ onPlayingPage }: { onPlayingPage: boolean }): React
             color="primary"
             sx={{ width: 60, height: 60 }}
           >
-            {loading ? <CircularProgress size={30} /> : playing ? <Pause sx={{ fontSize: 39 }} /> : <PlayArrow sx={{ fontSize: 39 }} />}
+            {loading
+              ? <CircularProgress size={30} />
+              : playing
+              ? <Pause sx={{ fontSize: rem(39) }} />
+              : <PlayArrow sx={{ fontSize: rem(39) }} />}
           </IconButton>
-          <IconButton aria-label={t("audiobook.nextChapter")} onClick={nextChapter} disabled={!canNext} sx={{ width: 52, height: 52 }}>
-            <SkipNext sx={{ fontSize: 34 }} />
+          <IconButton
+            aria-label={t("audiobook.nextChapter")}
+            onClick={nextChapter}
+            disabled={!canNext}
+            sx={{ width: 52, height: 52 }}
+          >
+            <SkipNext sx={{ fontSize: rem(34) }} />
           </IconButton>
         </Box>
       </Box>

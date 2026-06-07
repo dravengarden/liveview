@@ -1,3 +1,4 @@
+import { rem } from "@/px";
 import {
   Box,
   MenuItem,
@@ -247,7 +248,9 @@ export function SettingsButton({
                             justifyContent: "center",
                           }}
                         >
-                          <CheckIcon sx={{ fontSize: 11, color: "white" }} />
+                          <CheckIcon
+                            sx={{ fontSize: rem(11), color: "white" }}
+                          />
                         </Box>
                       )}
                     </Box>

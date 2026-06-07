@@ -1,3 +1,4 @@
+import { rem } from "@/px";
 import {
   useCallback,
   useEffect,
@@ -589,7 +590,7 @@ export function FloatingBubble({
             )
             : (
               <AudiobookIcon
-                sx={{ fontSize: 22, color: "rgba(255,255,255,0.92)" }}
+                sx={{ fontSize: rem(22), color: "rgba(255,255,255,0.92)" }}
               />
             )}
           {
@@ -766,7 +767,7 @@ export function FloatingBubble({
                 )
                 : (
                   <AudiobookIcon
-                    sx={{ fontSize: 21, color: "rgba(255,255,255,0.92)" }}
+                    sx={{ fontSize: rem(21), color: "rgba(255,255,255,0.92)" }}
                   />
                 )}
             </Box>
@@ -786,7 +787,7 @@ export function FloatingBubble({
             <OpenIcon
               sx={{
                 flexShrink: 0,
-                fontSize: 18,
+                fontSize: rem(18),
                 color: "primary.main",
                 mr: 0.25,
               }}
@@ -836,8 +837,8 @@ export function FloatingBubble({
               {loading
                 ? <CircularProgress size={26} />
                 : playing
-                ? <Pause sx={{ fontSize: 34 }} />
-                : <PlayArrow sx={{ fontSize: 34 }} />}
+                ? <Pause sx={{ fontSize: rem(34) }} />
+                : <PlayArrow sx={{ fontSize: rem(34) }} />}
             </IconButton>
             <IconButton
               aria-label={t("audiobook.skipForward")}
@@ -888,7 +889,7 @@ export function FloatingBubble({
               onClick={(e) => setSpeedAnchor(e.currentTarget)}
               sx={segSx}
             >
-              <Box component="span" sx={{ fontSize: 14, fontWeight: 700 }}>
+              <Box component="span" sx={{ fontSize: rem(14), fontWeight: 700 }}>
                 {rate}×
               </Box>
             </Box>
@@ -912,7 +913,7 @@ export function FloatingBubble({
                     {fmtSleep(sleepRemainingMin)}
                   </Typography>
                 )
-                : <Bedtime sx={{ fontSize: 22 }} />}
+                : <Bedtime sx={{ fontSize: rem(22) }} />}
             </Box>
 
             {/* Delete — stop playback + dismiss the bubble (asks first). */}
@@ -927,7 +928,7 @@ export function FloatingBubble({
                 color: "error.main",
               }}
             >
-              <DeleteIcon sx={{ fontSize: 21 }} />
+              <DeleteIcon sx={{ fontSize: rem(21) }} />
             </Box>
           </Box>
         </Box>

@@ -1,3 +1,4 @@
+import { rem } from "@/px";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -244,7 +245,7 @@ export function AudiobookPlayer(
               {fmtSleep(sleepRemainingMin)}
             </Typography>
           )
-          : <Bedtime sx={{ fontSize: 22, color: "text.secondary" }} />}
+          : <Bedtime sx={{ fontSize: rem(22), color: "text.secondary" }} />}
       sx={chipSelectSx}
     >
       <MenuItem value={0}>{t("audiobook.sleepOff")}</MenuItem>
@@ -263,7 +264,7 @@ export function AudiobookPlayer(
       color={following ? "primary" : "default"}
       sx={{ width: 44, height: 44 }}
     >
-      <MyLocation sx={{ fontSize: 26 }} />
+      <MyLocation sx={{ fontSize: rem(26) }} />
     </IconButton>
   );
 
@@ -282,7 +283,7 @@ export function AudiobookPlayer(
         disabled={!canPrev}
         sx={{ width: 50, height: 50 }}
       >
-        <SkipPrevious sx={{ fontSize: 33 }} />
+        <SkipPrevious sx={{ fontSize: rem(33) }} />
       </IconButton>
       <IconButton
         aria-label={t("audiobook.skipBack")}
@@ -294,7 +295,7 @@ export function AudiobookPlayer(
       >
         <Replay15Icon
           sx={{
-            fontSize: 30,
+            fontSize: rem(30),
             transform: `rotate(${backSpin}deg)`,
             transition: "transform .5s cubic-bezier(.2,.8,.2,1)",
           }}
@@ -310,8 +311,8 @@ export function AudiobookPlayer(
         {loading
           ? <CircularProgress size={32} />
           : playing
-          ? <Pause sx={{ fontSize: 38 }} />
-          : <PlayArrow sx={{ fontSize: 38 }} />}
+          ? <Pause sx={{ fontSize: rem(38) }} />
+          : <PlayArrow sx={{ fontSize: rem(38) }} />}
       </IconButton>
       <IconButton
         aria-label={t("audiobook.skipForward")}
@@ -323,7 +324,7 @@ export function AudiobookPlayer(
       >
         <Forward15Icon
           sx={{
-            fontSize: 30,
+            fontSize: rem(30),
             transform: `rotate(${fwdSpin}deg)`,
             transition: "transform .5s cubic-bezier(.2,.8,.2,1)",
           }}
@@ -335,7 +336,7 @@ export function AudiobookPlayer(
         disabled={!canNext}
         sx={{ width: 50, height: 50 }}
       >
-        <SkipNext sx={{ fontSize: 33 }} />
+        <SkipNext sx={{ fontSize: rem(33) }} />
       </IconButton>
     </Box>
   );

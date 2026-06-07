@@ -1,7 +1,8 @@
+import { rem } from "@/px";
 import { lazy, Suspense } from "react";
-import { Box, Typography, CircularProgress } from "@mui/material";
+import { Box, CircularProgress, Typography } from "@mui/material";
 import { Description as FileIcon } from "@mui/icons-material";
-import type { Theme, FileType } from "@/types";
+import type { FileType, Theme } from "@/types";
 import { useI18n } from "@/i18n";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { ImageViewer } from "./viewers/ImageViewer";
@@ -12,14 +13,26 @@ import { JsonViewer } from "./viewers/JsonViewer";
 // (PDF.js, Excalidraw, a CSV grid, …); code-split them out of the main bundle
 // so opening a book doesn't ship code for file types it may never show. Named
 // exports → map to a default for React.lazy.
-const PdfViewer = lazy(() => import("./viewers/PdfViewer").then((m) => ({ default: m.PdfViewer })));
-const HtmlViewer = lazy(() => import("./viewers/HtmlViewer").then((m) => ({ default: m.HtmlViewer })));
-const CsvViewer = lazy(() => import("./viewers/CsvViewer").then((m) => ({ default: m.CsvViewer })));
-const ExcalidrawViewer = lazy(() =>
-  import("./viewers/ExcalidrawViewer").then((m) => ({ default: m.ExcalidrawViewer }))
+const PdfViewer = lazy(() =>
+  import("./viewers/PdfViewer").then((m) => ({ default: m.PdfViewer }))
 );
-const LatexViewer = lazy(() => import("./viewers/LatexViewer").then((m) => ({ default: m.LatexViewer })));
-const TypstViewer = lazy(() => import("./viewers/TypstViewer").then((m) => ({ default: m.TypstViewer })));
+const HtmlViewer = lazy(() =>
+  import("./viewers/HtmlViewer").then((m) => ({ default: m.HtmlViewer }))
+);
+const CsvViewer = lazy(() =>
+  import("./viewers/CsvViewer").then((m) => ({ default: m.CsvViewer }))
+);
+const ExcalidrawViewer = lazy(() =>
+  import("./viewers/ExcalidrawViewer").then((m) => ({
+    default: m.ExcalidrawViewer,
+  }))
+);
+const LatexViewer = lazy(() =>
+  import("./viewers/LatexViewer").then((m) => ({ default: m.LatexViewer }))
+);
+const TypstViewer = lazy(() =>
+  import("./viewers/TypstViewer").then((m) => ({ default: m.TypstViewer }))
+);
 
 interface ContentViewerProps {
   content: string | null;
@@ -40,7 +53,15 @@ interface ContentViewerProps {
 /** Spinner shown while a code-split viewer chunk downloads. */
 function ViewerLoading(): React.JSX.Element {
   return (
-    <Box sx={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "text.secondary" }}>
+    <Box
+      sx={{
+        flex: 1,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "text.secondary",
+      }}
+    >
       <CircularProgress size={28} />
     </Box>
   );
@@ -70,7 +91,7 @@ export function ContentViewer({
           color: "text.secondary",
         }}
       >
-        <FileIcon sx={{ fontSize: 64, mb: 2, opacity: 0.5 }} />
+        <FileIcon sx={{ fontSize: rem(64), mb: 2, opacity: 0.5 }} />
         <Typography variant="body1">{t("content.selectFile")}</Typography>
       </Box>
     );
@@ -136,8 +157,10 @@ export function ContentViewer({
             color: "text.secondary",
           }}
         >
-          <FileIcon sx={{ fontSize: 64, mb: 2, opacity: 0.5 }} />
-          <Typography variant="body1">{t("content.unsupported", { type: fileType })}</Typography>
+          <FileIcon sx={{ fontSize: rem(64), mb: 2, opacity: 0.5 }} />
+          <Typography variant="body1">
+            {t("content.unsupported", { type: fileType })}
+          </Typography>
         </Box>
       );
   }

@@ -1,3 +1,4 @@
+import { rem } from "@/px";
 import { Box, CircularProgress } from "@mui/material";
 import CheckIcon from "@mui/icons-material/Check";
 import { useEffect, useState } from "react";
@@ -74,8 +75,14 @@ export function ReconnectBanner(): React.JSX.Element | null {
         zIndex: (t) => t.zIndex.tooltip + 1,
       }}
     >
-      {banner.kind === "down" && <CircularProgress size={14} color="inherit" thickness={5} />}
-      {banner.kind === "reconnected" && <CheckIcon sx={{ fontSize: 18 }} />}
+      {banner.kind === "down" && (
+        <CircularProgress size={14} color="inherit" thickness={5} />
+      )}
+      {banner.kind === "reconnected" && (
+        <CheckIcon
+          sx={{ fontSize: rem(18) }}
+        />
+      )}
       <span>{label}</span>
     </Box>
   );

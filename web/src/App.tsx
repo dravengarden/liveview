@@ -1,3 +1,4 @@
+import { rem } from "@/px";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
@@ -1010,12 +1011,12 @@ export function App(): React.JSX.Element {
             // font-size setting, and a fixed glyph stays centred in the thumb.
             {
               kind: "text",
-              icon: <ReadIcon sx={{ fontSize: 20 }} />,
+              icon: <ReadIcon sx={{ fontSize: rem(20) }} />,
               label: t("audiobook.read"),
             },
             {
               kind: "audio",
-              icon: <AudiobookIcon sx={{ fontSize: 20 }} />,
+              icon: <AudiobookIcon sx={{ fontSize: rem(20) }} />,
               label: t("audiobook.open"),
             },
           ] as const).map(({ kind, icon, label }) => {

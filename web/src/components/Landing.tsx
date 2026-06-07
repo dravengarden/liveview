@@ -1,3 +1,4 @@
+import { rem } from "@/px";
 import {
   Box,
   Card,
@@ -172,7 +173,9 @@ function BookCover({
         )
         : (
           // No image (or it failed): show the kind icon over the gradient.
-          <KindIcon sx={{ fontSize: 52, color: "rgba(255,255,255,0.92)" }} />
+          <KindIcon
+            sx={{ fontSize: rem(52), color: "rgba(255,255,255,0.92)" }}
+          />
         )}
       {children}
     </Box>
@@ -494,8 +497,7 @@ export function Landing({
               <TextField
                 size="small"
                 value={query}
-                onChange={(e) =>
-                  setQuery(e.target.value)}
+                onChange={(e) => setQuery(e.target.value)}
                 placeholder={t("landing.search")}
                 aria-label={t("landing.search")}
                 InputProps={{
@@ -852,7 +854,9 @@ export function Landing({
                                     {e.hasText && (
                                       <ProgressMeter
                                         icon={
-                                          <BookIcon sx={{ fontSize: 15 }} />
+                                          <BookIcon
+                                            sx={{ fontSize: rem(15) }}
+                                          />
                                         }
                                         pct={textP ? pctOf(textP) : 0}
                                       />
@@ -861,7 +865,7 @@ export function Landing({
                                       <ProgressMeter
                                         icon={
                                           <AudiobookIcon
-                                            sx={{ fontSize: 15 }}
+                                            sx={{ fontSize: rem(15) }}
                                           />
                                         }
                                         pct={audioP ? pctOf(audioP) : 0}
