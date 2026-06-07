@@ -1,0 +1,5 @@
+# Tauri build artifacts. The generated mobile project (gen/apple) is committed
+# AFTER `tauri ios init` on the Mac so the app builds without re-running init;
+# only the machine-generated schemas and the Rust target dir are ignored.
+/target
+/gen/schemas

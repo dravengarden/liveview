@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Core defaults for the liveview native shell. No extra permissions: the window shows a remote origin, which by design has no IPC access.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
