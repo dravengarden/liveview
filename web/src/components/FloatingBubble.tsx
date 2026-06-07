@@ -7,16 +7,19 @@ import {
 } from "react";
 import {
   Box,
+  Button,
   CircularProgress,
   Fade,
   Grow,
   IconButton,
+  ListItemIcon,
   Menu,
   MenuItem,
   Typography,
 } from "@mui/material";
 import {
   Close,
+  DeleteOutline as DeleteIcon,
   Forward10,
   Headphones as AudiobookIcon,
   Pause,
@@ -25,6 +28,7 @@ import {
   SkipNext,
   SkipPrevious,
 } from "@mui/icons-material";
+import { BottomSheet } from "../_shell";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
 
@@ -45,6 +49,7 @@ function coverGradient(slug: string): string {
 const SIZE = 56; // bubble diameter (px)
 const MARGIN = 12; // gap kept from the viewport edge
 const DRAG_THRESHOLD = 6; // px a press must travel before it's a drag (vs a tap)
+const LONG_PRESS_MS = 500; // hold this long (without moving) → the context menu
 const IDLE_MS = 3000; // fade + tuck behind the edge after this long untouched
 const PEEK = 0.15; // fraction of the bubble that tucks off-edge when idle —
 // kept small so the idle bubble stays clearly discoverable (most of it
@@ -143,6 +148,7 @@ export function FloatingBubble({
     skip,
     rate,
     setRate,
+    stop,
   } = useAudioPlayer();
 
   const stored = useRef<StoredPos>(loadPos());
@@ -153,6 +159,13 @@ export function FloatingBubble({
   const [controlsOpen, setControlsOpen] = useState(false);
   const [idle, setIdle] = useState(false);
   const [speedAnchor, setSpeedAnchor] = useState<HTMLElement | null>(null);
+  // Long-press the bubble → a small menu (Stop & close), then a confirm sheet.
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const longPressTimer = useRef<number | undefined>(undefined);
+  // Set when a press is held long enough to be a long-press, so the matching
+  // pointerup doesn't also fire the tap (which opens the transport card).
+  const longPressed = useRef(false);
 
   const elRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -279,6 +292,18 @@ export function FloatingBubble({
         y: pos.y,
         id: e.pointerId,
       };
+      // Arm the long-press: if the press is still held (and hasn't become a
+      // drag) after LONG_PRESS_MS, open the context menu instead of a tap.
+      longPressed.current = false;
+      if (longPressTimer.current !== undefined) {
+        clearTimeout(longPressTimer.current);
+      }
+      longPressTimer.current = window.setTimeout(() => {
+        longPressed.current = true;
+        drag.current.active = false; // cancel the pending tap/drag
+        setMenuAnchor(elRef.current);
+        poke();
+      }, LONG_PRESS_MS);
       poke();
     },
     [pos.x, pos.y, poke],
@@ -292,6 +317,10 @@ export function FloatingBubble({
     if (!d.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
       d.moved = true;
       setDragging(true);
+      // Moving means it's a drag, not a long-press — disarm the menu timer.
+      if (longPressTimer.current !== undefined) {
+        clearTimeout(longPressTimer.current);
+      }
     }
     if (!d.moved) return;
     const vw = window.innerWidth;
@@ -311,6 +340,11 @@ export function FloatingBubble({
   const onPointerUp = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       const d = drag.current;
+      // A long-press already fired (it set active=false + opened the menu); the
+      // release must NOT also toggle the card. Clear the timer regardless.
+      if (longPressTimer.current !== undefined) {
+        clearTimeout(longPressTimer.current);
+      }
       if (!d.active || e.pointerId !== d.id) return;
       d.active = false;
       try {
@@ -485,6 +519,11 @@ export function FloatingBubble({
           height: SIZE,
           zIndex: theme.zIndex.fab,
           touchAction: "none",
+          // Suppress the iOS long-press callout (image "save"/selection menu) so
+          // our own long-press → context menu wins.
+          userSelect: "none",
+          WebkitUserSelect: "none",
+          WebkitTouchCallout: "none",
           cursor: dragging ? "grabbing" : "grab",
           opacity: controlsOpen ? 0 : tucked ? IDLE_OPACITY : 0.92,
           pointerEvents: controlsOpen ? "none" : "auto",
@@ -824,6 +863,62 @@ export function FloatingBubble({
           </MenuItem>
         ))}
       </Menu>
+
+      {/* Long-press menu: just a destructive "stop & close" for now. */}
+      <Menu
+        anchorEl={menuAnchor}
+        open={menuAnchor !== null}
+        onClose={() => setMenuAnchor(null)}
+        anchorOrigin={{
+          vertical: "center",
+          horizontal: pos.side === "right" ? "left" : "right",
+        }}
+        transformOrigin={{
+          vertical: "center",
+          horizontal: pos.side === "right" ? "right" : "left",
+        }}
+      >
+        <MenuItem
+          onClick={() => {
+            setMenuAnchor(null);
+            setConfirmOpen(true);
+          }}
+          sx={{ color: "error.main" }}
+        >
+          <ListItemIcon sx={{ color: "error.main" }}>
+            <DeleteIcon fontSize="small" />
+          </ListItemIcon>
+          {t("audiobook.stop")}
+        </MenuItem>
+      </Menu>
+
+      {/* Confirm before stopping — destructive, so it asks first. */}
+      <BottomSheet
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        title={t("audiobook.stopConfirmTitle")}
+        actions={
+          <>
+            <Button color="inherit" onClick={() => setConfirmOpen(false)}>
+              {t("audiobook.cancel")}
+            </Button>
+            <Button
+              color="error"
+              variant="contained"
+              onClick={() => {
+                setConfirmOpen(false);
+                stop();
+              }}
+            >
+              {t("audiobook.stop")}
+            </Button>
+          </>
+        }
+      >
+        <Typography variant="body2" color="text.secondary">
+          {t("audiobook.stopConfirmBody")}
+        </Typography>
+      </BottomSheet>
     </>
   );
 }
