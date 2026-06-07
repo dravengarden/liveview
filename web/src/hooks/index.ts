@@ -4,10 +4,5 @@ export { useSettings } from "./useSettings";
 export { useFont } from "./useFont";
 export { useProgress } from "./useProgress";
 export type { UseProgress } from "./useProgress";
-export {
-  type NavbarPosition,
-  setNavbarPosition,
-  useNavbarAtBottom,
-  useNavbarPosition,
-} from "./useNavbarPosition";
+export { useNavbarAtBottom } from "./useNavbarPosition";
 export { type ShelfSort, setShelfSort, useShelfSort } from "./useShelfSort";

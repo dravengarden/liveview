@@ -2,8 +2,7 @@ import { useSyncExternalStore } from "react";
 
 // How the bookshelf is ordered. A library-wide preference (not per-device, but
 // kept local for now like the other UI prefs): localStorage + a change event,
-// the same useSyncExternalStore shape as useNavbarPosition. Read by the shelf
-// (Landing) and written by Settings.
+// via useSyncExternalStore. Read by the shelf (Landing) and written by Settings.
 //
 //   updated — most-recently added/edited content first (the default)
 //   read    — most-recently opened (reading/listening) first

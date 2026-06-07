@@ -7,8 +7,6 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   Typography,
-  useMediaQuery,
-  useTheme,
 } from "@mui/material";
 import type { SxProps, Theme as MuiTheme } from "@mui/material/styles";
 import {
@@ -20,14 +18,7 @@ import { useState } from "react";
 import { SettingsSheet } from "../_shell";
 import type { MenuBarSettings, Theme, ThemeMode, ThemeVariant } from "@/types";
 import { THEME_VARIANTS, VARIANT_OPTIONS } from "@/types";
-import {
-  type NavbarPosition,
-  setNavbarPosition,
-  type ShelfSort,
-  setShelfSort,
-  useNavbarPosition,
-  useShelfSort,
-} from "@/hooks";
+import { type ShelfSort, setShelfSort, useShelfSort } from "@/hooks";
 import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
 
@@ -154,11 +145,6 @@ export function SettingsButton({
   onFontScaleChange,
 }: SettingsButtonProps): React.JSX.Element {
   const { t, lang, setLang } = useI18n();
-  // Navbar position is a compact-tier setting only (desktop is always a top
-  // bar), gated on the same `< lg` tier the in-book NavShell uses.
-  const theme = useTheme();
-  const mobile = useMediaQuery(theme.breakpoints.down("lg"));
-  const navbarPosition = useNavbarPosition();
   const shelfSort = useShelfSort();
   // The font picker is collapsed by default — its 7 preview cards would
   // otherwise dominate the sheet. Collapsed shows just the current face,
@@ -448,8 +434,7 @@ export function SettingsButton({
 
         <Divider />
 
-        {/* ── Layout: shelf order (all tiers) + nav bar position (mobile, since
-            desktop is always a top bar). */}
+        {/* ── Library: bookshelf order. */}
         <Stack spacing={2}>
           <Typography variant="overline" color="text.secondary">
             {t("settings.layout")}
@@ -470,24 +455,6 @@ export function SettingsButton({
               </Select>
             }
           />
-          {mobile && (
-            <Row
-              label={t("settings.navbar")}
-              desc={t("settings.navbarDesc")}
-              control={
-                <Select
-                  size="small"
-                  value={navbarPosition}
-                  onChange={(e) =>
-                    setNavbarPosition(e.target.value as NavbarPosition)}
-                  sx={{ minWidth: 104 }}
-                >
-                  <MenuItem value="top">{t("navbar.top")}</MenuItem>
-                  <MenuItem value="bottom">{t("navbar.bottom")}</MenuItem>
-                </Select>
-              }
-            />
-          )}
         </Stack>
 
         <Divider />

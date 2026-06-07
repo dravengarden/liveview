@@ -9,6 +9,7 @@ import {
   ThemeProvider,
   ToggleButton,
   ToggleButtonGroup,
+  Typography,
 } from "@mui/material";
 import {
   Close as CloseIcon,
@@ -354,6 +355,15 @@ export function App(): React.JSX.Element {
     return bookMode ? root.children : [root];
   }, [tree, activeSlug, bookMode]);
   const bookLabel = activeBook?.label ?? activeSlug ?? "";
+  // The current chapter's display title (current UI edition, falling back to the
+  // node name, then the file name) — shown as the primary line of the in-book
+  // bar so you always see WHERE you are, with the book name as the second line.
+  const chapterLabel = useMemo(() => {
+    if (!currentPath) return "";
+    const node = findNode(tree, currentPath);
+    return (node && ((uiLang && node.titles?.[uiLang]) || node.name)) ||
+      currentPath.split("/").pop() || "";
+  }, [currentPath, tree, uiLang]);
   // The renditions the active book offers, and the one currently active. The
   // language switcher shows the *active rendition's* languages (each rendition
   // carries its own lang list).
@@ -1097,20 +1107,40 @@ export function App(): React.JSX.Element {
               barPosition={navbarAtBottom ? "bottom" : "top"}
               title={
                 <Box
-                  component="span"
                   role="button"
                   tabIndex={0}
                   aria-label={t("app.scrollTop")}
                   onClick={scrollReaderTop}
                   sx={{
-                    display: "block",
+                    minWidth: 0,
                     cursor: "pointer",
-                    whiteSpace: "nowrap",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
+                    display: "flex",
+                    flexDirection: "column",
+                    justifyContent: "center",
                   }}
                 >
-                  {bookLabel}
+                  {
+                    /* Line 1: where you ARE — the current chapter (bold). Line 2:
+                      the book it belongs to (muted), shown only when it differs
+                      so a doc whose chapter IS the book name doesn't repeat. */
+                  }
+                  <Typography
+                    variant="subtitle2"
+                    noWrap
+                    sx={{ fontWeight: 700, lineHeight: 1.25 }}
+                  >
+                    {chapterLabel || bookLabel}
+                  </Typography>
+                  {chapterLabel && chapterLabel !== bookLabel && (
+                    <Typography
+                      variant="caption"
+                      noWrap
+                      color="text.secondary"
+                      sx={{ lineHeight: 1.2 }}
+                    >
+                      {bookLabel}
+                    </Typography>
+                  )}
                 </Box>
               }
               nav={(api) => (
