@@ -443,8 +443,12 @@ export function Landing({
           ...(navbarAtBottom
             ? {
               borderTop: 1,
-              pt: 1,
-              pb: "calc(env(safe-area-inset-bottom, 0px) + 8px)",
+              // The home-indicator inset is generous; the bar's own content
+              // already clears it, so trim 22px off (floor 6px) to kill the
+              // dead gap below the row. Mirrors NavShell's bottomPad so the
+              // shelf bar and the in-book bar sit at the same height.
+              pt: 0.75,
+              pb: "max(calc(env(safe-area-inset-bottom, 0px) - 22px), 6px)",
             }
             : {
               borderBottom: 1,
