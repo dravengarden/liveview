@@ -21,15 +21,14 @@ import {
 import {
   Close,
   DeleteOutline as DeleteIcon,
-  Forward10,
   Headphones as AudiobookIcon,
   Pause,
   PlayArrow,
-  Replay10,
   SkipNext,
   SkipPrevious,
 } from "@mui/icons-material";
 import { BottomSheet } from "../_shell";
+import { Forward15Icon, Replay15Icon } from "./Skip15Icons";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
 
@@ -168,6 +167,9 @@ export function FloatingBubble({
   // True while a finger is held on the bubble (before it resolves to tap / drag
   // / long-press): the puck squishes and the hold-ring sweeps to full.
   const [pressing, setPressing] = useState(false);
+  // Accumulating rotation for the ∓15s skip glyphs (one smooth turn per tap).
+  const [backSpin, setBackSpin] = useState(0);
+  const [fwdSpin, setFwdSpin] = useState(0);
   const longPressTimer = useRef<number | undefined>(undefined);
   // Set when a press is held long enough to be a long-press, so the matching
   // pointerup doesn't also fire the tap (which opens the transport card).
@@ -860,10 +862,18 @@ export function FloatingBubble({
             </IconButton>
             <IconButton
               aria-label={t("audiobook.skipBack")}
-              onClick={() => skip(-10)}
+              onClick={() => {
+                skip(-15);
+                setBackSpin((s) => s - 360);
+              }}
               sx={{ width: 38, height: 38 }}
             >
-              <Replay10 />
+              <Replay15Icon
+                sx={{
+                  transform: `rotate(${backSpin}deg)`,
+                  transition: "transform .5s cubic-bezier(.2,.8,.2,1)",
+                }}
+              />
             </IconButton>
             <IconButton
               aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
@@ -879,10 +889,18 @@ export function FloatingBubble({
             </IconButton>
             <IconButton
               aria-label={t("audiobook.skipForward")}
-              onClick={() => skip(10)}
+              onClick={() => {
+                skip(15);
+                setFwdSpin((s) => s + 360);
+              }}
               sx={{ width: 38, height: 38 }}
             >
-              <Forward10 />
+              <Forward15Icon
+                sx={{
+                  transform: `rotate(${fwdSpin}deg)`,
+                  transition: "transform .5s cubic-bezier(.2,.8,.2,1)",
+                }}
+              />
             </IconButton>
             <IconButton
               aria-label={t("audiobook.nextChapter")}

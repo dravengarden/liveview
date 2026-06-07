@@ -11,15 +11,14 @@ import {
 } from "@mui/material";
 import {
   Bedtime,
-  Forward10,
   MyLocation,
   Pause,
   PlayArrow,
-  Replay10,
   SkipNext,
   SkipPrevious,
 } from "@mui/icons-material";
 import { alpha } from "@mui/material/styles";
+import { Forward15Icon, Replay15Icon } from "./Skip15Icons";
 import { useAudioPlayer } from "@/audio/player";
 import { READING_COLUMN_MAX } from "@/types";
 import { useI18n } from "@/i18n";
@@ -100,6 +99,10 @@ export function AudiobookPlayer(
   // scroll GESTURE turns it OFF (we don't fight the reader), and the follow
   // button / a sentence tap turns it back ON.
   const [following, setFollowing] = useState(true);
+  // Accumulating rotation for the skip glyphs: each tap adds a full ∓360°, and
+  // the CSS transition animates one smooth turn (iOS-style).
+  const [backSpin, setBackSpin] = useState(0);
+  const [fwdSpin, setFwdSpin] = useState(0);
 
   const scrollCurrentIntoView = useCallback(() => {
     const container = scrollRef.current;
@@ -264,10 +267,19 @@ export function AudiobookPlayer(
       </IconButton>
       <IconButton
         aria-label={t("audiobook.skipBack")}
-        onClick={() => skip(-10)}
+        onClick={() => {
+          skip(-15);
+          setBackSpin((s) => s - 360); // one full turn left, iOS-style
+        }}
         sx={{ width: 50, height: 50 }}
       >
-        <Replay10 sx={{ fontSize: 30 }} />
+        <Replay15Icon
+          sx={{
+            fontSize: 30,
+            transform: `rotate(${backSpin}deg)`,
+            transition: "transform .5s cubic-bezier(.2,.8,.2,1)",
+          }}
+        />
       </IconButton>
       <IconButton
         onClick={togglePlay}
@@ -284,10 +296,19 @@ export function AudiobookPlayer(
       </IconButton>
       <IconButton
         aria-label={t("audiobook.skipForward")}
-        onClick={() => skip(10)}
+        onClick={() => {
+          skip(15);
+          setFwdSpin((s) => s + 360); // one full turn right
+        }}
         sx={{ width: 50, height: 50 }}
       >
-        <Forward10 sx={{ fontSize: 30 }} />
+        <Forward15Icon
+          sx={{
+            fontSize: 30,
+            transform: `rotate(${fwdSpin}deg)`,
+            transition: "transform .5s cubic-bezier(.2,.8,.2,1)",
+          }}
+        />
       </IconButton>
       <IconButton
         aria-label={t("audiobook.nextChapter")}
