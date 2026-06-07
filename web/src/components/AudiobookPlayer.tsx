@@ -1,4 +1,4 @@
-import { rem } from "@/px";
+import { rem, tap } from "@/px";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -262,7 +262,7 @@ export function AudiobookPlayer(
       aria-label={following ? t("audiobook.following") : t("audiobook.follow")}
       onClick={() => (following ? setFollowing(false) : jumpToCurrent())}
       color={following ? "primary" : "default"}
-      sx={{ width: 44, height: 44 }}
+      sx={{ width: tap(44), height: tap(44) }}
     >
       <MyLocation sx={{ fontSize: rem(26) }} />
     </IconButton>
@@ -274,14 +274,16 @@ export function AudiobookPlayer(
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        gap: 0.25,
+        // Inter-button gap scales with the font so the cluster tightens at small
+        // sizes and breathes at large ones.
+        gap: rem(2),
       }}
     >
       <IconButton
         aria-label={t("audiobook.prevChapter")}
         onClick={prevChapter}
         disabled={!canPrev}
-        sx={{ width: 50, height: 50 }}
+        sx={{ width: tap(50), height: tap(50) }}
       >
         <SkipPrevious sx={{ fontSize: rem(33) }} />
       </IconButton>
@@ -291,7 +293,7 @@ export function AudiobookPlayer(
           skip(-15);
           setBackSpin((s) => s - 360); // one full turn left, iOS-style
         }}
-        sx={{ width: 50, height: 50 }}
+        sx={{ width: tap(50), height: tap(50) }}
       >
         <Replay15Icon
           sx={{
@@ -306,7 +308,7 @@ export function AudiobookPlayer(
         disabled={loading}
         color="primary"
         aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
-        sx={{ width: 58, height: 58 }}
+        sx={{ width: tap(58), height: tap(58) }}
       >
         {loading
           ? <CircularProgress size={32} />
@@ -320,7 +322,7 @@ export function AudiobookPlayer(
           skip(15);
           setFwdSpin((s) => s + 360); // one full turn right
         }}
-        sx={{ width: 50, height: 50 }}
+        sx={{ width: tap(50), height: tap(50) }}
       >
         <Forward15Icon
           sx={{
@@ -334,7 +336,7 @@ export function AudiobookPlayer(
         aria-label={t("audiobook.nextChapter")}
         onClick={nextChapter}
         disabled={!canNext}
-        sx={{ width: 50, height: 50 }}
+        sx={{ width: tap(50), height: tap(50) }}
       >
         <SkipNext sx={{ fontSize: rem(33) }} />
       </IconButton>
@@ -353,7 +355,7 @@ export function AudiobookPlayer(
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        minHeight: 58,
+        minHeight: tap(58),
       }}
     >
       <Box sx={earSx}>{speedChip}</Box>
@@ -470,7 +472,8 @@ export function AudiobookPlayer(
           // corner radius.
           pl: "max(env(safe-area-inset-left, 0px), 12px)",
           pr: "max(env(safe-area-inset-right, 0px), 12px)",
-          pt: 0.25,
+          // Top breathing scales with the font (no tap-target here, so no floor).
+          pt: rem(4),
           // Bottom inset: when a bottom nav bar sits below us it already clears
           // the home indicator, so just a hair of breathing room (no doubled
           // gap). Otherwise (nav bar on top, player at the screen edge) sit ~8px
