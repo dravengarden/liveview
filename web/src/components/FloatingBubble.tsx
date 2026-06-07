@@ -13,15 +13,16 @@ import {
   Fade,
   Grow,
   IconButton,
-  ListItemIcon,
   Menu,
   MenuItem,
   Typography,
 } from "@mui/material";
 import {
+  Bedtime,
   Close,
   DeleteOutline as DeleteIcon,
   Headphones as AudiobookIcon,
+  NorthEast as OpenIcon,
   Pause,
   PlayArrow,
   SkipNext,
@@ -49,9 +50,6 @@ function coverGradient(slug: string): string {
 const SIZE = 56; // bubble diameter (px)
 const MARGIN = 12; // gap kept from the viewport edge
 const DRAG_THRESHOLD = 6; // px a press must travel before it's a drag (vs a tap)
-const LONG_PRESS_MS = 500; // hold this long (without moving) → the context menu
-const HOLD_R = SIZE / 2 - 3; // radius of the long-press "fill" ring
-const HOLD_C = 2 * Math.PI * HOLD_R; // its circumference (for the dash sweep)
 const IDLE_MS = 3000; // fade + tuck behind the edge after this long untouched
 const PEEK = 0.15; // fraction of the bubble that tucks off-edge when idle —
 // kept small so the idle bubble stays clearly discoverable (most of it
@@ -59,10 +57,22 @@ const PEEK = 0.15; // fraction of the bubble that tucks off-edge when idle —
 // "the player disappeared".
 const IDLE_OPACITY = 0.7; // how faint it gets when idle (still recedes, but
 // stays plainly visible, not nearly-gone)
-const CARD_H = 138; // approx control-card height, for bottom-clamping the card
+const CARD_H = 224; // approx control-card height, for bottom-clamping the card
 /** Playback-speed options for the card's speed menu (same list as the full player). */
 const RATES = [0.75, 1, 1.25, 1.5, 2, 2.25, 2.5, 2.75, 3] as const;
+/** Sleep-timer options in minutes (mirrors the full player). */
+const SLEEP_MINUTES = [15, 30, 45, 60, 90] as const;
 const POS_KEY = "lv-audio-bubble-pos";
+
+/** Compact sleep-timer label: 15m / 60→1h / 90→1h30m (same as the full player). */
+function fmtSleep(min: number): string {
+  if (min >= 60) {
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return m === 0 ? `${h}h` : `${h}h${m}m`;
+  }
+  return `${min}m`;
+}
 
 type Side = "left" | "right";
 interface StoredPos {
@@ -150,6 +160,9 @@ export function FloatingBubble({
     skip,
     rate,
     setRate,
+    sleepMinutes,
+    sleepRemainingMin,
+    setSleepTimer,
     stop,
   } = useAudioPlayer();
 
@@ -161,23 +174,13 @@ export function FloatingBubble({
   const [controlsOpen, setControlsOpen] = useState(false);
   const [idle, setIdle] = useState(false);
   const [speedAnchor, setSpeedAnchor] = useState<HTMLElement | null>(null);
-  // Long-press the bubble → a small menu (Stop & close), then a confirm sheet.
-  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const [sleepAnchor, setSleepAnchor] = useState<HTMLElement | null>(null);
+  // Tapping the card's delete asks first (one tap would otherwise drop the
+  // now-playing mid-listen).
   const [confirmOpen, setConfirmOpen] = useState(false);
-  // True while a finger is held on the bubble (before it resolves to tap / drag
-  // / long-press): the puck squishes and the hold-ring sweeps to full.
-  const [pressing, setPressing] = useState(false);
   // Accumulating rotation for the ∓15s skip glyphs (one smooth turn per tap).
   const [backSpin, setBackSpin] = useState(0);
   const [fwdSpin, setFwdSpin] = useState(0);
-  const longPressTimer = useRef<number | undefined>(undefined);
-  // Set when a press is held long enough to be a long-press, so the matching
-  // pointerup doesn't also fire the tap (which opens the transport card).
-  const longPressed = useRef(false);
-  // Hidden <input switch> toggled on long-press: iOS doesn't support
-  // navigator.vibrate, but flipping a switch in a user gesture nudges its
-  // haptic on iOS 17.4+ (best-effort; a no-op where unsupported).
-  const hapticRef = useRef<HTMLInputElement | null>(null);
 
   const elRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
@@ -231,25 +234,6 @@ export function FloatingBubble({
     setIdle(false);
     if (idleTimer.current !== undefined) clearTimeout(idleTimer.current);
     idleTimer.current = window.setTimeout(() => setIdle(true), IDLE_MS);
-  }, []);
-
-  // A short haptic on long-press. navigator.vibrate covers Android/Chromium;
-  // iOS ignores it, so we also flip a hidden <input switch> — the one web
-  // affordance that triggers iOS's system haptic (17.4+). Both are best-effort.
-  const haptic = useCallback(() => {
-    try {
-      navigator.vibrate?.(12);
-    } catch {
-      // some engines throw on vibrate without a user gesture — ignore
-    }
-    const el = hapticRef.current;
-    if (el) el.checked = !el.checked;
-  }, []);
-
-  // Mark the hidden checkbox as an iOS "switch" (the `switch` content attribute
-  // isn't a typed React prop, so set it imperatively once mounted).
-  useEffect(() => {
-    hapticRef.current?.setAttribute("switch", "");
   }, []);
 
   useEffect(() => {
@@ -323,25 +307,9 @@ export function FloatingBubble({
         y: pos.y,
         id: e.pointerId,
       };
-      // Arm the long-press: if the press is still held (and hasn't become a
-      // drag) after LONG_PRESS_MS, open the context menu instead of a tap. The
-      // puck squishes + the hold-ring sweeps while pressed.
-      longPressed.current = false;
-      setPressing(true);
-      if (longPressTimer.current !== undefined) {
-        clearTimeout(longPressTimer.current);
-      }
-      longPressTimer.current = window.setTimeout(() => {
-        longPressed.current = true;
-        drag.current.active = false; // cancel the pending tap/drag
-        setPressing(false);
-        haptic();
-        setMenuAnchor(elRef.current);
-        poke();
-      }, LONG_PRESS_MS);
       poke();
     },
-    [pos.x, pos.y, poke, haptic],
+    [pos.x, pos.y, poke],
   );
 
   const onPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
@@ -352,11 +320,6 @@ export function FloatingBubble({
     if (!d.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
       d.moved = true;
       setDragging(true);
-      setPressing(false);
-      // Moving means it's a drag, not a long-press — disarm the menu timer.
-      if (longPressTimer.current !== undefined) {
-        clearTimeout(longPressTimer.current);
-      }
     }
     if (!d.moved) return;
     const vw = window.innerWidth;
@@ -376,12 +339,6 @@ export function FloatingBubble({
   const onPointerUp = useCallback(
     (e: React.PointerEvent<HTMLDivElement>) => {
       const d = drag.current;
-      // A long-press already fired (it set active=false + opened the menu); the
-      // release must NOT also toggle the card. Clear the timer + press state.
-      setPressing(false);
-      if (longPressTimer.current !== undefined) {
-        clearTimeout(longPressTimer.current);
-      }
       if (!d.active || e.pointerId !== d.id) return;
       d.active = false;
       try {
@@ -556,21 +513,16 @@ export function FloatingBubble({
           height: SIZE,
           zIndex: theme.zIndex.fab,
           touchAction: "none",
-          // Suppress the iOS long-press callout (image "save"/selection menu) so
-          // our own long-press → context menu wins.
           userSelect: "none",
           WebkitUserSelect: "none",
           WebkitTouchCallout: "none",
           cursor: dragging ? "grabbing" : "grab",
           opacity: controlsOpen ? 0 : tucked ? IDLE_OPACITY : 0.92,
           pointerEvents: controlsOpen ? "none" : "auto",
-          // Compose the idle tuck with a press-squish (scale down while held,
-          // springs back on release / when the menu pops).
-          transform: `${
-            tucked
-              ? `translateX(${pos.side === "right" ? PEEK * 100 : -PEEK * 100}%)`
-              : ""
-          }${pressing ? " scale(0.9)" : ""}`.trim() || "none",
+          // Idle tuck: slide a sliver off the docked edge when untouched.
+          transform: tucked
+            ? `translateX(${pos.side === "right" ? PEEK * 100 : -PEEK * 100}%)`
+            : "none",
           transition: dragging
             ? "none"
             : "left .26s cubic-bezier(.2,.8,.2,1), top .26s cubic-bezier(.2,.8,.2,1), opacity .3s, transform .18s cubic-bezier(.2,.8,.2,1)",
@@ -624,43 +576,6 @@ export function FloatingBubble({
               conveys progress; play/pause lives in the tap-to-open card. */
           }
         </Box>
-
-        {
-          /* Long-press hold ring: a bright stroke that sweeps to full over
-            LONG_PRESS_MS, so holding reads as "charging" toward the menu. */
-        }
-        {pressing && (
-          <Box
-            component="svg"
-            aria-hidden
-            width={SIZE}
-            height={SIZE}
-            viewBox={`0 0 ${SIZE} ${SIZE}`}
-            sx={{
-              position: "absolute",
-              inset: 0,
-              transform: "rotate(-90deg)",
-              pointerEvents: "none",
-              zIndex: 1,
-            }}
-          >
-            <circle
-              cx={SIZE / 2}
-              cy={SIZE / 2}
-              r={HOLD_R}
-              fill="none"
-              stroke="rgba(255,255,255,0.95)"
-              strokeWidth={3}
-              strokeLinecap="round"
-              style={{
-                strokeDasharray: HOLD_C,
-                strokeDashoffset: HOLD_C,
-                animation: `lv-hold-fill ${LONG_PRESS_MS}ms linear forwards`,
-                "--lv-hold-circ": String(HOLD_C),
-              } as React.CSSProperties}
-            />
-          </Box>
-        )}
       </Box>
 
       {
@@ -771,10 +686,15 @@ export function FloatingBubble({
             </IconButton>
           </Box>
 
-          {/* Row 1 — artwork + title: the "back to the player" handle. */}
+          {
+            /* Row 1 — now-playing identity, and the PROMINENT "go to current"
+              action. Styled as a filled, clearly-tappable button (not bare
+              text) with a trailing open-glyph, so jumping back into the playing
+              book reads as the card's primary affordance. */
+          }
           <Box
             component="button"
-            aria-label={t("audiobook.openPlayer")}
+            aria-label={t("audiobook.goToCurrent")}
             onClick={() => {
               onOpenPlayer();
               setControlsOpen(false);
@@ -786,16 +706,18 @@ export function FloatingBubble({
               gap: 1,
               minWidth: 0,
               cursor: "pointer",
-              borderRadius: 2,
-              px: 0.5,
-              "&:hover": { opacity: 0.85 },
+              borderRadius: 2.5,
+              p: 0.75,
+              bgcolor: "action.hover",
+              transition: "background-color .15s",
+              "&:hover": { bgcolor: "action.selected" },
             }}
           >
             <Box
               sx={{
                 flexShrink: 0,
-                width: 38,
-                height: 38,
+                width: 40,
+                height: 40,
                 borderRadius: "50%",
                 overflow: "hidden",
                 position: "relative",
@@ -822,7 +744,7 @@ export function FloatingBubble({
                 )
                 : (
                   <AudiobookIcon
-                    sx={{ fontSize: 20, color: "rgba(255,255,255,0.92)" }}
+                    sx={{ fontSize: 21, color: "rgba(255,255,255,0.92)" }}
                   />
                 )}
             </Box>
@@ -839,24 +761,32 @@ export function FloatingBubble({
                 {nowPlaying.bookLabel}
               </Typography>
             </Box>
+            <OpenIcon
+              sx={{
+                flexShrink: 0,
+                fontSize: 18,
+                color: "primary.main",
+                mr: 0.25,
+              }}
+            />
           </Box>
 
           {
-            /* Row 2 — transport: prev-chapter · −10s · play/pause · +10s ·
-              next-chapter, with a compact speed cycle pinned to the right. */
+            /* Row 2 — primary transport, centred: prev-chapter · −15s ·
+              play/pause · +15s · next-chapter. */
           }
           <Box
             sx={{
               display: "flex",
               alignItems: "center",
-              justifyContent: "space-between",
+              justifyContent: "space-evenly",
             }}
           >
             <IconButton
               aria-label={t("audiobook.prevChapter")}
               onClick={prevChapter}
               disabled={!canPrev}
-              sx={{ width: 38, height: 38 }}
+              sx={{ width: 40, height: 40 }}
             >
               <SkipPrevious />
             </IconButton>
@@ -866,7 +796,7 @@ export function FloatingBubble({
                 skip(-15);
                 setBackSpin((s) => s - 360);
               }}
-              sx={{ width: 38, height: 38 }}
+              sx={{ width: 40, height: 40 }}
             >
               <Replay15Icon
                 sx={{
@@ -879,13 +809,13 @@ export function FloatingBubble({
               aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
               onClick={togglePlay}
               color="primary"
-              sx={{ width: 48, height: 48 }}
+              sx={{ width: 52, height: 52 }}
             >
               {loading
-                ? <CircularProgress size={24} />
+                ? <CircularProgress size={26} />
                 : playing
-                ? <Pause sx={{ fontSize: 32 }} />
-                : <PlayArrow sx={{ fontSize: 32 }} />}
+                ? <Pause sx={{ fontSize: 34 }} />
+                : <PlayArrow sx={{ fontSize: 34 }} />}
             </IconButton>
             <IconButton
               aria-label={t("audiobook.skipForward")}
@@ -893,7 +823,7 @@ export function FloatingBubble({
                 skip(15);
                 setFwdSpin((s) => s + 360);
               }}
-              sx={{ width: 38, height: 38 }}
+              sx={{ width: 40, height: 40 }}
             >
               <Forward15Icon
                 sx={{
@@ -906,11 +836,27 @@ export function FloatingBubble({
               aria-label={t("audiobook.nextChapter")}
               onClick={nextChapter}
               disabled={!canNext}
-              sx={{ width: 38, height: 38 }}
+              sx={{ width: 40, height: 40 }}
             >
               <SkipNext />
             </IconButton>
-            {/* Tap to open the speed menu (mirrors the full player's list). */}
+          </Box>
+
+          <Divider sx={{ mx: 0.5 }} />
+
+          {
+            /* Row 3 — utilities: speed · sleep timer · delete. The three
+              secondary actions, spaced out; delete sits apart in error red. */
+          }
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              px: 0.75,
+            }}
+          >
+            {/* Speed — tap to open the rate menu (mirrors the full player). */}
             <Box
               component="button"
               aria-label={t("audiobook.speed")}
@@ -919,12 +865,11 @@ export function FloatingBubble({
               sx={{
                 all: "unset",
                 cursor: "pointer",
-                minWidth: 38,
+                minWidth: 44,
                 textAlign: "center",
-                px: 0.5,
-                py: 0.25,
+                py: 0.5,
                 borderRadius: 1.5,
-                fontSize: 13,
+                fontSize: 14,
                 fontWeight: 700,
                 color: "text.secondary",
                 "&:hover": { color: "text.primary", bgcolor: "action.hover" },
@@ -932,6 +877,52 @@ export function FloatingBubble({
             >
               {rate}×
             </Box>
+
+            {/* Sleep timer — moon when off, remaining time (accent) when armed. */}
+            <Box
+              component="button"
+              aria-label={t("audiobook.sleepTimer")}
+              aria-haspopup="true"
+              onClick={(e) => setSleepAnchor(e.currentTarget)}
+              sx={{
+                all: "unset",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 0.5,
+                minWidth: 44,
+                justifyContent: "center",
+                py: 0.5,
+                borderRadius: 1.5,
+                "&:hover": { bgcolor: "action.hover" },
+              }}
+            >
+              {sleepRemainingMin > 0
+                ? (
+                  <Typography
+                    variant="body2"
+                    fontWeight={700}
+                    color="primary"
+                    sx={{ fontVariantNumeric: "tabular-nums" }}
+                  >
+                    {fmtSleep(sleepRemainingMin)}
+                  </Typography>
+                )
+                : (
+                  <Bedtime
+                    sx={{ fontSize: 22, color: "text.secondary" }}
+                  />
+                )}
+            </Box>
+
+            {/* Delete — stop playback + dismiss the bubble (asks first). */}
+            <IconButton
+              aria-label={t("audiobook.stop")}
+              onClick={() => setConfirmOpen(true)}
+              sx={{ width: 40, height: 40, color: "error.main" }}
+            >
+              <DeleteIcon sx={{ fontSize: 22 }} />
+            </IconButton>
           </Box>
         </Box>
       </Grow>
@@ -958,110 +949,35 @@ export function FloatingBubble({
         ))}
       </Menu>
 
-      {
-        /* Long-press popup: a small context card — which book/chapter the
-          action targets, then the destructive "stop & close" row. Styled like
-          the transport card (rounded, bordered, elevated) so it reads as part
-          of the same widget, not a bare system menu. */
-      }
+      {/* Sleep-timer menu — Off + the same minute options as the full player. */}
       <Menu
-        anchorEl={menuAnchor}
-        open={menuAnchor !== null}
-        onClose={() => setMenuAnchor(null)}
-        anchorOrigin={{
-          vertical: "center",
-          horizontal: pos.side === "right" ? "left" : "right",
-        }}
-        transformOrigin={{
-          vertical: "center",
-          horizontal: pos.side === "right" ? "right" : "left",
-        }}
-        slotProps={{
-          paper: {
-            sx: {
-              minWidth: 224,
-              maxWidth: "calc(100vw - 24px)",
-              borderRadius: 3,
-              border: 1,
-              borderColor: "divider",
-              boxShadow: 8,
-              overflow: "hidden",
-            },
-          },
-          list: { sx: { py: 0 } },
-        }}
+        anchorEl={sleepAnchor}
+        open={sleepAnchor !== null}
+        onClose={() => setSleepAnchor(null)}
+        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        transformOrigin={{ vertical: "bottom", horizontal: "center" }}
       >
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            gap: 1.25,
-            px: 1.5,
-            py: 1.25,
+        <MenuItem
+          selected={sleepMinutes === 0}
+          onClick={() => {
+            setSleepTimer(0);
+            setSleepAnchor(null);
           }}
         >
-          <Box
-            sx={{
-              flexShrink: 0,
-              width: 36,
-              height: 36,
-              borderRadius: "50%",
-              overflow: "hidden",
-              position: "relative",
-              background: coverGradient(slug),
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
+          {t("audiobook.sleepOff")}
+        </MenuItem>
+        {SLEEP_MINUTES.map((m) => (
+          <MenuItem
+            key={m}
+            selected={m === sleepMinutes}
+            onClick={() => {
+              setSleepTimer(m);
+              setSleepAnchor(null);
             }}
           >
-            {nowPlaying.cover
-              ? (
-                <Box
-                  component="img"
-                  src={`/api/cover?book=${encodeURIComponent(slug)}`}
-                  alt=""
-                  sx={{
-                    position: "absolute",
-                    inset: 0,
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "cover",
-                  }}
-                />
-              )
-              : (
-                <AudiobookIcon
-                  sx={{ fontSize: 19, color: "rgba(255,255,255,0.92)" }}
-                />
-              )}
-          </Box>
-          <Box sx={{ minWidth: 0 }}>
-            <Typography variant="body2" fontWeight={700} noWrap>
-              {nowPlaying.chapterLabel}
-            </Typography>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              noWrap
-              sx={{ display: "block" }}
-            >
-              {nowPlaying.bookLabel}
-            </Typography>
-          </Box>
-        </Box>
-        <Divider />
-        <MenuItem
-          onClick={() => {
-            setMenuAnchor(null);
-            setConfirmOpen(true);
-          }}
-          sx={{ color: "error.main", py: 1.25, gap: 0.5 }}
-        >
-          <ListItemIcon sx={{ color: "error.main", minWidth: 34 }}>
-            <DeleteIcon fontSize="small" />
-          </ListItemIcon>
-          {t("audiobook.stop")}
-        </MenuItem>
+            {fmtSleep(m)}
+          </MenuItem>
+        ))}
       </Menu>
 
       {/* Confirm before stopping — destructive, so it asks first. */}
@@ -1091,24 +1007,6 @@ export function FloatingBubble({
           {t("audiobook.stopConfirmBody")}
         </Typography>
       </BottomSheet>
-
-      {
-        /* Hidden iOS-haptic switch (see `haptic`). Off-screen + inert; the
-          `switch` attribute is added imperatively after mount. */
-      }
-      <input
-        ref={hapticRef}
-        type="checkbox"
-        aria-hidden
-        tabIndex={-1}
-        style={{
-          position: "fixed",
-          width: 0,
-          height: 0,
-          opacity: 0,
-          pointerEvents: "none",
-        }}
-      />
     </>
   );
 }
