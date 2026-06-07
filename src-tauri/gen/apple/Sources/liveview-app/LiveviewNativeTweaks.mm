@@ -9,7 +9,6 @@
 // (init leaves extra Sources/*.mm alone — see src-tauri/README.md gotchas).
 #import <AVFoundation/AVFoundation.h>
 #import <Foundation/Foundation.h>
-#import <MediaPlayer/MediaPlayer.h>
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
@@ -94,39 +93,6 @@ __attribute__((constructor)) static void liveviewEnableSwipeBack(void) {
             lv_orig_wk_init =
                 (id (*)(id, SEL, CGRect, id))method_getImplementation(m);
             method_setImplementation(m, (IMP)lv_wk_init);
-        }
-    }
-}
-
-// (4) Lock-screen skip interval = 15s (iOS-only, native shell only). iOS
-// hardcodes the WEB side to a "10" skip icon — a pure web app / PWA cannot
-// change it (WebKit ignores the page's seekOffset for the label). But the native
-// host CAN: WebKit drives the WKWebView's lock-screen / Control Center skip
-// buttons through MediaPlayer's MPSkipIntervalCommand, whose `preferredIntervals`
-// is both the displayed number AND the interval the tap fires. WebKit sets it to
-// [10]; swizzle the setter so every set is coerced to [15]. The button then reads
-// 15 and a tap fires a 15s skip (which liveview's MediaSession handler honours via
-// the event's seekOffset). The PWA is untouched — this is native-only.
-//
-// MediaPlayer.framework is linked (project.yml) so the class is registered by the
-// time this image-load constructor runs.
-static void (*lv_orig_setPreferredIntervals)(id, SEL, NSArray *) = NULL;
-static void lv_setPreferredIntervals(id self, SEL _cmd, NSArray *intervals) {
-    lv_orig_setPreferredIntervals(self, _cmd, @[ @15 ]);
-}
-
-__attribute__((constructor)) static void liveviewForceSkip15(void) {
-    @autoreleasepool {
-        Class cls = NSClassFromString(@"MPSkipIntervalCommand");
-        if (!cls) {
-            return;
-        }
-        Method m =
-            class_getInstanceMethod(cls, @selector(setPreferredIntervals:));
-        if (m) {
-            lv_orig_setPreferredIntervals =
-                (void (*)(id, SEL, NSArray *))method_getImplementation(m);
-            method_setImplementation(m, (IMP)lv_setPreferredIntervals);
         }
     }
 }
