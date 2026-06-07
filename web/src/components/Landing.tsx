@@ -69,6 +69,7 @@ interface ShelfEntry {
   book: Book;
   category: Category;
   hasAudio: boolean;
+  hasText: boolean;
 }
 
 function shelfEntries(books: Book[]): ShelfEntry[] {
@@ -81,7 +82,7 @@ function shelfEntries(books: Book[]): ShelfEntry[] {
       : audio && !text
       ? "audiobook"
       : "book";
-    out.push({ book: b, category, hasAudio: audio });
+    out.push({ book: b, category, hasAudio: audio, hasText: text });
   }
   return out;
 }
@@ -789,25 +790,33 @@ export function Landing({
                             <CardActionArea onClick={() => onOpen(b.slug)}>
                               {
                                 /* Cover: the book's own image when it has one, else a
-                          slug-keyed gradient + the kind icon. A book that offers
-                          audio carries a headphones badge (top-left). Progress no
-                          longer rides the cover — it's a labeled meter row in the
-                          body (cleaner than stacked cover chips). */
+                          slug-keyed gradient + the kind icon. Every card carries a
+                          kind badge (top-left): Audiobook for anything listenable,
+                          else Book, else Docs. Progress is a labeled meter row in
+                          the body (cleaner than stacked cover chips). */
                               }
                               <BookCover book={b} category={category}>
-                                {e.hasAudio && (
-                                  <Chip
-                                    icon={<AudiobookIcon />}
-                                    label={t("landing.audiobookBadge")}
-                                    size="small"
-                                    sx={{
-                                      position: "absolute",
-                                      top: 8,
-                                      left: 8,
-                                      ...coverChipSx,
-                                    }}
-                                  />
-                                )}
+                                <Chip
+                                  icon={category === "docs"
+                                    ? <DocsIcon />
+                                    : e.hasAudio
+                                    ? <AudiobookIcon />
+                                    : <BookIcon />}
+                                  label={t(
+                                    category === "docs"
+                                      ? "landing.docsBadge"
+                                      : e.hasAudio
+                                      ? "landing.audiobookBadge"
+                                      : "landing.bookBadge",
+                                  )}
+                                  size="small"
+                                  sx={{
+                                    position: "absolute",
+                                    top: 8,
+                                    left: 8,
+                                    ...coverChipSx,
+                                  }}
+                                />
                               </BookCover>
                               <Box sx={{ p: 1.75 }}>
                                 <Typography
@@ -852,26 +861,33 @@ export function Landing({
                                   far. A clean per-item meter (Audiobookshelf /
                                   Plex idiom) instead of stacked naked bars. */
                                 }
+                                {
+                                  /* Once a book has ANY progress, show a meter
+                                    for EACH rendition it offers — reading and/or
+                                    listening — so an opened audiobook still shows
+                                    its 📖 book progress (0% until read), not just
+                                    the 🎧. A never-opened book stays meter-free. */
+                                }
                                 {(textP || audioP) && (
                                   <Box
                                     sx={{ display: "flex", gap: 1, mt: 1.25 }}
                                   >
-                                    {textP && (
+                                    {e.hasText && (
                                       <ProgressMeter
                                         icon={
                                           <BookIcon sx={{ fontSize: 15 }} />
                                         }
-                                        pct={pctOf(textP)}
+                                        pct={textP ? pctOf(textP) : 0}
                                       />
                                     )}
-                                    {audioP && (
+                                    {e.hasAudio && (
                                       <ProgressMeter
                                         icon={
                                           <AudiobookIcon
                                             sx={{ fontSize: 15 }}
                                           />
                                         }
-                                        pct={pctOf(audioP)}
+                                        pct={audioP ? pctOf(audioP) : 0}
                                       />
                                     )}
                                   </Box>
