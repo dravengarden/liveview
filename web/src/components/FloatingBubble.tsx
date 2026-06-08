@@ -17,6 +17,7 @@ import {
   MenuItem,
   Typography,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import {
   Bedtime,
   Cast as CastIcon,
@@ -46,6 +47,19 @@ function coverGradient(slug: string): string {
   return `linear-gradient(135deg, hsl(${hue} 52% 52%), hsl(${
     (hue + 38) % 360
   } 48% 42%))`;
+}
+
+/** The same hue, but TRANSLUCENT — a tinted glass version for the frosted puck:
+ *  the book colour is just a wash over a backdrop-blur, so the page reads through
+ *  it (iOS material look) instead of an opaque disc. A real cover image, when
+ *  present, still sits opaque on top — only the gradient fallback turns to glass. */
+function coverGlass(slug: string): string {
+  let h = 0;
+  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) | 0;
+  const hue = Math.abs(h) % 360;
+  return `linear-gradient(135deg, hsl(${hue} 52% 52% / 0.55), hsl(${
+    (hue + 38) % 360
+  } 48% 42% / 0.45))`;
 }
 
 const SIZE = 56; // bubble diameter (px)
@@ -568,7 +582,12 @@ export function FloatingBubble({
             inset: 5,
             borderRadius: "50%",
             overflow: "hidden",
-            background: coverGradient(slug),
+            // Frosted puck: a translucent tint over a backdrop blur, so the page
+            // shows through it as glass. A cover image (below) overlays opaque, so
+            // only the gradient-fallback puck reads as frosted.
+            background: coverGlass(slug),
+            backdropFilter: "blur(16px) saturate(180%)",
+            WebkitBackdropFilter: "blur(16px) saturate(180%)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -631,7 +650,9 @@ export function FloatingBubble({
             position: "fixed",
             inset: 0,
             zIndex: theme.zIndex.fab - 1,
-            bgcolor: "rgba(0,0,0,0.45)",
+            // Lighter scrim than a solid modal: the card is frosted glass, so a
+            // heavy black dim would just mud it — let the page read THROUGH.
+            bgcolor: "rgba(0,0,0,0.3)",
           })}
         />
       </Fade>
@@ -658,7 +679,13 @@ export function FloatingBubble({
             pb: 1,
             pt: 0.25,
             width: cardW,
-            bgcolor: "background.paper",
+            // Frosted glass: translucent surface + backdrop blur so the page
+            // (under the light scrim) diffuses through it, matching the app's
+            // other frosted chrome (bars / status strip). The border + shadow
+            // keep the glass edge legible.
+            bgcolor: alpha(theme.palette.background.paper, 0.72),
+            backdropFilter: "blur(24px) saturate(180%)",
+            WebkitBackdropFilter: "blur(24px) saturate(180%)",
             borderRadius: 4,
             boxShadow: 8,
             border: 1,
