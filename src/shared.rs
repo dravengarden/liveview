@@ -82,4 +82,11 @@ pub enum WsMessage {
     TreeUpdate {
         tree: Vec<TreeNode>,
     },
+    /// A single `/api/settings` key changed (any client's PUT). Broadcast so the
+    /// state-based `mirroredStore`s (audio rate/pos/session/active-player, …)
+    /// re-reconcile live cross-device instead of only on the next page load.
+    SettingUpdate {
+        key: String,
+        value: String,
+    },
 }

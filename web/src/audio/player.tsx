@@ -11,8 +11,11 @@ import type { Mark, SpokenContent } from "@/types";
 import { useI18n } from "@/i18n";
 import { loadServerSetting } from "@/syncBackends";
 import {
+  activePlayerStore,
   type AudioPos,
   audioStores,
+  CLIENT_ID,
+  deviceLabelStore,
   type PersistedSession,
   posStore,
   rateStore,
@@ -101,6 +104,13 @@ export interface AudioPlayer {
    *  from ANOTHER device — drives the "已同步…" snackbar. `seq` lets an identical
    *  message re-fire the toast; null until/unless a cross-device sync lands. */
   syncNotice: { message: string; seq: number } | null;
+  /** Non-null when audio is currently playing on ANOTHER client (tab/device/app).
+   *  This client is paused (yielded); the play surfaces show "play here" instead
+   *  of the normal toggle, and `label` is that device's human name. */
+  playingElsewhere: { label: string } | null;
+  /** Take over playback here: claim it (the other client pauses) and resume from
+   *  the synced position. Used by the "play here" affordance. */
+  playHere: () => void;
 }
 
 // Device-local FAST PATH for the resume position + rate. The cross-device
@@ -117,6 +127,13 @@ const posKey = (path: string, lang: string): string =>
 /** Warm the next chapter's synthesis this many seconds before the current ends,
  *  so auto-advance doesn't stall on a cold edge-tts cache. */
 const PREFETCH_LEAD_S = 25;
+
+/** A claim older than this is considered DEAD (the owner crashed / closed without
+ *  releasing) — other clients then ignore it and may claim freely. Must comfortably
+ *  exceed HEARTBEAT_MS so a live owner is never mistaken for stale. */
+const CLAIM_STALE_MS = 15000;
+/** A playing client re-stamps its claim this often so it stays fresh < STALE. */
+const HEARTBEAT_MS = 5000;
 
 /** A same-chapter resume from another device only "wins" (and toasts) when it's
  *  meaningfully ahead of this device's local position — a few seconds of drift
@@ -262,6 +279,17 @@ export function AudioPlayerProvider(
   // Listen-plane UI: is the full read-along popup in focus? Default collapsed so
   // a resumed session (rehydrated below) shows only the bar, never auto-expands.
   const [expanded, setExpanded] = useState(false);
+  // Single-active-player handoff: non-null when ANOTHER fresh client owns
+  // playback right now. The three play surfaces then render a "play here" / take
+  // over control instead of the normal play toggle. Null = we're free to play.
+  const [playingElsewhere, setPlayingElsewhere] = useState<
+    { label: string } | null
+  >(null);
+  // True only while WE are pausing the element because another client took over
+  // (a "yielded" pause). The <audio> `pause` event can't tell a yield from a
+  // user pause, so this flag tells `onPause` to NOT release our claim (the new
+  // owner holds it — releasing would null it and fight them).
+  const yieldingRef = useRef(false);
   // Sleep timer (WeChat-Reading style): the chosen option (for the menu
   // highlight) plus a remaining-minutes display that counts down ONLY while
   // playing. The live seconds-remaining + last-tick timestamp live in refs so
@@ -300,6 +328,27 @@ export function AudioPlayerProvider(
   // separately per-tick in the timeupdate handler.
   const persistPos = useCallback((path: string, t: number) => {
     posStore.set({ path, t });
+  }, []);
+
+  // ── Single-active-player claim primitives ──────────────────────────────────
+  // Claim playback for THIS client (fresh ts). Called whenever this client
+  // starts playing (togglePlay→play, playChapter? no — load is paused;
+  // playHere, auto-advance) and re-fired by the heartbeat to stay non-stale.
+  const claimPlayback = useCallback(() => {
+    activePlayerStore.set({
+      clientId: CLIENT_ID,
+      label: deviceLabelStore.get(),
+      ts: Date.now(),
+    });
+  }, []);
+
+  // Release the claim ONLY if we still own it (a user-initiated pause/stop on the
+  // owning client → "no one is playing now"). Never call this on a yielded pause:
+  // the new owner holds the claim and we must not null it.
+  const releasePlayback = useCallback(() => {
+    if (activePlayerStore.get()?.clientId === CLIENT_ID) {
+      activePlayerStore.set(null);
+    }
   }, []);
 
   // Load a chapter into the element: fetch sentences (instant) then marks
@@ -493,9 +542,23 @@ export function AudioPlayerProvider(
       // controls are live from the first frame rather than the first tick.
       updatePositionState(audio);
     };
-    const onPlay = (): void => setPlaying(true);
+    const onPlay = (): void => {
+      setPlaying(true);
+      // Any path that actually starts the element (togglePlay, playHere,
+      // auto-advance, OS/lock-screen play) claims playback for this client. We
+      // own it now, so we're not "playing elsewhere".
+      claimPlayback();
+      setPlayingElsewhere(null);
+    };
     const onPause = (): void => {
       setPlaying(false);
+      // Distinguish a YIELDED pause (another client took over — keep their claim)
+      // from a USER pause on the owning client (release → no one is playing).
+      if (yieldingRef.current) {
+        yieldingRef.current = false;
+      } else {
+        releasePlayback();
+      }
       // Flush the current position server-side so a pause is immediately
       // resumable on another device (force the write past the store's throttle).
       const np = nowPlayingRef.current;
@@ -544,7 +607,43 @@ export function AudioPlayerProvider(
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("ended", onEnded);
     };
-  }, [goTo]);
+  }, [goTo, claimPlayback, releasePlayback]);
+
+  // Heartbeat: while WE are playing, re-stamp the claim every HEARTBEAT_MS so its
+  // `ts` stays fresh (< CLAIM_STALE_MS) and another client never mistakes us for
+  // a dead owner. Cleared on pause/unmount.
+  useEffect(() => {
+    if (!playing) return undefined;
+    const id = setInterval(claimPlayback, HEARTBEAT_MS);
+    return () => clearInterval(id);
+  }, [playing, claimPlayback]);
+
+  // Observe the claim: when ANOTHER fresh client owns playback and we're audibly
+  // playing, YIELD — pause our element without releasing the claim (the owner
+  // holds it), and surface "playing on <label>". When the claim becomes ours /
+  // null / stale, clear the "elsewhere" state so our play affordance returns.
+  useEffect(() => {
+    const evaluate = (): void => {
+      const ap = activePlayerStore.get();
+      const ownedElsewhere = ap !== null &&
+        ap.clientId !== CLIENT_ID &&
+        Date.now() - ap.ts < CLAIM_STALE_MS;
+      if (ownedElsewhere) {
+        const a = audioRef.current;
+        if (a && !a.paused) {
+          // Yielded pause: flag it so onPause keeps the new owner's claim intact.
+          yieldingRef.current = true;
+          a.pause();
+        }
+        setPlayingElsewhere({ label: ap.label });
+      } else {
+        // Our own claim, no claim, or a stale (dead-owner) claim → we're free.
+        setPlayingElsewhere(null);
+      }
+    };
+    evaluate();
+    return activePlayerStore.subscribe(evaluate);
+  }, []);
 
   // Startup lifecycle for the server-synced audio stores: HYDRATE (load each
   // store's device-local mirror for an instant first paint) → resume the local
@@ -571,14 +670,15 @@ export function AudioPlayerProvider(
 
       // 2) Read the server copies (the bulk GET is memoized, so this shares the
       //    same fetch the `connect()` calls below use — no extra round-trip).
-      const [rawRate, rawSleepRem, rawSleepMin, rawSession, rawPos] = await Promise
-        .all([
-          loadServerSetting("audio.rate"),
-          loadServerSetting("audio.sleepRemaining"),
-          loadServerSetting("audio.sleepMinutes"),
-          loadServerSetting("audio.session"),
-          loadServerSetting("audio.pos"),
-        ]);
+      const [rawRate, rawSleepRem, rawSleepMin, rawSession, rawPos] =
+        await Promise
+          .all([
+            loadServerSetting("audio.rate"),
+            loadServerSetting("audio.sleepRemaining"),
+            loadServerSetting("audio.sleepMinutes"),
+            loadServerSetting("audio.session"),
+            loadServerSetting("audio.pos"),
+          ]);
       if (cancelled) return;
 
       // 3) Start the live mirror lifecycle (pull + reconcile + subscribe). The
@@ -649,11 +749,14 @@ export function AudioPlayerProvider(
           ? serverPos.t
           : 0;
         const localPos = cur
-          ? Number(localStorage.getItem(posKey(cur.chapterPath, cur.lang)) ?? "0")
+          ? Number(
+            localStorage.getItem(posKey(cur.chapterPath, cur.lang)) ?? "0",
+          )
           : 0;
         // Same chapter on both devices, but the server (another device) is
         // further along → adopt its position. The lead matches posStore.reconcile.
-        const posAhead = !chapterDiffers && serverT > localPos + SYNC_POS_LEAD_S;
+        const posAhead = !chapterDiffers &&
+          serverT > localPos + SYNC_POS_LEAD_S;
         if (chapterDiffers || posAhead) {
           if (serverT > 0) {
             // Seed the per-chapter localStorage pos so loadTrack's existing
@@ -837,6 +940,19 @@ export function AudioPlayerProvider(
       playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
     } else a.pause();
   }, []);
+
+  // Take over playback from whichever client currently owns it. Claim FIRST (so
+  // the handoff is felt instantly — the previous owner's observer pauses it),
+  // then resume from the synced position (the element is already loaded at it;
+  // posStore keeps it cross-device current). onPlay clears `playingElsewhere`
+  // once the element actually starts.
+  const playHere = useCallback(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    claimPlayback();
+    setPlayingElsewhere(null);
+    playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
+  }, [claimPlayback]);
   const seek = useCallback((sec: number) => {
     const a = audioRef.current;
     if (a) a.currentTime = sec;
@@ -935,6 +1051,8 @@ export function AudioPlayerProvider(
       prevChapter,
       stop,
       syncNotice,
+      playingElsewhere,
+      playHere,
     }),
     [
       nowPlaying,
@@ -963,6 +1081,8 @@ export function AudioPlayerProvider(
       prevChapter,
       stop,
       syncNotice,
+      playingElsewhere,
+      playHere,
     ],
   );
 

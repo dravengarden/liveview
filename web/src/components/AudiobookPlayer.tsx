@@ -12,6 +12,7 @@ import {
 } from "@mui/material";
 import {
   Bedtime,
+  Cast as CastIcon,
   MyLocation,
   Pause,
   PlayArrow,
@@ -89,6 +90,8 @@ export function AudiobookPlayer(
     setSleepTimer,
     nextChapter,
     prevChapter,
+    playingElsewhere,
+    playHere,
   } = useAudioPlayer();
 
   // Mirror playback position into the shared progress store (debounced upstream
@@ -304,14 +307,19 @@ export function AudiobookPlayer(
         />
       </IconButton>
       <IconButton
-        onClick={togglePlay}
+        onClick={playingElsewhere ? playHere : togglePlay}
         disabled={loading}
         color="primary"
-        aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
+        aria-label={playingElsewhere
+          ? t("audiobook.playHere")
+          : playing
+          ? t("audiobook.pause")
+          : t("audiobook.play")}
         sx={{ width: tap(58), height: tap(58) }}
       >
-        {loading
-          ? <CircularProgress size={32} />
+        {loading ? <CircularProgress size={32} /> : playingElsewhere
+          // Take-over affordance: cast/handoff glyph instead of resume.
+          ? <CastIcon sx={{ fontSize: rem(33) }} />
           : playing
           ? <Pause sx={{ fontSize: rem(38) }} />
           : <PlayArrow sx={{ fontSize: rem(38) }} />}
@@ -528,6 +536,27 @@ export function AudiobookPlayer(
             {fmtTime(duration)}
           </Typography>
         </Box>
+        {playingElsewhere && (
+          // Handoff hint: this client is paused because another device owns
+          // playback; the central button takes over.
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 0.5,
+              pb: 0.25,
+              color: "primary.main",
+            }}
+          >
+            <CastIcon sx={{ fontSize: rem(16) }} />
+            <Typography variant="caption" fontWeight={600}>
+              {t("audiobook.playingElsewhere", {
+                device: playingElsewhere.label,
+              })}
+            </Typography>
+          </Box>
+        )}
         {transportControls}
       </Box>
     </Box>

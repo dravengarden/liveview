@@ -567,7 +567,18 @@ async fn api_settings_put(
     Json(body): Json<SettingPut>,
 ) -> impl IntoResponse {
     match state.store.settings_set(&body.key, &body.value).await {
-        Ok(()) => StatusCode::NO_CONTENT,
+        Ok(()) => {
+            // Broadcast the change so other clients' mirrored stores re-reconcile
+            // live (cross-device), mirroring `broadcast_tree`. Clone before the
+            // response so the PUT's own return value is unaffected.
+            if let Ok(s) = serde_json::to_string(&WsMessage::SettingUpdate {
+                key: body.key.clone(),
+                value: body.value.clone(),
+            }) {
+                let _ = state.tx.send(s);
+            }
+            StatusCode::NO_CONTENT
+        }
         Err(e) => {
             tracing::warn!(error = %e, "settings write failed");
             StatusCode::INTERNAL_SERVER_ERROR

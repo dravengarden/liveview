@@ -2,7 +2,7 @@
 //
 // Hand-rolled (no Workbox) to keep the dependency surface minimal. Bump
 // VERSION to invalidate all caches on the next visit.
-const VERSION = "lv-v64";
+const VERSION = "lv-v65";
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const API_CACHE = `${VERSION}-api`;
@@ -17,7 +17,7 @@ self.addEventListener("install", (event) => {
     caches
       .open(SHELL_CACHE)
       .then((cache) => cache.addAll(SHELL))
-      .then(() => self.skipWaiting())
+      .then(() => self.skipWaiting()),
   );
 });
 
@@ -27,10 +27,12 @@ self.addEventListener("activate", (event) => {
       .keys()
       .then((keys) =>
         Promise.all(
-          keys.filter((k) => !k.startsWith(VERSION)).map((k) => caches.delete(k))
+          keys.filter((k) => !k.startsWith(VERSION)).map((k) =>
+            caches.delete(k)
+          ),
         )
       )
-      .then(() => self.clients.claim())
+      .then(() => self.clients.claim()),
   );
 });
 

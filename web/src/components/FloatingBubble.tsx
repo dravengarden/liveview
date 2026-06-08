@@ -19,6 +19,7 @@ import {
 } from "@mui/material";
 import {
   Bedtime,
+  Cast as CastIcon,
   Close,
   DeleteOutline as DeleteIcon,
   Headphones as AudiobookIcon,
@@ -164,6 +165,8 @@ export function FloatingBubble({
     sleepRemainingMin,
     setSleepTimer,
     stop,
+    playingElsewhere,
+    playHere,
   } = useAudioPlayer();
 
   // A DetentSheet (settings / TOC / confirm) renders inline, so its z-index is
@@ -777,11 +780,15 @@ export function FloatingBubble({
               </Typography>
               <Typography
                 variant="caption"
-                color="text.secondary"
+                color={playingElsewhere ? "primary.main" : "text.secondary"}
                 noWrap
                 sx={{ display: "block" }}
               >
-                {nowPlaying.bookLabel}
+                {playingElsewhere
+                  ? t("audiobook.playingElsewhere", {
+                    device: playingElsewhere.label,
+                  })
+                  : nowPlaying.bookLabel}
               </Typography>
             </Box>
             <OpenIcon
@@ -829,13 +836,18 @@ export function FloatingBubble({
               />
             </IconButton>
             <IconButton
-              aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
-              onClick={togglePlay}
+              aria-label={playingElsewhere
+                ? t("audiobook.playHere")
+                : playing
+                ? t("audiobook.pause")
+                : t("audiobook.play")}
+              onClick={playingElsewhere ? playHere : togglePlay}
               color="primary"
               sx={{ width: 52, height: 52 }}
             >
-              {loading
-                ? <CircularProgress size={26} />
+              {loading ? <CircularProgress size={26} /> : playingElsewhere
+                // Take-over affordance: cast/handoff glyph instead of resume.
+                ? <CastIcon sx={{ fontSize: rem(30) }} />
                 : playing
                 ? <Pause sx={{ fontSize: rem(34) }} />
                 : <PlayArrow sx={{ fontSize: rem(34) }} />}

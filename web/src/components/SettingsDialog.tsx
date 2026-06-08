@@ -4,6 +4,7 @@ import {
   MenuItem,
   Select,
   Stack,
+  TextField,
   ToggleButton,
   ToggleButtonGroup,
   Typography,
@@ -21,6 +22,8 @@ import { THEME_VARIANTS, VARIANT_OPTIONS } from "@/types";
 import { setShelfSort, type ShelfSort, useShelfSort } from "@/hooks";
 import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
+import { useStore } from "@/_store/mod.ts";
+import { deviceLabelStore } from "@/audio/stores";
 
 interface SettingsButtonProps {
   variant: ThemeVariant;
@@ -152,6 +155,9 @@ export function SettingsButton({
 }: SettingsButtonProps): React.JSX.Element {
   const { t, lang, setLang } = useI18n();
   const shelfSort = useShelfSort();
+  // The human name THIS device advertises for the single-active-player handoff
+  // ("Playing on <name>"). Device-LOCAL (persisted), so renaming it never syncs.
+  const deviceLabel = useStore(deviceLabelStore);
   // The font picker is collapsed by default — its 7 preview cards would
   // otherwise dominate the sheet. Collapsed shows just the current face,
   // previewed in itself; expanding drops the full list, and picking a face
@@ -470,6 +476,25 @@ export function SettingsButton({
                   <MenuItem key={s} value={s}>{t(`sort.${s}`)}</MenuItem>
                 ))}
               </Select>
+            }
+          />
+        </Stack>
+
+        {/* ── This device: the name shown when audio plays here ──────────── */}
+        <Stack spacing={1.5}>
+          <Typography variant="overline" color="text.secondary">
+            {t("settings.device")}
+          </Typography>
+          <Row
+            label={t("settings.deviceName")}
+            desc={t("settings.deviceNameDesc")}
+            control={
+              <TextField
+                size="small"
+                value={deviceLabel}
+                onChange={(e) => deviceLabelStore.set(e.target.value)}
+                sx={{ minWidth: 140 }}
+              />
             }
           />
         </Stack>

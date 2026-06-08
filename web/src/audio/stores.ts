@@ -1,5 +1,6 @@
 import { mirroredStore } from "@/_sync/mod.ts";
 import { idbPersistence } from "@/_sync-idb/mod.ts";
+import { persisted } from "@/_store/mod.ts";
 import type { Codec } from "@/syncBackends";
 import { settingBackend } from "@/syncBackends";
 import type { NowPlaying, Track } from "./player";
@@ -105,8 +106,100 @@ export const posStore = mirroredStore<AudioPos>({
   initial: { path: "", t: 0 },
   remote: settingBackend("audio.pos", posCodec),
   reconcile: (local, remote) =>
-    remote.path === local.path && remote.t > local.t + SYNC_POS_LEAD_S ? remote : local,
+    remote.path === local.path && remote.t > local.t + SYNC_POS_LEAD_S
+      ? remote
+      : local,
   push: { throttleMs: 5000 },
+});
+
+// ── Single active player (Spotify-Connect-style handoff) ────────────────────
+// Only ONE client (tab / device / native app instance) plays audio at a time;
+// every other client pauses and offers "play here". The claim is just another
+// cross-device `mirroredStore` over `/api/settings`, now live via the WS push.
+
+/** Per-INSTANCE client id, minted fresh at module load — NOT persisted. Two tabs
+ *  in one browser are distinct clients (distinguishable); a reload mints a new
+ *  one (correct: the old tab is gone). This is the identity a claim is keyed on. */
+export const CLIENT_ID = crypto.randomUUID();
+
+/** Best-effort human label for THIS device, from the UA/platform, so other
+ *  devices show "playing on <label>". Coarse on purpose (we only need a
+ *  recognizable name); the user can override it via the persisted store below. */
+function deriveLabel(): string {
+  const ua = navigator.userAgent;
+  const platform = (navigator.platform ?? "").toLowerCase();
+  let device = "This device";
+  if (/iPhone/i.test(ua)) {
+    device = "iPhone";
+  } else if (
+    /iPad/i.test(ua) ||
+    (platform === "macintel" && navigator.maxTouchPoints > 1)
+  ) {
+    // iPadOS 13+ reports a desktop "MacIntel" UA; touch points disambiguate it.
+    device = "iPad";
+  } else if (/Android/i.test(ua)) {
+    device = "Android";
+  } else if (/Mac/i.test(ua) || platform.startsWith("mac")) {
+    device = "Mac";
+  } else if (/Win/i.test(ua) || platform.startsWith("win")) {
+    device = "Windows";
+  }
+  // A browser hint when it's cheap to spot, so two browsers on one machine read
+  // apart (e.g. "Mac · Chrome").
+  let browser = "";
+  if (/Edg\//.test(ua)) {
+    browser = "Edge";
+  } else if (/Chrome\//.test(ua) && !/Chromium/.test(ua)) {
+    browser = "Chrome";
+  } else if (/Firefox\//.test(ua)) {
+    browser = "Firefox";
+  } else if (/Safari\//.test(ua) && !/Chrome/.test(ua)) {
+    browser = "Safari";
+  }
+  return browser ? `${device} · ${browser}` : device;
+}
+
+/** The human name OTHER devices see for this one. Device-LOCAL (`persisted`), so
+ *  it never syncs — each device names itself. Settings exposes a rename field. */
+export const deviceLabelStore = persisted<string>(
+  "lv-device-label",
+  deriveLabel(),
+);
+
+/** The current claim: who is playing, and when they last refreshed it (heartbeat
+ *  `ts`, so a crashed owner's claim goes stale instead of wedging playback). */
+export interface ActivePlayer {
+  clientId: string;
+  label: string;
+  ts: number;
+}
+
+// JSON codec; `null` (no one playing) ⇄ "" (the server's "unset" value), like
+// sessionCodec. An empty/blank push also decodes to null so a cleared claim is
+// observed live (a bare JSON.parse("") would throw → be ignored).
+const jsonCodec: Codec<ActivePlayer | null> = {
+  enc: (v) => (v === null ? "" : JSON.stringify(v)),
+  dec: (raw) => {
+    if (raw === "") {
+      return null;
+    }
+    const ap = JSON.parse(raw) as ActivePlayer | null;
+    if (
+      ap !== null &&
+      (typeof ap.clientId !== "string" || typeof ap.ts !== "number")
+    ) {
+      throw new Error("audio.activePlayer: malformed");
+    }
+    return ap;
+  },
+};
+
+export const activePlayerStore = mirroredStore<ActivePlayer | null>({
+  initial: null,
+  remote: settingBackend("audio.activePlayer", jsonCodec),
+  // Default reconcile (remote-wins): the latest claim from any device wins, which
+  // is exactly the takeover semantics. Immediate push (no pacing) so a takeover
+  // is felt instantly on the other client.
 });
 
 /** Every server-synced audio store, for the lifecycle helpers (hydrate → connect
@@ -117,4 +210,5 @@ export const audioStores = [
   sleepRemainingStore,
   sessionStore,
   posStore,
+  activePlayerStore,
 ] as const;

@@ -125,7 +125,8 @@ export type WsMessage =
     file_type: FileType;
     content: string;
   }
-  | { type: "TreeUpdate"; tree: TreeNode[] };
+  | { type: "TreeUpdate"; tree: TreeNode[] }
+  | { type: "SettingUpdate"; key: string; value: string };
 
 // Reading-oriented themes only (Day / Sepia / Dark / Night). The old
 // code-editor schemes (solarized, dracula, nord, monokai, one-dark, gruvbox)

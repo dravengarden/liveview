@@ -1,15 +1,25 @@
-import { useEffect, useRef, useCallback } from "react";
-import type { WsMessage, TreeNode, FileType } from "@/types";
+import { useCallback, useEffect, useRef } from "react";
+import type { FileType, TreeNode, WsMessage } from "@/types";
 import { connectionLost, connectionReady } from "@/connectionStore";
+import { emitServerSettingPush } from "@/syncBackends";
 
 interface UseWebSocketOptions {
-  onContentUpdate: (path: string, lang: string, fileType: FileType, content: string) => void;
+  onContentUpdate: (
+    path: string,
+    lang: string,
+    fileType: FileType,
+    content: string,
+  ) => void;
   onTreeUpdate: (tree: TreeNode[]) => void;
 }
 
-export function useWebSocket({ onContentUpdate, onTreeUpdate }: UseWebSocketOptions): void {
+export function useWebSocket(
+  { onContentUpdate, onTreeUpdate }: UseWebSocketOptions,
+): void {
   const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   const connect = useCallback(() => {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -28,6 +38,11 @@ export function useWebSocket({ onContentUpdate, onTreeUpdate }: UseWebSocketOpti
           onContentUpdate(msg.path, msg.lang, msg.file_type, msg.content);
         } else if (msg.type === "TreeUpdate") {
           onTreeUpdate(msg.tree);
+        } else if (msg.type === "SettingUpdate") {
+          // Live cross-device settings push: feed the value to any mirrored
+          // store subscribed on this key (it re-reconciles). The client also
+          // sees the echo of its OWN PUT here — that's a no-op (remote == local).
+          emitServerSettingPush(msg.key, msg.value);
         }
       } catch (e) {
         console.error("Failed to parse WebSocket message:", e);
