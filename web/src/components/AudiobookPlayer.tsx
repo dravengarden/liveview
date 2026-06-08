@@ -535,11 +535,20 @@ export function AudiobookPlayer(
           // the two collide at bottom:0. With the bar on top (desktop), the bar
           // doesn't publish the var → 0 → the transport sits at the screen edge.
           bottom: "var(--shell-bar-h, 0px)",
+          // Hairline marks the SLAB TOP over the scrolling text (legibility); the
+          // transport/navbar boundary below carries NO border, so the two same-
+          // recipe glass panes read as one continuous slab (cowboy-style).
           borderTop: 1,
           borderColor: "divider",
-          bgcolor: (t) => alpha(t.palette.background.default, 0.78),
-          backdropFilter: "blur(24px) saturate(180%)",
-          WebkitBackdropFilter: "blur(24px) saturate(180%)",
+          // Same milky glass recipe as the NavShell bar below (0.72 dark / 0.76
+          // light, blur 30 / saturate 200) so they're one indistinguishable slab.
+          bgcolor: (t) =>
+            alpha(
+              t.palette.background.default,
+              t.palette.mode === "dark" ? 0.72 : 0.76,
+            ),
+          backdropFilter: "blur(30px) saturate(200%)",
+          WebkitBackdropFilter: "blur(30px) saturate(200%)",
           // Match the bottom NavShell's 12px side padding so the transport's
           // edge "ears" (follow/speed left, sleep right) line up vertically with
           // the navbar's hamburger / gear below. Also floors the landscape
