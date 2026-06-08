@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    />
+    <title>LiveView</title>
+    <!--
+      Native-shell connection loader (iOS Local Network gate).
+
+      Why this page exists: the WKWebView used to navigate straight to the remote
+      https URL on launch. On iOS that first request to the tailnet host trips the
+      one-time "Local Network" permission prompt, and the in-flight navigation
+      FAILS before the user taps Allow → white screen, with no retry after the
+      grant (the user had to force-quit + reopen). PWA/Safari never sees this
+      (no Local Network prompt), so this is iOS-shell-only.
+
+      What it does instead: boot a tiny LOCAL page (bundled, no network → never
+      white), probe the remote, and only then hand off:
+        • permission granted  → probe succeeds → redirect to the real app (auto-
+          recover, no reopen).
+        • permission denied    → after a few quiet retries, show an error card with
+          a "去设置开启" deep-link + a "重试" button.
+        • granted later (in Settings, then back) → visibilitychange re-probes and
+          connects with no tap.
+      On macOS/Android (no Local Network prompt) the first probe succeeds instantly
+      → transparent redirect, this UI never shows.
+    -->
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0a0b0b;
+        --fg: #f5f5f7;
+        --dim: #9aa2a1;
+        --card: rgba(26, 30, 30, 0.72);
+        --hair: rgba(255, 255, 255, 0.1);
+        --accent: #2dd4bf; /* liveview teal */
+        --accent-press: #21bda9;
+      }
+      * {
+        box-sizing: border-box;
+        -webkit-tap-highlight-color: transparent;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+          sans-serif;
+        display: grid;
+        place-items: center;
+        padding: max(env(safe-area-inset-top), 24px) 24px
+          max(env(safe-area-inset-bottom), 24px);
+        overflow: hidden;
+      }
+      /* --- connecting (default) --- */
+      #spinner {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 2.5px solid var(--hair);
+        border-top-color: var(--accent);
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      #connecting {
+        display: grid;
+        place-items: center;
+        gap: 18px;
+        text-align: center;
+      }
+      #connecting .label {
+        color: var(--dim);
+        font-size: 13px;
+        /* Only surfaces if the probe is slow (>1.2s) — a calm "still trying", not
+           an alarm. Hidden at first so a fast connect looks like the splash. */
+        opacity: 0;
+        transition: opacity 0.4s ease;
+      }
+      body[data-slow="1"] #connecting .label {
+        opacity: 1;
+      }
+      /* --- error card --- */
+      #error {
+        display: none;
+        width: 100%;
+        max-width: 360px;
+        background: var(--card);
+        -webkit-backdrop-filter: saturate(180%) blur(30px);
+        backdrop-filter: saturate(180%) blur(30px);
+        border: 1px solid var(--hair);
+        border-radius: 20px;
+        padding: 26px 22px 20px;
+        text-align: center;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+      }
+      body[data-state="error"] #connecting {
+        display: none;
+      }
+      body[data-state="error"] #error {
+        display: block;
+      }
+      #error .glyph {
+        font-size: 34px;
+        line-height: 1;
+        margin-bottom: 14px;
+      }
+      #error h1 {
+        margin: 0 0 8px;
+        font-size: 18px;
+        font-weight: 600;
+      }
+      #error p {
+        margin: 0 0 20px;
+        color: var(--dim);
+        font-size: 14px;
+      }
+      .btn {
+        display: block;
+        width: 100%;
+        border: 0;
+        border-radius: 13px;
+        padding: 13px 16px;
+        font-size: 15px;
+        font-weight: 600;
+        font-family: inherit;
+        cursor: pointer;
+        transition:
+          transform 0.08s ease,
+          background 0.15s ease;
+      }
+      .btn:active {
+        transform: scale(0.975);
+      }
+      .btn-primary {
+        background: var(--accent);
+        color: #06201d;
+        margin-bottom: 10px;
+      }
+      .btn-primary:active {
+        background: var(--accent-press);
+      }
+      .btn-ghost {
+        background: transparent;
+        color: var(--fg);
+        border: 1px solid var(--hair);
+      }
+      #hint {
+        margin: 16px 2px 0;
+        font-size: 12px;
+        color: var(--dim);
+        line-height: 1.6;
+      }
+    </style>
+  </head>
+  <body data-state="connecting">
+    <div id="connecting">
+      <div id="spinner"></div>
+      <div class="label">正在连接 hawk…</div>
+    </div>
+
+    <div id="error">
+      <div class="glyph">📡</div>
+      <h1>无法连接到 LiveView</h1>
+      <p>需要「本地网络」权限才能连接到 hawk。在设置里打开后回到这里即可自动重连。</p>
+      <button class="btn btn-primary" id="open-settings">去设置开启</button>
+      <button class="btn btn-ghost" id="retry">重试</button>
+      <p id="hint">或手动前往：设置 › LiveView › 本地网络</p>
+    </div>
+
+    <script>
+      const APP_NAME = "LiveView";
+      const REMOTE = "https://liveview.hawk.thundersparrow.top";
+
+      const body = document.body;
+      const hint = document.getElementById("hint");
+      let attempt = 0;
+      let probing = false;
+      let slowTimer;
+
+      // Probe reachability without CORS: a no-cors fetch resolves (opaque) when
+      // the host is reachable and rejects (TypeError) when the network is blocked
+      // — exactly the Local-Network-denied vs allowed signal we need. A generous
+      // abort keeps a permission-pending request (which HANGS until the user taps
+      // the modal) from being killed before they decide.
+      function probe() {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 12000);
+        return fetch(REMOTE + "/", {
+          mode: "no-cors",
+          cache: "no-store",
+          signal: ctrl.signal,
+        })
+          .then(() => true)
+          .catch(() => false)
+          .finally(() => clearTimeout(t));
+      }
+
+      async function connect() {
+        if (probing) return;
+        probing = true;
+        body.dataset.state = "connecting";
+        // Reveal the "still trying" label only if it's taking a moment.
+        clearTimeout(slowTimer);
+        slowTimer = setTimeout(() => (body.dataset.slow = "1"), 1200);
+
+        if (await probe()) {
+          // Reachable → hand off to the real app. A full navigation (not a fetch)
+          // so the WKWebView becomes the remote origin, exactly as before.
+          location.replace(REMOTE);
+          return;
+        }
+
+        attempt += 1;
+        probing = false;
+        if (attempt < 4) {
+          // Quiet backoff: a just-granted permission reconnects within ~1–3s with
+          // no interaction; the error card only appears once retries are spent.
+          setTimeout(connect, 700 * attempt);
+        } else {
+          clearTimeout(slowTimer);
+          body.dataset.state = "error";
+        }
+      }
+
+      // Open the iOS app-settings page (where the Local Network toggle lives).
+      // Tries the opener plugin (global binding first, then a raw invoke); if the
+      // native bridge isn't there (desktop / mis-wired), fall back to the manual
+      // hint so the button never dead-ends.
+      async function openSettings() {
+        const t = globalThis.__TAURI__;
+        try {
+          if (t?.opener?.openUrl) {
+            await t.opener.openUrl("app-settings:");
+            return;
+          }
+          if (t?.core?.invoke) {
+            await t.core.invoke("plugin:opener|open_url", {
+              path: "app-settings:",
+            });
+            return;
+          }
+        } catch {
+          /* fall through to the manual hint */
+        }
+        hint.style.color = "var(--accent)";
+        hint.textContent = "请手动前往：设置 › " + APP_NAME + " › 本地网络";
+      }
+
+      document.getElementById("open-settings").addEventListener("click", openSettings);
+      document.getElementById("retry").addEventListener("click", () => {
+        attempt = 0;
+        connect();
+      });
+
+      // Returning from Settings (or any foreground) → re-probe. This is what makes
+      // "grant in Settings, swipe back, it just connects" work with zero taps.
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible" && body.dataset.state !== "connecting") {
+          attempt = 0;
+          connect();
+        }
+      });
+
+      connect();
+    </script>
+  </body>
+</html>

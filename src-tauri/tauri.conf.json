@@ -5,9 +5,10 @@
   "identifier": "top.thundersparrow.liveview",
   "build": {
     "devUrl": "https://liveview.hawk.thundersparrow.top",
-    "frontendDist": "https://liveview.hawk.thundersparrow.top"
+    "frontendDist": "../loader"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "LiveView",

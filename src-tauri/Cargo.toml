@@ -30,3 +30,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# Only native command the shell exposes: open the iOS app-settings page from the
+# loader's "去设置开启" button (where the Local Network toggle lives). On iOS the
+# opener routes `app-settings:` through UIApplication.open; a no-op everywhere the
+# loader's error card never shows (desktop/Android).
+tauri-plugin-opener = "2"

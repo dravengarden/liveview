@@ -86,8 +86,37 @@ and `target/` are gitignored.
   `LaunchBackground` colour set (light `#ffffff` / dark `#0d1117`), matching the
   web app's pre-mount splash so cold start has no white flash.
 
+- **Local Network loader** — `../loader/index.html` is bundled as `frontendDist`
+  instead of the remote URL. On iOS the first connection to the tailnet host
+  trips the one-time "Local Network" prompt; the old direct-to-remote load
+  white-screened until force-quit. The loader boots locally (never white), probes
+  the remote, then redirects — granting reconnects automatically, denying shows
+  an error card with a "去设置开启" deep-link (opener plugin → `app-settings:`).
+  See the comment at the top of `loader/index.html` for the full flow. Exposes
+  `tauri-plugin-opener` + `opener:allow-open-url` (the only IPC the shell grants).
+
 Safe-area insets (`env(safe-area-inset-*)`) are reported correctly by the native
 WebView with no extra code.
+
+### Rebuilding after the Local Network loader change (do this on the Mac)
+
+No `tauri ios init` re-gen needed — the loader is `frontendDist` (re-embedded by
+the Rust rebuild) and the opener is a normal dependency. From `src-tauri/`:
+
+```sh
+export PATH=/opt/homebrew/bin:$PATH
+cargo tauri ios build        # first run adds tauri-plugin-opener to Cargo.lock — commit it
+```
+
+Then re-sign + reinstall, and verify on-device (identical flow to the cowboy
+shell — see `projects/cowboy/tauri-shell/src-tauri/README.md`):
+
+1. **Delete the app first** so iOS re-shows the Local Network prompt.
+2. Launch → Allow → connects within ~1–3s, no white screen, no reopen.
+3. Re-install → Don't Allow → error card; **去设置开启** opens Settings on
+   LiveView's page; toggle on + swipe back → auto-reconnects (no tap).
+4. If 去设置开启 doesn't open Settings, the opener invoke shape may differ —
+   check `openSettings()` in `loader/index.html` (it degrades to a manual hint).
 
 ### If background audio still pauses on lock (on-device tuning)
 

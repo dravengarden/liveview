@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core defaults for the liveview native shell. No extra permissions: the window shows a remote origin, which by design has no IPC access.",
+  "description": "Core defaults for the liveview native shell. The only extra permission is opener:allow-open-url, used solely by the bundled loader's 'go to Settings' button to open the iOS app-settings page.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "opener:allow-open-url"]
 }
