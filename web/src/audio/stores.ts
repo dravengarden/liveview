@@ -119,8 +119,28 @@ export const posStore = mirroredStore<AudioPos>({
 
 /** Per-INSTANCE client id, minted fresh at module load — NOT persisted. Two tabs
  *  in one browser are distinct clients (distinguishable); a reload mints a new
- *  one (correct: the old tab is gone). This is the identity a claim is keyed on. */
-export const CLIENT_ID = crypto.randomUUID();
+ *  one (correct: the old tab is gone). This is the identity a claim is keyed on.
+ *
+ *  `crypto.randomUUID` only exists in a SECURE CONTEXT (https / localhost); over
+ *  plain-HTTP LAN it's undefined and a bare call throws at module load, crashing
+ *  the whole app. This id only needs to distinguish live clients, not be
+ *  cryptographically strong, so fall back to a random string off the always-present
+ *  `getRandomValues` (or Math.random as a last resort). */
+function mintClientId(): string {
+  const c = globalThis.crypto as Crypto | undefined;
+  if (c && typeof c.randomUUID === "function") {
+    return c.randomUUID();
+  }
+  const rand = c?.getRandomValues
+    ? Array.from(
+      c.getRandomValues(new Uint8Array(8)),
+      (b) => b.toString(16).padStart(2, "0"),
+    ).join("")
+    : Math.random().toString(16).slice(2, 18);
+  return `c-${rand}`;
+}
+
+export const CLIENT_ID = mintClientId();
 
 /** Best-effort human label for THIS device, from the UA/platform, so other
  *  devices show "playing on <label>". Coarse on purpose (we only need a
