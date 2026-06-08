@@ -117,7 +117,7 @@ const STRINGS: Record<Language, Dict> = {
     "settings.device": "This device",
     "settings.deviceName": "Device name",
     "settings.deviceNameDesc":
-      "The name other devices show when audio plays here",
+      "A label other devices show when audio plays here. The device keeps a stable id underneath, so renaming it doesn't make it a new device.",
     "settings.about": "About",
     "settings.aboutText":
       "liveview — read and listen to your library, always up to date.",
@@ -221,7 +221,8 @@ const STRINGS: Record<Language, Dict> = {
     "sort.name": "名称",
     "settings.device": "本设备",
     "settings.deviceName": "设备名称",
-    "settings.deviceNameDesc": "在此设备播放时，其他设备显示的名称",
+    "settings.deviceNameDesc":
+      "在此设备播放时其他设备显示的名称（只是别名）。设备底层有稳定的 id，改名不会变成一台新设备。",
     "settings.about": "关于",
     "settings.aboutText": "liveview —— 阅读与收听你的书库，内容自动更新。",
   },

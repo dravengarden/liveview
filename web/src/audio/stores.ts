@@ -117,16 +117,13 @@ export const posStore = mirroredStore<AudioPos>({
 // every other client pauses and offers "play here". The claim is just another
 // cross-device `mirroredStore` over `/api/settings`, now live via the WS push.
 
-/** Per-INSTANCE client id, minted fresh at module load — NOT persisted. Two tabs
- *  in one browser are distinct clients (distinguishable); a reload mints a new
- *  one (correct: the old tab is gone). This is the identity a claim is keyed on.
- *
- *  `crypto.randomUUID` only exists in a SECURE CONTEXT (https / localhost); over
- *  plain-HTTP LAN it's undefined and a bare call throws at module load, crashing
- *  the whole app. This id only needs to distinguish live clients, not be
- *  cryptographically strong, so fall back to a random string off the always-present
- *  `getRandomValues` (or Math.random as a last resort). */
-function mintClientId(): string {
+/** Mint a fresh random id. Secure-context-safe: `crypto.randomUUID` only exists
+ *  in a SECURE CONTEXT (https / localhost); over plain-HTTP LAN it's undefined
+ *  and a bare call throws at module load, crashing the whole app. These ids only
+ *  need to be unique, not cryptographically strong, so fall back to a random
+ *  string off the always-present `getRandomValues` (or Math.random as a last
+ *  resort). */
+function mintId(): string {
   const c = globalThis.crypto as Crypto | undefined;
   if (c && typeof c.randomUUID === "function") {
     return c.randomUUID();
@@ -140,7 +137,26 @@ function mintClientId(): string {
   return `c-${rand}`;
 }
 
-export const CLIENT_ID = mintClientId();
+// ── Device identity: three distinct ids, one stable ────────────────────────────
+// The device identity is the STABLE id; the human name is just an alias of it;
+// the per-page-load id only disambiguates two tabs of the SAME browser. Keeping
+// these separate is what lets the user rename a device without it becoming a
+// "new" device, while two tabs still mutually exclude each other for playback.
+
+/** THE device identity: STABLE, persisted, unique-per-device. Everything else
+ *  (the human name below, the server-side device record) hangs off THIS id.
+ *  It survives reloads / app relaunches — localStorage persists in the native
+ *  Tauri WKWebView (per-install) and per-profile in a browser. Minted once on
+ *  first run via the secure-context-safe `mintId`, then read back forever. */
+export const DEVICE_ID = persisted<string>("lv-device-id", mintId());
+
+/** Per-PAGE-LOAD id, minted fresh at module load — NOT persisted. It exists ONLY
+ *  so two tabs/windows of the SAME browser (which share one `DEVICE_ID`) are
+ *  distinguishable for playback mutual-exclusion — the claim is keyed on THIS.
+ *  A reload mints a new one (correct: the old tab is gone). It is an
+ *  implementation detail of the single-active-player handoff, NOT the device
+ *  identity — never persist it, never show it. */
+export const INSTANCE_ID = mintId();
 
 /** Best-effort human label for THIS device, from the UA/platform, so other
  *  devices show "playing on <label>". Coarse on purpose (we only need a
@@ -179,17 +195,24 @@ function deriveLabel(): string {
   return browser ? `${device} · ${browser}` : device;
 }
 
-/** The human name OTHER devices see for this one. Device-LOCAL (`persisted`), so
- *  it never syncs — each device names itself. Settings exposes a rename field. */
+/** The human NAME for this device — an editable ALIAS of `DEVICE_ID`, NOT an
+ *  identity of its own. Renaming it (Settings exposes a field) changes only the
+ *  label; `DEVICE_ID` stays exactly the same, so a renamed device is still the
+ *  same device. Device-LOCAL (`persisted`), so it never syncs — each device
+ *  names itself. Default derived from the UA via `deriveLabel`. */
 export const deviceLabelStore = persisted<string>(
   "lv-device-label",
   deriveLabel(),
 );
 
 /** The current claim: who is playing, and when they last refreshed it (heartbeat
- *  `ts`, so a crashed owner's claim goes stale instead of wedging playback). */
+ *  `ts`, so a crashed owner's claim goes stale instead of wedging playback).
+ *  `deviceId` records WHICH device holds it (stable, for display/debug);
+ *  `instanceId` is the per-page-load id the mutual-exclusion check actually keys
+ *  on, so two tabs of one browser (same `deviceId`) still exclude each other. */
 export interface ActivePlayer {
-  clientId: string;
+  deviceId: string;
+  instanceId: string;
   label: string;
   ts: number;
 }
@@ -206,7 +229,8 @@ const jsonCodec: Codec<ActivePlayer | null> = {
     const ap = JSON.parse(raw) as ActivePlayer | null;
     if (
       ap !== null &&
-      (typeof ap.clientId !== "string" || typeof ap.ts !== "number")
+      (typeof ap.deviceId !== "string" || typeof ap.instanceId !== "string" ||
+        typeof ap.ts !== "number")
     ) {
       throw new Error("audio.activePlayer: malformed");
     }

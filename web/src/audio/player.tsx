@@ -14,8 +14,9 @@ import {
   activePlayerStore,
   type AudioPos,
   audioStores,
-  CLIENT_ID,
+  DEVICE_ID,
   deviceLabelStore,
+  INSTANCE_ID,
   type PersistedSession,
   posStore,
   rateStore,
@@ -336,17 +337,20 @@ export function AudioPlayerProvider(
   // playHere, auto-advance) and re-fired by the heartbeat to stay non-stale.
   const claimPlayback = useCallback(() => {
     activePlayerStore.set({
-      clientId: CLIENT_ID,
+      deviceId: DEVICE_ID.get(),
+      instanceId: INSTANCE_ID,
       label: deviceLabelStore.get(),
       ts: Date.now(),
     });
   }, []);
 
   // Release the claim ONLY if we still own it (a user-initiated pause/stop on the
-  // owning client → "no one is playing now"). Never call this on a yielded pause:
-  // the new owner holds the claim and we must not null it.
+  // owning client → "no one is playing now"). Keyed on instanceId (NOT deviceId)
+  // so a second tab of the SAME browser can't release this tab's claim. Never
+  // call this on a yielded pause: the new owner holds the claim and we must not
+  // null it.
   const releasePlayback = useCallback(() => {
-    if (activePlayerStore.get()?.clientId === CLIENT_ID) {
+    if (activePlayerStore.get()?.instanceId === INSTANCE_ID) {
       activePlayerStore.set(null);
     }
   }, []);
@@ -625,8 +629,11 @@ export function AudioPlayerProvider(
   useEffect(() => {
     const evaluate = (): void => {
       const ap = activePlayerStore.get();
+      // Keyed on instanceId (NOT deviceId): a claim from another tab of the SAME
+      // browser still counts as "elsewhere", preserving same-browser two-tab
+      // mutual exclusion exactly as before.
       const ownedElsewhere = ap !== null &&
-        ap.clientId !== CLIENT_ID &&
+        ap.instanceId !== INSTANCE_ID &&
         Date.now() - ap.ts < CLAIM_STALE_MS;
       if (ownedElsewhere) {
         const a = audioRef.current;
