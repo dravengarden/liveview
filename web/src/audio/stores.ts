@@ -147,8 +147,29 @@ function mintId(): string {
  *  (the human name below, the server-side device record) hangs off THIS id.
  *  It survives reloads / app relaunches — localStorage persists in the native
  *  Tauri WKWebView (per-install) and per-profile in a browser. Minted once on
- *  first run via the secure-context-safe `mintId`, then read back forever. */
-export const DEVICE_ID = persisted<string>("lv-device-id", mintId());
+ *  first run via the secure-context-safe `mintId`, then read back forever.
+ *
+ *  Written DIRECTLY (not via `persisted`): a `persisted` store doesn't write its
+ *  initial value until the first `.set()`, so a never-set store would re-mint
+ *  `mintId()` every load and the id would NOT be stable. This id never changes,
+ *  so it's a plain write-once constant. If localStorage is unavailable (private
+ *  mode / blocked) it degrades to a per-session id — the acceptable web fallback. */
+function loadOrMintDeviceId(): string {
+  const KEY = "lv-device-id";
+  try {
+    const existing = globalThis.localStorage?.getItem(KEY);
+    if (existing) {
+      return existing;
+    }
+    const id = mintId();
+    globalThis.localStorage?.setItem(KEY, id);
+    return id;
+  } catch {
+    return mintId();
+  }
+}
+
+export const DEVICE_ID = loadOrMintDeviceId();
 
 /** Per-PAGE-LOAD id, minted fresh at module load — NOT persisted. It exists ONLY
  *  so two tabs/windows of the SAME browser (which share one `DEVICE_ID`) are

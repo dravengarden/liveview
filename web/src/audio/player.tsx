@@ -337,7 +337,7 @@ export function AudioPlayerProvider(
   // playHere, auto-advance) and re-fired by the heartbeat to stay non-stale.
   const claimPlayback = useCallback(() => {
     activePlayerStore.set({
-      deviceId: DEVICE_ID.get(),
+      deviceId: DEVICE_ID,
       instanceId: INSTANCE_ID,
       label: deviceLabelStore.get(),
       ts: Date.now(),
