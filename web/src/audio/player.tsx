@@ -8,8 +8,18 @@ import {
   useState,
 } from "react";
 import type { Mark, SpokenContent } from "@/types";
-import { getServerSettings, putServerSetting } from "@/serverSettings";
 import { useI18n } from "@/i18n";
+import { loadServerSetting } from "@/syncBackends";
+import {
+  type AudioPos,
+  audioStores,
+  type PersistedSession,
+  posStore,
+  rateStore,
+  sessionStore,
+  sleepMinutesStore,
+  sleepRemainingStore,
+} from "./stores";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Book-level audio engine.
@@ -93,20 +103,16 @@ export interface AudioPlayer {
   syncNotice: { message: string; seq: number } | null;
 }
 
+// Device-local FAST PATH for the resume position + rate. The cross-device
+// authority (+ the >8s same-chapter reconcile) now lives in the `mirroredStore`s
+// (audio/stores.ts); these localStorage keys stay only as the SYNCHRONOUS local
+// seed (`loadTrack` reads posKey to set `audio.currentTime` before any async
+// store resolves, and the rate paints instantly on mount). The session's local
+// mirror moved into `sessionStore` (IDB), so it has no localStorage key anymore.
 const RATE_KEY = "lv-audio-rate";
-const SESSION_KEY = "lv-audio-session";
-/** Per-chapter resume position (audio seconds); client-only. */
+/** Per-chapter resume position (audio seconds); local sync-seed only. */
 const posKey = (path: string, lang: string): string =>
   `lv-audio-pos:${path}:${lang}`;
-
-/** Settings that still sync across devices, as (serverKey, localStorageKey)
- *  pairs — used ONLY to detect a cross-device change and toast "已同步设置".
- *  The UI prefs (theme / font / language / margin / …) are now device-LOCAL, so
- *  only the playback rate remains here (owned by this engine). A drift here only
- *  mis-fires the toast, never breaks the sync. */
-const SYNCED_SETTING_KEYS: ReadonlyArray<readonly [string, string]> = [
-  ["audio.rate", RATE_KEY],
-];
 
 /** Warm the next chapter's synthesis this many seconds before the current ends,
  *  so auto-advance doesn't stall on a cold edge-tts cache. */
@@ -114,7 +120,9 @@ const PREFETCH_LEAD_S = 25;
 
 /** A same-chapter resume from another device only "wins" (and toasts) when it's
  *  meaningfully ahead of this device's local position — a few seconds of drift
- *  from rounding / last-tick timing shouldn't masquerade as a cross-device sync. */
+ *  from rounding / last-tick timing shouldn't masquerade as a cross-device sync.
+ *  (The `posStore.reconcile` enforces the same lead server-side; this drives the
+ *  toast decision in the calling code.) */
 const SYNC_POS_LEAD_S = 8;
 
 /** mm:ss for the sync toast. */
@@ -224,12 +232,6 @@ function markIndex(marks: Mark[], ms: number): number {
   return -1;
 }
 
-interface PersistedSession {
-  nowPlaying: NowPlaying;
-  queue: Track[];
-  queueIndex: number;
-}
-
 const Ctx = createContext<AudioPlayer | null>(null);
 
 export function AudioPlayerProvider(
@@ -268,7 +270,6 @@ export function AudioPlayerProvider(
   const [sleepRemainingMin, setSleepRemainingMin] = useState(0);
   const sleepRemainingRef = useRef(0); // live seconds remaining
   const lastSleepTickRef = useRef(0); // Date.now() of last decrement; 0 = reseed, don't count
-  const lastSleepPutRef = useRef(0); // throttle for the server save of remaining
 
   // Refs the once-attached <audio> listeners read without re-subscribing.
   const marksRef = useRef<Mark[]>([]);
@@ -285,34 +286,21 @@ export function AudioPlayerProvider(
 
   const persistSession = useCallback(
     (np: NowPlaying, q: Track[], qi: number) => {
-      try {
-        localStorage.setItem(
-          SESSION_KEY,
-          JSON.stringify({ nowPlaying: np, queue: q, queueIndex: qi }),
-        );
-      } catch {
-        // storage full / disabled — non-fatal, just no resume-on-reload.
-      }
-      // Also persist the resume pointer (book + chapter + queue) server-side so it
-      // syncs across devices; the per-chapter position rides "audio.pos" separately.
-      putServerSetting(
-        "audio.session",
-        JSON.stringify({ nowPlaying: np, queue: q, queueIndex: qi }),
-      );
+      // The resume pointer (book + chapter + queue) — its own mirrored store:
+      // immediate server push + an IDB local mirror for instant offline resume
+      // (replacing the SESSION_KEY localStorage write). The per-chapter position
+      // rides `posStore` separately.
+      sessionStore.set({ nowPlaying: np, queue: q, queueIndex: qi });
     },
     [],
   );
 
-  // Fire-and-forget server-side persistence of a player setting (rate, sleep
-  // timer). Survives reloads and syncs across devices; localStorage stays as the
-  // offline fallback.
-  const persistSetting = useCallback((key: string, value: string) => {
-    putServerSetting(key, value);
+  // Write the current resume position to its mirrored store (server + reconcile
+  // tier). The synchronous local fast-path (posKey localStorage) is written
+  // separately per-tick in the timeupdate handler.
+  const persistPos = useCallback((path: string, t: number) => {
+    posStore.set({ path, t });
   }, []);
-
-  // Throttle for the server-side position write (the localStorage posKey write
-  // stays per-tick; the server save is rate-limited — see the timeupdate handler).
-  const lastPosPutRef = useRef(0);
 
   // Load a chapter into the element: fetch sentences (instant) then marks
   // (triggers server synth — slow on first play), point <audio> at the cached
@@ -424,12 +412,12 @@ export function AudioPlayerProvider(
   // playing tick", so the paused/armed gap before play isn't counted.
   const setSleepTimer = useCallback((minutes: number) => {
     setSleepMinutes(minutes);
-    persistSetting("audio.sleepMinutes", String(minutes));
+    sleepMinutesStore.set(minutes);
     sleepRemainingRef.current = minutes * 60;
     setSleepRemainingMin(minutes);
     lastSleepTickRef.current = 0;
-    persistSetting("audio.sleepRemaining", String(minutes * 60));
-  }, [persistSetting]);
+    sleepRemainingStore.set(minutes * 60);
+  }, []);
 
   // Attach the element's listeners ONCE. They read refs so they never go stale.
   useEffect(() => {
@@ -446,13 +434,10 @@ export function AudioPlayerProvider(
           posKey(np.chapterPath, np.lang),
           String(audio.currentTime),
         );
-        // Server-save the position at most once every 5s (cross-device resume);
-        // localStorage above stays per-tick for instant local resume.
-        const now = Date.now();
-        if (now - lastPosPutRef.current > 5000) {
-          lastPosPutRef.current = now;
-          putServerSetting("audio.pos", String(audio.currentTime));
-        }
+        // Cross-device resume: write the position to its mirrored store every
+        // tick; the store throttles the server save to ~once/5s (push.throttleMs).
+        // The localStorage above stays per-tick for instant local resume.
+        persistPos(np.chapterPath, audio.currentTime);
       }
       // Warm the next chapter's synth shortly before this one ends.
       if (
@@ -486,22 +471,17 @@ export function AudioPlayerProvider(
             setSleepRemainingMin(0);
             setSleepMinutes(0);
             audio.pause();
-            putServerSetting("audio.sleepRemaining", "0");
-            putServerSetting("audio.sleepMinutes", "0");
+            sleepRemainingStore.set(0);
+            sleepMinutesStore.set(0);
           } else {
             sleepRemainingRef.current = remaining;
             const mins = Math.ceil(remaining / 60);
             // Only re-render when the displayed minute actually changes (the
             // handler fires ~4×/s).
             setSleepRemainingMin((prev) => (prev === mins ? prev : mins));
-            // Throttle the server save of remaining to ~once/5s.
-            if (now - lastSleepPutRef.current > 5000) {
-              lastSleepPutRef.current = now;
-              putServerSetting(
-                "audio.sleepRemaining",
-                String(Math.round(remaining)),
-              );
-            }
+            // Write the remaining seconds every tick; the store throttles the
+            // server save to ~once/5s (push.throttleMs).
+            sleepRemainingStore.set(Math.round(remaining));
           }
         }
       }
@@ -517,20 +497,19 @@ export function AudioPlayerProvider(
     const onPause = (): void => {
       setPlaying(false);
       // Flush the current position server-side so a pause is immediately
-      // resumable on another device (bypasses the 5s throttle).
-      if (nowPlayingRef.current && audio.currentTime > 0) {
-        lastPosPutRef.current = Date.now();
-        putServerSetting("audio.pos", String(audio.currentTime));
+      // resumable on another device (force the write past the store's throttle).
+      const np = nowPlayingRef.current;
+      if (np && audio.currentTime > 0) {
+        persistPos(np.chapterPath, audio.currentTime);
+        void posStore.flush();
       }
       // Freeze the sleep countdown: reseed so the paused gap isn't charged on
       // resume, and flush the remaining seconds so another device picks up the
       // frozen value.
       lastSleepTickRef.current = 0;
       if (sleepRemainingRef.current > 0) {
-        putServerSetting(
-          "audio.sleepRemaining",
-          String(Math.round(sleepRemainingRef.current)),
-        );
+        sleepRemainingStore.set(Math.round(sleepRemainingRef.current));
+        void sleepRemainingStore.flush();
       }
     };
     const onEnded = (): void => {
@@ -538,8 +517,10 @@ export function AudioPlayerProvider(
       if (np) localStorage.removeItem(posKey(np.chapterPath, np.lang));
       // Chapter finished: clear the saved position so a resume starts the next
       // chapter cleanly rather than at the previous chapter's end.
-      lastPosPutRef.current = Date.now();
-      putServerSetting("audio.pos", "0");
+      if (np) {
+        persistPos(np.chapterPath, 0);
+        void posStore.flush();
+      }
       // Book-level continuous playback: roll into the next chapter, else stop.
       if (queueIndexRef.current < queueRef.current.length - 1) {
         goTo(queueIndexRef.current + 1, true);
@@ -565,40 +546,62 @@ export function AudioPlayerProvider(
     };
   }, [goTo]);
 
-  // Resume-on-load: rehydrate the last session as a PAUSED mini-player, so the
-  // user sees "continue listening" without auto-playing on a fresh page.
+  // Startup lifecycle for the server-synced audio stores: HYDRATE (load each
+  // store's device-local mirror for an instant first paint) → resume the local
+  // session PAUSED → CONNECT (pull the server + reconcile + live-subscribe). The
+  // adopt-the-server-position decision + the "已同步…" toast are driven HERE (the
+  // calling code), not inside any store's `reconcile` — reconcile must stay pure.
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(SESSION_KEY);
-      if (!raw) return;
-      const s = JSON.parse(raw) as PersistedSession;
-      if (s.nowPlaying && Array.isArray(s.queue)) {
-        loadTrack(s.nowPlaying, s.queue, s.queueIndex, false);
+    let cancelled = false;
+    void (async () => {
+      // 1) Hydrate every store from its local mirror. Only `sessionStore` has one
+      //    (IDB), so this restores THIS device's last session for an instant
+      //    paused mini-player ("continue listening" without auto-playing).
+      await Promise.all(audioStores.map((s) => s.hydrate()));
+      if (cancelled) return;
+      const localSession = sessionStore.get();
+      if (localSession) {
+        loadTrack(
+          localSession.nowPlaying,
+          localSession.queue,
+          localSession.queueIndex,
+          false,
+        );
       }
-    } catch {
-      // ignore a corrupt/old session blob
-    }
-    // Once, on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
-  // Restore server-persisted player settings once on mount (rate + sleep). The
-  // rate is applied to the audio element via setRate. The sleep timer is
-  // restored as remaining SECONDS (frozen until playback resumes the countdown),
-  // plus the chosen option for the menu highlight.
-  useEffect(() => {
-    // Snapshot the synced settings' local values BEFORE the shared GET resolves
-    // (the per-setting hooks overwrite them on that same resolve), so we can tell
-    // whether the server copy was changed on ANOTHER device.
-    const localSettings = SYNCED_SETTING_KEYS.map(([, ls]) =>
-      localStorage.getItem(ls)
-    );
-    void getServerSettings().then((s) => {
-      let audioSynced = false;
-      const r = Number(s["audio.rate"]);
-      if (Number.isFinite(r) && r > 0) setRate(r);
-      const sr = Number(s["audio.sleepRemaining"]);
-      const smChoice = Number(s["audio.sleepMinutes"]);
+      // 2) Read the server copies (the bulk GET is memoized, so this shares the
+      //    same fetch the `connect()` calls below use — no extra round-trip).
+      const [rawRate, rawSleepRem, rawSleepMin, rawSession, rawPos] = await Promise
+        .all([
+          loadServerSetting("audio.rate"),
+          loadServerSetting("audio.sleepRemaining"),
+          loadServerSetting("audio.sleepMinutes"),
+          loadServerSetting("audio.session"),
+          loadServerSetting("audio.pos"),
+        ]);
+      if (cancelled) return;
+
+      // 3) Start the live mirror lifecycle (pull + reconcile + subscribe). The
+      //    stores now own the cross-device value; the imperative engine below
+      //    just adopts the resume point + raises the toast once.
+      for (const s of audioStores) s.connect();
+
+      // Apply server rate (remote-wins) to the element. A rate that differs from
+      // this device's last local value means another device changed it — raise
+      // the generic "已同步设置" toast (the richer audio toast below wins if a
+      // resume position also moved on the same load).
+      let settingsSynced = false;
+      const localRate = localStorage.getItem(RATE_KEY);
+      const r = Number(rawRate);
+      if (Number.isFinite(r) && r > 0) {
+        setRate(r);
+        if (rawRate !== null && rawRate !== localRate) settingsSynced = true;
+      }
+
+      // Restore the sleep timer as remaining SECONDS (frozen until playback
+      // resumes the countdown), plus the chosen option for the menu highlight.
+      const sr = Number(rawSleepRem);
+      const smChoice = Number(rawSleepMin);
       if (Number.isFinite(sr) && sr > 0) {
         sleepRemainingRef.current = sr;
         setSleepRemainingMin(Math.ceil(sr / 60));
@@ -607,72 +610,101 @@ export function AudioPlayerProvider(
         }
         lastSleepTickRef.current = 0; // counts down once playback starts (frozen until then)
       }
+
       // Reconcile the resume pointer (the server reflects the most recent write
-      // from ANY device). Reload when the chapter differs from what the
-      // localStorage effect rehydrated, OR when it's the same chapter but the
-      // server is meaningfully ahead — i.e. another device kept listening past
-      // this one. Either is a genuine cross-device pull, so it also raises the
-      // "已同步…" toast (App renders it via the shared snackbar).
-      const raw = s["audio.session"];
-      if (raw) {
+      // from ANY device). Reload when the chapter differs from what hydrate
+      // restored, OR when it's the same chapter but the server is meaningfully
+      // ahead — i.e. another device kept listening past this one. Either is a
+      // genuine cross-device pull, so it also raises the "已同步…" toast.
+      let serverSession: PersistedSession | null = null;
+      if (rawSession) {
         try {
-          const sess = JSON.parse(raw) as PersistedSession;
-          if (sess.nowPlaying && Array.isArray(sess.queue)) {
-            const cur = nowPlayingRef.current;
-            const chapterDiffers = !cur ||
-              cur.chapterPath !== sess.nowPlaying.chapterPath ||
-              cur.bookSlug !== sess.nowPlaying.bookSlug;
-            const serverPos = Number(s["audio.pos"]);
-            const localPos = cur
-              ? Number(
-                localStorage.getItem(posKey(cur.chapterPath, cur.lang)) ?? "0",
-              )
-              : 0;
-            // Same chapter on both devices, but the server (another device) is
-            // further along → adopt its position rather than this device's. Use a
-            // small lead so timing drift on the same device doesn't false-trigger.
-            const posAhead = !chapterDiffers &&
-              Number.isFinite(serverPos) &&
-              serverPos > localPos + SYNC_POS_LEAD_S;
-            if (chapterDiffers || posAhead) {
-              if (Number.isFinite(serverPos) && serverPos > 0) {
-                // Seed the per-chapter localStorage pos so loadTrack's existing
-                // restore picks it up.
-                localStorage.setItem(
-                  posKey(sess.nowPlaying.chapterPath, sess.nowPlaying.lang),
-                  String(serverPos),
-                );
-              }
-              loadTrack(sess.nowPlaying, sess.queue, sess.queueIndex, false); // PAUSED
-              audioSynced = true;
-              setSyncNotice({
-                seq: Date.now(),
-                message: t("sync.audio", {
-                  book: sess.nowPlaying.bookLabel,
-                  chapter: sess.nowPlaying.chapterLabel,
-                  time: fmtClock(Number.isFinite(serverPos) ? serverPos : 0),
-                }),
-              });
-            }
+          const parsed = JSON.parse(rawSession) as PersistedSession;
+          if (parsed.nowPlaying && Array.isArray(parsed.queue)) {
+            serverSession = parsed;
           }
         } catch {
           // ignore a corrupt server session blob
         }
       }
-      // A simple setting (theme / font / language / rate) changed on another
-      // device → the generic "已同步设置" toast. Audio's richer toast wins when
-      // both moved on the same load.
-      if (!audioSynced) {
-        const changed = SYNCED_SETTING_KEYS.some(([srv], i) => {
-          const v = s[srv];
-          return v != null && v !== localSettings[i];
-        });
-        if (changed) {
-          setSyncNotice({ seq: Date.now(), message: t("sync.settings") });
+      let serverPos: AudioPos | null = null;
+      if (rawPos) {
+        try {
+          const parsed = JSON.parse(rawPos) as AudioPos;
+          if (typeof parsed.path === "string" && Number.isFinite(parsed.t)) {
+            serverPos = parsed;
+          }
+        } catch {
+          // ignore a corrupt server pos blob
         }
       }
-    });
+      let audioSynced = false;
+      if (serverSession) {
+        const cur = nowPlayingRef.current;
+        const chapterDiffers = !cur ||
+          cur.chapterPath !== serverSession.nowPlaying.chapterPath ||
+          cur.bookSlug !== serverSession.nowPlaying.bookSlug;
+        const serverT = serverPos &&
+            serverPos.path === serverSession.nowPlaying.chapterPath
+          ? serverPos.t
+          : 0;
+        const localPos = cur
+          ? Number(localStorage.getItem(posKey(cur.chapterPath, cur.lang)) ?? "0")
+          : 0;
+        // Same chapter on both devices, but the server (another device) is
+        // further along → adopt its position. The lead matches posStore.reconcile.
+        const posAhead = !chapterDiffers && serverT > localPos + SYNC_POS_LEAD_S;
+        if (chapterDiffers || posAhead) {
+          if (serverT > 0) {
+            // Seed the per-chapter localStorage pos so loadTrack's existing
+            // restore picks it up.
+            localStorage.setItem(
+              posKey(
+                serverSession.nowPlaying.chapterPath,
+                serverSession.nowPlaying.lang,
+              ),
+              String(serverT),
+            );
+          }
+          loadTrack(
+            serverSession.nowPlaying,
+            serverSession.queue,
+            serverSession.queueIndex,
+            false,
+          ); // PAUSED
+          audioSynced = true;
+          setSyncNotice({
+            seq: Date.now(),
+            message: t("sync.audio", {
+              book: serverSession.nowPlaying.bookLabel,
+              chapter: serverSession.nowPlaying.chapterLabel,
+              time: fmtClock(serverT),
+            }),
+          });
+        }
+      }
+      // A simple setting (rate) changed on another device → the generic
+      // "已同步设置" toast. The richer audio toast wins when both moved.
+      if (!audioSynced && settingsSynced) {
+        setSyncNotice({ seq: Date.now(), message: t("sync.settings") });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Force any debounced/throttled writes out before the page is hidden/unloaded,
+  // so a backgrounded tab (iOS especially) doesn't lose the last position / rate
+  // / sleep / session. `pagehide` is the iOS-reliable terminal event (the page
+  // may never fire `beforeunload`). One listener, flushing every audio store.
+  useEffect(() => {
+    const onPageHide = (): void => {
+      for (const s of audioStores) void s.flush();
+    };
+    window.addEventListener("pagehide", onPageHide);
+    return () => window.removeEventListener("pagehide", onPageHide);
   }, []);
 
   // OS / lock-screen / headphone controls. Metadata follows the chapter; the
@@ -828,8 +860,10 @@ export function AudioPlayerProvider(
   const setRate = useCallback((r: number) => {
     setRateState(r);
     rateRef.current = r;
+    // localStorage stays the synchronous local seed for instant first paint;
+    // the mirrored store owns the cross-device server write (immediate push).
     localStorage.setItem(RATE_KEY, String(r));
-    persistSetting("audio.rate", String(r));
+    rateStore.set(r);
     const a = audioRef.current;
     if (a) {
       a.playbackRate = r;
@@ -838,7 +872,7 @@ export function AudioPlayerProvider(
       // timeupdate, so the lock-screen scrubber would otherwise drift.
       updatePositionState(a);
     }
-  }, [persistSetting]);
+  }, []);
   const stop = useCallback(() => {
     const a = audioRef.current;
     if (a) {
@@ -861,12 +895,13 @@ export function AudioPlayerProvider(
     lastSleepTickRef.current = 0;
     setSleepRemainingMin(0);
     setSleepMinutes(0);
-    putServerSetting("audio.sleepRemaining", "0");
-    localStorage.removeItem(SESSION_KEY);
-    // Clear the server-side resume pointer too, so a stopped session doesn't
-    // resurrect on this or another device (empty value clears the key).
-    putServerSetting("audio.session", "");
-    putServerSetting("audio.pos", "0");
+    sleepRemainingStore.set(0);
+    // Clear the resume pointer + position so a stopped session doesn't resurrect
+    // on this or another device. sessionStore's codec encodes null as "" (the
+    // empty value the server treats as "unset"); its IDB local mirror is cleared
+    // too. posStore resets to its empty initial.
+    sessionStore.set(null);
+    posStore.set({ path: "", t: 0 });
   }, []);
 
   const value = useMemo<AudioPlayer>(

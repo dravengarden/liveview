@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createTheme, type Theme as MuiTheme } from "@mui/material/styles";
+import { persisted, useStore } from "@/_store/mod.ts";
 import type { Theme, ThemeMode, ThemeVariant } from "@/types";
 import { THEME_VARIANTS } from "@/types";
 
 // Theme is two axes: a colour VARIANT (classic/warm/purple) and a MODE
 // (auto/light/dark). The flat theme value is derived from them. Persisted
-// device-local in localStorage (not server-synced — only progress is).
+// device-local in localStorage (not server-synced — only progress is): two
+// `persisted` stores, one per axis, each storing a bare enum string (matching
+// the pre-migration on-disk format so existing installs keep their look).
 const VARIANT_KEY = "lv-theme-variant";
 const MODE_KEY = "lv-theme-mode";
 const LEGACY_THEME_KEY = "lv-theme";
@@ -44,21 +47,39 @@ function migrateLegacy(): { variant: ThemeVariant; mode: ThemeMode } | null {
   }
 }
 
-function getStored(): { variant: ThemeVariant; mode: ThemeMode } {
-  // Resolve each axis independently so a partially-persisted state (e.g. only
-  // the mode was changed after a legacy migration) keeps both choices.
-  const legacy = migrateLegacy();
-  const v = localStorage.getItem(VARIANT_KEY);
-  const m = localStorage.getItem(MODE_KEY);
-  return {
-    variant: VALID_VARIANTS.includes(v as ThemeVariant)
-      ? (v as ThemeVariant)
-      : (legacy?.variant ?? "classic"),
-    mode: VALID_MODES.includes(m as ThemeMode)
-      ? (m as ThemeMode)
-      : (legacy?.mode ?? "auto"),
-  };
-}
+// The legacy single-key migration, resolved ONCE at module load. Each axis store
+// uses its legacy half as `initial` (the value `persisted` returns when the new
+// per-axis key is absent), so an existing install keeps its look on first load
+// after the upgrade. Once the user touches either axis, the new key is written
+// and the legacy fallback no longer applies — exactly the pre-migration per-axis
+// behaviour.
+const legacyMigration = migrateLegacy();
+
+// Two device-LOCAL `persisted` stores, one per axis. `deserialize` validates the
+// stored enum string, snapping an unknown value back to `initial` (= the legacy
+// fallback). Bare-string format, so serialize is identity.
+const variantStore = persisted<ThemeVariant>(
+  VARIANT_KEY,
+  legacyMigration?.variant ?? "classic",
+  {
+    serialize: (v) => v,
+    deserialize: (raw) =>
+      VALID_VARIANTS.includes(raw as ThemeVariant)
+        ? (raw as ThemeVariant)
+        : (legacyMigration?.variant ?? "classic"),
+  },
+);
+const modeStore = persisted<ThemeMode>(
+  MODE_KEY,
+  legacyMigration?.mode ?? "auto",
+  {
+    serialize: (v) => v,
+    deserialize: (raw) =>
+      VALID_MODES.includes(raw as ThemeMode)
+        ? (raw as ThemeMode)
+        : (legacyMigration?.mode ?? "auto"),
+  },
+);
 
 // Explicit, not name-based: "sepia" is a light theme yet has no "light" in its
 // name, so a substring test would misclassify it (and would mis-gate the
@@ -176,10 +197,8 @@ interface UseThemeResult {
 }
 
 export function useTheme(): UseThemeResult {
-  const [variant, setVariantState] = useState<ThemeVariant>(() =>
-    getStored().variant
-  );
-  const [mode, setModeState] = useState<ThemeMode>(() => getStored().mode);
+  const variant = useStore(variantStore);
+  const mode = useStore(modeStore);
   const [sysDark, setSysDark] = useState<boolean>(systemPrefersDark);
 
   const theme = resolveTheme(variant, mode, sysDark);
@@ -189,13 +208,11 @@ export function useTheme(): UseThemeResult {
   themeRef.current = theme;
 
   const setVariant = useCallback((v: ThemeVariant) => {
-    setVariantState(v);
-    localStorage.setItem(VARIANT_KEY, v);
+    variantStore.set(v);
   }, []);
 
   const setMode = useCallback((m: ThemeMode) => {
-    setModeState(m);
-    localStorage.setItem(MODE_KEY, m);
+    modeStore.set(m);
   }, []);
 
   // While mode = auto, follow the OS scheme live (re-resolves to the variant's

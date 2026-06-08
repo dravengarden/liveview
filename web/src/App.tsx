@@ -34,7 +34,7 @@ import {
   useWebSocket,
 } from "@/hooks";
 import { useI18n } from "@/i18n";
-import { getServerSettings, putServerSetting } from "@/serverSettings";
+import { loadAllServerSettings, putServerSetting } from "@/syncBackends";
 import { type Track, useAudioPlayer } from "@/audio/player";
 import { useAutoUpdate } from "@/hooks/useAutoUpdate";
 import { NavShell } from "./_shell";
@@ -238,7 +238,7 @@ export function App(): React.JSX.Element {
     Record<string, { rendition?: string; lang?: string }>
   >({});
   useEffect(() => {
-    void getServerSettings().then((s) => {
+    void loadAllServerSettings().then((s) => {
       const out: Record<string, { rendition?: string; lang?: string }> = {};
       for (const [k, v] of Object.entries(s)) {
         const m = /^book\.(.+)\.(rendition|lang)$/.exec(k);

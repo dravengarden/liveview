@@ -1,4 +1,5 @@
-import { useCallback, useState } from "react";
+import { useCallback } from "react";
+import { persisted, useStore } from "@/_store/mod.ts";
 import {
   CONTENT_WIDTH_DEFAULT,
   CONTENT_WIDTH_MAX,
@@ -40,37 +41,38 @@ function sanitize(n: unknown, min: number, max: number, def: number): number {
   return inRange(v, min, max) ? v : def;
 }
 
-function getStoredSettings(): MenuBarSettings {
-  try {
-    const stored = localStorage.getItem(SETTINGS_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored) as Partial<MenuBarSettings>;
-      return {
-        contentMaxWidth: sanitize(
-          parsed.contentMaxWidth,
-          CONTENT_WIDTH_MIN,
-          CONTENT_WIDTH_MAX,
-          DEFAULT_SETTINGS.contentMaxWidth,
-        ),
-        lineHeight: sanitize(
-          parsed.lineHeight,
-          LINE_HEIGHT_MIN,
-          LINE_HEIGHT_MAX,
-          DEFAULT_SETTINGS.lineHeight,
-        ),
-        fontScale: sanitize(
-          parsed.fontScale,
-          FONT_SCALE_MIN,
-          FONT_SCALE_MAX,
-          DEFAULT_SETTINGS.fontScale,
-        ),
-      };
-    }
-  } catch {
-    // ignore
-  }
-  return DEFAULT_SETTINGS;
+/** Parse + sanitize a stored settings blob, snapping each axis to its valid
+ *  range. Used as the store's `deserialize` so the same migration runs on every
+ *  read (cross-tab + first paint). */
+function sanitizeSettings(parsed: Partial<MenuBarSettings>): MenuBarSettings {
+  return {
+    contentMaxWidth: sanitize(
+      parsed.contentMaxWidth,
+      CONTENT_WIDTH_MIN,
+      CONTENT_WIDTH_MAX,
+      DEFAULT_SETTINGS.contentMaxWidth,
+    ),
+    lineHeight: sanitize(
+      parsed.lineHeight,
+      LINE_HEIGHT_MIN,
+      LINE_HEIGHT_MAX,
+      DEFAULT_SETTINGS.lineHeight,
+    ),
+    fontScale: sanitize(
+      parsed.fontScale,
+      FONT_SCALE_MIN,
+      FONT_SCALE_MAX,
+      DEFAULT_SETTINGS.fontScale,
+    ),
+  };
 }
+
+// Device-LOCAL `persisted` store of the whole settings object. The `deserialize`
+// runs `sanitizeSettings` so a stale/corrupt blob snaps to valid values (and a
+// parse error falls back to `initial` = DEFAULT_SETTINGS inside `persisted`).
+const settingsStore = persisted<MenuBarSettings>(SETTINGS_KEY, DEFAULT_SETTINGS, {
+  deserialize: (raw) => sanitizeSettings(JSON.parse(raw) as Partial<MenuBarSettings>),
+});
 
 interface UseSettingsResult {
   menuBarSettings: MenuBarSettings;
@@ -80,35 +82,19 @@ interface UseSettingsResult {
 }
 
 export function useSettings(): UseSettingsResult {
-  const [menuBarSettings, setMenuBarSettings] = useState<MenuBarSettings>(
-    getStoredSettings,
-  );
+  const menuBarSettings = useStore(settingsStore);
 
-  const persist = useCallback((next: MenuBarSettings) => {
-    setMenuBarSettings(next);
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+  const setContentMaxWidth = useCallback((width: number) => {
+    settingsStore.set((prev) => ({ ...prev, contentMaxWidth: width }));
   }, []);
 
-  const setContentMaxWidth = useCallback(
-    (width: number) => {
-      persist({ ...getStoredSettings(), contentMaxWidth: width });
-    },
-    [persist],
-  );
+  const setLineHeight = useCallback((lh: number) => {
+    settingsStore.set((prev) => ({ ...prev, lineHeight: lh }));
+  }, []);
 
-  const setLineHeight = useCallback(
-    (lh: number) => {
-      persist({ ...getStoredSettings(), lineHeight: lh });
-    },
-    [persist],
-  );
-
-  const setFontScale = useCallback(
-    (scale: number) => {
-      persist({ ...getStoredSettings(), fontScale: scale });
-    },
-    [persist],
-  );
+  const setFontScale = useCallback((scale: number) => {
+    settingsStore.set((prev) => ({ ...prev, fontScale: scale }));
+  }, []);
 
   return {
     menuBarSettings,

@@ -1,11 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect } from "react";
+import { persisted, useStore } from "@/_store/mod.ts";
 import { DEFAULT_FONT_ID, getFontPreset } from "@/fonts";
 
 const FONT_KEY = "lv-font";
 
-function getStoredFontId(): string {
-  return localStorage.getItem(FONT_KEY) ?? DEFAULT_FONT_ID;
-}
+// Device-LOCAL reading-font choice. A `persisted` store over localStorage (the
+// font id is a bare string, so serialize/deserialize is identity — matching the
+// pre-migration on-disk format so existing users keep their font). Cross-tab
+// sync is free.
+const fontStore = persisted<string>(FONT_KEY, DEFAULT_FONT_ID, {
+  serialize: (v) => v,
+  deserialize: (raw) => raw,
+});
 
 interface UseFontResult {
   fontId: string;
@@ -19,7 +25,7 @@ interface UseFontResult {
  * choice persists in localStorage (device-local, like the other UI prefs).
  */
 export function useFont(): UseFontResult {
-  const [fontId, setFontId] = useState<string>(getStoredFontId);
+  const fontId = useStore(fontStore);
 
   useEffect(() => {
     const preset = getFontPreset(fontId);
@@ -28,11 +34,10 @@ export function useFont(): UseFontResult {
       preset.stack,
     );
     void preset.load();
-    localStorage.setItem(FONT_KEY, fontId);
   }, [fontId]);
 
   const setFont = useCallback((id: string) => {
-    setFontId(id);
+    fontStore.set(id);
   }, []);
 
   return { fontId, setFont };
