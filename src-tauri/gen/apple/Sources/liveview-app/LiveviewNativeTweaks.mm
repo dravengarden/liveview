@@ -9,6 +9,7 @@
 // (init leaves extra Sources/*.mm alone — see src-tauri/README.md gotchas).
 #import <AVFoundation/AVFoundation.h>
 #import <Foundation/Foundation.h>
+#import <MediaPlayer/MediaPlayer.h>
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
 
@@ -95,4 +96,34 @@ __attribute__((constructor)) static void liveviewEnableSwipeBack(void) {
             method_setImplementation(m, (IMP)lv_wk_init);
         }
     }
+}
+
+// (4) Lock-screen skip interval = 15s (iOS-only, native shell only). The system
+// draws the lock-screen / Control Center skip buttons from the shared
+// MPRemoteCommandCenter; the number is each skip command's `preferredIntervals`.
+// WebKit drives these for WKWebView media but leaves the interval at the system
+// default (10s) — a pure web app / PWA can't touch it. The native host CAN:
+// proactively SET preferredIntervals to [15] on the shared command center, and
+// re-assert on a light timer (WebKit reconfigures the command center on each
+// play/pause/load, which can reset it). The button then reads 15 and a tap fires
+// a 15s skip (honoured by liveview's MediaSession seekOffset handler). The PWA is
+// untouched — native-only. MediaPlayer.framework is linked (project.yml).
+static void lv_applySkip15(void) {
+    MPRemoteCommandCenter *cc = [MPRemoteCommandCenter sharedCommandCenter];
+    cc.skipForwardCommand.preferredIntervals = @[ @15 ];
+    cc.skipBackwardCommand.preferredIntervals = @[ @15 ];
+}
+
+__attribute__((constructor)) static void liveviewForceSkip15(void) {
+    // Defer to the main run loop (the constructor runs before it exists), then
+    // pin the interval and keep re-asserting it.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        lv_applySkip15();
+        [NSTimer scheduledTimerWithTimeInterval:1.5
+                                        repeats:YES
+                                          block:^(NSTimer *_Nonnull timer) {
+                                            (void)timer;
+                                            lv_applySkip15();
+                                          }];
+    });
 }
