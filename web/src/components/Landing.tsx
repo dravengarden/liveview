@@ -27,7 +27,7 @@ import {
   MenuBook as BookIcon,
   Search as SearchIcon,
 } from "@mui/icons-material";
-import { type ReactNode, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { Book, BookProgress, ReadingProgress } from "@/types";
 import { type ShelfSort, useShelfSort } from "@/hooks";
 import { useI18n } from "@/i18n";
@@ -486,39 +486,78 @@ export function Landing({
   // app-level status-bar tap (both scroll it to the top).
   const scrollerRef = useRef<HTMLDivElement>(null);
 
+  // Frosted-overlay toolbar: the bookshelf bar is now an iOS-style frosted
+  // OVERLAY (like the in-book NavShell bar + the audio transport) that the shelf
+  // scrolls UNDER, not a solid flex sibling. We measure its rendered height (it
+  // varies with the safe-area inset + rotation + whether the kind filter shows)
+  // and publish it as `--lv-toolbar-h` on the shelf region, so the scroller can
+  // reserve that much space at the matching edge (top or bottom, per
+  // navbarAtBottom). Same recipe + var-name idiom as NavShell's --shell-bar-h.
+  const shelfRegionRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const toolbarEl = toolbarRef.current;
+    const regionEl = shelfRegionRef.current;
+    if (!toolbarEl || !regionEl) return;
+    const publish = (): void => {
+      regionEl.style.setProperty(
+        "--lv-toolbar-h",
+        `${toolbarEl.offsetHeight}px`,
+      );
+    };
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(toolbarEl);
+    return () => {
+      ro.disconnect();
+    };
+  }, []);
+
   return (
     <Box
+      ref={shelfRegionRef}
       sx={{
         flex: 1,
         minHeight: 0,
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
+        // Positioning context for the frosted toolbar overlay (absolute within
+        // this root) and the carrier of the published --lv-toolbar-h.
+        position: "relative",
       }}
     >
       {
         /* ── Navbar ──────────────────────────────────────────────────────────
-          Neutral chrome (background.default + divider, not a saturated bar —
-          ui.md §4), a pinned flex sibling of the scroll area so settings,
-          search and the filters stay reachable however far the shelf scrolls.
-          On the mobile tier with the "bottom" preference it drops below the
-          shelf via flex `order` (mobile-browser style), owning the
-          home-indicator inset instead of the notch. */
+          An iOS-style FROSTED-GLASS OVERLAY (matching the in-book NavShell bar +
+          the audio transport) pinned to the shelf region's top (or bottom, on
+          the mobile-browser tier), with the shelf scrolling UNDER it; the
+          scroller reserves --lv-toolbar-h at the matching edge so the cards
+          still clear it. Higher alpha (0.78) than the status strip because real
+          card content scrolls under it — the search/filter/gear legibility comes
+          first; blur+saturate match the other bars so they read as one glass
+          layer. background.default (the page bg the cards sit on), not paper. A
+          subtle edge (hairline / divider) still marks the boundary. zIndex above
+          the scroller + the back-to-top button. */
       }
       <Box
+        ref={toolbarRef}
         sx={{
-          order: navbarAtBottom ? 2 : 0,
-          flexShrink: 0,
-          zIndex: 5,
-          bgcolor: "background.default",
+          position: "absolute",
+          left: 0,
+          right: 0,
+          ...(navbarAtBottom ? { bottom: 0 } : { top: 0 }),
+          zIndex: 6,
           borderColor: "divider",
+          bgcolor: (t) => alpha(t.palette.background.default, 0.78),
+          backdropFilter: "blur(24px) saturate(180%)",
+          WebkitBackdropFilter: "blur(24px) saturate(180%)",
           ...(navbarAtBottom
             ? {
               // A hard, edge-to-edge 1px rule looks like a stray line when the
               // shelf has scrolled and there's empty page-bg above the bar.
               // Use a hairline that fades to transparent at both ends so the
               // seam reads as intentional, not a harsh divider.
-              position: "relative",
               "&::before": {
                 content: '""',
                 position: "absolute",
@@ -699,15 +738,34 @@ export function Landing({
         <Box
           ref={scrollerRef}
           data-lv-scroller="shelf"
+          // The frosted toolbar overlays one edge of this scroller (top on the
+          // desktop/top tier, bottom on the mobile-browser tier), so reserve
+          // --lv-toolbar-h of foot/head space at THAT edge — the cards then fully
+          // clear the bar yet still scroll under it. The var is 0 before measured
+          // (a brief first paint), so the base breathing values hold meanwhile.
+          // scroll-padding at the same edge keeps scroll-to-top / a scrolled-into-
+          // view card from landing under the bar.
           sx={{
             flex: 1,
             minHeight: 0,
             overflow: "auto",
             px: { xs: 2, md: 6 },
-            pt: navbarAtBottom
-              ? "calc(env(safe-area-inset-top, 0px) + 16px)"
-              : 2,
-            pb: { xs: 4, md: 6 },
+            ...(navbarAtBottom
+              ? {
+                // Bottom tier: bar at the foot; the shelf reaches the top so it
+                // still clears the notch itself.
+                pt: "calc(env(safe-area-inset-top, 0px) + 16px)",
+                pb: "calc(32px + var(--lv-toolbar-h, 0px))",
+                scrollPaddingTop: "calc(env(safe-area-inset-top, 0px) + 16px)",
+                scrollPaddingBottom: "var(--lv-toolbar-h, 0px)",
+              }
+              : {
+                // Top tier: bar at the head; pad the top by its height plus the
+                // base breathing room.
+                pt: "calc(16px + var(--lv-toolbar-h, 0px))",
+                pb: { xs: 4, md: 6 },
+                scrollPaddingTop: "var(--lv-toolbar-h, 0px)",
+              }),
           }}
         >
           <Box sx={{ maxWidth: 1000, mx: "auto" }}>
@@ -1050,7 +1108,15 @@ export function Landing({
               )}
           </Box>
         </Box>
-        <ScrollToTopButton targetRef={scrollerRef} />
+        {
+          /* Lift the FAB above the frosted toolbar when it overlays the foot
+            (mobile-browser tier); on the top tier the toolbar is at the head, so
+            no lift. */
+        }
+        <ScrollToTopButton
+          targetRef={scrollerRef}
+          bottomLift={navbarAtBottom ? "var(--lv-toolbar-h, 0px)" : "0px"}
+        />
       </Box>
     </Box>
   );

@@ -2,10 +2,18 @@
 @import "./highlight.css";
 
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica,
+    Arial, sans-serif;
   /* Reading-surface font; useFont overrides this with the selected preset's
      stack and lazy-loads its faces. */
-  --lv-reading-font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --lv-reading-font:
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
 }
 
 * {
@@ -31,6 +39,20 @@ body {
     display: block;
     flex: none;
     height: env(safe-area-inset-top, 0px);
+  }
+
+  /* Frosted-overlay bottom bar: the NavShell bar is now an iOS-style frosted
+     OVERLAY (barFrosted) that floats over the reader, not a flex sibling below
+     it, so the scroller fills full-height and its last lines pass UNDER the bar.
+     The components reserve the foot space themselves (`pb` reads --shell-bar-h
+     in MarkdownViewer; AudiobookPlayer pads by its transport + the bar) — this
+     rule only sets scroll-padding so an in-doc anchor (`#heading`) jump, or the
+     read-along follow-mode centring, doesn't land a target UNDER the frosted
+     bar. --shell-bar-h is published by NavShell on the content region (0 before
+     measured / on the solid path); padding-bottom stays in the components to
+     avoid clobbering MUI's emotion `py`. */
+  [data-lv-scroller="reader"] {
+    scroll-padding-bottom: var(--shell-bar-h, 0px);
   }
 }
 
@@ -133,7 +155,10 @@ body {
   border-left-color: #58a6ff;
 }
 
-[data-theme="dark"] .markdown-body .markdown-alert.markdown-alert-note .markdown-alert-title {
+[data-theme="dark"]
+  .markdown-body
+  .markdown-alert.markdown-alert-note
+  .markdown-alert-title {
   color: #58a6ff;
 }
 
@@ -141,7 +166,10 @@ body {
   border-left-color: #a371f7;
 }
 
-[data-theme="dark"] .markdown-body .markdown-alert.markdown-alert-important .markdown-alert-title {
+[data-theme="dark"]
+  .markdown-body
+  .markdown-alert.markdown-alert-important
+  .markdown-alert-title {
   color: #a371f7;
 }
 
@@ -149,7 +177,10 @@ body {
   border-left-color: #d29922;
 }
 
-[data-theme="dark"] .markdown-body .markdown-alert.markdown-alert-warning .markdown-alert-title {
+[data-theme="dark"]
+  .markdown-body
+  .markdown-alert.markdown-alert-warning
+  .markdown-alert-title {
   color: #d29922;
 }
 
@@ -157,7 +188,10 @@ body {
   border-left-color: #3fb950;
 }
 
-[data-theme="dark"] .markdown-body .markdown-alert.markdown-alert-tip .markdown-alert-title {
+[data-theme="dark"]
+  .markdown-body
+  .markdown-alert.markdown-alert-tip
+  .markdown-alert-title {
   color: #3fb950;
 }
 
@@ -165,7 +199,10 @@ body {
   border-left-color: #f85149;
 }
 
-[data-theme="dark"] .markdown-body .markdown-alert.markdown-alert-caution .markdown-alert-title {
+[data-theme="dark"]
+  .markdown-body
+  .markdown-alert.markdown-alert-caution
+  .markdown-alert-title {
   color: #f85149;
 }
 
@@ -468,7 +505,10 @@ body {
   border-left-color: #7c3aed;
 }
 
-[data-theme="lavender"] .markdown-body .markdown-alert.markdown-alert-note .markdown-alert-title {
+[data-theme="lavender"]
+  .markdown-body
+  .markdown-alert.markdown-alert-note
+  .markdown-alert-title {
   color: #7c3aed;
 }
 
@@ -552,7 +592,10 @@ body {
   border-left-color: #a78bfa;
 }
 
-[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-note .markdown-alert-title {
+[data-theme="plum"]
+  .markdown-body
+  .markdown-alert.markdown-alert-note
+  .markdown-alert-title {
   color: #a78bfa;
 }
 
@@ -560,7 +603,10 @@ body {
   border-left-color: #c4b5fd;
 }
 
-[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-important .markdown-alert-title {
+[data-theme="plum"]
+  .markdown-body
+  .markdown-alert.markdown-alert-important
+  .markdown-alert-title {
   color: #c4b5fd;
 }
 
@@ -568,7 +614,10 @@ body {
   border-left-color: #d29922;
 }
 
-[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-warning .markdown-alert-title {
+[data-theme="plum"]
+  .markdown-body
+  .markdown-alert.markdown-alert-warning
+  .markdown-alert-title {
   color: #d29922;
 }
 
@@ -576,7 +625,10 @@ body {
   border-left-color: #3fb950;
 }
 
-[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-tip .markdown-alert-title {
+[data-theme="plum"]
+  .markdown-body
+  .markdown-alert.markdown-alert-tip
+  .markdown-alert-title {
   color: #3fb950;
 }
 
@@ -584,7 +636,10 @@ body {
   border-left-color: #f85149;
 }
 
-[data-theme="plum"] .markdown-body .markdown-alert.markdown-alert-caution .markdown-alert-title {
+[data-theme="plum"]
+  .markdown-body
+  .markdown-alert.markdown-alert-caution
+  .markdown-alert-title {
   color: #f85149;
 }
 

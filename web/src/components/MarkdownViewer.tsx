@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Box } from "@mui/material";
 import { READING_COLUMN_MAX } from "@/types";
 import { ImageLightbox } from "../_shell";
@@ -22,7 +22,7 @@ declare global {
     katex?: {
       renderToString: (
         tex: string,
-        options: { displayMode: boolean; throwOnError: boolean }
+        options: { displayMode: boolean; throwOnError: boolean },
       ) => string;
     };
   }
@@ -156,12 +156,13 @@ export function MarkdownViewer({
       if ([...codeBlocks].some((b) => !b.dataset["highlighted"])) {
         void ensureScript("/highlight.min.js")
           .then(() => {
-            containerRef.current?.querySelectorAll<HTMLElement>("pre code").forEach((block) => {
-              if (window.hljs && !block.dataset["highlighted"]) {
-                window.hljs.highlightElement(block);
-                block.dataset["highlighted"] = "true";
-              }
-            });
+            containerRef.current?.querySelectorAll<HTMLElement>("pre code")
+              .forEach((block) => {
+                if (window.hljs && !block.dataset["highlighted"]) {
+                  window.hljs.highlightElement(block);
+                  block.dataset["highlighted"] = "true";
+                }
+              });
           })
           .catch(() => {
             // highlight.js unavailable — leave code as plain text.
@@ -174,13 +175,15 @@ export function MarkdownViewer({
     // while the script downloads, then renders. Pinned to one light theme (see
     // mermaidConfig) + a light plate, so no per-theme re-render path.
     const mermaidBlocks = container.querySelectorAll<HTMLElement>(
-      'pre[lang="mermaid"], code.language-mermaid'
+      'pre[lang="mermaid"], code.language-mermaid',
     );
     if (mermaidBlocks.length > 0) {
       const pending: { holder: HTMLElement; code: string }[] = [];
       mermaidBlocks.forEach((block) => {
         if (block.dataset["mermaid"]) return;
-        const code = block.tagName === "CODE" ? block.textContent : block.querySelector("code")?.textContent;
+        const code = block.tagName === "CODE"
+          ? block.textContent
+          : block.querySelector("code")?.textContent;
         if (!code) return;
         block.dataset["mermaid"] = "true";
         const holder = document.createElement("div");
@@ -200,7 +203,9 @@ export function MarkdownViewer({
               holder.replaceWith(div);
             });
             // Re-wire the lightbox gallery once the SVGs exist (run() is async).
-            const divs = containerRef.current?.querySelectorAll<Element>(".mermaid:not([data-processed])");
+            const divs = containerRef.current?.querySelectorAll<Element>(
+              ".mermaid:not([data-processed])",
+            );
             if (divs && divs.length > 0) {
               void window.mermaid.run({ nodes: divs }).then(() => {
                 setDiagramTick((tk) => tk + 1);
@@ -220,7 +225,7 @@ export function MarkdownViewer({
     // (jsdelivr is slow/blocked behind the GFW + dead offline); assets live in
     // /katex/ (woff2 fonts resolve relative to the stylesheet).
     const mathEls = container.querySelectorAll<HTMLElement>(
-      '[data-math-style]:not([data-katex-rendered]), code.language-math:not([data-katex-rendered])'
+      "[data-math-style]:not([data-katex-rendered]), code.language-math:not([data-katex-rendered])",
     );
     if (mathEls.length > 0) {
       void Promise.all([
@@ -230,25 +235,35 @@ export function MarkdownViewer({
         .then(() => {
           const c = containerRef.current;
           if (!c || !window.katex) return;
-          c.querySelectorAll<HTMLElement>('[data-math-style]:not([data-katex-rendered])').forEach((el) => {
+          c.querySelectorAll<HTMLElement>(
+            "[data-math-style]:not([data-katex-rendered])",
+          ).forEach((el) => {
             const tex = el.textContent ?? "";
             const displayMode = el.dataset["mathStyle"] === "display";
             try {
-              el.innerHTML = window.katex!.renderToString(tex, { displayMode, throwOnError: false });
+              el.innerHTML = window.katex!.renderToString(tex, {
+                displayMode,
+                throwOnError: false,
+              });
               el.dataset["katexRendered"] = "true";
             } catch {
               // Keep original content on error
             }
           });
           // Also handle fenced code blocks with language "math".
-          c.querySelectorAll<HTMLElement>('code.language-math:not([data-katex-rendered])').forEach((el) => {
+          c.querySelectorAll<HTMLElement>(
+            "code.language-math:not([data-katex-rendered])",
+          ).forEach((el) => {
             const tex = el.textContent ?? "";
             const pre = el.parentElement;
             if (pre?.tagName === "PRE") {
               try {
                 const div = document.createElement("div");
                 div.className = "katex-display-block";
-                div.innerHTML = window.katex!.renderToString(tex, { displayMode: true, throwOnError: false });
+                div.innerHTML = window.katex!.renderToString(tex, {
+                  displayMode: true,
+                  throwOnError: false,
+                });
                 pre.replaceWith(div);
               } catch {
                 // Keep original content on error
@@ -281,7 +296,9 @@ export function MarkdownViewer({
       return undefined;
     }
     const imgs = [...body.querySelectorAll<HTMLImageElement>("img")].filter(
-      (img) => !img.closest("a") && !img.classList.contains("emoji") && !img.closest("g-emoji"),
+      (img) =>
+        !img.closest("a") && !img.classList.contains("emoji") &&
+        !img.closest("g-emoji"),
     );
     const gallery: { src: string; alt: string }[] = [];
     const cleanups: (() => void)[] = [];
@@ -299,12 +316,17 @@ export function MarkdownViewer({
         const hash = rawSrc.indexOf("#");
         const pathPart = hash >= 0 ? rawSrc.slice(0, hash) : rawSrc;
         const frag = hash >= 0 ? rawSrc.slice(hash) : "";
-        img.src = `/api/raw?path=${encodeURIComponent(resolveDocPath(currentPath, pathPart))}${frag}`;
+        img.src = `/api/raw?path=${
+          encodeURIComponent(resolveDocPath(currentPath, pathPart))
+        }${frag}`;
       }
       const idx = gallery.length;
       gallery.push({ src: img.currentSrc || img.src, alt: img.alt });
       let wrap = img.parentElement;
-      if (!(wrap instanceof HTMLElement) || !wrap.classList.contains("lv-zoom-wrap")) {
+      if (
+        !(wrap instanceof HTMLElement) ||
+        !wrap.classList.contains("lv-zoom-wrap")
+      ) {
         const span = document.createElement("span");
         span.className = "lv-zoom-wrap";
         img.replaceWith(span);
@@ -330,7 +352,9 @@ export function MarkdownViewer({
     // KaTeX math and octicons), so the CSS plate also lands only on those.
     const svgToDataUrl = (svg: SVGSVGElement): string => {
       const clone = svg.cloneNode(true) as SVGSVGElement;
-      if (!clone.getAttribute("xmlns")) clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      if (!clone.getAttribute("xmlns")) {
+        clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      }
       // Mermaid/book SVGs are sized with width="100%" + a CSS max-width. An
       // <img> is a replaced element with no containing block to resolve "100%"
       // against, so it falls back to the SVG default 300×150 — the diagram
@@ -371,7 +395,9 @@ export function MarkdownViewer({
         }),
     ];
     diagrams.forEach((el) => {
-      const svg = el.tagName.toLowerCase() === "svg" ? (el as unknown as SVGSVGElement) : el.querySelector("svg");
+      const svg = el.tagName.toLowerCase() === "svg"
+        ? (el as unknown as SVGSVGElement)
+        : el.querySelector("svg");
       if (!svg) return;
       const idx = gallery.length;
       gallery.push({ src: svgToDataUrl(svg), alt: "" });
@@ -407,7 +433,10 @@ export function MarkdownViewer({
       if (max <= 0) return; // not scrollable yet — don't clobber with 0
       const ratio = el.scrollTop / max;
       // Drive the progress bar via a CSS var (no React re-render per scroll).
-      wrapperRef.current?.style.setProperty("--lv-read-progress", ratio.toFixed(4));
+      wrapperRef.current?.style.setProperty(
+        "--lv-read-progress",
+        ratio.toFixed(4),
+      );
       onSaveScroll?.(currentPath, ratio);
     });
   }, [currentPath, onSaveScroll]);
@@ -415,7 +444,9 @@ export function MarkdownViewer({
   // Cancel any queued scroll read on unmount so it can't fire after teardown.
   useEffect(() => {
     return () => {
-      if (scrollRafRef.current !== null) cancelAnimationFrame(scrollRafRef.current);
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
     };
   }, []);
 
@@ -474,7 +505,7 @@ export function MarkdownViewer({
       // Image taps are handled by per-image listeners wired in the effect
       // above (so they fire reliably on iOS); nothing to do here.
     },
-    [currentPath, onNavigate]
+    [currentPath, onNavigate],
   );
 
   // Reading-layout vars from settings → applied as CSS custom properties on
@@ -507,84 +538,108 @@ export function MarkdownViewer({
 
   return (
     <>
-    <Box
-      ref={wrapperRef}
-      // `view-transition-name` scopes the chapter cross-fade (App.loadFile) to
-      // the reader area, so the sidebar/chrome don't animate. Only one element
-      // may carry a given name, and one MarkdownViewer is mounted at a time.
-      style={{ viewTransitionName: "lv-content" }}
-      sx={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
-    >
-      {/* Reading-progress bar: scales with scroll via --lv-read-progress (set
-          imperatively in handleScroll). Pinned to the top edge of the reader. */}
       <Box
-        aria-hidden
+        ref={wrapperRef}
+        // `view-transition-name` scopes the chapter cross-fade (App.loadFile) to
+        // the reader area, so the sidebar/chrome don't animate. Only one element
+        // may carry a given name, and one MarkdownViewer is mounted at a time.
+        style={{ viewTransitionName: "lv-content" }}
         sx={{
-          position: "absolute",
-          top: 0,
-          left: 0,
-          right: 0,
-          height: "3px",
-          zIndex: 4,
-          transformOrigin: "left center",
-          transform: "scaleX(var(--lv-read-progress, 0))",
-          bgcolor: "primary.main",
-          opacity: 0.85,
-          pointerEvents: "none",
+          position: "relative",
+          flex: 1,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
         }}
-      />
-    <Box
-      ref={containerRef}
-      data-lv-scroller="reader"
-      onClick={handleClick}
-      onScroll={handleScroll}
-      sx={{
-        flex: 1,
-        // Without min-height:0 a flex child won't shrink below its content, so
-        // overflow:auto never engages and the page can't scroll (notably on
-        // iOS, where there's no trackpad to mask it).
-        minHeight: 0,
-        overflow: "auto",
-        // Vertical padding fixed; horizontal padding IS the reading margin.
-        py: { xs: 2, md: 4 },
-        px: `${contentMaxWidth}px`,
-        "& img": {
-          cursor: "zoom-in",
-        },
-        "& .copy-btn": {
-          position: "absolute",
-          top: 8,
-          right: 8,
-          px: 1.5,
-          py: 0.5,
-          fontSize: 12,
-          bgcolor: "action.hover",
-          border: 1,
-          borderColor: "divider",
-          borderRadius: 1,
-          cursor: "pointer",
-          opacity: 0,
-          transition: "opacity 0.2s",
-          "&:hover": {
-            bgcolor: "action.selected",
-          },
-        },
-        "& pre:hover .copy-btn": {
-          opacity: 1,
-        },
-      }}
-    >
-      <Box
-        className="markdown-body"
-        sx={innerSx}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
-    </Box>
-      {/* Back-to-top — absolute within this relative wrapper, so it rides above
-          a bottom nav bar and the reading-progress bar without overlapping the
-          transport. */}
-      <ScrollToTopButton targetRef={containerRef} />
-    </Box>
+      >
+        {
+          /* Reading-progress bar: scales with scroll via --lv-read-progress (set
+          imperatively in handleScroll). Pinned to the top edge of the reader. */
+        }
+        <Box
+          aria-hidden
+          sx={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            right: 0,
+            height: "3px",
+            zIndex: 4,
+            transformOrigin: "left center",
+            transform: "scaleX(var(--lv-read-progress, 0))",
+            bgcolor: "primary.main",
+            opacity: 0.85,
+            pointerEvents: "none",
+          }}
+        />
+        <Box
+          ref={containerRef}
+          data-lv-scroller="reader"
+          onClick={handleClick}
+          onScroll={handleScroll}
+          sx={{
+            flex: 1,
+            // Without min-height:0 a flex child won't shrink below its content, so
+            // overflow:auto never engages and the page can't scroll (notably on
+            // iOS, where there's no trackpad to mask it).
+            minHeight: 0,
+            overflow: "auto",
+            // Vertical padding fixed; horizontal padding IS the reading margin.
+            pt: { xs: 2, md: 4 },
+            // Foot padding ADDS the frosted bottom bar's height on the mobile tier
+            // (--shell-bar-h, published by NavShell on the content region; 0 on
+            // desktop / before measured) on top of the base breathing room, so the
+            // last paragraph scrolls fully clear of the frosted overlay bar yet the
+            // text still scrolls UNDER it. Restore-by-ratio is unaffected (it reads
+            // scrollHeight after this padding is in).
+            pb: {
+              xs: "calc(16px + var(--shell-bar-h, 0px))",
+              md: "calc(32px + var(--shell-bar-h, 0px))",
+            },
+            px: `${contentMaxWidth}px`,
+            "& img": {
+              cursor: "zoom-in",
+            },
+            "& .copy-btn": {
+              position: "absolute",
+              top: 8,
+              right: 8,
+              px: 1.5,
+              py: 0.5,
+              fontSize: 12,
+              bgcolor: "action.hover",
+              border: 1,
+              borderColor: "divider",
+              borderRadius: 1,
+              cursor: "pointer",
+              opacity: 0,
+              transition: "opacity 0.2s",
+              "&:hover": {
+                bgcolor: "action.selected",
+              },
+            },
+            "& pre:hover .copy-btn": {
+              opacity: 1,
+            },
+          }}
+        >
+          <Box
+            className="markdown-body"
+            sx={innerSx}
+            dangerouslySetInnerHTML={{ __html: html }}
+          />
+        </Box>
+        {
+          /* Back-to-top — absolute within this relative wrapper. The bottom nav bar
+          is now a frosted OVERLAY over this area (not a flex sibling below it),
+          so lift the FAB by the bar's height (--shell-bar-h; 0 on the solid /
+          desktop path) to keep it clear of the bar + the reading-progress bar. */
+        }
+        <ScrollToTopButton
+          targetRef={containerRef}
+          bottomLift="var(--shell-bar-h, 0px)"
+        />
+      </Box>
       <ImageLightbox
         images={images}
         index={lbIndex}

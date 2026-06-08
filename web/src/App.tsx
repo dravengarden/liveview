@@ -1176,6 +1176,13 @@ export function App(): React.JSX.Element {
             <NavShell
               appKey="liveview"
               barPosition={navbarAtBottom ? "bottom" : "top"}
+              // Frosted-overlay bar ONLY on the compact (bottom-bar) tier, where
+              // the reader runs full-height and content scrolls under the bar
+              // (iOS-style). On desktop the bar is a top sibling above a
+              // persistent sidebar, so it stays the solid flex sibling — a
+              // frosted desktop bar would also float over the sidebar. The
+              // reader scroller pads itself by --shell-bar-h (index.css).
+              barFrosted={navbarAtBottom}
               title={
                 <Box
                   role="button"

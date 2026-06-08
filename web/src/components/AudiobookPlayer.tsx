@@ -104,6 +104,32 @@ export function AudiobookPlayer(
   }, [currentTime, duration, nowPlaying, onSaveScroll]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Frosted transport overlay: like the NavShell bar, the transport now floats
+  // OVER the read-along scroller (frosted glass, content scrolls under it). We
+  // measure its rendered height (it grows with the safe-area inset, the optional
+  // "playing elsewhere" line, and rotation) and publish it as `--lv-transport-h`
+  // on the relative root, so the scroller can reserve foot space for transport +
+  // the NavShell bar below it (--shell-bar-h) in one calc.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const transportRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const transportEl = transportRef.current;
+    const rootEl = rootRef.current;
+    if (!transportEl || !rootEl) return;
+    const publish = (): void => {
+      rootEl.style.setProperty(
+        "--lv-transport-h",
+        `${transportEl.offsetHeight}px`,
+      );
+    };
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(transportEl);
+    return () => {
+      ro.disconnect();
+    };
+  }, []);
+
   // Explicit follow: ON auto-scrolls the spoken line to centre; a genuine user
   // scroll GESTURE turns it OFF (we don't fight the reader), and the follow
   // button / a sentence tap turns it back ON.
@@ -378,11 +404,15 @@ export function AudiobookPlayer(
 
   return (
     <Box
+      ref={rootRef}
       sx={{
         flex: 1,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
+        // The transport is a frosted overlay pinned to this box's bottom, so
+        // this is its positioning context (already relative) and carries the
+        // published --lv-transport-h the scroller pads by.
         position: "relative",
       }}
     >
@@ -405,7 +435,22 @@ export function AudiobookPlayer(
         // Horizontal padding IS the reading MARGIN setting (same as the text
         // reader's MarkdownViewer), so the read-along gutter tracks Settings →
         // Reading → Margin instead of a hardcoded value.
-        sx={{ flex: 1, overflowY: "auto", px: `${contentMaxWidth}px`, py: 4 }}
+        sx={{
+          flex: 1,
+          overflowY: "auto",
+          px: `${contentMaxWidth}px`,
+          pt: 4,
+          // Foot space clears BOTH overlays the read-along scrolls under: the
+          // frosted transport pinned to this box's bottom (--lv-transport-h) and
+          // the NavShell frosted bar below it (--shell-bar-h). Both are 0 before
+          // measured / on the solid (desktop) path, leaving the base py:4.
+          pb:
+            "calc(32px + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
+          // Keep follow-mode centring (block:"center") and a sentence tap from
+          // parking the spoken line UNDER the transport when it's near the end.
+          scrollPaddingBottom:
+            "calc(var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
+        }}
       >
         <Box
           sx={{
@@ -468,12 +513,33 @@ export function AudiobookPlayer(
         </Box>
       </Box>
 
-      {/* Transport: scrubber row + control row. */}
+      {
+        /* Transport: scrubber row + control row. A frosted overlay (iOS-style)
+          pinned to the bottom of the relative root, so the read-along text
+          scrolls UNDER it; the scroller reserves --lv-transport-h of foot space
+          (above). Higher alpha (0.78) than the status strip because real text
+          passes under it — the transport's own controls' legibility comes first;
+          blur+saturate match the NavShell bar so the two stack as one glass
+          layer. background.default (the page bg under the text), not paper. The
+          hairline top border keeps the boundary readable over a busy column. */
+      }
       <Box
+        ref={transportRef}
         sx={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          // Sit ABOVE the NavShell frosted bar when one is below us (bottom
+          // tier): both are overlays pinned to the same content region, so lift
+          // the transport by the bar's height (--shell-bar-h) instead of letting
+          // the two collide at bottom:0. With the bar on top (desktop), the bar
+          // doesn't publish the var → 0 → the transport sits at the screen edge.
+          bottom: "var(--shell-bar-h, 0px)",
           borderTop: 1,
           borderColor: "divider",
-          bgcolor: "background.paper",
+          bgcolor: (t) => alpha(t.palette.background.default, 0.78),
+          backdropFilter: "blur(24px) saturate(180%)",
+          WebkitBackdropFilter: "blur(24px) saturate(180%)",
           // Match the bottom NavShell's 12px side padding so the transport's
           // edge "ears" (follow/speed left, sleep right) line up vertically with
           // the navbar's hamburger / gear below. Also floors the landscape
