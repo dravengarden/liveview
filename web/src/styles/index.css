@@ -450,7 +450,10 @@ body {
 [data-theme="lavender"] .markdown-body {
   color-scheme: light;
   color: #1c1428;
-  background-color: #faf6fd;
+  /* The reading column sits on the PAGE colour (bgDefault), like every other
+     theme (sepia → #f4ecd8, classic → #fff) — NOT the near-white bgPaper
+     (#faf6fd), which read as a white card glaring against the lavender page. */
+  background-color: #f4ecf7;
 }
 
 [data-theme="lavender"] .markdown-body a {
