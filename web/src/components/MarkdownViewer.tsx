@@ -53,17 +53,21 @@ const MERMAID_FONT_FAMILY =
   'var(--lv-reading-font), "Noto Sans SC", "PingFang SC", ' +
   '"Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif';
 
-// Mermaid is pinned to its light "default" theme in EVERY app theme, and the
-// rendered diagram sits on a fixed light plate (.mermaid in markdown.css). Why
-// not switch mermaid light/dark with the page: that needs a full re-render of
-// every diagram on each theme change, and still leaves dark-mermaid mismatched
-// against the (necessarily light) plate book SVGs need. One fixed theme + one
-// fixed plate means a diagram reads identically in Light / Sepia / Dark / Night
-// with zero per-theme variants to maintain — the same floor the figure plate
-// gives raster images.
-function mermaidConfig(): Record<string, unknown> {
+// Mermaid renders with its NATIVE theme for the active page mode — "default"
+// (light) on Light/Sepia, "dark" on Dark/Night — so a diagram is designed for
+// the page it sits on, not a `filter: invert()` approximation of it. The page's
+// color scheme is read from documentElement's `data-color-scheme` (set by
+// useTheme); a live theme toggle re-renders every diagram from its stashed
+// source (see the re-render effect + `data-mermaid-src`). Book SVGs (raster /
+// fixed-colour standalone `.lv-svg-figure`) CAN'T re-render, so they keep the
+// invert-filter dark adaptation in markdown.css — only mermaid goes native.
+function isDarkScheme(): boolean {
+  return document.documentElement.dataset["colorScheme"] === "dark";
+}
+
+function mermaidConfig(isDark: boolean): Record<string, unknown> {
   return {
-    theme: "default",
+    theme: isDark ? "dark" : "default",
     startOnLoad: false,
     fontFamily: MERMAID_FONT_FAMILY,
     markdownAutoWrap: true,
@@ -172,8 +176,8 @@ export function MarkdownViewer({
 
     // Mermaid: the library is ~3 MB, so load it ON DEMAND — only when the
     // chapter actually has a diagram. Each block becomes a spinner placeholder
-    // while the script downloads, then renders. Pinned to one light theme (see
-    // mermaidConfig) + a light plate, so no per-theme re-render path.
+    // while the script downloads, then renders in the page's native mode (see
+    // mermaidConfig); a theme toggle re-renders them via the effect below.
     const mermaidBlocks = container.querySelectorAll<HTMLElement>(
       'pre[lang="mermaid"], code.language-mermaid',
     );
@@ -195,11 +199,15 @@ export function MarkdownViewer({
         void ensureScript("/mermaid.min.js")
           .then(() => {
             if (!window.mermaid) return;
-            window.mermaid.initialize(mermaidConfig());
+            window.mermaid.initialize(mermaidConfig(isDarkScheme()));
             pending.forEach(({ holder, code }) => {
               const div = document.createElement("div");
               div.className = "mermaid";
               div.textContent = code;
+              // Stash the source so a later theme toggle can re-render this
+              // diagram in the other mode (mermaid replaces textContent with the
+              // SVG, losing the source otherwise).
+              div.dataset["mermaidSrc"] = code;
               holder.replaceWith(div);
             });
             // Re-wire the lightbox gallery once the SVGs exist (run() is async).
@@ -280,6 +288,41 @@ export function MarkdownViewer({
   useEffect(() => {
     processContent();
   }, [html, processContent]);
+
+  // Re-render mermaid diagrams when the app theme's light/dark MODE flips, so
+  // each redraws in mermaid's native theme for the new mode (not a CSS-invert
+  // approximation). Watches documentElement's `data-color-scheme` (set by
+  // useTheme); a light↔light switch (classic↔sepia) leaves it unchanged → no
+  // re-render. Each diagram redraws from its stashed `data-mermaid-src`. Book
+  // SVGs can't re-render, so they keep the invert filter (markdown.css).
+  useEffect(() => {
+    const root = document.documentElement;
+    let lastScheme = root.dataset["colorScheme"];
+    const obs = new MutationObserver(() => {
+      const scheme = root.dataset["colorScheme"];
+      if (scheme === lastScheme) return;
+      lastScheme = scheme;
+      const container = containerRef.current;
+      if (!container || !window.mermaid) return;
+      const divs = container.querySelectorAll<HTMLElement>(
+        ".mermaid[data-mermaid-src]",
+      );
+      if (divs.length === 0) return;
+      divs.forEach((div) => {
+        div.textContent = div.dataset["mermaidSrc"] ?? "";
+        div.removeAttribute("data-processed");
+      });
+      window.mermaid.initialize(mermaidConfig(isDarkScheme()));
+      void window.mermaid.run({ nodes: divs }).then(() => {
+        setDiagramTick((tk) => tk + 1);
+      });
+    });
+    obs.observe(root, {
+      attributes: true,
+      attributeFilter: ["data-color-scheme"],
+    });
+    return () => obs.disconnect();
+  }, []);
 
   // Make every (non-linked) doc image a zoomable, tappable target and collect
   // them into an ordered gallery for the lightbox. The open listener is bound
