@@ -3,16 +3,9 @@ import {
   Box,
   Card,
   CardActionArea,
-  Checkbox,
   Chip,
-  FormControl,
   IconButton,
   InputAdornment,
-  ListItemText,
-  MenuItem,
-  OutlinedInput,
-  Select,
-  type SelectChangeEvent,
   TextField,
   Typography,
   useMediaQuery,
@@ -22,7 +15,6 @@ import { alpha, type Theme } from "@mui/material/styles";
 import {
   Article as DocsIcon,
   Clear as ClearIcon,
-  FilterList as FilterIcon,
   Headphones as AudiobookIcon,
   MenuBook as BookIcon,
   Search as SearchIcon,
@@ -477,9 +469,14 @@ export function Landing({
   // Only offer a kind in the dropdown when the shelf actually has one.
   const availableKinds = KIND_ORDER.filter((k) => counts[k] > 0);
 
-  const onKindsChange = (e: SelectChangeEvent<Category[]>): void => {
-    const v = e.target.value;
-    setKinds(typeof v === "string" ? (v.split(",") as Category[]) : v);
+  // Toggle a kind in/out of the active filter (empty set = all kinds). Inline
+  // chips instead of a dropdown: a Select STEALS focus when opened, dismissing
+  // the keyboard mid-search; a plain toggle (with preventDefault on press, below)
+  // keeps the search input focused, so filtering and typing coexist.
+  const toggleKind = (k: Category): void => {
+    setKinds((prev) =>
+      prev.includes(k) ? prev.filter((x) => x !== k) : [...prev, k]
+    );
   };
 
   // The shelf scroll container — ref'd for the back-to-top button + the
@@ -671,65 +668,51 @@ export function Landing({
                 sx={{ flexGrow: 1, minWidth: 0 }}
               />
               {availableKinds.length > 0 && (
-                <FormControl
-                  size="small"
-                  sx={{ flexShrink: 0, width: { xs: 136, sm: 172 } }}
+                /* Inline kind filter: one toggle chip per available kind (book /
+                   audiobook / docs), instead of a dropdown. No popup → nothing
+                   can dismiss the keyboard, so a mid-search filter change keeps
+                   you typing. Empty selection = all kinds. */
+                <Box
+                  sx={{
+                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 0.25,
+                  }}
                 >
-                  <Select
-                    multiple
-                    displayEmpty
-                    value={kinds}
-                    onChange={onKindsChange}
-                    aria-label={t("landing.filter")}
-                    title={t("landing.filter")}
-                    input={
-                      <OutlinedInput
-                        startAdornment={
-                          <InputAdornment position="start">
-                            <FilterIcon fontSize="medium" />
-                          </InputAdornment>
-                        }
-                      />
-                    }
-                    // Empty selection reads as a muted "All kinds" placeholder;
-                    // otherwise the picked kinds, comma-joined (ellipsized by the
-                    // Select when they overflow the compact control).
-                    renderValue={(selected) =>
-                      selected.length === 0
-                        ? (
-                          <Box
-                            component="span"
-                            sx={{ color: "text.secondary" }}
-                          >
-                            {t("landing.filterAll")}
-                          </Box>
-                        )
-                        : (
-                          selected.map((k) => t(KIND_LABEL[k])).join(", ")
-                        )}
-                  >
-                    {availableKinds.map((k) => (
-                      <MenuItem key={k} value={k} dense>
-                        <Checkbox
-                          checked={kinds.includes(k)}
-                          size="small"
-                          sx={{ py: 0, pl: 0, pr: 1 }}
-                        />
-                        <ListItemText primary={t(KIND_LABEL[k])} />
-                        <Box
-                          component="span"
-                          sx={{
-                            ml: 3,
-                            color: "text.secondary",
-                            fontVariantNumeric: "tabular-nums",
-                          }}
-                        >
-                          {counts[k]}
-                        </Box>
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
+                  {availableKinds.map((k) => {
+                    const KindIcon = kindIcon(k);
+                    const active = kinds.includes(k);
+                    return (
+                      <IconButton
+                        key={k}
+                        aria-label={t(KIND_LABEL[k])}
+                        aria-pressed={active}
+                        title={t(KIND_LABEL[k])}
+                        // preventDefault on press keeps the search input focused
+                        // (keyboard up) while toggling a filter mid-search; the
+                        // click still fires to toggle.
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => toggleKind(k)}
+                        sx={{
+                          width: 40,
+                          height: 40,
+                          borderRadius: 2,
+                          color: active
+                            ? "primary.contrastText"
+                            : "text.secondary",
+                          bgcolor: active ? "primary.main" : "transparent",
+                          transition: "background-color .15s, color .15s",
+                          "&:hover": {
+                            bgcolor: active ? "primary.main" : "action.hover",
+                          },
+                        }}
+                      >
+                        <KindIcon sx={{ fontSize: rem(20) }} />
+                      </IconButton>
+                    );
+                  })}
+                </Box>
               )}
             </>
           )}
