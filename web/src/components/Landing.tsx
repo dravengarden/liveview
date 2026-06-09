@@ -513,6 +513,33 @@ export function Landing({
     };
   }, []);
 
+  // Lift the bottom toolbar above the on-screen keyboard. The toolbar is an
+  // ABSOLUTE overlay pinned to the shelf bottom, so focusing the search input
+  // would otherwise leave the iOS keyboard covering it (input hidden while
+  // typing). Publish the keyboard's bottom overlap as `--lv-kb-inset` from the
+  // VisualViewport and offset the toolbar by it. Self-correcting vs the viewport
+  // `interactive-widget=resizes-content`: where the layout viewport already
+  // shrinks, innerHeight === visualViewport.height → 0, so no double-shift.
+  useEffect(() => {
+    const vv = globalThis.visualViewport;
+    const regionEl = shelfRegionRef.current;
+    if (!vv || !regionEl) return undefined;
+    const apply = (): void => {
+      const inset = Math.max(
+        0,
+        globalThis.innerHeight - vv.height - vv.offsetTop,
+      );
+      regionEl.style.setProperty("--lv-kb-inset", `${inset}px`);
+    };
+    apply();
+    vv.addEventListener("resize", apply);
+    vv.addEventListener("scroll", apply);
+    return () => {
+      vv.removeEventListener("resize", apply);
+      vv.removeEventListener("scroll", apply);
+    };
+  }, []);
+
   return (
     <Box
       ref={shelfRegionRef}
@@ -546,7 +573,10 @@ export function Landing({
           position: "absolute",
           left: 0,
           right: 0,
-          ...(navbarAtBottom ? { bottom: 0 } : { top: 0 }),
+          // Bottom: lift above the keyboard (var set above; 0 when closed).
+          ...(navbarAtBottom
+            ? { bottom: "var(--lv-kb-inset, 0px)" }
+            : { top: 0 }),
           zIndex: 6,
           borderColor: "divider",
           bgcolor: (t) => alpha(t.palette.background.default, 0.78),
