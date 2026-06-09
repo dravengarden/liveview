@@ -225,15 +225,18 @@
 
 /* ── Diagram plate (mermaid + standalone SVG) ──────────────────────────────
    Mermaid renders dark-on-light with a TRANSPARENT svg background, and book
-   SVGs are the same: readable on a light page, invisible on a dark one. On LIGHT
-   and SEPIA we back every diagram with a neutral white plate (mermaid stays
-   pinned to its light `default` theme — MarkdownViewer.tsx). `cursor: zoom-in`
-   advertises the click-to-enlarge the lightbox provides (see lv-zoom-wrap).
-   `.lv-svg-figure` is added in JS to genuine standalone SVGs only — never to
-   KaTeX/octicon SVGs, which must not get a plate. */
+   SVGs are the same: readable on a light page, invisible on a dark one. On the
+   LIGHT themes we back every diagram with a TRANSLUCENT white plate: it
+   composites over the themed reading page, so it reads as a softly-elevated
+   card that picks up the page's tint (white on Light, lavender-tinted on
+   Lavender, cream on Sepia) instead of a hard #fff block glaring against a
+   tinted page. `cursor: zoom-in` advertises the click-to-enlarge the lightbox
+   provides (see lv-zoom-wrap). `.lv-svg-figure` is added in JS to genuine
+   standalone SVGs only — never to KaTeX/octicon SVGs, which must not get a
+   plate. (DARK / NIGHT get their own plate below.) */
 .markdown-body .mermaid,
 .markdown-body .lv-svg-figure {
-  background-color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.55);
   padding: 0.5rem;
   border-radius: 6px;
   cursor: zoom-in;
