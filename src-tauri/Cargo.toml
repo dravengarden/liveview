@@ -35,3 +35,8 @@ tauri = { version = "2", features = [] }
 # opener routes `app-settings:` through UIApplication.open; a no-op everywhere the
 # loader's error card never shows (desktop/Android).
 tauri-plugin-opener = "2"
+# Native OS haptics (real UIImpactFeedbackGenerator on iOS — the only reliable
+# iOS haptic; Safari/PWA has none). The remote liveview UI calls
+# `plugin:haptics|*` via the injected IPC bridge; granted to the remote origin in
+# capabilities/remote-haptics.json. installHaptics() (web) buzzes every control.
+tauri-plugin-haptics = "2"
