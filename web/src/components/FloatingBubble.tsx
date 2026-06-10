@@ -30,7 +30,7 @@ import {
   SkipNext,
   SkipPrevious,
 } from "@mui/icons-material";
-import { BottomSheet, useAnyDetentSheetOpen } from "../_shell";
+import { BottomSheet, haptic, useAnyDetentSheetOpen } from "../_shell";
 import { Forward15Icon, Replay15Icon } from "./Skip15Icons";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
@@ -382,6 +382,10 @@ export function FloatingBubble({
       const yMax = Math.max(yMin, vh - SIZE - MARGIN);
       const topRatio = yMax > yMin ? (d.y - yMin) / (yMax - yMin) : 0;
       commitPos(side, topRatio);
+      // Docked to an edge — a light tick confirms the snap. (A tap, handled
+      // above, already buzzes via its clickable; this is the gesture case that
+      // haptic delegation can't see.)
+      haptic("light");
       poke();
     },
     [commitPos, poke],
