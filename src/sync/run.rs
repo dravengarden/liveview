@@ -45,6 +45,9 @@ pub struct SyncReport {
     pub skipped: usize,
     pub deleted: usize,
     pub orphans_gc: usize,
+    /// Content-check diagnostics found this run (warn-only — never blocks the
+    /// deploy; logged so a broken book shows up without failing the sync).
+    pub check_warnings: usize,
     pub root: String,
 }
 
@@ -97,6 +100,10 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
     let mut applies: BTreeMap<String, LeafApply> = BTreeMap::new();
     let mut book_nodes: Vec<(String, Build)> = Vec::new();
     let mut corpus_slugs: Vec<String> = Vec::new();
+    // Warn-only content check, accumulated as we read each source file (the
+    // SyncReport isn't built until after this walk). Folded into the report and
+    // logged below; a non-zero count never fails the sync.
+    let mut check_warnings = 0usize;
 
     for book in &resolved.books {
         corpus_slugs.push(book.slug.clone());
@@ -159,6 +166,20 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                         std::fs::read(&abs).map_err(|e| format!("read {}: {e}", abs.display()))?;
                     let content_hash = blake3::hash(&bytes).to_hex().to_string();
                     let ft = FileType::from_path(&rel);
+
+                    // Warn-only structural check on the bytes we just read. Logs
+                    // each finding with its source location; never blocks deploy.
+                    if let Ok(src) = std::str::from_utf8(&bytes) {
+                        let dir = abs.parent().unwrap_or_else(|| Path::new("."));
+                        for d in crate::check::check_source(&rel, src, dir, ft.clone()) {
+                            tracing::warn!(
+                                rule = %d.rule,
+                                "check {}/{}/{} {}:{}:{}: {}",
+                                book.slug, r_kind, ed.lang, d.file, d.line, d.col, d.message
+                            );
+                            check_warnings += 1;
+                        }
+                    }
                     let is_audio = rend.kind == RenditionKind::Audio && rel.ends_with(".spoken.md");
                     let voice = is_audio
                         .then(|| rend.voice.clone().unwrap_or_else(|| cfg.tts_voice.clone()));
@@ -251,8 +272,15 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
     // ── Apply. ──────────────────────────────────────────────────────────────
     let mut report = SyncReport {
         books: resolved.books.len(),
+        check_warnings,
         ..Default::default()
     };
+    if check_warnings > 0 {
+        tracing::warn!(
+            "content check: {check_warnings} diagnostic(s) across the corpus \
+             (warn-only — deploy continues; run `liveview check <dir>` for details)"
+        );
+    }
     // Fast pass: structure + text + binaries + audio chapter ROWS (no mp3 yet),
     // so the reader is fully navigable in seconds.
     apply_plan(&plan, &applies, &store, &obj, cfg, &mut report).await?;

@@ -182,13 +182,19 @@ async fn run_sync(args: cli::SyncArgs) -> Result<(), String> {
         skipped = report.skipped,
         deleted = report.deleted,
         orphans_gc = report.orphans_gc,
+        check_warnings = report.check_warnings,
         root = %report.root,
         "sync complete"
     );
     let root_short = &report.root[..report.root.len().min(12)];
     println!(
-        "sync: {} books, {} put, {} skipped, {} deleted, {} gc'd, root {root_short}",
-        report.books, report.put, report.skipped, report.deleted, report.orphans_gc
+        "sync: {} books, {} put, {} skipped, {} deleted, {} gc'd, {} check warnings, root {root_short}",
+        report.books,
+        report.put,
+        report.skipped,
+        report.deleted,
+        report.orphans_gc,
+        report.check_warnings
     );
     Ok(())
 }

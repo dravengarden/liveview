@@ -55,6 +55,30 @@ fn validators_for(file_type: &FileType) -> Vec<Box<dyn Validator>> {
     }
 }
 
+/// Check one already-loaded file and return its diagnostics (never errors).
+///
+/// The `sync` deploy reuses this with the bytes it already read, so a broken
+/// footnote / reference / asset surfaces in the deploy log without a second
+/// disk read. `dir` is the directory the source lives in (for relative-asset
+/// resolution); `rel` is what appears in each diagnostic's `file` field.
+pub fn check_source(rel: &str, source: &str, dir: &Path, file_type: FileType) -> Vec<Diagnostic> {
+    let file = CheckFile {
+        path: dir.join(rel),
+        rel: rel.to_string(),
+        source: source.to_string(),
+        file_type,
+    };
+    let ctx = CheckCtx {
+        dir: dir.to_path_buf(),
+    };
+    let mut diags = Vec::new();
+    for validator in validators_for(&file.file_type) {
+        diags.extend(validator.check(&file, &ctx));
+    }
+    diags.sort_by_key(|d| (d.line, d.col));
+    diags
+}
+
 /// Run the checker over `paths` and return the process exit code.
 ///
 /// - A path that is a file is checked as-is; a directory is recursed for
