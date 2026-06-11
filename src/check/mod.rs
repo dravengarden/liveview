@@ -13,6 +13,8 @@
 
 pub mod diagnostic;
 pub mod markdown;
+pub mod math;
+pub mod mermaid;
 
 use std::path::{Path, PathBuf};
 
@@ -49,7 +51,13 @@ pub trait Validator {
 /// a new validator is one more arm / push here.
 fn validators_for(file_type: &FileType) -> Vec<Box<dyn Validator>> {
     match file_type {
-        FileType::Markdown => vec![Box::new(markdown::MarkdownValidator)],
+        // Markdown carries prose structure, embedded math, and mermaid fences —
+        // each gets its own validator over the same source.
+        FileType::Markdown => vec![
+            Box::new(markdown::MarkdownValidator),
+            Box::new(math::MathValidator),
+            Box::new(mermaid::MermaidValidator),
+        ],
         // No validators yet for other types (frontend-rendered / binary).
         _ => Vec::new(),
     }

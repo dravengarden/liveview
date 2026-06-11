@@ -51,6 +51,15 @@ aws-smithy-runtime-api = "1"
 # Embedded assets
 include_dir = { version = "0.7", optional = true }
 
+# Math validation for `liveview check`: runs the REAL KaTeX (bundled JS) in an
+# in-process quick-js engine — not deno, no DOM. This is the only way to match
+# the client's KaTeX exactly; a pure-Rust LaTeX parser (pulldown-latex) rejected
+# 14% of the corpus's valid KaTeX (`\tag`, `\operatorname`, `\boldsymbol`, …) as
+# false positives. The crate bundles KaTeX 0.16.4; the client self-hosts 0.16.21
+# (same 0.16 command set — patch releases don't change accepted syntax). We use
+# only its parse errors, as a "won't render in the reader" signal.
+katex = "0.4.6"
+
 [features]
 default = []
 embedded = ["dep:include_dir"]
