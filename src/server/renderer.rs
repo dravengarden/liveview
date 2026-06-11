@@ -2,24 +2,14 @@ use comrak::{markdown_to_html, Options};
 
 use crate::shared::FileType;
 
-/// Render file content based on file type.
-pub fn render_file(source: &str, file_type: &FileType) -> String {
-    match file_type {
-        FileType::Markdown => render_markdown(source),
-        // For these types, frontend handles rendering, just return raw content
-        FileType::Html
-        | FileType::Csv
-        | FileType::Json
-        | FileType::Excalidraw
-        | FileType::Latex
-        | FileType::Typst => source.to_string(),
-        // Binary types should not reach here
-        FileType::Image | FileType::Pdf | FileType::Unknown => source.to_string(),
-    }
-}
-
-/// Render markdown source to HTML.
-pub fn render_markdown(source: &str) -> String {
+/// The single source of truth for how we parse/render Markdown.
+///
+/// Why a shared builder: the `check` subcommand parses with the *exact same*
+/// options as the server renders with, so a clean check matches what actually
+/// renders (a footnote/link/table that comrak resolves here is one the checker
+/// won't flag, and vice-versa). Keep every extension/render flag here — never
+/// re-derive options in the checker or the two will silently diverge.
+pub fn markdown_options() -> Options<'static> {
     let mut options = Options::default();
 
     // GFM extensions
@@ -43,5 +33,26 @@ pub fn render_markdown(source: &str) -> String {
     options.render.github_pre_lang = true;
     options.render.full_info_string = true;
 
-    markdown_to_html(source, &options)
+    options
+}
+
+/// Render file content based on file type.
+pub fn render_file(source: &str, file_type: &FileType) -> String {
+    match file_type {
+        FileType::Markdown => render_markdown(source),
+        // For these types, frontend handles rendering, just return raw content
+        FileType::Html
+        | FileType::Csv
+        | FileType::Json
+        | FileType::Excalidraw
+        | FileType::Latex
+        | FileType::Typst => source.to_string(),
+        // Binary types should not reach here
+        FileType::Image | FileType::Pdf | FileType::Unknown => source.to_string(),
+    }
+}
+
+/// Render markdown source to HTML.
+pub fn render_markdown(source: &str) -> String {
+    markdown_to_html(source, &markdown_options())
 }

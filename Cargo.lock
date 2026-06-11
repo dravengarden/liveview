@@ -2041,6 +2041,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "walkdir",
 ]
 
 [[package]]

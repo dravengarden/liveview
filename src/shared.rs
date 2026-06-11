@@ -70,6 +70,10 @@ pub struct FileContent {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
+// The `*Update` suffix is the wire contract (the serde `type` tag the SPA
+// matches on); renaming the variants to satisfy this lint would break the
+// protocol. Pre-existing; scoped allow keeps `clippy --all-targets` green.
+#[allow(clippy::enum_variant_names)]
 pub enum WsMessage {
     ContentUpdate {
         path: String,

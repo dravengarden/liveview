@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 /// liveview - LiveView
@@ -45,11 +45,49 @@ pub struct Cli {
 }
 
 #[derive(Subcommand, Debug, Clone)]
+// `Sync` carries many connection/credential flags and is much larger than
+// `Check`; this enum is parsed once at startup and immediately destructured, so
+// the size difference has no runtime cost worth boxing for.
+#[allow(clippy::large_enum_variant)]
 pub enum Command {
     /// Reconcile the book corpus into the postgres + rustfs content store
     /// (the git-driven incremental deploy). Connection params default to the
     /// env vars the systemd unit sets.
     Sync(SyncArgs),
+
+    /// Structurally check book Markdown (offline, pure-Rust). Parses each file
+    /// with the *same* comrak options the server renders with, then reports
+    /// problems comrak silently swallows: dangling/unused footnotes, broken
+    /// reference links, and missing local assets. Exit code is non-zero on any
+    /// error (or any warning with `--deny-warnings`).
+    Check(CheckArgs),
+}
+
+/// Args for `liveview check`. Paths default to `.` (recurse the cwd for
+/// `*.md` / `*.markdown`); a file argument is checked as-is.
+#[derive(Args, Debug, Clone)]
+pub struct CheckArgs {
+    /// Files or directories to check. Directories recurse for markdown.
+    #[arg(default_value = ".")]
+    pub paths: Vec<PathBuf>,
+
+    /// Output format: `human` (grouped, file:line:col) or `json` (a serde array
+    /// of Diagnostic, for tooling / agents).
+    #[arg(long, value_enum, default_value = "human")]
+    pub format: OutputFormat,
+
+    /// Treat warnings as failures (exit non-zero if any warning is found).
+    #[arg(long)]
+    pub deny_warnings: bool,
+}
+
+/// How `liveview check` prints its diagnostics.
+#[derive(ValueEnum, Debug, Clone, Copy)]
+pub enum OutputFormat {
+    /// Human-readable, grouped by file.
+    Human,
+    /// A JSON array of `Diagnostic` (stable schema for tooling).
+    Json,
 }
 
 /// Args for `liveview sync`. The S3 credentials accept either a direct value
@@ -87,7 +125,11 @@ pub struct SyncArgs {
     pub edge_tts_cmd: String,
 
     /// Default edge-tts voice; a book's `[renditions.audio].voice` overrides it.
-    #[arg(long, env = "LIVEVIEW_TTS_VOICE", default_value = "zh-CN-XiaoxiaoNeural")]
+    #[arg(
+        long,
+        env = "LIVEVIEW_TTS_VOICE",
+        default_value = "zh-CN-XiaoxiaoNeural"
+    )]
     pub tts_voice: String,
 
     /// Bump to force a full re-render (renderer upgrade).

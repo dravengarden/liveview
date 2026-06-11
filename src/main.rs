@@ -1,3 +1,4 @@
+mod check;
 mod cli;
 mod config;
 mod server;
@@ -120,6 +121,13 @@ fn main() {
     };
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
+    // `liveview check` is fully synchronous + offline — handle it before
+    // spinning up the tokio runtime, then exit with its status code.
+    if let Some(Command::Check(args)) = cli.command.clone() {
+        let code = check::run(&args.paths, args.format, args.deny_warnings);
+        std::process::exit(code);
+    }
+
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     match cli.command.clone() {
@@ -130,6 +138,9 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        // `liveview check` is handled (and exits) above, before the runtime is
+        // built — it never reaches this match.
+        Some(Command::Check(_)) => unreachable!("check handled before the tokio runtime"),
         // Default — run the server. It reads only the `[server]` block (host /
         // port / open) from the config; content comes from pg + rustfs, so it
         // never resolves or touches the corpus filesystem.
