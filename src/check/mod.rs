@@ -18,6 +18,7 @@ pub mod markdown;
 pub mod math;
 pub mod mermaid;
 pub mod svg;
+pub mod targets;
 pub mod typst;
 
 use std::path::{Path, PathBuf};

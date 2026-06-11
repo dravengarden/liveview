@@ -128,6 +128,11 @@ fn main() {
         std::process::exit(code);
     }
 
+    // `liveview targets` is likewise synchronous (resolve corpus → list charts).
+    if let Some(Command::Targets(args)) = cli.command.clone() {
+        std::process::exit(run_targets(&args));
+    }
+
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     match cli.command.clone() {
@@ -138,9 +143,10 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        // `liveview check` is handled (and exits) above, before the runtime is
-        // built — it never reaches this match.
+        // `liveview check` / `targets` are handled (and exit) above, before the
+        // runtime is built — they never reach this match.
         Some(Command::Check(_)) => unreachable!("check handled before the tokio runtime"),
+        Some(Command::Targets(_)) => unreachable!("targets handled before the tokio runtime"),
         // Default — run the server. It reads only the `[server]` block (host /
         // port / open) from the config; content comes from pg + rustfs, so it
         // never resolves or touches the corpus filesystem.
@@ -149,6 +155,48 @@ fn main() {
             rt.block_on(run(cli, server));
         }
     }
+}
+
+/// `liveview targets` entry point: resolve the corpus, emit each chart's render
+/// target. Returns the process exit code (2 on resolve/read failure, else 0).
+fn run_targets(args: &cli::TargetsArgs) -> i32 {
+    let resolved = match resolve_config(args.config.as_deref()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("targets: {e}");
+            return 2;
+        }
+    };
+    let targets =
+        match check::targets::collect(&resolved, &args.base_url, args.book.as_deref()) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("targets: {e}");
+                return 2;
+            }
+        };
+    match args.format {
+        cli::OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&targets).unwrap_or_else(|_| "[]".to_string())
+            );
+        }
+        cli::OutputFormat::Human => {
+            for t in &targets {
+                let kind = serde_json::to_value(t.kind)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_default();
+                println!(
+                    "{}/{} {}:{}  {}#{}  {}",
+                    t.book, t.lang, t.file, t.line, kind, t.nth, t.page_url
+                );
+            }
+            eprintln!("targets: {} chart(s)", targets.len());
+        }
+    }
+    0
 }
 
 /// `liveview sync` entry point: resolve the corpus, gather connection params,

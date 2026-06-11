@@ -335,7 +335,7 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
 
 /// Recursively collect files under `root` that this edition includes, keyed by
 /// path relative to the edition source.
-fn walk(
+pub(crate) fn walk(
     root: &Path,
     dir: &Path,
     ed: &crate::config::EditionState,

@@ -62,6 +62,31 @@ pub enum Command {
     /// typst syntax, and JSON / Excalidraw. Exit code is non-zero on any error
     /// (or any warning with `--deny-warnings`).
     Check(CheckArgs),
+
+    /// Enumerate the renderable charts (inline SVG + mermaid) in the corpus, with
+    /// each chart's reader URL + DOM kind/index — the render targets the visual-QA
+    /// loop (the `chart-review` skill) screenshots. Content authority only:
+    /// liveview says what/where, the skill + Chrome MCP do the screenshotting.
+    Targets(TargetsArgs),
+}
+
+/// Args for `liveview targets`. Resolves the corpus the same way `sync` does.
+#[derive(Args, Debug, Clone)]
+pub struct TargetsArgs {
+    /// Limit to one book by slug (default: every book in the corpus).
+    pub book: Option<String>,
+
+    /// Corpus config (`liveview.toml`); auto-discovered from cwd when omitted.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+
+    /// Reader origin to build each chart's `page_url` against.
+    #[arg(long, default_value = "http://127.0.0.1:4160")]
+    pub base_url: String,
+
+    /// Output format: `json` (array of ChartTarget, for the skill) or `human`.
+    #[arg(long, value_enum, default_value = "json")]
+    pub format: OutputFormat,
 }
 
 /// Args for `liveview check`. Paths default to `.` (recurse the cwd for

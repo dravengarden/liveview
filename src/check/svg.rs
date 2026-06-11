@@ -27,31 +27,48 @@ use crate::server::renderer;
 
 pub struct SvgValidator;
 
+/// A rendered inline-SVG span — one comrak emits as raw HTML (i.e. NOT inside a
+/// code fence): its byte offset, 1-based start line, and the `<svg>…</svg>` text.
+pub(crate) struct SvgSpan<'a> {
+    pub offset: usize,
+    pub line: u32,
+    pub text: &'a str,
+}
+
+/// All inline `<svg>…</svg>` spans the server actually renders (code fences
+/// excluded). Shared by the validator (XML well-formedness) and `targets`
+/// (chart enumeration) so both see the exact same SVGs.
+pub(crate) fn svg_spans(src: &str) -> Vec<SvgSpan<'_>> {
+    if !src.contains("<svg") {
+        return Vec::new();
+    }
+    // Parse only to find code regions to exclude (code is escaped, not
+    // rendered, so an `<svg>` inside a fence is not a live SVG).
+    let arena = Arena::new();
+    let root = parse_document(&arena, src, &renderer::markdown_options());
+    let starts = line_starts(src);
+    let code = collect_code_ranges(root, &starts, src.len());
+    extract_svgs(src)
+        .into_iter()
+        .filter(|(off, _)| !code.iter().any(|r| r.contains(off)))
+        .map(|(offset, text)| {
+            let (line, _) = byte_to_line_col(src, offset);
+            SvgSpan { offset, line, text }
+        })
+        .collect()
+}
+
 impl Validator for SvgValidator {
     fn check(&self, file: &CheckFile, _ctx: &CheckCtx) -> Vec<Diagnostic> {
         let src = &file.source;
-        if !src.contains("<svg") {
-            return Vec::new();
-        }
-
-        // Parse only to find code regions to exclude (code is escaped, not
-        // rendered, so an `<svg>` inside a fence is not a live SVG).
-        let arena = Arena::new();
-        let root = parse_document(&arena, src, &renderer::markdown_options());
-        let starts = line_starts(src);
-        let code = collect_code_ranges(root, &starts, src.len());
-
         let mut diags = Vec::new();
-        for (off, svg) in extract_svgs(src) {
-            if code.iter().any(|r| r.contains(&off)) {
-                continue;
-            }
-            let Err(err) = roxmltree::Document::parse(svg) else {
+        for span in svg_spans(src) {
+            let Err(err) = roxmltree::Document::parse(span.text) else {
                 continue;
             };
             // Anchor at the `<svg`, then offset by roxmltree's 1-based row/col
             // within the svg substring.
-            let (svg_line, svg_col) = byte_to_line_col(src, off);
+            let (svg_line, svg_col) = byte_to_line_col(src, span.offset);
             let pos = err.pos();
             let line = svg_line + pos.row.saturating_sub(1);
             let col = if pos.row <= 1 {
@@ -74,7 +91,7 @@ impl Validator for SvgValidator {
                      tags or unescaped `<`/`&`"
                         .to_string(),
                 ),
-                snippet: Some(svg.chars().take(48).collect()),
+                snippet: Some(span.text.chars().take(48).collect()),
             });
         }
         diags
