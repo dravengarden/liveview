@@ -959,7 +959,10 @@ export function Landing({
                                     // Single-format kind badge — ICON ONLY (no
                                     // text): the glyph already names the kind and
                                     // the big cover icon repeats it, so the label
-                                    // was redundant. Matches the icon-only switch.
+                                    // was redundant. PRIMARY colour (not neutral):
+                                    // a lone badge means that format is the active
+                                    // one, so it reads like the highlighted segment
+                                    // of the dual-format switch.
                                     <Box
                                       aria-label={t(
                                         category === "docs"
@@ -978,8 +981,8 @@ export function Landing({
                                         px: 1,
                                         py: 0.5,
                                         borderRadius: 5,
-                                        bgcolor: "rgba(0,0,0,0.45)",
-                                        color: "#fff",
+                                        bgcolor: "primary.main",
+                                        color: "primary.contrastText",
                                       }}
                                     >
                                       {category === "docs"
