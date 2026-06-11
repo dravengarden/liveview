@@ -369,7 +369,11 @@ export function FloatingBubble({
         // capture may already be lost (pointercancel) — ignore
       }
       if (!d.moved) {
-        // A tap, not a drag → toggle the control card.
+        // A tap, not a drag → toggle the control card. Explicit haptic: the
+        // bubble uses a custom pointer-capture gesture (not a plain onClick), so
+        // the global haptic delegation can't see this tap. (Coalesced, so it
+        // never double-buzzes with delegation.)
+        haptic("light");
         setControlsOpen((o) => !o);
         poke();
         return;
