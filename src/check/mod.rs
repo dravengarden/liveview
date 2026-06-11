@@ -12,9 +12,12 @@
 //! schema across all of them.
 
 pub mod diagnostic;
+pub mod excalidraw;
+pub mod json;
 pub mod markdown;
 pub mod math;
 pub mod mermaid;
+pub mod svg;
 pub mod typst;
 
 use std::path::{Path, PathBuf};
@@ -58,11 +61,23 @@ fn validators_for(file_type: &FileType) -> Vec<Box<dyn Validator>> {
             Box::new(markdown::MarkdownValidator),
             Box::new(math::MathValidator),
             Box::new(mermaid::MermaidValidator),
+            // Inline `<svg>` blocks are embedded raw in markdown (67 corpus
+            // files); validate they're well-formed XML.
+            Box::new(svg::SvgValidator),
         ],
         // `.typ` files: validate that the source parses as well-formed typst
         // (the reader highlights them; a future renderer would compile them).
         FileType::Typst => vec![Box::new(typst::TypstValidator)],
-        // No validators yet for other types (frontend-rendered / binary).
+        // `.json` (.jsonc/.json5 too): strict parse, matching the reader's
+        // `JSON.parse`.
+        FileType::Json => vec![Box::new(json::JsonValidator)],
+        // `.excalidraw`: valid JSON + the load-bearing schema fields.
+        FileType::Excalidraw => vec![Box::new(excalidraw::ExcalidrawValidator)],
+        // CSV and HTML get no validator: the reader's CSV parser is a lenient
+        // hand-rolled split (almost nothing is "malformed"), and raw HTML is
+        // rendered by the browser, which tolerates ill-formed markup — neither
+        // has a meaningful "won't render" check, and the corpus has none of
+        // either. Image/Pdf are binary.
         _ => Vec::new(),
     }
 }

@@ -60,6 +60,7 @@ include_dir = { version = "0.7", optional = true }
 # only its parse errors, as a "won't render in the reader" signal.
 katex = "0.4.6"
 typst-syntax = "0.14.2"
+roxmltree = "0.21.1"
 
 [features]
 default = []
