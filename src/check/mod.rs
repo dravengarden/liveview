@@ -15,6 +15,7 @@ pub mod diagnostic;
 pub mod markdown;
 pub mod math;
 pub mod mermaid;
+pub mod typst;
 
 use std::path::{Path, PathBuf};
 
@@ -58,6 +59,9 @@ fn validators_for(file_type: &FileType) -> Vec<Box<dyn Validator>> {
             Box::new(math::MathValidator),
             Box::new(mermaid::MermaidValidator),
         ],
+        // `.typ` files: validate that the source parses as well-formed typst
+        // (the reader highlights them; a future renderer would compile them).
+        FileType::Typst => vec![Box::new(typst::TypstValidator)],
         // No validators yet for other types (frontend-rendered / binary).
         _ => Vec::new(),
     }
@@ -151,7 +155,7 @@ fn collect_files(paths: &[PathBuf]) -> Result<Vec<CheckFile>, String> {
             for entry in WalkDir::new(p).sort_by_file_name() {
                 let entry = entry.map_err(|e| format!("walk {}: {e}", p.display()))?;
                 let path = entry.path();
-                if path.is_file() && is_markdown(path) {
+                if path.is_file() && is_checkable(path) {
                     if let Some(f) = load_file(path, path)? {
                         out.push(f);
                     }
@@ -164,18 +168,18 @@ fn collect_files(paths: &[PathBuf]) -> Result<Vec<CheckFile>, String> {
     Ok(out)
 }
 
-fn is_markdown(path: &Path) -> bool {
-    matches!(
-        FileType::from_path(&path.to_string_lossy()),
-        FileType::Markdown
-    )
+/// Does this path have any validator? The single source of truth is the
+/// registry — when a new file type gets a validator, directory recursion picks
+/// it up automatically.
+fn is_checkable(path: &Path) -> bool {
+    !validators_for(&FileType::from_path(&path.to_string_lossy())).is_empty()
 }
 
-/// Load one file into a `CheckFile`. Returns `Ok(None)` for a non-markdown
-/// file passed explicitly (nothing to do in P0); errors only on a read failure.
+/// Load one file into a `CheckFile`. Returns `Ok(None)` for a file type with no
+/// validator (nothing to check); errors only on a read failure.
 fn load_file(path: &Path, rel: &Path) -> Result<Option<CheckFile>, String> {
     let file_type = FileType::from_path(&path.to_string_lossy());
-    if !matches!(file_type, FileType::Markdown) {
+    if validators_for(&file_type).is_empty() {
         return Ok(None);
     }
     let source =

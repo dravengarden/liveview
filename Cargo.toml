@@ -59,6 +59,7 @@ include_dir = { version = "0.7", optional = true }
 # (same 0.16 command set — patch releases don't change accepted syntax). We use
 # only its parse errors, as a "won't render in the reader" signal.
 katex = "0.4.6"
+typst-syntax = "0.14.2"
 
 [features]
 default = []
