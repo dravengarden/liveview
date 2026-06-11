@@ -55,11 +55,12 @@ pub enum Command {
     /// env vars the systemd unit sets.
     Sync(SyncArgs),
 
-    /// Structurally check book Markdown (offline, pure-Rust). Parses each file
-    /// with the *same* comrak options the server renders with, then reports
-    /// problems comrak silently swallows: dangling/unused footnotes, broken
-    /// reference links, and missing local assets. Exit code is non-zero on any
-    /// error (or any warning with `--deny-warnings`).
+    /// Structurally check book content offline, with the *same* engines the
+    /// server renders with — so "clean" means "renders". Covers markdown
+    /// (dangling/unused footnotes, broken reference links, missing assets),
+    /// math (real KaTeX), mermaid diagram types, inline SVG (XML well-formed),
+    /// typst syntax, and JSON / Excalidraw. Exit code is non-zero on any error
+    /// (or any warning with `--deny-warnings`).
     Check(CheckArgs),
 }
 
