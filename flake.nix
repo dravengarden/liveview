@@ -97,7 +97,7 @@
         # + static.crates.io), NOT importCargoLock: this box's omega proxy
         # 403s the crates.io API download endpoint that importCargoLock uses,
         # while static.crates.io returns 200.
-        cargoHash = "sha256-+2n8gkgMie41EpRc7wEQit+TlYpgcuGnoJLem1G0cfw=";
+        cargoHash = "sha256-ZoWB6G1RaavomXHALWF5LaD5w6i2guZb5ppJ7MIDTyg=";
 
         # include_dir!("$CARGO_MANIFEST_DIR/web/dist") is a compile-time
         # lookup — drop the prebuilt SPA there before cargo runs.

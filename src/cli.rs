@@ -68,6 +68,33 @@ pub enum Command {
     /// loop (the `chart-review` skill) screenshots. Content authority only:
     /// liveview says what/where, the skill + Chrome MCP do the screenshotting.
     Targets(TargetsArgs),
+
+    /// Serve ONE local corpus straight from the filesystem — no postgres/rustfs,
+    /// no `sync`. The SAME reader + render engines as the deployed server,
+    /// rendering each chapter on demand. For local preview and the visual-QA
+    /// loop (`chart-review`), which needs a real reader URL without deploying.
+    Preview(PreviewArgs),
+}
+
+/// Args for `liveview preview`. Resolves the corpus the same way `sync` /
+/// `targets` do, then serves it from memory on a local port.
+#[derive(Args, Debug, Clone)]
+pub struct PreviewArgs {
+    /// Corpus config (`liveview.toml`); auto-discovered from cwd when omitted.
+    #[arg(short, long)]
+    pub config: Option<PathBuf>,
+
+    /// Bind port. Auto-picks from 4159 upward when omitted.
+    #[arg(short, long)]
+    pub port: Option<u16>,
+
+    /// Bind host (default `127.0.0.1`).
+    #[arg(long)]
+    pub host: Option<String>,
+
+    /// Open the browser once the server is up.
+    #[arg(short, long)]
+    pub open: bool,
 }
 
 /// Args for `liveview targets`. Resolves the corpus the same way `sync` does.

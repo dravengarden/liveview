@@ -147,6 +147,14 @@ fn main() {
         // runtime is built — they never reach this match.
         Some(Command::Check(_)) => unreachable!("check handled before the tokio runtime"),
         Some(Command::Targets(_)) => unreachable!("targets handled before the tokio runtime"),
+        // `liveview preview` — serve ONE local corpus from the filesystem (no
+        // pg/rustfs, no sync), rendering on demand. For local QA / chart-review.
+        Some(Command::Preview(args)) => {
+            if let Err(e) = rt.block_on(run_preview(args)) {
+                eprintln!("preview error: {e}");
+                std::process::exit(2);
+            }
+        }
         // Default — run the server. It reads only the `[server]` block (host /
         // port / open) from the config; content comes from pg + rustfs, so it
         // never resolves or touches the corpus filesystem.
@@ -306,7 +314,7 @@ fn spawn_reload_listener(state: SharedState, database_url: String) {
                 Ok(mut listener) => {
                     if listener.listen("liveview_reload").await.is_ok() {
                         while listener.recv().await.is_ok() {
-                            match Catalog::load(&state.store).await {
+                            match Catalog::load(state.store.as_ref()).await {
                                 Ok(cat) => {
                                     *state.catalog.write().await = cat;
                                     broadcast_tree(&state).await;
@@ -351,28 +359,30 @@ async fn run(cli: Cli, server: config::ServerCfg) {
             std::process::exit(2);
         }
     };
-    let store = match PgStore::open(&conf.database_url).await {
+    let pg = match PgStore::open(&conf.database_url).await {
         Ok(s) => s,
         Err(e) => {
             eprintln!("connect postgres: {e}");
             std::process::exit(2);
         }
     };
-    if let Err(e) = store.migrate().await {
+    if let Err(e) = pg.migrate().await {
         eprintln!("migrate: {e}");
         std::process::exit(2);
     }
-    let obj = ObjStore::connect(
+    let store: Arc<dyn crate::store::content::ContentStore> = Arc::new(pg);
+    let objstore = ObjStore::connect(
         &conf.s3_endpoint,
         &conf.s3_access_key,
         &conf.s3_secret_key,
         &conf.s3_bucket,
     );
-    if let Err(e) = obj.ensure_bucket().await {
+    if let Err(e) = objstore.ensure_bucket().await {
         eprintln!("rustfs bucket: {e}");
         std::process::exit(2);
     }
-    let catalog = match Catalog::load(&store).await {
+    let obj: Arc<dyn crate::store::content::BlobStore> = Arc::new(objstore);
+    let catalog = match Catalog::load(store.as_ref()).await {
         Ok(c) => c,
         Err(e) => {
             eprintln!("load catalog: {e}");
@@ -395,6 +405,49 @@ async fn run(cli: Cli, server: config::ServerCfg) {
     // Reload the catalog + nudge clients when `liveview sync` issues NOTIFY.
     spawn_reload_listener(state.clone(), conf.database_url.clone());
 
+    let app = build_app(state);
+    serve_app(app, host, port, should_open).await;
+}
+
+/// `liveview preview` — serve ONE local corpus from the filesystem (no
+/// pg/rustfs, no `sync`), rendering each chapter on demand with the SAME engines
+/// as the deployed server. The reader URLs `liveview targets` emits resolve
+/// here, so the chart-review visual QA needs no deploy.
+async fn run_preview(args: cli::PreviewArgs) -> Result<(), String> {
+    let resolved = resolve_config(args.config.as_deref())?;
+    let host = args.host.clone().unwrap_or_else(|| resolved.host.clone());
+    let book_count = resolved.books.len();
+
+    // One FsStore instance backs BOTH traits: as `ContentStore` it renders
+    // chapters + builds the catalog/tree; as `BlobStore` it serves the in-memory
+    // assets it cached — so api_raw fetches the same bytes api_file referenced.
+    let fs = Arc::new(crate::store::fs::FsStore::new(resolved.books));
+    let store: Arc<dyn crate::store::content::ContentStore> = fs.clone();
+    let obj: Arc<dyn crate::store::content::BlobStore> = fs;
+
+    let catalog = Catalog::load(store.as_ref()).await?;
+    tracing::info!(books = book_count, "filesystem preview — corpus resolved");
+
+    let (tx, _rx) = broadcast::channel::<String>(64);
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let state: SharedState = Arc::new(AppState {
+        tx,
+        store,
+        obj,
+        catalog: RwLock::new(catalog),
+        tts_cmd: env("LIVEVIEW_EDGE_TTS_CMD").unwrap_or_else(|| "edge-tts".to_string()),
+        tts_voice: env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string()),
+    });
+
+    let app = build_app(state);
+    serve_app(app, host, args.port, args.open).await;
+    Ok(())
+}
+
+/// Build the reader's axum app (API routes + SPA assets) over any backend.
+/// Shared by the deployed server (`run`) and the filesystem preview
+/// (`run_preview`): one router, two content backends.
+fn build_app(state: SharedState) -> Router {
     let api_router = Router::new()
         .route("/api/books", get(api_books))
         .route("/api/cover", get(api_cover))
@@ -416,17 +469,17 @@ async fn run(cli: Cli, server: config::ServerCfg) {
         .with_state(state.clone());
 
     #[cfg(feature = "embedded")]
-    let app = {
+    {
         api_router
             .route("/", get(embedded_assets::serve_index))
             .route("/assets/{*path}", get(embedded_assets::serve_assets))
             .route("/{*path}", get(embedded_assets::serve_root))
             .fallback(get(embedded_assets::serve_index))
             .layer(Extension(state))
-    };
+    }
 
     #[cfg(not(feature = "embedded"))]
-    let app = {
+    {
         use tower_http::services::ServeDir;
         let serve_dir = ServeDir::new("web/dist")
             .append_index_html_on_directories(true)
@@ -434,8 +487,11 @@ async fn run(cli: Cli, server: config::ServerCfg) {
         api_router
             .fallback_service(serve_dir)
             .layer(Extension(state))
-    };
+    }
+}
 
+/// Bind (auto-picking a free port from 4159 upward when unspecified) and serve.
+async fn serve_app(app: Router, host: String, port: Option<u16>, should_open: bool) {
     const DEFAULT_PORT: u16 = 4159;
     let listener = if let Some(port) = port {
         let addr = format!("{host}:{port}");

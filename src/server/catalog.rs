@@ -5,7 +5,7 @@
 //! before fetching content. Reloaded after each `liveview sync`.
 
 use crate::config::RenditionKind;
-use crate::store::pg::PgStore;
+use crate::store::content::ContentStore;
 
 pub struct EditionMeta {
     pub lang: String,
@@ -53,8 +53,8 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// Build the catalog from the content store.
-    pub async fn load(store: &PgStore) -> Result<Self, String> {
+    /// Build the catalog from any content store (postgres or filesystem).
+    pub async fn load(store: &dyn ContentStore) -> Result<Self, String> {
         let mut books = Vec::new();
         for b in store.list_books().await.map_err(|e| e.to_string())? {
             let mut renditions = Vec::new();
