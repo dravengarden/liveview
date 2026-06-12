@@ -185,6 +185,40 @@ function writeHash(
   }
 }
 
+// Device-local "resume where I left off". The native shell reopens the BASE url
+// (no hash) on a cold relaunch, so a browser-style hash deep link isn't there to
+// restore from — we stash the last reading location here and re-enter it on a
+// hash-less load. (A normal in-browser reload keeps the hash and never needs
+// this.) Cleared on return to the shelf, so relaunching from the shelf stays on
+// the shelf. Scroll position within the chapter is restored separately from the
+// server progress store.
+const RESUME_KEY = "lv-resume";
+interface ResumeLocation {
+  path: string;
+  lang: string | null;
+  rendition: string | null;
+}
+function readResume(): ResumeLocation | null {
+  try {
+    const raw = localStorage.getItem(RESUME_KEY);
+    const v = raw ? (JSON.parse(raw) as Partial<ResumeLocation>) : null;
+    return v && typeof v.path === "string" && v.path
+      ? { path: v.path, lang: v.lang ?? null, rendition: v.rendition ?? null }
+      : null;
+  } catch {
+    // Unavailable (private mode) or corrupt JSON — resume is best-effort.
+    return null;
+  }
+}
+function writeResume(loc: ResumeLocation | null): void {
+  try {
+    if (loc) localStorage.setItem(RESUME_KEY, JSON.stringify(loc));
+    else localStorage.removeItem(RESUME_KEY);
+  } catch {
+    // Best-effort; ignore storage failures.
+  }
+}
+
 /** A page missing in the selected edition; we render `shown` content instead. */
 interface UntranslatedNotice {
   requested: string;
@@ -195,6 +229,10 @@ export function App(): React.JSX.Element {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [books, setBooks] = useState<Book[]>([]);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
+  // The reading location saved on this device, read ONCE at first render — before
+  // the save-effect can clear it on the mount-time `currentPath === null` — so the
+  // cold-relaunch resume (tryResumeLastLocation) sees it. Pure init, no re-read.
+  const [initialResume] = useState<ResumeLocation | null>(() => readResume());
   // `lang` is the *selected* edition; `untranslated` records when a page is
   // missing there and we fell back to another edition's content.
   const [lang, setLang] = useState<string>("");
@@ -603,12 +641,14 @@ export function App(): React.JSX.Element {
     ) => {
       const slug = path.split("/")[0] ?? "";
       const book = books.find((b) => b.slug === slug);
-      const rInfo = book?.renditions.find((r) => r.kind === renditionArg);
-      // Omit lang/rendition from the URL when they equal the book/rendition
-      // default, keeping deep links clean (mirrors how `lang` already behaves).
-      const langForHash = rInfo && langArg !== rInfo.default_lang
-        ? langArg
-        : null;
+      // ALWAYS pin the lang in the URL (never omit it when it equals the book
+      // default). The restore path re-derives a missing lang from the UI language
+      // (pickInitialLang), which differs from `default_lang` — so omitting the
+      // token made a book whose default ≠ UI language flip languages on reload
+      // (reading zh, the SW-update reload dropped you into en). The hash is the
+      // source of truth across a reload; keep it explicit. (rendition still omits
+      // its default — its restore default matches the omission, so it's safe.)
+      const langForHash = langArg || null;
       const renditionForHash = book && renditionArg !== book.default_rendition
         ? renditionArg
         : null;
@@ -839,14 +879,13 @@ export function App(): React.JSX.Element {
       setRendition(kind);
       renditionRef.current = kind;
       if (replaceHash) {
-        // Normalise the hash to canonical form (drop a redundant default-rendition
-        // or default-lang token) without adding a history entry.
+        // Normalise the hash without a history entry: pin the resolved lang
+        // explicitly (see the openFile note — a missing lang re-derives to the UI
+        // language, not default_lang, so it must never be dropped) and drop a
+        // redundant default-rendition token.
         const slug = path.split("/")[0] ?? "";
         const book = books.find((b) => b.slug === slug);
-        const rInfo = book?.renditions.find((r) => r.kind === kind);
-        const langForHash = rInfo && entryLang !== rInfo.default_lang
-          ? entryLang
-          : null;
+        const langForHash = entryLang || null;
         const renditionForHash = book && kind !== book.default_rendition
           ? kind
           : null;
@@ -874,6 +913,41 @@ export function App(): React.JSX.Element {
     [books, loadFile, langForHashEntry, renditionForHashEntry, loadBook],
   );
 
+  // Persist the last reading location on THIS device (see RESUME_KEY) whenever
+  // it changes; clear it on the shelf. Drives the cold-relaunch resume below.
+  useEffect(() => {
+    writeResume(currentPath ? { path: currentPath, lang, rendition } : null);
+  }, [currentPath, lang, rendition]);
+
+  // Resume the last reading location saved on this device. Fault-tolerant: the
+  // saved book may have been removed since — log a warning, clear the stale
+  // entry, and fall back to the shelf rather than crashing. Returns whether it
+  // resumed. Re-enters via the hash so the normal restore path does the spine
+  // fetch + chapter load + scroll restore.
+  const tryResumeLastLocation = useCallback(async (): Promise<boolean> => {
+    // `initialResume` is captured at first render (below), BEFORE the save-effect
+    // can clear the key on the mount-time `currentPath === null`.
+    const saved = initialResume;
+    if (!saved) return false;
+    const slug = saved.path.split("/")[0] ?? "";
+    if (!books.some((b) => b.slug === slug)) {
+      console.warn(
+        `liveview: saved book "${slug}" no longer exists; returning to the shelf`,
+      );
+      writeResume(null);
+      return false;
+    }
+    try {
+      writeHash(saved.path, saved.lang, saved.rendition, true);
+      await restoreFromHash(true);
+      return true;
+    } catch (e) {
+      console.warn(`liveview: failed to resume "${saved.path}":`, e);
+      writeHash(null, null, null, true); // reset the URL so the shelf is clean
+      return false;
+    }
+  }, [books, restoreFromHash, initialResume]);
+
   // Fetch the tree once, then restore any deep link from the hash. Waits for
   // `books` so deep-link rendition/language/fallback resolution works.
   useEffect(() => {
@@ -883,17 +957,21 @@ export function App(): React.JSX.Element {
       const { path } = getHashState();
       if (path) {
         await restoreFromHash(true);
-      } else {
-        // No deep link: seed the default (text) sidebar spine for the bookshelf.
-        try {
-          const res = await fetch("/api/tree");
-          setTree((await res.json()) as TreeNode[]);
-        } catch (e) {
-          console.error("Failed to fetch tree:", e);
-        }
+        return;
+      }
+      // No deep link in the URL. A native-shell cold relaunch loads the base URL
+      // (no hash), so try to RESUME the last book read on this device first.
+      if (await tryResumeLastLocation()) return;
+      // Nothing to resume (or the saved book is gone): seed the default (text)
+      // sidebar spine for the bookshelf.
+      try {
+        const res = await fetch("/api/tree");
+        setTree((await res.json()) as TreeNode[]);
+      } catch (e) {
+        console.error("Failed to fetch tree:", e);
       }
     })();
-  }, [books, restoreFromHash]);
+  }, [books, restoreFromHash, tryResumeLastLocation]);
 
   // Handle browser back/forward navigation.
   useEffect(() => {
@@ -970,8 +1048,7 @@ export function App(): React.JSX.Element {
     currentPathRef.current = np.chapterPath;
     setUntranslated(null);
     syncedChapterRef.current = np.chapterPath;
-    const rInfo = activeBook?.renditions.find((r) => r.kind === rendition);
-    const langForHash = rInfo && lang !== rInfo.default_lang ? lang : null;
+    const langForHash = lang || null; // always pin lang (see openFile note)
     const renditionForHash =
       activeBook && rendition !== activeBook.default_rendition
         ? rendition
