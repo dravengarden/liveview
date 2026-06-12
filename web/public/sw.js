@@ -2,7 +2,7 @@
 //
 // Hand-rolled (no Workbox) to keep the dependency surface minimal. Bump
 // VERSION to invalidate all caches on the next visit.
-const VERSION = "lv-v94";
+const VERSION = "lv-v95";
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const API_CACHE = `${VERSION}-api`;
