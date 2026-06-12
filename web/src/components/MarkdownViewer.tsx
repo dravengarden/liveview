@@ -100,6 +100,57 @@ function resolveDocPath(currentPath: string | null, ref: string): string {
   return normalized.join("/");
 }
 
+// Open a figure (diagram / image) on a real TAP, not a naive `click`. A figure
+// lives inside scrollable content — the page scrolls vertically and wide
+// diagrams scroll horizontally — and a browser `click` fires even when the
+// finger was actually scrolling, so the lightbox popped open by accident. This
+// is the mobile-standard touch-slop model (Flutter's kTouchSlop = 18px,
+// empirically tuned up from 8; iOS does the same): it counts as a tap only while
+// net finger travel stays within the slop AND the press is brief. Any larger
+// move — or a browser-issued `pointercancel` when scrolling takes the pointer
+// over — cancels the tap. Returns a cleanup.
+const FIGURE_TAP_SLOP_PX = 18;
+const FIGURE_TAP_MAX_MS = 700;
+function onTapToOpen(el: HTMLElement, open: () => void): () => void {
+  let sx = 0;
+  let sy = 0;
+  let t0 = 0;
+  let candidate = false;
+  const moved = (e: PointerEvent): number =>
+    Math.hypot(e.clientX - sx, e.clientY - sy);
+  const down = (e: PointerEvent): void => {
+    sx = e.clientX;
+    sy = e.clientY;
+    t0 = e.timeStamp;
+    candidate = true;
+  };
+  const move = (e: PointerEvent): void => {
+    if (candidate && moved(e) > FIGURE_TAP_SLOP_PX) candidate = false;
+  };
+  const up = (e: PointerEvent): void => {
+    if (
+      candidate && e.timeStamp - t0 <= FIGURE_TAP_MAX_MS &&
+      moved(e) <= FIGURE_TAP_SLOP_PX
+    ) {
+      open();
+    }
+    candidate = false;
+  };
+  const cancel = (): void => {
+    candidate = false;
+  };
+  el.addEventListener("pointerdown", down);
+  el.addEventListener("pointermove", move);
+  el.addEventListener("pointerup", up);
+  el.addEventListener("pointercancel", cancel);
+  return () => {
+    el.removeEventListener("pointerdown", down);
+    el.removeEventListener("pointermove", move);
+    el.removeEventListener("pointerup", up);
+    el.removeEventListener("pointercancel", cancel);
+  };
+}
+
 export function MarkdownViewer({
   html,
   currentPath,
@@ -381,9 +432,9 @@ export function MarkdownViewer({
         wrap = span;
       }
       const target = wrap;
-      const onOpen = (): void => setLbIndex(idx);
-      target.addEventListener("click", onOpen);
-      cleanups.push(() => target.removeEventListener("click", onOpen));
+      // Tap, not click — so scrolling the page over an image doesn't open the
+      // lightbox by accident (same touch-slop recognizer as diagrams).
+      cleanups.push(onTapToOpen(target, () => setLbIndex(idx)));
     });
 
     // Diagrams (mermaid + standalone SVG) join the same lightbox gallery. They
@@ -488,9 +539,10 @@ export function MarkdownViewer({
       const idx = gallery.length;
       gallery.push({ src: svgToDataUrl(svg), alt: "" });
       el.style.cursor = "zoom-in";
-      const onOpen = (): void => setLbIndex(idx);
-      el.addEventListener("click", onOpen);
-      cleanups.push(() => el.removeEventListener("click", onOpen));
+      // Open on a real TAP, not a naive `click` (which fires even after the
+      // finger scrolled the page or panned a wide diagram → the lightbox popped
+      // open by accident). See `onTapToOpen` — Flutter/iOS touch-slop model.
+      cleanups.push(onTapToOpen(el, () => setLbIndex(idx)));
     });
 
     setImages(gallery);
