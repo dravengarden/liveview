@@ -170,7 +170,9 @@ export function MarkdownViewer({
   // rAF handle coalescing scroll bursts into one layout read per frame.
   const scrollRafRef = useRef<number | null>(null);
   // Ordered list of zoomable images in the doc + which one the lightbox shows.
-  const [images, setImages] = useState<{ src: string; alt: string }[]>([]);
+  const [images, setImages] = useState<
+    { src: string; alt: string; themed?: boolean }[]
+  >([]);
   const [lbIndex, setLbIndex] = useState<number | null>(null);
   // Bumped when mermaid finishes rendering. Mermaid runs asynchronously, so the
   // diagrams aren't in the DOM yet when the gallery effect first wires click
@@ -394,7 +396,7 @@ export function MarkdownViewer({
         !img.closest("a") && !img.classList.contains("emoji") &&
         !img.closest("g-emoji"),
     );
-    const gallery: { src: string; alt: string }[] = [];
+    const gallery: { src: string; alt: string; themed?: boolean }[] = [];
     const cleanups: (() => void)[] = [];
     imgs.forEach((img) => {
       // Book images are authored relative to the chapter (e.g. "assets/x.jpg").
@@ -444,7 +446,7 @@ export function MarkdownViewer({
     // so the enlarged view matches the in-page plate (the backdrop is dark).
     // `.lv-svg-figure` is tagged here on genuine standalone SVGs only (skip
     // KaTeX math and octicons), so the CSS plate also lands only on those.
-    const svgToDataUrl = (svg: SVGSVGElement): string => {
+    const svgToDataUrl = (svg: SVGSVGElement, isMermaid: boolean): string => {
       const clone = svg.cloneNode(true) as SVGSVGElement;
       if (!clone.getAttribute("xmlns")) {
         clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
@@ -469,7 +471,11 @@ export function MarkdownViewer({
         clone.setAttribute("height", String(Math.round(h)));
         clone.style.maxWidth = "none";
       }
-      clone.style.backgroundColor = "#ffffff";
+      // Fixed-colour figures (book SVGs) get a white backing — the lightbox
+      // inverts it to a dark plate in dark mode. A mermaid SVG is theme-native
+      // (re-rendered per mode), so leave it transparent and let the lightbox's
+      // mode-matched plate show through instead of being inverted back to light.
+      clone.style.backgroundColor = isMermaid ? "transparent" : "#ffffff";
       const xml = new XMLSerializer().serializeToString(clone);
       return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(xml)}`;
     };
@@ -537,7 +543,16 @@ export function MarkdownViewer({
       }
 
       const idx = gallery.length;
-      gallery.push({ src: svgToDataUrl(svg), alt: "" });
+      // Mermaid is theme-native (re-rendered per mode); a standalone book SVG
+      // (.lv-svg-figure) has fixed baked-in colours. The lightbox must invert the
+      // latter in dark mode but NOT the former, so tag the entry `themed`.
+      const isMermaid = el.classList.contains("mermaid") ||
+        svg.closest(".mermaid") !== null;
+      gallery.push({
+        src: svgToDataUrl(svg, isMermaid),
+        alt: "",
+        themed: isMermaid,
+      });
       el.style.cursor = "zoom-in";
       // Open on a real TAP, not a naive `click` (which fires even after the
       // finger scrolled the page or panned a wide diagram → the lightbox popped
