@@ -167,7 +167,7 @@ export function SettingsButton({
     FONT_PRESETS[0];
 
   return (
-    <SettingsSheet title={t("settings.title")} wide cover>
+    <SettingsSheet title={t("settings.title")} wide frosted>
       {
         /* A continuous grouped list (iOS-settings rhythm): each section is an
           overline header + its controls, with a single consistent gap between
