@@ -464,7 +464,11 @@ export function MarkdownViewer({
             if (fs && fs < minFont) minFont = fs;
           });
         if (!Number.isFinite(minFont)) minFont = 14;
-        const col = body.clientWidth || vbw;
+        // Subtract the diagram plate's padding (0.5rem each side) + a little
+        // slack, so a diagram sized to "fit the column" actually fits INSIDE the
+        // scroll wrapper rather than overflowing by the padding and scrolling for
+        // no reason.
+        const col = Math.max(120, (body.clientWidth || vbw) - 24);
         const rendered = Math.round(
           Math.min(vbw, Math.max(col, (vbw * MIN_INLINE_FONT_PX) / minFont)),
         );
