@@ -244,6 +244,24 @@
   margin-block: 1.25rem;
 }
 
+/* Responsive diagram wrapper (added in JS around each .mermaid / .lv-svg-figure).
+   The inner svg is sized so its smallest label stays ~12px on screen; if that's
+   wider than the reading column, this wrapper scrolls horizontally instead of
+   letting the diagram shrink to an unreadable thumbnail. Small diagrams centre.
+   Tap-to-zoom (the lightbox) gives the full overview regardless. */
+.markdown-body .lv-diagram-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  text-align: center;
+}
+.markdown-body .lv-diagram-scroll > .mermaid,
+.markdown-body .lv-diagram-scroll > .lv-svg-figure {
+  display: inline-block;
+  text-align: initial;
+}
+
 /* DARK / NIGHT. Mermaid now renders in its NATIVE dark theme (light-on-
    transparent art — MarkdownViewer re-renders every diagram on a theme toggle),
    so it only needs a subtle dark backing plate, NOT a colour filter. Book SVGs

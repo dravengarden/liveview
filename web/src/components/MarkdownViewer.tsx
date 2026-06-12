@@ -442,6 +442,44 @@ export function MarkdownViewer({
         ? (el as unknown as SVGSVGElement)
         : el.querySelector("svg");
       if (!svg) return;
+
+      // Responsive inline sizing — keep the smallest label readable on every
+      // screen. A wide diagram scaled to fit a 358px phone column renders its
+      // text at ~3-8px (unreadable). Instead, render it no smaller than the
+      // width that keeps the smallest label ≈12px on screen, capped at the
+      // diagram's natural size and floored at the column: it fits on desktop and
+      // scrolls horizontally (the `.lv-diagram-scroll` wrapper) only when it must
+      // — never shrinking text to a thumbnail. Tap-to-zoom (below) still gives
+      // the full overview.
+      const vbw = svg.viewBox.baseVal.width ||
+        svg.getBoundingClientRect().width;
+      if (vbw) {
+        let minFont = Infinity;
+        svg
+          .querySelectorAll<HTMLElement>("text, .nodeLabel, .edgeLabel")
+          .forEach((t) => {
+            if (!(t.textContent ?? "").trim()) return;
+            const fs = Number.parseFloat(getComputedStyle(t).fontSize);
+            if (fs && fs < minFont) minFont = fs;
+          });
+        if (!Number.isFinite(minFont)) minFont = 14;
+        const col = body.clientWidth || vbw;
+        const rendered = Math.round(
+          Math.min(vbw, Math.max(col, (vbw * 12) / minFont)),
+        );
+        let wrap = el.parentElement;
+        if (!wrap?.classList.contains("lv-diagram-scroll")) {
+          const w = document.createElement("div");
+          w.className = "lv-diagram-scroll";
+          el.parentElement?.insertBefore(w, el);
+          w.appendChild(el);
+          wrap = w;
+        }
+        svg.style.width = `${rendered}px`;
+        svg.style.maxWidth = "none";
+        svg.style.height = "auto";
+      }
+
       const idx = gallery.length;
       gallery.push({ src: svgToDataUrl(svg), alt: "" });
       el.style.cursor = "zoom-in";
@@ -455,6 +493,22 @@ export function MarkdownViewer({
       for (const c of cleanups) c();
     };
   }, [html, currentPath, diagramTick]);
+
+  // Re-fit diagrams on viewport change (window resize / iPad rotate): bump the
+  // diagram tick so the effect above recomputes each diagram's responsive width
+  // for the new column. Coalesced to one rAF per burst.
+  useEffect(() => {
+    let raf = 0;
+    const onResize = (): void => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => setDiagramTick((t) => t + 1));
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+      cancelAnimationFrame(raf);
+    };
+  }, []);
 
   // Persist scroll position (as a 0..1 ratio, robust to reflow) while reading.
   // Upstream debounces the network write; here we just report on each scroll.
