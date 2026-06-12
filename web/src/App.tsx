@@ -342,6 +342,54 @@ export function App(): React.JSX.Element {
       el.scrollTo({ top: 0, behavior: "smooth" });
     }
   }, []);
+  // Wire the status-bar tap target (below) with NATIVE pointer events, not React
+  // onClick: iOS WKWebView (standalone PWA / Tauri shell) does NOT reliably
+  // deliver a synthetic `click` to a non-interactive div even with the
+  // cursor:pointer heuristic — the status-bar tap-to-top silently no-op'd there
+  // (the reported "tapping the top does nothing"). A real pointerdown→pointerup
+  // tap, slop-gated (the same recogniser the figure lightbox uses, which is
+  // verified to fire on iOS), is reliable. Bound to the element via a ref.
+  const statusBarTapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = statusBarTapRef.current;
+    if (!el) {
+      return undefined;
+    }
+    let startX = 0;
+    let startY = 0;
+    let startedAt = 0;
+    let tap = false;
+    const travel = (e: PointerEvent): number =>
+      Math.hypot(e.clientX - startX, e.clientY - startY);
+    const down = (e: PointerEvent): void => {
+      startX = e.clientX;
+      startY = e.clientY;
+      startedAt = e.timeStamp;
+      tap = true;
+    };
+    const move = (e: PointerEvent): void => {
+      if (tap && travel(e) > 12) tap = false;
+    };
+    const up = (e: PointerEvent): void => {
+      if (tap && e.timeStamp - startedAt <= 700 && travel(e) <= 12) {
+        scrollAllTop();
+      }
+      tap = false;
+    };
+    const cancel = (): void => {
+      tap = false;
+    };
+    el.addEventListener("pointerdown", down);
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", cancel);
+    return () => {
+      el.removeEventListener("pointerdown", down);
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", cancel);
+    };
+  }, [scrollAllTop]);
   // "book" mode (book.toml-driven) renders a clean titled spine; "docs" mode
   // renders the raw filesystem tree. The flag also drives whether the root
   // folder node is shown (see below) and the per-row styling in the sidebar.
@@ -1085,8 +1133,8 @@ export function App(): React.JSX.Element {
               (settings / now-playing), whose own top strip stays interactive. */
         }
         <Box
+          ref={statusBarTapRef}
           aria-hidden
-          onClick={scrollAllTop}
           sx={{
             position: "fixed",
             top: 0,
@@ -1094,11 +1142,11 @@ export function App(): React.JSX.Element {
             right: 0,
             height: "env(safe-area-inset-top, 0px)",
             zIndex: (t) => t.zIndex.appBar + 1,
-            // iOS WKWebView only delivers `click` to a non-interactive element
-            // (this empty div) when it looks clickable — `cursor: pointer` is the
-            // documented trigger. Without it the status-bar tap-to-top silently
-            // never fired on iOS (React delegates listeners to the root, so the
-            // div has no inline onclick for iOS's heuristic to see).
+            // The tap is wired with NATIVE pointer events (statusBarTapRef effect
+            // above), NOT React onClick: iOS WKWebView doesn't reliably deliver a
+            // synthetic click to this non-interactive div even with cursor:pointer,
+            // so the gesture silently no-op'd. cursor:pointer stays as the desktop
+            // hover affordance.
             cursor: "pointer",
           }}
         />
