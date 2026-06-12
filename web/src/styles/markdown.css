@@ -262,6 +262,20 @@
   text-align: initial;
 }
 
+/* A wide DISPLAY equation must scroll within its own box, not push the whole
+   page sideways. KaTeX's `.katex-display` ships no overflow handling, so a long
+   formula (e.g. a multi-term spread) overflows the reading column and the page
+   gains a horizontal scrollbar — text then clips on the left. Contain it here;
+   inline math is untouched. */
+.markdown-body .katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  /* room so the scrollbar/overflow doesn't clip descenders */
+  padding-block: 2px;
+}
+
 /* DARK / NIGHT. Mermaid now renders in its NATIVE dark theme (light-on-
    transparent art — MarkdownViewer re-renders every diagram on a theme toggle),
    so it only needs a subtle dark backing plate, NOT a colour filter. Book SVGs
