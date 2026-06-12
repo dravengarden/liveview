@@ -29,11 +29,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1781249862,
-        "narHash": "sha256-jnXLY5mlaCnDAnGKj7uNZUnQ4hxR+y74I8h9BOgDZd4=",
+        "lastModified": 1781257402,
+        "narHash": "sha256-/Hi83BouUg5EpFlK28tUKC4PWxxAZBPu7/DWphtRxYU=",
         "owner": "dravengarden",
         "repo": "shared-utils",
-        "rev": "0f58b6e702063587b5fa9cc393965fca93a0daa4",
+        "rev": "239ab1c526460bb56f4792e36ad1f69de47af62e",
         "type": "github"
       },
       "original": {
