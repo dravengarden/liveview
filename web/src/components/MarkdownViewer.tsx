@@ -443,14 +443,15 @@ export function MarkdownViewer({
         : el.querySelector("svg");
       if (!svg) return;
 
-      // Responsive inline sizing — keep the smallest label readable on every
-      // screen. A wide diagram scaled to fit a 358px phone column renders its
-      // text at ~3-8px (unreadable). Instead, render it no smaller than the
-      // width that keeps the smallest label ≈12px on screen, capped at the
-      // diagram's natural size and floored at the column: it fits on desktop and
-      // scrolls horizontally (the `.lv-diagram-scroll` wrapper) only when it must
-      // — never shrinking text to a thumbnail. Tap-to-zoom (below) still gives
-      // the full overview.
+      // Responsive inline sizing — let a diagram FIT the column whenever its
+      // text stays at least readable (≈9px on screen), and only fall back to
+      // horizontal scroll when fitting would shrink text below that floor. So
+      // most diagrams just fit (no scrollbar); only genuinely-huge ones (a wide
+      // sequence diagram, a sprawling SVG) scroll — and tap-to-zoom (below)
+      // covers any fine detail. A lower floor than the QA target (11) is
+      // deliberate: scrolling-too-eagerly is worse UX than slightly-small-but-
+      // tappable inline text.
+      const MIN_INLINE_FONT_PX = 9;
       const vbw = svg.viewBox.baseVal.width ||
         svg.getBoundingClientRect().width;
       if (vbw) {
@@ -465,7 +466,7 @@ export function MarkdownViewer({
         if (!Number.isFinite(minFont)) minFont = 14;
         const col = body.clientWidth || vbw;
         const rendered = Math.round(
-          Math.min(vbw, Math.max(col, (vbw * 12) / minFont)),
+          Math.min(vbw, Math.max(col, (vbw * MIN_INLINE_FONT_PX) / minFont)),
         );
         let wrap = el.parentElement;
         if (!wrap?.classList.contains("lv-diagram-scroll")) {
