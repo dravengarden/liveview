@@ -47,8 +47,27 @@ if (import.meta.env.PROD && "serviceWorker" in navigator) {
     });
   }
   window.addEventListener("load", () => {
-    void navigator.serviceWorker.register("/sw.js").catch(() => {
-      // Non-fatal: the app still works without offline support.
-    });
+    void navigator.serviceWorker
+      .register("/sw.js")
+      .then((reg) => {
+        // iOS standalone PWAs RESUME the old in-memory page when reopened (even
+        // after a swipe-kill) and skip the SW update check — so a deployed fix
+        // can sit on the server forever while the device keeps running the old
+        // bundle. Force an update check every time the app returns to the
+        // foreground; if a newer SW is found it installs (skipWaiting) →
+        // activates → controllerchange → the reload above. This is what makes a
+        // deploy actually reach an installed PWA without a manual cache wipe.
+        const checkForUpdate = (): void => {
+          if (globalThis.document.visibilityState === "visible") {
+            void reg.update().catch(() => {
+              // Offline / transient — try again on the next foreground.
+            });
+          }
+        };
+        globalThis.document.addEventListener("visibilitychange", checkForUpdate);
+      })
+      .catch(() => {
+        // Non-fatal: the app still works without offline support.
+      });
   });
 }
