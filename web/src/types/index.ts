@@ -47,6 +47,12 @@ export interface ReadingProgress {
   chapterLabel: string;
   /** Scroll position within the chapter, 0..1. */
   scroll: number;
+  /** Book-level progress, 0..1: (resume chapter's index in the spine + its
+   *  in-chapter scroll) / total chapters. This is what the shelf meter shows —
+   *  "how far through the whole book" — so being at the top of chapter 11 of 14
+   *  reads ~71%, not the 0% the in-chapter `scroll` alone would give. Falls back
+   *  to `scroll` when the chapter isn't found in the loaded spine. */
+  fraction: number;
   /** When this position was last written (Unix epoch ms) — drives the shelf's
    *  "last opened" stamp and its default most-recent-first ordering. */
   updatedAt: number;

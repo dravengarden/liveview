@@ -538,10 +538,22 @@ export function App(): React.JSX.Element {
         (node && ((uiLang && node.titles?.[uiLang]) || node.name)) ||
         r.path.split("/").pop() ||
         r.path;
+      // Book-level progress: where this chapter sits in the book's ordered spine,
+      // plus its in-chapter scroll, over the chapter count. The shelf's `tree` is
+      // the full forest, so the book's leaves are available here. (Audio resume
+      // paths (.spoken.md) aren't in the text spine → idx < 0 → scroll fallback.)
+      const scroll = Math.min(1, Math.max(0, r.scroll));
+      const bookNode = tree.find((n) => n.path === slug);
+      const leaves = bookNode ? flattenTracks(bookNode.children, uiLang) : [];
+      const idx = leaves.findIndex((l) => l.path === r.path);
+      const fraction = leaves.length > 0 && idx >= 0
+        ? (idx + scroll) / leaves.length
+        : scroll;
       (out[slug] ??= {})[kind] = {
         path: r.path,
         chapterLabel,
         scroll: r.scroll,
+        fraction,
         updatedAt: r.updated_at,
       };
     }

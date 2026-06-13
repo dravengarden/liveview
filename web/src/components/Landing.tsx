@@ -232,9 +232,12 @@ function CoverRenditionSwitch({
         alignItems: "stretch",
         borderRadius: 5,
         overflow: "hidden",
-        ...(inline
-          ? { flexShrink: 0, bgcolor: "action.selected" }
-          : { position: "absolute", top: 8, left: 8, bgcolor: "rgba(0,0,0,0.45)" }),
+        ...(inline ? { flexShrink: 0, bgcolor: "action.selected" } : {
+          position: "absolute",
+          top: 8,
+          left: 8,
+          bgcolor: "rgba(0,0,0,0.45)",
+        }),
       }}
     >
       {segs.map((s) => {
@@ -864,10 +867,13 @@ export function Landing({
                         const bp = progress[b.slug];
                         const textP = bp?.text;
                         const audioP = bp?.audio;
+                        // Book-level progress (how far through the spine), not
+                        // the in-chapter scroll — so resuming at the top of a
+                        // late chapter doesn't read 0%. See ReadingProgress.fraction.
                         const pctOf = (r: ReadingProgress): number =>
                           Math.min(
                             100,
-                            Math.max(0, Math.round(r.scroll * 100)),
+                            Math.max(0, Math.round(r.fraction * 100)),
                           );
                         const resume = textP && audioP
                           ? (textP.updatedAt >= audioP.updatedAt
@@ -977,67 +983,67 @@ export function Landing({
                           meter row in the body. */
                               }
                               {!compactCards && (
-                              <BookCover book={b} category={category}>
-                                {e.hasText && e.hasAudio
-                                  ? (
-                                    <CoverRenditionSwitch
-                                      slug={b.slug}
-                                      activeKind={activeKind}
-                                      onOpen={onOpen}
-                                      bookLabel={t("landing.bookBadge")}
-                                      audioLabel={t("landing.audiobookBadge")}
-                                    />
-                                  )
-                                  : (
-                                    // Single-format kind badge — ICON ONLY (no
-                                    // text): the glyph already names the kind and
-                                    // the big cover icon repeats it, so the label
-                                    // was redundant. PRIMARY colour (not neutral):
-                                    // a lone badge means that format is the active
-                                    // one, so it reads like the highlighted segment
-                                    // of the dual-format switch.
-                                    <Box
-                                      aria-label={t(
-                                        category === "docs"
-                                          ? "landing.docsBadge"
-                                          : e.hasAudio
-                                          ? "landing.audiobookBadge"
-                                          : "landing.bookBadge",
-                                      )}
-                                      sx={{
-                                        position: "absolute",
-                                        top: 8,
-                                        left: 8,
-                                        display: "flex",
-                                        alignItems: "center",
-                                        justifyContent: "center",
-                                        px: 1,
-                                        py: 0.5,
-                                        borderRadius: 5,
-                                        bgcolor: "primary.main",
-                                        color: "primary.contrastText",
-                                      }}
-                                    >
-                                      {category === "docs"
-                                        ? (
-                                          <DocsIcon
-                                            sx={{ fontSize: rem(17) }}
-                                          />
-                                        )
-                                        : e.hasAudio
-                                        ? (
-                                          <AudiobookIcon
-                                            sx={{ fontSize: rem(17) }}
-                                          />
-                                        )
-                                        : (
-                                          <BookIcon
-                                            sx={{ fontSize: rem(17) }}
-                                          />
+                                <BookCover book={b} category={category}>
+                                  {e.hasText && e.hasAudio
+                                    ? (
+                                      <CoverRenditionSwitch
+                                        slug={b.slug}
+                                        activeKind={activeKind}
+                                        onOpen={onOpen}
+                                        bookLabel={t("landing.bookBadge")}
+                                        audioLabel={t("landing.audiobookBadge")}
+                                      />
+                                    )
+                                    : (
+                                      // Single-format kind badge — ICON ONLY (no
+                                      // text): the glyph already names the kind and
+                                      // the big cover icon repeats it, so the label
+                                      // was redundant. PRIMARY colour (not neutral):
+                                      // a lone badge means that format is the active
+                                      // one, so it reads like the highlighted segment
+                                      // of the dual-format switch.
+                                      <Box
+                                        aria-label={t(
+                                          category === "docs"
+                                            ? "landing.docsBadge"
+                                            : e.hasAudio
+                                            ? "landing.audiobookBadge"
+                                            : "landing.bookBadge",
                                         )}
-                                    </Box>
-                                  )}
-                              </BookCover>
+                                        sx={{
+                                          position: "absolute",
+                                          top: 8,
+                                          left: 8,
+                                          display: "flex",
+                                          alignItems: "center",
+                                          justifyContent: "center",
+                                          px: 1,
+                                          py: 0.5,
+                                          borderRadius: 5,
+                                          bgcolor: "primary.main",
+                                          color: "primary.contrastText",
+                                        }}
+                                      >
+                                        {category === "docs"
+                                          ? (
+                                            <DocsIcon
+                                              sx={{ fontSize: rem(17) }}
+                                            />
+                                          )
+                                          : e.hasAudio
+                                          ? (
+                                            <AudiobookIcon
+                                              sx={{ fontSize: rem(17) }}
+                                            />
+                                          )
+                                          : (
+                                            <BookIcon
+                                              sx={{ fontSize: rem(17) }}
+                                            />
+                                          )}
+                                      </Box>
+                                    )}
+                                </BookCover>
                               )}
                               <Box sx={{ p: 1.75 }}>
                                 {
