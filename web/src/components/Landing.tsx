@@ -489,8 +489,9 @@ function GroupSection({
   onToggle: () => void;
   children: ReactNode;
 }): React.JSX.Element {
+  const hue = slugHue(name);
   return (
-    <Box sx={{ mb: 3 }}>
+    <Box sx={{ mb: 1.5 }}>
       <Box
         role="button"
         tabIndex={0}
@@ -512,41 +513,72 @@ function GroupSection({
           cursor: "pointer",
           display: "flex",
           alignItems: "center",
-          gap: 1,
-          px: 1.5,
-          py: 1,
+          gap: 1.25,
+          px: 1.75,
+          py: 1.25,
           mb: 1,
           borderRadius: 2,
-          borderBottom: 1,
+          // A real surface, not bare text: a paper-tinted frosted bar with a
+          // hairline + soft shadow so it floats above the shelf (the page bg is
+          // flat, so a `background.default` wash was invisible — it read as
+          // unstyled text with big gaps). The blur+saturate still kick in when
+          // it's stuck over scrolling cards, layering them as glass.
+          border: 1,
           borderColor: "divider",
-          // The shared frosted-glass material (toolbar / detent-sheet recipe):
-          // a translucent page-bg wash + blur+saturate, so cards scroll under
-          // the header as a single glass layer.
-          bgcolor: (t) => alpha(t.palette.background.default, 0.72),
-          backdropFilter: "blur(24px) saturate(180%)",
-          WebkitBackdropFilter: "blur(24px) saturate(180%)",
+          boxShadow: 1,
+          bgcolor: (t) => alpha(t.palette.background.paper, 0.82),
+          backdropFilter: "blur(20px) saturate(160%)",
+          WebkitBackdropFilter: "blur(20px) saturate(160%)",
         }}
       >
+        {
+          /* Per-series colour anchor — the slug-keyed cover gradient as a small
+            dot, so each section reads at a glance and the headers aren't a
+            monochrome list. */
+        }
+        <Box
+          sx={{
+            width: 10,
+            height: 10,
+            borderRadius: "50%",
+            flexShrink: 0,
+            background: `linear-gradient(135deg, hsl(${hue} 58% 56%), hsl(${
+              (hue + 38) % 360
+            } 54% 46%))`,
+          }}
+        />
         <Typography
-          variant="subtitle2"
+          variant="subtitle1"
           sx={{ fontWeight: 700, minWidth: 0, flex: 1 }}
           noWrap
         >
           {name}
         </Typography>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ fontVariantNumeric: "tabular-nums", flexShrink: 0 }}
+        <Box
+          component="span"
+          sx={{
+            flexShrink: 0,
+            minWidth: 22,
+            textAlign: "center",
+            px: 0.75,
+            py: 0.1,
+            borderRadius: 5,
+            bgcolor: "action.selected",
+            color: "text.secondary",
+            fontSize: rem(12),
+            fontWeight: 600,
+            fontVariantNumeric: "tabular-nums",
+          }}
         >
-          ({count})
-        </Typography>
+          {count}
+        </Box>
         <ExpandMoreIcon
           sx={{
             flexShrink: 0,
             color: "text.secondary",
             transition: "transform .2s",
-            transform: collapsed ? "rotate(180deg)" : "none",
+            // Collapsed → chevron points down ("expand"); open → up ("collapse").
+            transform: collapsed ? "none" : "rotate(180deg)",
           }}
         />
       </Box>
