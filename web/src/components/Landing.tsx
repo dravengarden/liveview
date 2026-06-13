@@ -344,6 +344,35 @@ function CoverRenditionSwitch({
   );
 }
 
+/** Single-kind badge for a compact card's title row — a book/audiobook/docs that
+ *  ships only ONE rendition, so there's no switch to make. A small primary pill
+ *  with the kind glyph, matching the active segment of the dual-format inline
+ *  switch (so a single-format card reads consistently next to a dual one). The
+ *  non-compact cover shows the same badge overlaid; this is its inline twin. */
+function CompactKindBadge(
+  { category, label }: { category: Category; label: string },
+): React.JSX.Element {
+  const Icon = kindIcon(category);
+  return (
+    <Box
+      aria-label={label}
+      sx={{
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        px: 1,
+        py: 0.5,
+        borderRadius: 5,
+        bgcolor: "primary.main",
+        color: "primary.contrastText",
+      }}
+    >
+      <Icon sx={{ fontSize: rem(17) }} />
+    </Box>
+  );
+}
+
 /** Format a unix-ms deploy stamp as a locale date, or null when unset (0). */
 function fmtDate(ms: number, lang: string): string | null {
   if (!ms) return null;
@@ -954,15 +983,30 @@ export function Landing({
               >
                 {b.label}
               </Typography>
-              {compactCards && e.hasText && e.hasAudio && (
-                <CoverRenditionSwitch
-                  slug={b.slug}
-                  activeKind={activeKind}
-                  onOpen={onOpen}
-                  bookLabel={t("landing.bookBadge")}
-                  audioLabel={t("landing.audiobookBadge")}
-                  inline
-                />
+              {compactCards && (
+                e.hasText && e.hasAudio
+                  ? (
+                    <CoverRenditionSwitch
+                      slug={b.slug}
+                      activeKind={activeKind}
+                      onOpen={onOpen}
+                      bookLabel={t("landing.bookBadge")}
+                      audioLabel={t("landing.audiobookBadge")}
+                      inline
+                    />
+                  )
+                  : (
+                    <CompactKindBadge
+                      category={category}
+                      label={t(
+                        category === "docs"
+                          ? "landing.docsBadge"
+                          : category === "audiobook"
+                          ? "landing.audiobookBadge"
+                          : "landing.bookBadge",
+                      )}
+                    />
+                  )
               )}
             </Box>
             {b.description
