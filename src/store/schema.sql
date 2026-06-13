@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS books (
     slug              TEXT PRIMARY KEY,
     label             TEXT NOT NULL,
     description       TEXT,
+    -- Optional shelf grouping key (book.toml top-level `collection`).
+    collection        TEXT,
     -- content_hash of the cover blob in `assets`, or NULL (gradient fallback).
     cover_hash        TEXT,
     default_rendition TEXT NOT NULL,
@@ -29,6 +31,7 @@ CREATE TABLE IF NOT EXISTS books (
 -- EXISTS won't add columns to an already-present `books`).
 ALTER TABLE books ADD COLUMN IF NOT EXISTS created_at BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE books ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE books ADD COLUMN IF NOT EXISTS collection TEXT;
 
 CREATE TABLE IF NOT EXISTS renditions (
     book_slug    TEXT    NOT NULL REFERENCES books(slug) ON DELETE CASCADE,

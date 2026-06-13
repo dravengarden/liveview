@@ -20,7 +20,16 @@ import { useState } from "react";
 import { SettingsSheet } from "../_shell";
 import type { MenuBarSettings, Theme, ThemeMode, ThemeVariant } from "@/types";
 import { THEME_VARIANTS, VARIANT_OPTIONS } from "@/types";
-import { setCompactCards, setShelfSort, type ShelfSort, useCompactCards, useShelfSort } from "@/hooks";
+import {
+  setCompactCards,
+  setShelfGroup,
+  setShelfSort,
+  type ShelfGroup,
+  type ShelfSort,
+  useCompactCards,
+  useShelfGroup,
+  useShelfSort,
+} from "@/hooks";
 import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
 import { useStore } from "@/_store/mod.ts";
@@ -43,6 +52,9 @@ const MODE_OPTIONS: ThemeMode[] = ["auto", "light", "dark"];
 
 // Bookshelf sort options, in display order (labels via `sort.<key>`).
 const SHELF_SORTS: ShelfSort[] = ["updated", "read", "added", "name"];
+
+// Bookshelf group-by options, in display order (labels via `group.<key>`).
+const SHELF_GROUPS: ShelfGroup[] = ["none", "collection"];
 
 // Discrete presets for the reading-layout dropdowns — a slider was fiddly on
 // touch and a number field would pop the keyboard; a small set taps cleanly.
@@ -156,6 +168,7 @@ export function SettingsButton({
 }: SettingsButtonProps): React.JSX.Element {
   const { t, lang, setLang } = useI18n();
   const shelfSort = useShelfSort();
+  const shelfGroup = useShelfGroup();
   const compactCards = useCompactCards();
   // The human name THIS device advertises for the single-active-player handoff
   // ("Playing on <name>"). Device-LOCAL (persisted), so renaming it never syncs.
@@ -489,6 +502,22 @@ export function SettingsButton({
                 onChange={(e) => setCompactCards(e.target.checked)}
                 inputProps={{ "aria-label": t("settings.compact") }}
               />
+            }
+          />
+          <Row
+            label={t("settings.group")}
+            desc={t("settings.groupDesc")}
+            control={
+              <Select
+                size="small"
+                value={shelfGroup}
+                onChange={(e) => setShelfGroup(e.target.value as ShelfGroup)}
+                sx={{ minWidth: 132 }}
+              >
+                {SHELF_GROUPS.map((g) => (
+                  <MenuItem key={g} value={g}>{t(`group.${g}`)}</MenuItem>
+                ))}
+              </Select>
             }
           />
         </Stack>

@@ -360,6 +360,7 @@ mod tests {
             label: label.to_string(),
             slug: slug.to_string(),
             description: None,
+            collection: None,
             cover: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![RenditionState {
@@ -476,6 +477,7 @@ mod tests {
             label: "Book".to_string(),
             slug: "book".to_string(),
             description: None,
+            collection: None,
             cover: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![RenditionState {
@@ -650,6 +652,7 @@ mod tests {
             label: "Eth".to_string(),
             slug: "eth".to_string(),
             description: None,
+            collection: None,
             cover: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![

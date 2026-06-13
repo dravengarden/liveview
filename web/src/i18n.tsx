@@ -23,6 +23,7 @@ const STRINGS: Record<Language, Dict> = {
     "landing.noMounts":
       "No [[book]] in the liveview config — add one and it appears here.",
     "landing.noResults": "No matches",
+    "landing.otherGroup": "Other",
     "landing.continue": "Continue: {chapter}",
     "landing.added": "Added {date}",
     "landing.updated": "Updated {date}",
@@ -116,6 +117,10 @@ const STRINGS: Record<Language, Dict> = {
     "sort.read": "Read",
     "sort.added": "Added",
     "sort.name": "Name",
+    "settings.group": "Group books",
+    "settings.groupDesc": "Group the shelf into collapsible series",
+    "group.none": "Don't group",
+    "group.collection": "By series",
     "settings.device": "This device",
     "settings.deviceName": "Device name",
     "settings.deviceNameDesc":
@@ -131,6 +136,7 @@ const STRINGS: Record<Language, Dict> = {
     "landing.empty": "暂无可阅读的内容",
     "landing.noMounts": "liveview 配置里没有 [[book]]——添加后会出现在这里。",
     "landing.noResults": "没有匹配的结果",
+    "landing.otherGroup": "其他",
     "landing.continue": "继续：{chapter}",
     "landing.added": "创建于 {date}",
     "landing.updated": "更新于 {date}",
@@ -223,6 +229,10 @@ const STRINGS: Record<Language, Dict> = {
     "sort.read": "最近阅读",
     "sort.added": "最近添加",
     "sort.name": "名称",
+    "settings.group": "书籍分组",
+    "settings.groupDesc": "按系列分组,可折叠",
+    "group.none": "不分组",
+    "group.collection": "按系列",
     "settings.device": "本设备",
     "settings.deviceName": "设备名称",
     "settings.deviceNameDesc":

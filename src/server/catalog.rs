@@ -26,6 +26,7 @@ pub struct BookMeta {
     pub slug: String,
     pub label: String,
     pub description: Option<String>,
+    pub collection: Option<String>,
     pub cover_hash: Option<String>,
     pub default_rendition: RenditionKind,
     pub renditions: Vec<RenditionMeta>,
@@ -86,6 +87,7 @@ impl Catalog {
                 slug: b.slug,
                 label: b.label,
                 description: b.description,
+                collection: b.collection,
                 cover_hash: b.cover_hash,
                 default_rendition: RenditionKind::parse(&b.default_rendition)
                     .unwrap_or(RenditionKind::Text),

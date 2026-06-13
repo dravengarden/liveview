@@ -89,6 +89,9 @@ export interface Book {
   label: string;
   slug: string;
   description?: string | null;
+  /** The series/collection this book belongs to (e.g. "AI & Agents"), used by
+   *  the shelf's optional group-by-series view. Null/empty ⇒ ungrouped. */
+  collection?: string | null;
   /** Whether a cover image is available at `/api/cover?book=<slug>`. */
   cover: boolean;
   /** Which rendition kind the book opens in. */

@@ -165,6 +165,9 @@ pub struct BookManifest {
     /// Explicit per-mode renditions. Absent ⇒ legacy single-`text` synthesis.
     #[serde(default)]
     pub renditions: HashMap<RenditionKind, RenditionManifest>,
+    /// Optional shelf grouping key — books sharing a value belong to the same
+    /// collection. Top-level, sibling of `slug`/`title`/`tags`.
+    pub collection: Option<String>,
 }
 
 /// One `[renditions.<kind>]` entry.
@@ -289,6 +292,8 @@ pub struct BookState {
     pub label: String,
     pub slug: String,
     pub description: Option<String>,
+    /// Optional shelf grouping key from the manifest's top-level `collection`.
+    pub collection: Option<String>,
     /// Resolved absolute path to the cover image, when one exists.
     pub cover: Option<PathBuf>,
     /// Which rendition opens first.
@@ -542,6 +547,7 @@ impl Config {
                 label: b.label,
                 slug,
                 description: b.description,
+                collection: None,
                 cover: None,
                 default_rendition: RenditionKind::Text,
                 renditions: vec![RenditionState {
@@ -789,6 +795,7 @@ fn load_book_manifest(
         label: manifest.title,
         slug,
         description: None,
+        collection: manifest.collection.clone(),
         cover,
         default_rendition,
         renditions,
@@ -896,6 +903,7 @@ pub fn implicit_resolved(dir: &Path) -> Result<Resolved, String> {
             label,
             slug,
             description: None,
+            collection: None,
             cover: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![RenditionState {

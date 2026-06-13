@@ -53,6 +53,7 @@ pub struct BookRow {
     pub slug: String,
     pub label: String,
     pub description: Option<String>,
+    pub collection: Option<String>,
     pub cover_hash: Option<String>,
     pub default_rendition: String,
     /// Deploy-time stamps (unix ms); 0 when never stamped. See `mark_book`.
@@ -126,21 +127,24 @@ impl PgStore {
         slug: &str,
         label: &str,
         description: Option<&str>,
+        collection: Option<&str>,
         cover_hash: Option<&str>,
         default_rendition: &str,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO books (slug, label, description, cover_hash, default_rendition)
-             VALUES ($1, $2, $3, $4, $5)
+            "INSERT INTO books (slug, label, description, collection, cover_hash, default_rendition)
+             VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (slug) DO UPDATE SET
                  label = EXCLUDED.label,
                  description = EXCLUDED.description,
+                 collection = EXCLUDED.collection,
                  cover_hash = EXCLUDED.cover_hash,
                  default_rendition = EXCLUDED.default_rendition",
         )
         .bind(slug)
         .bind(label)
         .bind(description)
+        .bind(collection)
         .bind(cover_hash)
         .bind(default_rendition)
         .execute(&self.pool)
@@ -245,7 +249,7 @@ impl PgStore {
 
     pub async fn list_books(&self) -> Result<Vec<BookRow>, sqlx::Error> {
         sqlx::query_as::<_, BookRow>(
-            "SELECT slug, label, description, cover_hash, default_rendition, created_at, updated_at
+            "SELECT slug, label, description, collection, cover_hash, default_rendition, created_at, updated_at
              FROM books ORDER BY slug",
         )
         .fetch_all(&self.pool)
@@ -688,7 +692,7 @@ mod tests {
     async fn book_rendition_edition_roundtrip() {
         let Some(s) = store().await else { return };
         s.delete_book("t-book").await.unwrap();
-        s.upsert_book("t-book", "T Book", Some("blurb"), None, "text")
+        s.upsert_book("t-book", "T Book", Some("blurb"), None, None, "text")
             .await
             .unwrap();
         s.upsert_rendition("t-book", "text", "阅读", "zh", None, true, 0)
@@ -698,7 +702,7 @@ mod tests {
             .await
             .unwrap();
         // Re-upsert (idempotent) then cascade-delete.
-        s.upsert_book("t-book", "T Book v2", None, None, "text")
+        s.upsert_book("t-book", "T Book v2", None, None, None, "text")
             .await
             .unwrap();
         s.delete_book("t-book").await.unwrap();
