@@ -657,7 +657,10 @@ export function FloatingBubble({
           sx={(theme) => ({
             position: "fixed",
             inset: 0,
-            zIndex: theme.zIndex.fab - 1,
+            // ABOVE the bottom navbar (appBar) — at fab-1 the scrim sat under the
+            // navbar (appBar), so the dim covered the page but the bar stayed
+            // bright (the reported bug). Still below the TOC sheet (1250) + modals.
+            zIndex: theme.zIndex.appBar + 1,
             // Lighter scrim than a solid modal: the card is frosted glass, so a
             // heavy black dim would just mud it — let the page read THROUGH.
             bgcolor: "rgba(0,0,0,0.3)",
@@ -679,7 +682,9 @@ export function FloatingBubble({
             position: "fixed",
             top: cardDragging ? cardDrag.current.y : cardTop,
             left: cardDragging ? cardDrag.current.x : cardLeft,
-            zIndex: theme.zIndex.fab,
+            // Above the raised scrim (appBar+1), so the card stays bright while
+            // the scrim dims the page AND the navbar beneath it.
+            zIndex: theme.zIndex.appBar + 2,
             display: "flex",
             flexDirection: "column",
             gap: 0.5,
