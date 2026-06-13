@@ -4,6 +4,7 @@ import {
   MenuItem,
   Select,
   Stack,
+  Switch,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
@@ -19,7 +20,7 @@ import { useState } from "react";
 import { SettingsSheet } from "../_shell";
 import type { MenuBarSettings, Theme, ThemeMode, ThemeVariant } from "@/types";
 import { THEME_VARIANTS, VARIANT_OPTIONS } from "@/types";
-import { setShelfSort, type ShelfSort, useShelfSort } from "@/hooks";
+import { setCompactCards, setShelfSort, type ShelfSort, useCompactCards, useShelfSort } from "@/hooks";
 import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
 import { useStore } from "@/_store/mod.ts";
@@ -155,6 +156,7 @@ export function SettingsButton({
 }: SettingsButtonProps): React.JSX.Element {
   const { t, lang, setLang } = useI18n();
   const shelfSort = useShelfSort();
+  const compactCards = useCompactCards();
   // The human name THIS device advertises for the single-active-player handoff
   // ("Playing on <name>"). Device-LOCAL (persisted), so renaming it never syncs.
   const deviceLabel = useStore(deviceLabelStore);
@@ -476,6 +478,17 @@ export function SettingsButton({
                   <MenuItem key={s} value={s}>{t(`sort.${s}`)}</MenuItem>
                 ))}
               </Select>
+            }
+          />
+          <Row
+            label={t("settings.compact")}
+            desc={t("settings.compactDesc")}
+            control={
+              <Switch
+                checked={compactCards}
+                onChange={(e) => setCompactCards(e.target.checked)}
+                inputProps={{ "aria-label": t("settings.compact") }}
+              />
             }
           />
         </Stack>

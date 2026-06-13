@@ -29,7 +29,7 @@ import {
 } from "@mui/icons-material";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { Book, BookProgress, ReadingProgress } from "@/types";
-import { type ShelfSort, useShelfSort } from "@/hooks";
+import { type ShelfSort, useCompactCards, useShelfSort } from "@/hooks";
 import { useI18n } from "@/i18n";
 import { ScrollToTopButton } from "./ScrollToTopButton";
 
@@ -384,6 +384,8 @@ export function Landing({
 }: LandingProps): React.JSX.Element {
   const { t, lang } = useI18n();
   const sort = useShelfSort();
+  // Compact shelf: drop each card's coloured cover band to pack more per screen.
+  const compactCards = useCompactCards();
   const [query, setQuery] = useState("");
   // Multi-select kind filter; an empty selection means "all kinds".
   const [kinds, setKinds] = useState<Category[]>([]);
@@ -912,7 +914,11 @@ export function Landing({
                               // sm+ has fewer cards per column and we keep them painted.
                               contentVisibility: { xs: "auto", sm: "visible" },
                               containIntrinsicSize: {
-                                xs: "0 320px",
+                                // Compact cards drop the 104px cover band, so they
+                                // reserve a shorter off-screen box — otherwise the
+                                // over-estimate leaves the scrollbar long until the
+                                // cards paint in.
+                                xs: compactCards ? "0 150px" : "0 320px",
                                 sm: "auto",
                               },
                               // Hover lift is a pointer affordance; on touch it fires on
@@ -944,6 +950,7 @@ export function Landing({
                           (Audiobook-only / Book / Docs). Progress is a labeled
                           meter row in the body. */
                               }
+                              {!compactCards && (
                               <BookCover book={b} category={category}>
                                 {e.hasText && e.hasAudio
                                   ? (
@@ -1005,6 +1012,7 @@ export function Landing({
                                     </Box>
                                   )}
                               </BookCover>
+                              )}
                               <Box sx={{ p: 1.75 }}>
                                 <Typography
                                   variant="subtitle1"
