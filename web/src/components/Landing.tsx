@@ -902,6 +902,22 @@ export function Landing({
                               mb: "20px",
                               borderRadius: 2,
                               overflow: "hidden",
+                              // Compact cards drop the cover band, so carry the book's
+                              // slug-keyed colour as a slim gradient bar on the leading
+                              // edge — keeps each card visually distinct (and matches the
+                              // full card's gradient) without the 104px band. Clipped to
+                              // the rounded corners by overflow:hidden above.
+                              ...(compactCards && {
+                                position: "relative",
+                                "&::before": {
+                                  content: '""',
+                                  position: "absolute",
+                                  insetBlock: 0,
+                                  left: 0,
+                                  width: "6px",
+                                  background: coverGradient(b.slug),
+                                },
+                              }),
                               // Skip layout/paint for off-screen cards. The shelf is a
                               // tall list; on a phone (and right after returning from a
                               // book, when the whole shelf re-lays-out at once) the
