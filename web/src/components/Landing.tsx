@@ -209,12 +209,17 @@ function CoverRenditionSwitch({
   onOpen,
   bookLabel,
   audioLabel,
+  inline = false,
 }: {
   slug: string;
   activeKind: "text" | "audio";
   onOpen: (slug: string, renditionKind?: string) => void;
   bookLabel: string;
   audioLabel: string;
+  // `inline`: render in a card BODY (compact shelf, no cover band) instead of
+  // overlaying the dark cover — static-positioned, with a light theme-aware
+  // track instead of the dark scrim, so it reads on the paper surface.
+  inline?: boolean;
 }): React.JSX.Element {
   const segs = [
     { kind: "text" as const, Icon: BookIcon, label: bookLabel },
@@ -223,14 +228,13 @@ function CoverRenditionSwitch({
   return (
     <Box
       sx={{
-        position: "absolute",
-        top: 8,
-        left: 8,
         display: "flex",
         alignItems: "stretch",
         borderRadius: 5,
         overflow: "hidden",
-        bgcolor: "rgba(0,0,0,0.45)",
+        ...(inline
+          ? { flexShrink: 0, bgcolor: "action.selected" }
+          : { position: "absolute", top: 8, left: 8, bgcolor: "rgba(0,0,0,0.45)" }),
       }}
     >
       {segs.map((s) => {
@@ -256,10 +260,12 @@ function CoverRenditionSwitch({
               justifyContent: "center",
               px: 1,
               py: 0.5,
-              color: active ? "#fff" : "rgba(255,255,255,0.6)",
+              color: active
+                ? (inline ? "primary.contrastText" : "#fff")
+                : (inline ? "text.secondary" : "rgba(255,255,255,0.6)"),
               bgcolor: active ? "primary.main" : "transparent",
               transition: "background-color .15s, color .15s",
-              "&:hover": { color: "#fff" },
+              "&:hover": { color: inline ? "text.primary" : "#fff" },
             }}
           >
             <s.Icon sx={{ fontSize: rem(17) }} />
@@ -1034,13 +1040,39 @@ export function Landing({
                               </BookCover>
                               )}
                               <Box sx={{ p: 1.75 }}>
-                                <Typography
-                                  variant="subtitle1"
-                                  fontWeight={700}
-                                  sx={{ lineHeight: 1.3 }}
+                                {
+                                  /* Title row. In compact mode the cover band (and its
+                                    📖|🎧 switch) is gone, so a dual-rendition book gets
+                                    an INLINE switch here at the title's trailing edge —
+                                    still lets you open text vs audio straight from the
+                                    shelf. Single-kind books need no switch. */
+                                }
+                                <Box
+                                  sx={{
+                                    display: "flex",
+                                    alignItems: "flex-start",
+                                    justifyContent: "space-between",
+                                    gap: 1,
+                                  }}
                                 >
-                                  {b.label}
-                                </Typography>
+                                  <Typography
+                                    variant="subtitle1"
+                                    fontWeight={700}
+                                    sx={{ lineHeight: 1.3, minWidth: 0 }}
+                                  >
+                                    {b.label}
+                                  </Typography>
+                                  {compactCards && e.hasText && e.hasAudio && (
+                                    <CoverRenditionSwitch
+                                      slug={b.slug}
+                                      activeKind={activeKind}
+                                      onOpen={onOpen}
+                                      bookLabel={t("landing.bookBadge")}
+                                      audioLabel={t("landing.audiobookBadge")}
+                                      inline
+                                    />
+                                  )}
+                                </Box>
                                 {b.description
                                   ? (
                                     <Typography
