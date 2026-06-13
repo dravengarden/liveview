@@ -112,6 +112,17 @@ function coverGradient(slug: string): string {
   } 48% 42%))`;
 }
 
+/** A faint, translucent version of {@link coverGradient} — the book's colour as
+ *  a frosted 磨砂玻璃 wash. Composited OVER a compact card's paper surface (so the
+ *  card stays legible) to keep each book visually distinct without the cover
+ *  band. Low alpha so it reads on both the warm-light and dark shelves. */
+function compactTint(slug: string): string {
+  const h = slugHue(slug);
+  return `linear-gradient(135deg, hsl(${h} 52% 52% / 0.22), hsl(${
+    (h + 38) % 360
+  } 48% 42% / 0.08))`;
+}
+
 /** The kind glyph shown over a coverless card — also the audiobook's defining
  *  visual cue (headphones), so an audiobook reads as distinct from a book at a
  *  glance. */
@@ -903,20 +914,13 @@ export function Landing({
                               borderRadius: 2,
                               overflow: "hidden",
                               // Compact cards drop the cover band, so carry the book's
-                              // slug-keyed colour as a slim gradient bar on the leading
-                              // edge — keeps each card visually distinct (and matches the
-                              // full card's gradient) without the 104px band. Clipped to
-                              // the rounded corners by overflow:hidden above.
+                              // slug-keyed colour as a faint FROSTED wash tinting the whole
+                              // card — the same two-stop gradient as the cover, but
+                              // translucent and diffuse (磨砂玻璃), composited over the
+                              // card's paper surface. Distinguishes each book without the
+                              // 104px band or a hard colour bar.
                               ...(compactCards && {
-                                position: "relative",
-                                "&::before": {
-                                  content: '""',
-                                  position: "absolute",
-                                  insetBlock: 0,
-                                  left: 0,
-                                  width: "6px",
-                                  background: coverGradient(b.slug),
-                                },
+                                backgroundImage: compactTint(b.slug),
                               }),
                               // Skip layout/paint for off-screen cards. The shelf is a
                               // tall list; on a phone (and right after returning from a
