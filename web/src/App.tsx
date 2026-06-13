@@ -838,6 +838,89 @@ export function App(): React.JSX.Element {
     setUntranslated(null);
   }, []);
 
+  // iOS-style left-edge swipe → back to the shelf. A standalone PWA has no
+  // browser back-swipe, so we synthesise it: a touch that STARTS within EDGE px
+  // of the left edge and travels right past THRESH (more horizontal than
+  // vertical) pops back to the bookshelf. Only while reading a book; skipped
+  // when the touch begins inside an overlay (lightbox / sheet / modal — a fixed
+  // element high in the z-stack, which owns its own horizontal gestures).
+  // Passive listeners so normal vertical scrolling is never blocked.
+  useEffect(() => {
+    if (!currentPath) {
+      return;
+    }
+    const EDGE = 28;
+    const THRESH = 70;
+    let sx = 0;
+    let sy = 0;
+    let tracking = false;
+    let horiz = false;
+    let decided = false;
+    const inOverlay = (el: Element | null): boolean => {
+      for (let n = el; n && n !== document.body; n = n.parentElement) {
+        const s = globalThis.getComputedStyle(n);
+        if (s.position === "fixed" && Number(s.zIndex) >= 1250) {
+          return true;
+        }
+      }
+      return false;
+    };
+    const onStart = (e: TouchEvent): void => {
+      const t = e.touches[0];
+      if (!t || t.clientX > EDGE || inOverlay(e.target as Element)) {
+        return;
+      }
+      sx = t.clientX;
+      sy = t.clientY;
+      tracking = true;
+      decided = false;
+      horiz = false;
+    };
+    const onMove = (e: TouchEvent): void => {
+      if (!tracking) {
+        return;
+      }
+      const t = e.touches[0];
+      if (!t) {
+        return;
+      }
+      const dx = t.clientX - sx;
+      const dy = t.clientY - sy;
+      if (!decided && (Math.abs(dx) > 12 || Math.abs(dy) > 12)) {
+        decided = true;
+        horiz = dx > 0 && Math.abs(dx) > Math.abs(dy);
+        if (!horiz) {
+          tracking = false; // a vertical scroll — let it go
+        }
+      }
+    };
+    const onEnd = (e: TouchEvent): void => {
+      if (!tracking) {
+        return;
+      }
+      tracking = false;
+      const t = e.changedTouches[0];
+      if (!t) {
+        return;
+      }
+      const dx = t.clientX - sx;
+      const dy = t.clientY - sy;
+      if (horiz && dx > THRESH && Math.abs(dx) > Math.abs(dy)) {
+        backToLanding();
+      }
+    };
+    globalThis.addEventListener("touchstart", onStart, { passive: true });
+    globalThis.addEventListener("touchmove", onMove, { passive: true });
+    globalThis.addEventListener("touchend", onEnd, { passive: true });
+    globalThis.addEventListener("touchcancel", onEnd, { passive: true });
+    return () => {
+      globalThis.removeEventListener("touchstart", onStart);
+      globalThis.removeEventListener("touchmove", onMove);
+      globalThis.removeEventListener("touchend", onEnd);
+      globalThis.removeEventListener("touchcancel", onEnd);
+    };
+  }, [currentPath, backToLanding]);
+
   useEffect(() => {
     document.title = currentPath ?? "liveview";
   }, [currentPath]);
