@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 
 use crate::server::catalog::Catalog;
 use crate::store::content::{BlobStore, ContentStore};
@@ -19,6 +20,14 @@ pub struct AppState {
     /// when the backfill hasn't pre-generated a chapter yet.
     pub tts_cmd: String,
     pub tts_voice: String,
+    /// Cache of the synthesized "end of the whole book" cue, keyed by
+    /// `"{voice}|{phrase}"`. Appended to the last chapter's audio when the client
+    /// requests `&tail=bookend`, so the spoken "全书完" plays through the same
+    /// MediaSession `<audio>` element — i.e. on the lock screen / in the
+    /// background, where a client-side Web Audio cue would be silent. In-memory
+    /// only: regenerated cheaply (one short edge-tts call per voice) on the first
+    /// book-end play after a restart.
+    pub book_end_cue: Mutex<HashMap<String, Arc<Vec<u8>>>>,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;

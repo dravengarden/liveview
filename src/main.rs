@@ -400,6 +400,7 @@ async fn run(cli: Cli, server: config::ServerCfg) {
         catalog: RwLock::new(catalog),
         tts_cmd: env("LIVEVIEW_EDGE_TTS_CMD").unwrap_or_else(|| "edge-tts".to_string()),
         tts_voice: env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string()),
+        book_end_cue: Default::default(),
     });
 
     // Reload the catalog + nudge clients when `liveview sync` issues NOTIFY.
@@ -437,6 +438,7 @@ async fn run_preview(args: cli::PreviewArgs) -> Result<(), String> {
         catalog: RwLock::new(catalog),
         tts_cmd: env("LIVEVIEW_EDGE_TTS_CMD").unwrap_or_else(|| "edge-tts".to_string()),
         tts_voice: env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string()),
+        book_end_cue: Default::default(),
     });
 
     let app = build_app(state);
@@ -1013,6 +1015,11 @@ struct FileQuery {
     /// Reading mode (`"text"` / `"audio"`). Omitted ⇒ the book's default
     /// rendition. An unknown value is treated as the default (text-ish) mode.
     rendition: Option<String>,
+    /// Audio only: `"bookend"` asks `/api/audio` to append the spoken
+    /// "end of the whole book" cue to this chapter's MP3. The client sets it only
+    /// for the LAST chapter in the book's queue (it knows the spine order), so
+    /// the server needs no spine knowledge. Ignored by the other handlers.
+    tail: Option<String>,
 }
 
 /// A resolved request: the concrete rendition + the `(lang, default_lang)` pair
@@ -1232,9 +1239,21 @@ async fn api_audio(
             return (StatusCode::INTERNAL_SERVER_ERROR, "audio synth").into_response();
         }
     };
-    let Ok(data) = state.obj.get(&hash).await else {
+    let Ok(mut data) = state.obj.get(&hash).await else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response();
     };
+    // The book's last chapter carries a spoken "全书完" tail (client sends
+    // `tail=bookend` only for that chapter). Bake it into the served bytes so it
+    // plays through the same MediaSession element — on the lock screen / in the
+    // background, where a client-side cue would be silent. MP3 frames concatenate
+    // cleanly (same as `assemble()` joins per-sentence clips). Marks are
+    // untouched: the tail sits past the last sentence's end_ms, a silent gap in
+    // the read-along. Only the last chapter pays the (tiny) append.
+    if query.tail.as_deref() == Some("bookend") {
+        if let Some(cue) = book_end_cue(&state, &row).await {
+            data.extend_from_slice(&cue);
+        }
+    }
     let total = data.len() as u64;
     let range = headers
         .get(header::RANGE)
@@ -1332,6 +1351,53 @@ async fn ensure_chapter_audio(
         .await
         .map_err(|e| format!("record audio: {e}"))?;
     Ok((audio_hash, marks_hash))
+}
+
+/// The spoken "end of the whole book" phrase for a language edition, matched by
+/// language prefix (`zh`, `zh-CN`, `en`, `en-US`, …). Returns `None` for a
+/// language we have no phrase for — better silence than a wrong-language tail.
+fn book_end_phrase(lang: &str) -> Option<&'static str> {
+    if lang.starts_with("zh") {
+        Some("全书完")
+    } else if lang.starts_with("en") {
+        Some("The end.")
+    } else {
+        None
+    }
+}
+
+/// The synthesized "end of book" cue for this chapter's voice + language,
+/// cached in-process (keyed by `"{voice}|{phrase}"`). Returns `None` when the
+/// language has no phrase or synthesis fails — the caller then serves the
+/// chapter audio with no tail, never an error (a missing cue must not break
+/// playback). The voice is the book's audio-rendition voice, mirroring
+/// `ensure_chapter_audio`, so the cue matches the narration.
+async fn book_end_cue(state: &AppState, row: &store::pg::ChapterRow) -> Option<Vec<u8>> {
+    let phrase = book_end_phrase(&row.lang)?;
+    let voice = {
+        let cat = state.catalog.read().await;
+        cat.book(&row.book_slug)
+            .and_then(|b| b.rendition(RenditionKind::Audio))
+            .and_then(|r| r.voice.clone())
+            .unwrap_or_else(|| state.tts_voice.clone())
+    };
+    let key = format!("{voice}|{phrase}");
+    if let Some(cue) = state.book_end_cue.lock().await.get(&key) {
+        return Some(cue.as_ref().clone());
+    }
+    // Synthesize off-lock (a few-KB, ~1s edge-tts call); a rare double-synth
+    // race is harmless — both produce the same tiny clip and the last write wins.
+    let (mp3, _marks) =
+        match server::audio::synthesize(&state.tts_cmd, &voice, &[phrase.to_string()]).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, voice, "book-end cue synth failed");
+                return None;
+            }
+        };
+    let arc = std::sync::Arc::new(mp3);
+    state.book_end_cue.lock().await.insert(key, arc.clone());
+    Some(arc.as_ref().clone())
 }
 
 /// Hash + `put_if_absent` a blob to rustfs and record the asset row. Returns the

@@ -395,7 +395,13 @@ export function AudioPlayerProvider(
           marksRef.current = mdata;
 
           if (audio) {
-            audio.src = `/api/audio?${q1}`;
+            // The book's last chapter gets a spoken "全书完" tail baked into its
+            // audio server-side (so it plays on the lock screen, unlike a
+            // client-side cue). `q` is the full book spine, so the last index is
+            // genuinely the end of the book. Only the audio src carries the
+            // flag — spoken/marks stay clean, so the read-along isn't affected.
+            const isBookEnd = qi === q.length - 1;
+            audio.src = `/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`;
             // load() resets playbackRate from defaultPlaybackRate — set both so
             // the chosen rate survives (also re-applied on loadedmetadata).
             audio.defaultPlaybackRate = rateRef.current;
