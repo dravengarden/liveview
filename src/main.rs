@@ -43,13 +43,34 @@ mod embedded_assets {
             .and_then(|f| f.contents_utf8())
     }
 
+    /// Cache policy for a static asset. Content-hashed bundles (Vite stamps a
+    /// hash into the filename) are immutable for a given name → cache hard.
+    /// Everything else — above all `sw.js`, plus `index.html`, the manifest and
+    /// icons — MUST revalidate: a stale `sw.js` is THE classic reason an
+    /// installed iOS PWA never picks up a deploy. The PWA's `reg.update()`
+    /// re-fetches `/sw.js`, but with no `Cache-Control` iOS serves it from its
+    /// heuristic HTTP cache, the bytes look unchanged, and the whole
+    /// (otherwise-correct) skipWaiting → controllerchange → reload chain never
+    /// fires. `no-cache` = may store but must revalidate every time, so a
+    /// redeploy is seen immediately.
+    fn cache_control_for(path: &str) -> &'static str {
+        if path.starts_with("assets/") {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-cache"
+        }
+    }
+
     fn serve_file(path: &str) -> impl IntoResponse {
         match DIST_DIR.get_file(path) {
             Some(file) => {
                 let mime = mime_guess::from_path(path).first_or_octet_stream();
                 (
                     StatusCode::OK,
-                    [(header::CONTENT_TYPE, mime.as_ref().to_string())],
+                    [
+                        (header::CONTENT_TYPE, mime.as_ref().to_string()),
+                        (header::CACHE_CONTROL, cache_control_for(path).to_string()),
+                    ],
                     file.contents(),
                 )
                     .into_response()
@@ -68,7 +89,14 @@ mod embedded_assets {
 
     pub async fn serve_index() -> impl IntoResponse {
         match index_html() {
-            Some(html) => Html(html).into_response(),
+            // `no-cache`: the navigation entry point must revalidate so a deploy's
+            // new bundle refs (and thus the new SW) reach the device — same reason
+            // as `sw.js` in `cache_control_for`.
+            Some(html) => (
+                [(header::CACHE_CONTROL, "no-cache")],
+                Html(html),
+            )
+                .into_response(),
             None => StatusCode::NOT_FOUND.into_response(),
         }
     }
