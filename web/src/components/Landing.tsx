@@ -1077,13 +1077,17 @@ export function Landing({
               Plex idiom) instead of stacked naked bars. */
             }
             {
-              /* Once a book has ANY progress, show a meter
-                for EACH rendition it offers — reading and/or
-                listening — so an opened audiobook still shows
-                its 📖 book progress (0% until read), not just
-                the 🎧. A never-opened book stays meter-free. */
+              /* Always show a meter for EACH rendition the book
+                offers — reading and/or listening — even when it
+                has never been opened (it reads 0% until there's
+                progress). A book's place on the shelf should show
+                where you are at a glance, 0% included, so a fresh
+                book isn't visually indistinguishable from one
+                that's simply lost its meter; gated on the book
+                HAVING a rendition (not on progress existing), so a
+                bare docs tree with neither stays meter-free. */
             }
-            {(textP || audioP) && (
+            {(e.hasText || e.hasAudio) && (
               <Box
                 sx={{ display: "flex", gap: 1, mt: 1.25 }}
               >
