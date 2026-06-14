@@ -80,8 +80,14 @@ export interface AudioPlayer {
    *  table of contents. */
   queue: Track[];
   queueIndex: number;
-  /** Start (or replace) playback at a chapter, seeding the book's chapter queue. */
-  playChapter: (np: Omit<NowPlaying, "chapterLabel">, queue: Track[]) => void;
+  /** Start (or replace) playback at a chapter, seeding the book's chapter queue.
+   *  `autoplay` (default false = audiobook "open paused, tap to start") is true
+   *  for the reader's read-aloud button, which should begin speaking on one tap. */
+  playChapter: (
+    np: Omit<NowPlaying, "chapterLabel">,
+    queue: Track[],
+    autoplay?: boolean,
+  ) => void;
   togglePlay: () => void;
   seek: (sec: number) => void;
   /** Jump by a delta (negative = back) in seconds, clamped to the chapter. */
@@ -933,15 +939,17 @@ export function AudioPlayerProvider(
   }, []);
 
   const playChapter = useCallback(
-    (np: Omit<NowPlaying, "chapterLabel">, q: Track[]) => {
+    (np: Omit<NowPlaying, "chapterLabel">, q: Track[], autoplay = false) => {
       const qi = q.findIndex((tk) => tk.path === np.chapterPath);
       const label = q[qi]?.label ?? np.chapterPath.split("/").pop() ??
         np.chapterPath;
       // Opening an audiobook loads it PAUSED — the player shows up at the saved
       // position and the user taps play to start. Chapter navigation
       // (goTo/next/prev/goToChapter) and auto-advance (onEnded) still autoplay,
-      // since those happen during an active listen.
-      loadTrack({ ...np, chapterLabel: label }, q, qi >= 0 ? qi : 0, false);
+      // since those happen during an active listen. The reader's read-aloud
+      // button passes autoplay=true so one tap starts speaking immediately (the
+      // tap is the user gesture iOS needs).
+      loadTrack({ ...np, chapterLabel: label }, q, qi >= 0 ? qi : 0, autoplay);
     },
     [loadTrack],
   );

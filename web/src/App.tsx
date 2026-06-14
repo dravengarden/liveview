@@ -1138,6 +1138,28 @@ export function App(): React.JSX.Element {
     audioPlayChapter,
   ]);
 
+  // Read aloud the CURRENT text document: hand the engine this chapter on the
+  // `text` rendition (units-driven synth server-side) + the text spine as its
+  // queue, so the in-place highlight (useInPlaceHighlight) lights up the spoken
+  // sentence in the rich reader. Distinct from the audiobook path (effect A,
+  // `rendition === "audio"`): this is opt-in via the reader's read-aloud button,
+  // and keeps the reader view (no popup).
+  const handleReadAloud = useCallback(() => {
+    if (!activeBook || !currentPath) return;
+    audioPlayChapter(
+      {
+        bookSlug: activeBook.slug,
+        bookLabel: activeBook.label,
+        cover: activeBook.cover,
+        chapterPath: currentPath,
+        lang,
+        rendition: "text",
+      },
+      flattenTracks(activeTree, uiLang),
+      true, // autoplay: one tap on the read-aloud button starts speaking
+    );
+  }, [activeBook, currentPath, lang, activeTree, uiLang, audioPlayChapter]);
+
   // B) engine → view: when the engine auto-advances into the next chapter while
   //    you're watching THIS book's audio page, follow it (URL + sidebar). Follow
   //    ONLY when we were already in sync (so it's the engine advancing under us),
@@ -1508,6 +1530,7 @@ export function App(): React.JSX.Element {
                     lineHeight={menuBarSettings.lineHeight}
                     savedScroll={savedScroll}
                     onSaveScroll={saveProgress}
+                    onReadAloud={handleReadAloud}
                   />
                 )}
             </NavShell>

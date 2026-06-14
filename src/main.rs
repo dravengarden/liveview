@@ -429,6 +429,7 @@ async fn run(cli: Cli, server: config::ServerCfg) {
         tts_cmd: env("LIVEVIEW_EDGE_TTS_CMD").unwrap_or_else(|| "edge-tts".to_string()),
         tts_voice: env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string()),
         book_end_cue: Default::default(),
+        audio_synth_locks: Default::default(),
     });
 
     // Reload the catalog + nudge clients when `liveview sync` issues NOTIFY.
@@ -467,6 +468,7 @@ async fn run_preview(args: cli::PreviewArgs) -> Result<(), String> {
         tts_cmd: env("LIVEVIEW_EDGE_TTS_CMD").unwrap_or_else(|| "edge-tts".to_string()),
         tts_voice: env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string()),
         book_end_cue: Default::default(),
+        audio_synth_locks: Default::default(),
     });
 
     let app = build_app(state);
@@ -486,6 +488,7 @@ fn build_app(state: SharedState) -> Router {
         .route("/api/file", get(api_file))
         .route("/api/raw", get(api_raw))
         .route("/api/spoken", get(api_spoken))
+        .route("/api/units", get(api_units))
         .route("/api/audio", get(api_audio))
         .route("/api/marks", get(api_marks))
         .route("/api/progress", get(api_progress_get).put(api_progress_put))
@@ -1220,6 +1223,43 @@ async fn api_spoken(
     }
 }
 
+#[derive(serde::Serialize)]
+struct SpokenUnitsContent {
+    /// Edition actually served (overlay → base fallback).
+    lang: String,
+    /// Ordered read-along units: prose sentences + classified non-prose blocks
+    /// (code/image/math/table/html), each carrying a `blk` anchor. `idx` matches
+    /// the audio-mark index and the `data-sent` anchor.
+    units: Vec<server::spoken::Unit>,
+}
+
+/// Read-along units for the in-place highlight (the richer sibling of
+/// /api/spoken). Same overlay→base resolution; derived from the chapter markdown
+/// on the fly (a cheap comrak parse — no storage, no schema), so it never
+/// touches the audiobook generation path.
+async fn api_units(
+    State(state): State<SharedState>,
+    Query(query): Query<FileQuery>,
+) -> impl IntoResponse {
+    if !matches!(FileType::from_path(&query.path), FileType::Markdown) {
+        return (StatusCode::BAD_REQUEST, "not a markdown chapter").into_response();
+    }
+    let Some(ctx) = resolve_req(&state, &query).await else {
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    };
+    match resolve_narration(&state, &ctx).await {
+        Some((row, served_lang)) => {
+            let md = row.markdown.unwrap_or_default();
+            Json(SpokenUnitsContent {
+                lang: served_lang,
+                units: server::spoken::spoken_units(&md),
+            })
+            .into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "File not found").into_response(),
+    }
+}
+
 /// Parse an HTTP `Range: bytes=…` value into an inclusive `(start, end)` within
 /// `total`. Supports `start-`, `start-end`, and `-suffix`; `None` if malformed
 /// or unsatisfiable (caller then serves the full body).
@@ -1240,6 +1280,38 @@ fn parse_range(value: &str, total: u64) -> Option<(u64, u64)> {
     (start <= end && end < total).then_some((start, end))
 }
 
+/// Serve MP3 `data` with `Content-Length`, `Accept-Ranges` and HTTP Range
+/// support (seeking). Shared by the audiobook and text read-aloud paths.
+fn serve_mp3_range(data: Vec<u8>, headers: &axum::http::HeaderMap) -> axum::response::Response {
+    let total = data.len() as u64;
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| parse_range(v, total));
+    let builder = Response::builder()
+        .header(header::CONTENT_TYPE, "audio/mpeg")
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CACHE_CONTROL, "public, max-age=3600");
+    match range {
+        Some((start, end)) => builder
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{total}"),
+            )
+            .header(header::CONTENT_LENGTH, end - start + 1)
+            .body(Body::from(data[start as usize..=end as usize].to_vec()))
+            .unwrap()
+            .into_response(),
+        None => builder
+            .status(StatusCode::OK)
+            .header(header::CONTENT_LENGTH, total)
+            .body(Body::from(data))
+            .unwrap()
+            .into_response(),
+    }
+}
+
 /// Chapter narration audio — the pre-generated MP3 from rustfs, with
 /// `Content-Length` + HTTP Range support (seeking). A few MB → fetch the whole
 /// blob and slice for Range.
@@ -1248,6 +1320,21 @@ async fn api_audio(
     Query(query): Query<FileQuery>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
+    // Text rendition → read-aloud for an ordinary document (units-driven synth).
+    // Additive: the audiobook (`audio` rendition) path below is byte-for-byte
+    // unchanged.
+    if query.rendition.as_deref() == Some("text") {
+        return match ensure_text_audio(&state, &query).await {
+            Ok((audio_hash, _)) => match state.obj.get(&audio_hash).await {
+                Ok(data) => serve_mp3_range(data, &headers),
+                Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response(),
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "text read-aloud synth failed");
+                (StatusCode::INTERNAL_SERVER_ERROR, "audio synth").into_response()
+            }
+        };
+    }
     let Some(ctx) = resolve_audio(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "audio not available").into_response();
     };
@@ -1282,34 +1369,7 @@ async fn api_audio(
             data.extend_from_slice(&cue);
         }
     }
-    let total = data.len() as u64;
-    let range = headers
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| parse_range(v, total));
-
-    let builder = Response::builder()
-        .header(header::CONTENT_TYPE, "audio/mpeg")
-        .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CACHE_CONTROL, "public, max-age=3600");
-    match range {
-        Some((start, end)) => builder
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(
-                header::CONTENT_RANGE,
-                format!("bytes {start}-{end}/{total}"),
-            )
-            .header(header::CONTENT_LENGTH, end - start + 1)
-            .body(Body::from(data[start as usize..=end as usize].to_vec()))
-            .unwrap()
-            .into_response(),
-        None => builder
-            .status(StatusCode::OK)
-            .header(header::CONTENT_LENGTH, total)
-            .body(Body::from(data))
-            .unwrap()
-            .into_response(),
-    }
+    serve_mp3_range(data, &headers)
 }
 
 /// Per-sentence time marks for the chapter audio (drives read-along highlight).
@@ -1317,6 +1377,20 @@ async fn api_marks(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
 ) -> impl IntoResponse {
+    // Text rendition → units-driven read-aloud marks (idx aligns with /api/units
+    // for the in-place highlight). Additive: the audiobook path below is unchanged.
+    if query.rendition.as_deref() == Some("text") {
+        return match ensure_text_audio(&state, &query).await {
+            Ok((_, marks_hash)) => match state.obj.get(&marks_hash).await {
+                Ok(bytes) => ([(header::CONTENT_TYPE, "application/json")], bytes).into_response(),
+                Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "read marks").into_response(),
+            },
+            Err(e) => {
+                tracing::warn!(error = %e, "text read-aloud synth failed");
+                (StatusCode::INTERNAL_SERVER_ERROR, "audio synth").into_response()
+            }
+        };
+    }
     let Some(ctx) = resolve_audio(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "audio not available").into_response();
     };
@@ -1378,6 +1452,95 @@ async fn ensure_chapter_audio(
         )
         .await
         .map_err(|e| format!("record audio: {e}"))?;
+    Ok((audio_hash, marks_hash))
+}
+
+/// Read-aloud for the TEXT rendition (any document, not a curated audiobook).
+/// Synthesizes from the chapter's `spoken_units` so each clip is one unit, in
+/// order — the marks are therefore indexed by UNIT, matching `/api/units` and the
+/// in-place highlight. Result is content-addressed in rustfs and recorded on the
+/// TEXT chapter row's (until-now-unused) audio/marks hashes, so it's generated
+/// once and a re-sync (which resets those hashes) regenerates it. Never touches
+/// the `audio` rendition path. Returns `(audio_hash, marks_hash)`.
+async fn ensure_text_audio(
+    state: &AppState,
+    query: &FileQuery,
+) -> Result<(String, String), String> {
+    let ctx = resolve_req(state, query).await.ok_or("unknown book")?;
+    let (row, served) = resolve_narration(state, &ctx)
+        .await
+        .ok_or("chapter not found")?;
+    if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash) {
+        return Ok((a.clone(), m.clone()));
+    }
+    // Single-flight: serialize synth per chapter so a double-tap / second client
+    // waits rather than redoing the expensive edge-tts (+ narration) run.
+    let key = format!(
+        "{}|{}|{}|{}",
+        row.book_slug,
+        ctx.kind.as_str(),
+        row.lang,
+        row.rel_path
+    );
+    let lock = {
+        let mut map = state.audio_synth_locks.lock().await;
+        std::sync::Arc::clone(
+            map.entry(key)
+                .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(()))),
+        )
+    };
+    let _guard = lock.lock().await;
+    // Re-check after acquiring: a prior holder may have just filled the hashes.
+    if let Some((fresh, _)) = resolve_narration(state, &ctx).await {
+        if let (Some(a), Some(m)) = (fresh.audio_hash, fresh.marks_hash) {
+            return Ok((a, m));
+        }
+    }
+    let md = row.markdown.clone().unwrap_or_default();
+    let units = server::spoken::spoken_units(&md);
+    if units.is_empty() {
+        return Err("no speakable content".to_string());
+    }
+    // One clip per unit (empty-text units → a silent dwell in `assemble`), so the
+    // mark index equals the unit index the highlight anchors on. Prose is spoken
+    // verbatim; a non-prose block (code/math/image) is optionally narrated by the
+    // LLM CLI (P4) — on failure/disabled it stays empty → a brief silent
+    // step-over. Runs once per chapter (the whole result is cached on the row).
+    let mut texts: Vec<String> = Vec::with_capacity(units.len());
+    for u in &units {
+        if u.kind == server::spoken::UnitKind::Prose {
+            texts.push(u.text.clone());
+        } else {
+            texts.push(
+                server::narrate::narrate(u.kind, &u.src, &served)
+                    .await
+                    .unwrap_or_default(),
+            );
+        }
+    }
+    let voice = {
+        let cat = state.catalog.read().await;
+        cat.book(&row.book_slug)
+            .and_then(|b| b.rendition(RenditionKind::Audio))
+            .and_then(|r| r.voice.clone())
+            .unwrap_or_else(|| state.tts_voice.clone())
+    };
+    let (mp3, marks) = server::audio::synthesize(&state.tts_cmd, &voice, &texts).await?;
+    let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
+    let audio_hash = store_blob(state, mp3, "audio/mpeg").await?;
+    let marks_hash = store_blob(state, marks_json, "application/json").await?;
+    state
+        .store
+        .set_chapter_audio(
+            &row.book_slug,
+            ctx.kind.as_str(),
+            &row.lang,
+            &row.rel_path,
+            &audio_hash,
+            &marks_hash,
+        )
+        .await
+        .map_err(|e| format!("record text audio: {e}"))?;
     Ok((audio_hash, marks_hash))
 }
 

@@ -126,6 +126,27 @@ export interface Mark {
   end_ms: number;
 }
 
+/** Kind of a read-along unit (`/api/units`). Non-prose kinds carry no spoken
+ *  text yet (narrated later, or skipped); they let the highlight step over /
+ *  outline the block in place. */
+export type UnitKind = "prose" | "image" | "math" | "code" | "table" | "html";
+
+/** One read-along unit: a prose sentence or a classified non-prose block.
+ *  `idx` matches the {@link Mark} index; `blk` is the ordinal of the top-level
+ *  rendered block it lives in (the in-place-highlight anchor). */
+export interface Unit {
+  idx: number;
+  kind: UnitKind;
+  blk: number;
+  text: string;
+}
+
+/** Response of `/api/units` — the richer sibling of {@link SpokenContent}. */
+export interface SpokenUnits {
+  lang: string;
+  units: Unit[];
+}
+
 export type WsMessage =
   | {
     type: "ContentUpdate";

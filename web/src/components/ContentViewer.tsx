@@ -48,6 +48,8 @@ interface ContentViewerProps {
   savedScroll?: ((path: string) => number | undefined) | undefined;
   /** Reading-progress: report current scroll ratio for a doc path. */
   onSaveScroll?: ((path: string, ratio: number) => void) | undefined;
+  /** Start reading the current markdown document aloud (text-rendition TTS). */
+  onReadAloud?: (() => void) | undefined;
 }
 
 /** Spinner shown while a code-split viewer chunk downloads. */
@@ -77,6 +79,7 @@ export function ContentViewer({
   lineHeight,
   savedScroll,
   onSaveScroll,
+  onReadAloud,
 }: ContentViewerProps): React.JSX.Element {
   const { t } = useI18n();
   if (!currentPath) {
@@ -109,6 +112,7 @@ export function ContentViewer({
           lineHeight={lineHeight}
           savedScroll={savedScroll}
           onSaveScroll={onSaveScroll}
+          onReadAloud={onReadAloud}
         />
       );
       break;

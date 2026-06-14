@@ -28,6 +28,13 @@ pub struct AppState {
     /// only: regenerated cheaply (one short edge-tts call per voice) on the first
     /// book-end play after a restart.
     pub book_end_cue: Mutex<HashMap<String, Arc<Vec<u8>>>>,
+    /// Per-chapter single-flight locks for on-demand TEXT read-aloud synth, keyed
+    /// by `"{book}|{rendition}|{lang}|{path}"`. A double-tap or a second client
+    /// then waits on the same lock and finds the just-cached audio instead of
+    /// re-running the expensive edge-tts (+ narration) synth. In-memory; entries
+    /// are tiny and bounded by chapters ever read aloud. (The audiobook path keeps
+    /// its own simpler lazy fallback — untouched.)
+    pub audio_synth_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;

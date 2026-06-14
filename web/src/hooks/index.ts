@@ -9,3 +9,4 @@ export { type ShelfSort, setShelfSort, useShelfSort } from "./useShelfSort";
 export { type CompactCards, setCompactCards, useCompactCards } from "./useCompactCards";
 export { type ShelfGroup, setShelfGroup, useShelfGroup } from "./useShelfGroup";
 export { toggleGroupCollapsed, useCollapsedGroups } from "./useCollapsedGroups";
+export { useInPlaceHighlight } from "./useInPlaceHighlight";

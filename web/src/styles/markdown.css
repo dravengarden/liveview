@@ -1373,3 +1373,21 @@
     opacity: 0.5;
   }
 }
+
+/* In-place read-along highlight (CSS Custom Highlight API; see
+   useInPlaceHighlight). Highlight pseudo-elements only accept a small set of
+   properties (background-color honored, border-radius not). Two layers: the
+   whole current sentence is a faint context tint; the "read-so-far" wipe within
+   it (registered later → painted on top) is the strong current-position cue. */
+::highlight(lv-reading) {
+  background-color: rgba(240, 168, 40, 0.16);
+}
+::highlight(lv-reading-active) {
+  background-color: rgba(240, 168, 40, 0.42);
+}
+:root[data-color-scheme="dark"] ::highlight(lv-reading) {
+  background-color: rgba(255, 200, 80, 0.14);
+}
+:root[data-color-scheme="dark"] ::highlight(lv-reading-active) {
+  background-color: rgba(255, 200, 80, 0.38);
+}

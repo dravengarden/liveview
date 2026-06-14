@@ -13,7 +13,12 @@
 
 use std::sync::LazyLock;
 
+use comrak::nodes::{AstNode, NodeValue};
+use comrak::{parse_document, Arena};
 use regex::Regex;
+use serde::Serialize;
+
+use crate::server::renderer::markdown_options;
 
 // Block-level structure detectors.
 static TABLE_DELIM: LazyLock<Regex> =
@@ -210,6 +215,180 @@ pub fn spoken_sentences(markdown: &str) -> Vec<String> {
     sentences
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AST-based units (the read-aloud / in-place-highlight path).
+//
+// Why a second extractor instead of patching `spoken_sentences`: this walks the
+// SAME comrak parse the server renders with (`renderer::markdown_options`), so
+// "what's speakable" is decided by the real parser — currency `$5`, indented
+// code, multiline HTML, GFM tables etc. are classified exactly as they render,
+// not by parallel regexes. It also yields a `blk` anchor (the top-level rendered
+// block ordinal) so the read-along highlight can locate each unit in the DOM.
+// `spoken_sentences` above is left byte-for-byte unchanged so the existing
+// audiobook path is unaffected; this is purely additive.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Kind of a chapter unit. Non-prose kinds carry no spoken text yet (a one-line
+/// narration is filled in later, or the unit is skipped); they exist so the
+/// read-along can still step over / outline the block in place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnitKind {
+    Prose,
+    Image,
+    Math,
+    Code,
+    Table,
+    Html,
+}
+
+/// One speakable/anchorable unit: a sentence of prose, or a non-prose block.
+/// `blk` is the ordinal of the top-level rendered block it belongs to (the
+/// highlight anchor); `idx` is its position in the chapter's ordered unit list
+/// and matches the audio mark index + the `data-sent` anchor.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Unit {
+    pub idx: usize,
+    pub kind: UnitKind,
+    pub blk: usize,
+    pub text: String,
+    /// Raw source of a non-prose block (code/math literal, image alt or URL) —
+    /// the input for an optional spoken narration. Empty for prose / table / html.
+    /// Server-internal: never sent to the client.
+    #[serde(skip)]
+    pub src: String,
+}
+
+/// Collect inline prose from `node`'s children into soft-wrap fragments,
+/// skipping inline images / math / raw HTML / footnote refs; inline code and
+/// link/emphasis text ARE spoken (matching `spoken_sentences`' policy).
+fn collect_inline<'a>(node: &'a AstNode<'a>, frags: &mut Vec<String>, cur: &mut String) {
+    for child in node.children() {
+        match &child.data.borrow().value {
+            NodeValue::Text(t) => cur.push_str(t),
+            NodeValue::Code(c) => cur.push_str(&c.literal),
+            NodeValue::SoftBreak | NodeValue::LineBreak => frags.push(std::mem::take(cur)),
+            NodeValue::Image(_)
+            | NodeValue::Math(_)
+            | NodeValue::HtmlInline(_)
+            | NodeValue::FootnoteReference(_) => {}
+            // Emphasis / links / strikethrough / … — recurse for their text.
+            _ => collect_inline(child, frags, cur),
+        }
+    }
+}
+
+/// The plain prose of one leaf block (paragraph/heading), soft-wraps joined.
+fn leaf_prose<'a>(node: &'a AstNode<'a>) -> String {
+    let mut frags = Vec::new();
+    let mut cur = String::new();
+    collect_inline(node, &mut frags, &mut cur);
+    frags.push(cur);
+    join_wrapped(&frags)
+}
+
+/// If a leaf block carries an image or display-math but no prose, return its
+/// kind + source (image alt-or-URL, math literal) — the input for narration.
+/// Such a paragraph renders as a figure / formula, so it's an Image / Math unit.
+fn non_prose_block<'a>(node: &'a AstNode<'a>) -> Option<(UnitKind, String)> {
+    for d in node.descendants() {
+        match &d.data.borrow().value {
+            NodeValue::Image(link) => {
+                // Alt text = the image node's inline children; fall back to URL.
+                let mut frags = Vec::new();
+                let mut cur = String::new();
+                collect_inline(d, &mut frags, &mut cur);
+                frags.push(cur);
+                let alt = join_wrapped(&frags);
+                let src = if alt.trim().is_empty() { link.url.clone() } else { alt };
+                return Some((UnitKind::Image, src));
+            }
+            NodeValue::Math(m) => return Some((UnitKind::Math, m.literal.clone())),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Emit the unit(s) for one block at top-level ordinal `blk`, recursing into
+/// containers (lists/quotes) so nested paragraphs share the container's anchor.
+/// Tuple: (kind, blk, spoken text, narration source).
+fn emit_block<'a>(
+    node: &'a AstNode<'a>,
+    blk: usize,
+    out: &mut Vec<(UnitKind, usize, String, String)>,
+) {
+    match &node.data.borrow().value {
+        NodeValue::CodeBlock(nc) => {
+            out.push((UnitKind::Code, blk, String::new(), nc.literal.clone()));
+        }
+        NodeValue::Table(_) => out.push((UnitKind::Table, blk, String::new(), String::new())),
+        NodeValue::HtmlBlock(_) => out.push((UnitKind::Html, blk, String::new(), String::new())),
+        // Structural / non-spoken — no unit, but the block ordinal still advances.
+        NodeValue::ThematicBreak | NodeValue::FootnoteDefinition(_) | NodeValue::FrontMatter(_) => {}
+        NodeValue::Paragraph | NodeValue::Heading(_) => {
+            let prose = leaf_prose(node);
+            if prose.trim().is_empty() {
+                if let Some((kind, src)) = non_prose_block(node) {
+                    out.push((kind, blk, String::new(), src));
+                }
+            } else {
+                let mut sentences = Vec::new();
+                segment_block(&prose, &mut sentences);
+                for s in sentences {
+                    out.push((UnitKind::Prose, blk, s, String::new()));
+                }
+            }
+        }
+        // Containers: recurse, keeping the same top-level block anchor.
+        NodeValue::BlockQuote
+        | NodeValue::MultilineBlockQuote(_)
+        | NodeValue::List(_)
+        | NodeValue::Item(_)
+        | NodeValue::TaskItem(_)
+        | NodeValue::DescriptionList
+        | NodeValue::DescriptionItem(_)
+        | NodeValue::DescriptionTerm
+        | NodeValue::DescriptionDetails => {
+            for child in node.children() {
+                emit_block(child, blk, out);
+            }
+        }
+        // Anything else: best-effort prose extraction.
+        _ => {
+            let prose = leaf_prose(node);
+            if !prose.trim().is_empty() {
+                let mut sentences = Vec::new();
+                segment_block(&prose, &mut sentences);
+                for s in sentences {
+                    out.push((UnitKind::Prose, blk, s, String::new()));
+                }
+            }
+        }
+    }
+}
+
+/// Turn chapter markdown into an ordered list of units (prose sentences + the
+/// non-prose blocks between them), each anchored to its top-level block ordinal.
+pub fn spoken_units(markdown: &str) -> Vec<Unit> {
+    let arena = Arena::new();
+    let root = parse_document(&arena, markdown, &markdown_options());
+    let mut raw: Vec<(UnitKind, usize, String, String)> = Vec::new();
+    for (blk, node) in root.children().enumerate() {
+        emit_block(node, blk, &mut raw);
+    }
+    raw.into_iter()
+        .enumerate()
+        .map(|(idx, (kind, blk, text, src))| Unit {
+            idx,
+            kind,
+            blk,
+            text,
+            src,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,5 +456,52 @@ mod tests {
     fn decimals_do_not_split() {
         let s = spoken_sentences("gas price is 3.5 gwei here.");
         assert_eq!(s, ["gas price is 3.5 gwei here."]);
+    }
+
+    #[test]
+    fn units_keep_currency_and_classify_blocks() {
+        let md = "看价格 $5 and $10 这里。\n\n\
+                  ```rust\nfn x() {}\n```\n\n\
+                  | a | b |\n|---|---|\n| 1 | 2 |\n\n\
+                  ![图](a.png)\n";
+        let u = spoken_units(md);
+        // First block: prose, and the regex extractor's currency bug is gone —
+        // comrak's real `$`-math rule leaves "$5 and $10" as text.
+        assert_eq!(u[0].kind, UnitKind::Prose);
+        assert!(
+            u[0].text.contains("$5") && u[0].text.contains("$10"),
+            "currency lost: {:?}",
+            u[0]
+        );
+        assert_eq!(u[0].blk, 0);
+        let kinds: Vec<_> = u.iter().map(|x| x.kind).collect();
+        assert!(kinds.contains(&UnitKind::Code), "no code unit: {kinds:?}");
+        assert!(kinds.contains(&UnitKind::Table), "no table unit: {kinds:?}");
+        assert!(kinds.contains(&UnitKind::Image), "no image unit: {kinds:?}");
+        // blk is the top-level block ordinal: para=0, code=1, table=2, image=3.
+        assert_eq!(u.iter().find(|x| x.kind == UnitKind::Code).unwrap().blk, 1);
+        assert_eq!(u.iter().find(|x| x.kind == UnitKind::Image).unwrap().blk, 3);
+    }
+
+    #[test]
+    fn units_segment_prose_with_shared_block_anchor() {
+        let u = spoken_units("第一句。第二句！\n\n第三段。");
+        let prose: Vec<_> = u.iter().filter(|x| x.kind == UnitKind::Prose).collect();
+        assert_eq!(prose.len(), 3);
+        assert_eq!(prose[0].blk, 0);
+        assert_eq!(prose[1].blk, 0); // same paragraph → same anchor
+        assert_eq!(prose[2].blk, 1); // next paragraph → next anchor
+        assert!(u.iter().enumerate().all(|(i, x)| x.idx == i));
+    }
+
+    #[test]
+    fn units_keep_inline_code_drop_image_and_math() {
+        let u = spoken_units("用 `STF(s,t)` 计算 $x^2$ 和 ![图](a.png) 收尾。");
+        let p = u.iter().find(|x| x.kind == UnitKind::Prose).unwrap();
+        assert!(p.text.contains("STF(s,t)"), "inline code lost: {p:?}");
+        assert!(
+            !p.text.contains("x^2") && !p.text.contains("a.png"),
+            "math/image leaked into prose: {p:?}"
+        );
     }
 }
