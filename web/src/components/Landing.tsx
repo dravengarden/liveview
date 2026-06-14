@@ -373,14 +373,43 @@ function CompactKindBadge(
   );
 }
 
+/** Intl formatter construction is slow (several ms each on mobile Safari) and
+ *  these run once per card. Building two per card across the whole shelf on
+ *  every render — including the return from a book — was a 1–2s main-thread
+ *  stall: `content-visibility:auto` skips off-screen *layout/paint*, NOT this
+ *  *JS* that builds every card. The formatters are pure + immutable, so cache
+ *  one instance per locale and reuse it (88 constructions/render → 2 lookups).
+ *  Locales here are only zh-CN / en-US, so the caches stay tiny. */
+const toLocale = (lang: string): string => (lang === "zh" ? "zh-CN" : "en-US");
+const DATE_FMT = new Map<string, Intl.DateTimeFormat>();
+function dateFmt(lang: string): Intl.DateTimeFormat {
+  const loc = toLocale(lang);
+  let f = DATE_FMT.get(loc);
+  if (!f) {
+    f = new Intl.DateTimeFormat(loc, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+    DATE_FMT.set(loc, f);
+  }
+  return f;
+}
+const REL_FMT = new Map<string, Intl.RelativeTimeFormat>();
+function relFmt(lang: string): Intl.RelativeTimeFormat {
+  const loc = toLocale(lang);
+  let f = REL_FMT.get(loc);
+  if (!f) {
+    f = new Intl.RelativeTimeFormat(loc, { numeric: "auto" });
+    REL_FMT.set(loc, f);
+  }
+  return f;
+}
+
 /** Format a unix-ms deploy stamp as a locale date, or null when unset (0). */
 function fmtDate(ms: number, lang: string): string | null {
   if (!ms) return null;
-  return new Date(ms).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+  return dateFmt(lang).format(new Date(ms));
 }
 
 /** The largest [unit, seconds-per-unit] step a delta fits into, coarsest last. */
@@ -397,9 +426,7 @@ const REL_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
  *  render shares a single clock read. */
 function fmtRelative(ms: number, now: number, lang: string): string | null {
   if (!ms) return null;
-  const rtf = new Intl.RelativeTimeFormat(lang === "zh" ? "zh-CN" : "en-US", {
-    numeric: "auto",
-  });
+  const rtf = relFmt(lang);
   const sec = (ms - now) / 1000; // negative ⇒ in the past
   const abs = Math.abs(sec);
   for (const [unit, per] of REL_STEPS) {
