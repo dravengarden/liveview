@@ -10,6 +10,9 @@
 //!   `[id]:` definition.
 //! - `md/missing-asset` (Warning): a relative local link/image target that
 //!   isn't on disk.
+//! - `md/stray-emphasis` (Warning): a literal `**` that survived into inline
+//!   text — a bold marker comrak could not pair (the bold broke across a block
+//!   boundary, or was left unclosed), so the reader shows `**` instead of bold.
 //!
 //! ## What comrak 0.36 actually does (verified empirically, drives the design)
 //!
@@ -83,6 +86,7 @@ impl Validator for MarkdownValidator {
         self.check_footnotes(file, root, &mut diags);
         self.check_broken_ref_links(file, root, &mut diags);
         self.check_assets(file, ctx, root, &mut diags);
+        self.check_stray_emphasis(file, root, &mut diags);
 
         // Stable, location-ordered output regardless of which sub-check found
         // a diagnostic first.
@@ -288,6 +292,66 @@ impl MarkdownValidator {
                 hint: Some(format!("expected at `{}`", target.display())),
                 snippet: Some(url.to_string()),
             });
+        }
+    }
+
+    /// `md/stray-emphasis` (Warning).
+    ///
+    /// comrak consumes a *matched* `**bold**` into a `Strong` node — the `**`
+    /// delimiters are gone from the tree. So a `**` that survives inside an
+    /// inline `Text` node is a bold marker comrak could NOT pair, which the
+    /// reader renders as a literal `**` instead of bold. Almost always an
+    /// authoring slip, two flavours seen in practice:
+    ///
+    /// - **Bold split across a block boundary.** The classic CJK case: a
+    ///   soft-wrapped continuation line begins with `+ ` / `- ` / `* `, which
+    ///   CommonMark parses as a *list item that interrupts the paragraph* — the
+    ///   `**…**` is cut in two, leaving an unpaired `**` in each half.
+    /// - **Unclosed `**`**: the opener was typed, the closer forgotten.
+    ///
+    /// Scanning only `Text` nodes means a `**` inside a code span/block or a
+    /// math span is correctly ignored — those are `Code`/`CodeBlock`/`Math`
+    /// nodes, never `Text` (the same property the footnote/ref-link scans rely
+    /// on). Known limitation: a *deliberately escaped* `\*\*` (the correct way
+    /// to show a literal `**`) collapses to a `**` Text node and is flagged too
+    /// — a rare false positive, and warn-only, so a reviewer/skill waves it
+    /// through rather than being blocked.
+    fn check_stray_emphasis<'a>(
+        &self,
+        file: &CheckFile,
+        root: &'a AstNode<'a>,
+        diags: &mut Vec<Diagnostic>,
+    ) {
+        for node in root.descendants() {
+            let data = node.data.borrow();
+            let NodeValue::Text(text) = &data.value else {
+                continue;
+            };
+            let base = sourcepos_start(&data.sourcepos);
+            // `match_indices` is non-overlapping, so `****` reports at 0 and 2 —
+            // fine, both are stray markers either way.
+            for (off, _) in text.match_indices("**") {
+                let (line, col) = offset_within(base, text, off);
+                diags.push(Diagnostic {
+                    file: file.rel.clone(),
+                    line,
+                    col,
+                    end_line: line,
+                    end_col: col + 1, // spans the two `*` chars.
+                    severity: Severity::Warning,
+                    source: "markdown",
+                    rule: "md/stray-emphasis".to_string(),
+                    message: "literal `**` survived rendering — bold emphasis did not pair"
+                        .to_string(),
+                    hint: Some(
+                        "a soft-wrapped line starting with `+`/`-`/`*` is parsed as a list and \
+                         splits `**…**`; reflow so the marker isn't at line start, close the \
+                         bold, or escape it as `\\*\\*`"
+                            .to_string(),
+                    ),
+                    snippet: Some("**".to_string()),
+                });
+            }
         }
     }
 }
@@ -505,5 +569,49 @@ mod tests {
         let d = check_with_dir("![p](pic.png#only-dark)\n", dir.clone());
         let _ = std::fs::remove_dir_all(&dir);
         assert!(d.is_empty(), "fragment not stripped: {:?}", rules(&d));
+    }
+
+    // --- md/stray-emphasis ---------------------------------------------------
+    // comrak consumes a matched `**bold**` into a Strong node, so any `**` left
+    // in a Text node is an unpaired marker the reader shows literally.
+
+    #[test]
+    fn matched_bold_not_flagged() {
+        // Correctly paired bold leaves no `**` in the tree.
+        let d = check("This is **bold** text.\n");
+        assert!(d.is_empty(), "matched bold flagged: {:?}", rules(&d));
+    }
+
+    #[test]
+    fn unclosed_emphasis_flagged() {
+        let d = check("This is **not closed.\n");
+        assert_eq!(rules(&d), ["md/stray-emphasis"]);
+        assert_eq!(d[0].severity, Severity::Warning);
+        // The `**` is the 9th char on line 1.
+        assert_eq!((d[0].line, d[0].col), (1, 9));
+    }
+
+    #[test]
+    fn bold_split_by_list_interrupt_flagged() {
+        // The real-world bug: a soft-wrapped continuation line starting with
+        // `+ ` is parsed as a list item that interrupts the paragraph, cutting
+        // the bold in two — an unpaired `**` is left in each half.
+        let d = check("combo:**evict\n+ consolidate**.\n");
+        let r = rules(&d);
+        assert_eq!(r, ["md/stray-emphasis", "md/stray-emphasis"], "got {r:?}");
+        assert!(d.iter().all(|x| x.severity == Severity::Warning));
+    }
+
+    #[test]
+    fn emphasis_in_code_span_ignored() {
+        // `**` inside a code span is literal markup, not an emphasis marker.
+        let d = check("Write `**` to show two asterisks.\n");
+        assert!(d.is_empty(), "code-span `**` leaked: {:?}", rules(&d));
+    }
+
+    #[test]
+    fn emphasis_in_code_block_ignored() {
+        let d = check("```python\nx = 2 ** 8\n```\n");
+        assert!(d.is_empty(), "code-block `**` leaked: {:?}", rules(&d));
     }
 }
