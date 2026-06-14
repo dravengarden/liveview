@@ -1234,9 +1234,15 @@ struct SpokenUnitsContent {
 }
 
 /// Read-along units for the in-place highlight (the richer sibling of
-/// /api/spoken). Same overlay→base resolution; derived from the chapter markdown
-/// on the fly (a cheap comrak parse — no storage, no schema), so it never
-/// touches the audiobook generation path.
+/// /api/spoken), derived from the chapter markdown on the fly (a cheap comrak
+/// parse — no storage, no schema).
+///
+/// CRUCIAL: this resolves the **displayed** chapter exactly like `/api/file`
+/// (the rendered `.md`), NOT via `resolve_narration` (which prefers a
+/// `<id>.spoken.md` audiobook-script overlay). The highlight ranges + `blk`
+/// anchors must match the HTML the reader actually shows; an overlay is a
+/// different, rewritten document with a different block structure, so using it
+/// would land every anchor on the wrong block → whole-block mis-highlighting.
 async fn api_units(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
@@ -1247,8 +1253,12 @@ async fn api_units(
     let Some(ctx) = resolve_req(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     };
-    match resolve_narration(&state, &ctx).await {
-        Some((row, served_lang)) => {
+    match state
+        .store
+        .get_chapter_fallback(&ctx.slug, ctx.kind.as_str(), &ctx.lang, &ctx.default_lang, &ctx.rest)
+        .await
+    {
+        Ok(Some((row, served_lang))) => {
             let md = row.markdown.unwrap_or_default();
             Json(SpokenUnitsContent {
                 lang: served_lang,
@@ -1256,7 +1266,7 @@ async fn api_units(
             })
             .into_response()
         }
-        None => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        _ => (StatusCode::NOT_FOUND, "File not found").into_response(),
     }
 }
 
@@ -1467,8 +1477,16 @@ async fn ensure_text_audio(
     query: &FileQuery,
 ) -> Result<(String, String), String> {
     let ctx = resolve_req(state, query).await.ok_or("unknown book")?;
-    let (row, served) = resolve_narration(state, &ctx)
+    // Resolve the DISPLAYED chapter (like /api/file), NOT resolve_narration's
+    // `.spoken.md` overlay — so the synthesized audio + its marks are derived
+    // from the very text the reader sees and the in-place highlight anchors line
+    // up. (The overlay is the audiobook rendition's own curated script.)
+    let (row, served) = state
+        .store
+        .get_chapter_fallback(&ctx.slug, ctx.kind.as_str(), &ctx.lang, &ctx.default_lang, &ctx.rest)
         .await
+        .ok()
+        .flatten()
         .ok_or("chapter not found")?;
     if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash) {
         return Ok((a.clone(), m.clone()));
@@ -1491,7 +1509,11 @@ async fn ensure_text_audio(
     };
     let _guard = lock.lock().await;
     // Re-check after acquiring: a prior holder may have just filled the hashes.
-    if let Some((fresh, _)) = resolve_narration(state, &ctx).await {
+    if let Ok(Some((fresh, _))) = state
+        .store
+        .get_chapter_fallback(&ctx.slug, ctx.kind.as_str(), &ctx.lang, &ctx.default_lang, &ctx.rest)
+        .await
+    {
         if let (Some(a), Some(m)) = (fresh.audio_hash, fresh.marks_hash) {
             return Ok((a, m));
         }

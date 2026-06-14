@@ -196,14 +196,19 @@ export function useInPlaceHighlight(
         h.add(wipe);
         api.set(HL_ACTIVE, h);
       }
-    } else {
-      // Non-prose (or a text miss): outline the whole block, no inner wipe.
+    } else if (unit.kind !== "prose") {
+      // A non-prose block (image / code / table / math): outline the whole
+      // block so the reader sees where the narration is pointing.
       const range = document.createRange();
       range.selectNodeContents(blockEl);
       const h = api.make();
       h.add(range);
       api.set(HL_SENTENCE, h);
       api.remove(HL_ACTIVE);
+    } else {
+      // A prose sentence we couldn't locate in its block (text/markup
+      // mismatch): show NO highlight rather than lighting up the whole block.
+      clear();
     }
 
     // Follow-scroll only when the spoken block has drifted off screen, so we
