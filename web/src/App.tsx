@@ -684,10 +684,28 @@ export function App(): React.JSX.Element {
     [books, loadFile],
   );
 
-  // Sidebar / markdown-link navigation stays within the current edition + mode.
+  // Sidebar / TOC navigation, within the current edition + mode. Logical-layer
+  // history: the shelf is layer 0 and "reading" is a single layer-1 entry above
+  // it. `enterBook` pushes that one entry on shelf→book; switching chapters from
+  // the TOC is a *lateral* move that REPLACES it, so the browser/native Back from
+  // any chapter returns to the shelf, not to the previously-read chapter. (The
+  // `enteringFromShelf` guard is defensive — the sidebar only renders while
+  // reading, so in practice this always replaces.)
   const handleSelect = useCallback(
     (path: string) => {
-      void openFile(path, lang, rendition);
+      const enteringFromShelf = currentPathRef.current === null;
+      void openFile(path, lang, rendition, !enteringFromShelf);
+    },
+    [openFile, lang, rendition],
+  );
+
+  // In-content cross-reference links (a `.md` link in the prose, e.g. "see ch.4").
+  // Unlike a TOC jump this is a drill-DOWN, not a lateral move: PUSH a history
+  // entry so Back returns to the citing chapter where the link was, not to the
+  // shelf.
+  const handleNavigateLink = useCallback(
+    (path: string) => {
+      void openFile(path, lang, rendition, false);
     },
     [openFile, lang, rendition],
   );
@@ -1485,7 +1503,7 @@ export function App(): React.JSX.Element {
                     fileType={currentFileType}
                     currentPath={currentPath}
                     theme={theme}
-                    onNavigate={handleSelect}
+                    onNavigate={handleNavigateLink}
                     contentMaxWidth={menuBarSettings.contentMaxWidth}
                     lineHeight={menuBarSettings.lineHeight}
                     savedScroll={savedScroll}
