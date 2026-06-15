@@ -1536,7 +1536,14 @@ export function App(): React.JSX.Element {
               inset: 0,
               display: "flex",
               flexDirection: "column",
-              opacity: activeSlug === null ? 1 : 0,
+              // The shelf stays opacity:1 ALWAYS; the open book renders as an
+              // OPAQUE overlay on top (below) instead of the shelf going opacity:0.
+              // Why: on iOS/mobile WebKit the return freeze is ~480ms of COMPOSITOR
+              // (main thread free — measured), i.e. re-rasterizing the shelf's
+              // tiled scroll layer whose backing store iOS DISCARDS while it's
+              // hidden (opacity:0). Desktop WebKit (Mac Safari) doesn't, hence
+              // ~65ms there. Keeping the shelf visible (just occluded) should keep
+              // its tiles, making the return a layer removal, not a re-raster.
               pointerEvents: activeSlug === null ? "auto" : "none",
             }}
           >
@@ -1549,6 +1556,14 @@ export function App(): React.JSX.Element {
             />
           </Box>
           {activeSlug !== null && (
+            <Box
+              sx={{
+                // Opaque full-screen overlay covering the (still-rendered) shelf.
+                position: "absolute",
+                inset: 0,
+                bgcolor: (t) => t.palette.background.default,
+              }}
+            >
             <NavShell
               appKey="liveview"
               barPosition={navbarAtBottom ? "bottom" : "top"}
@@ -1650,6 +1665,7 @@ export function App(): React.JSX.Element {
                   />
                 )}
             </NavShell>
+            </Box>
           )}
         </Box>
       </Box>
