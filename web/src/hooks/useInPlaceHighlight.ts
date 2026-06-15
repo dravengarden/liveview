@@ -224,14 +224,19 @@ export function useInPlaceHighlight(
     return clear;
   }, [active, units, marks, currentIdx, currentTime, playing, scrollerRef]);
 
-  // Tap-to-seek: while reading aloud, clicking a paragraph jumps playback to its
-  // first sentence. Ignores links/images (the reader's own handlers own those)
-  // and is inert when not reading aloud, so normal reading clicks are untouched.
+  // Tap-to-seek: only WHILE PLAYING, clicking a paragraph jumps playback to its
+  // first sentence — the "follow my eyes" reposition the user wants while
+  // listening. When the narration is PAUSED (or not on this chapter), a tap is
+  // just the reader touching the page, so it does NOTHING: it must never seek or
+  // auto-start playback (the dominant interaction here is silent reading, and an
+  // accidental paragraph tap hijacking playback was the top complaint). Ignores
+  // links/images (the reader's own handlers own those). To start narration from a
+  // specific spot: play (navbar control), then tap — now it seeks.
   useEffect(() => {
     const body = scrollerRef.current?.querySelector<HTMLElement>(
       ".markdown-body",
     );
-    if (!active || !body) return undefined;
+    if (!active || !playing || !body) return undefined;
     const onClick = (e: MouseEvent): void => {
       const target = e.target as HTMLElement;
       if (target.closest("a") || target.closest("img")) return;
@@ -243,5 +248,5 @@ export function useInPlaceHighlight(
     };
     body.addEventListener("click", onClick);
     return () => body.removeEventListener("click", onClick);
-  }, [active, units, seekToSentence, scrollerRef]);
+  }, [active, playing, units, seekToSentence, scrollerRef]);
 }

@@ -22,6 +22,8 @@ import {
   Close as CloseIcon,
   Headphones as AudiobookIcon,
   MenuBook as ReadIcon,
+  Pause as PauseIcon,
+  PlayArrow as PlayIcon,
 } from "@mui/icons-material";
 import {
   AudiobookPlayer,
@@ -338,8 +340,13 @@ export function App(): React.JSX.Element {
   // The root audio engine: playback + the popup live above every view, so
   // navigating never stops the audio nor closes the popup. We only need to seed
   // playback (`playChapter`) and raise the popup into focus (`setExpanded`).
-  const { playChapter: audioPlayChapter, syncNotice, nowPlaying } =
-    useAudioPlayer();
+  const {
+    playChapter: audioPlayChapter,
+    syncNotice,
+    nowPlaying,
+    playing,
+    togglePlay,
+  } = useAudioPlayer();
   // Mirror of `nowPlaying` for the view→engine effect's guard. That effect must
   // react ONLY to view-led navigation (currentPath), never to engine-led chapter
   // changes — reading nowPlaying through a ref keeps it out of the dep array so
@@ -1302,8 +1309,39 @@ export function App(): React.JSX.Element {
 
   // In-book top-bar actions: the read/listen switch (when the book has both
   // renditions) + the shared settings affordance.
+  // Read-aloud of THIS text chapter is "active" when the engine is on it (text
+  // rendition, same path) — playing OR paused. The navbar control reflects that
+  // state and (when active) the floating now-playing bubble is suppressed, since
+  // the bar already represents it: one listen affordance, not two headphones.
+  const readingThisInPlace = nowPlaying?.rendition === "text" &&
+    nowPlaying.chapterPath === currentPath;
+
   const bookActions = (
     <>
+      {/* Read-aloud play/pause for the current rich-text page (in-place highlight
+          on the rendered markdown). Lives here in the bar — NOT a floating FAB
+          over the content — so it never overlaps the page or sits in the reading
+          thumb-zone. Only on the text rendition (the audio read-along page has its
+          own transport). Idle/paused → ▶ (start / resume); playing → ⏸. */}
+      {rendition === "text" && currentPath && (
+        <IconButton
+          aria-label={readingThisInPlace
+            ? (playing ? t("audiobook.pause") : t("audiobook.play"))
+            : t("audiobook.readAloud")}
+          aria-pressed={readingThisInPlace && playing}
+          onClick={() =>
+            readingThisInPlace ? togglePlay() : handleReadAloud()}
+          sx={{
+            width: 40,
+            height: 40,
+            color: readingThisInPlace ? "primary.main" : "text.secondary",
+          }}
+        >
+          {readingThisInPlace && playing
+            ? <PauseIcon sx={{ fontSize: rem(24) }} />
+            : <PlayIcon sx={{ fontSize: rem(24) }} />}
+        </IconButton>
+      )}
       {showRenditionToggle && (
         // Read ↔ listen as a soft pill segmented control: a subtle rounded
         // track with two circular thumbs, the active one an accent disc. Lighter
@@ -1581,7 +1619,6 @@ export function App(): React.JSX.Element {
                     lineHeight={menuBarSettings.lineHeight}
                     savedScroll={savedScroll}
                     onSaveScroll={saveProgress}
-                    onReadAloud={handleReadAloud}
                   />
                 )}
             </NavShell>
@@ -1595,6 +1632,7 @@ export function App(): React.JSX.Element {
       }
       <FloatingBubble
         onPlayingPage={onPlayingPage}
+        suppressed={readingThisInPlace}
         onOpenPlayer={openPlayingAudio}
       />
       <Snackbar

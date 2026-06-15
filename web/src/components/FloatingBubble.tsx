@@ -155,9 +155,15 @@ function resolve(side: Side, topRatio: number): Pos {
  */
 export function FloatingBubble({
   onPlayingPage,
+  suppressed = false,
   onOpenPlayer,
 }: {
   onPlayingPage: boolean;
+  /** Hide the bubble even though playback is active — used when another bar
+   *  already represents the now-playing state (e.g. the navbar read-aloud
+   *  control while you're viewing the very chapter being read aloud), so we
+   *  don't show two "now playing" affordances for the same session. */
+  suppressed?: boolean;
   onOpenPlayer: () => void;
 }): React.JSX.Element | null {
   const { t } = useI18n();
@@ -275,7 +281,7 @@ export function FloatingBubble({
   // resize listener can't update an absent element) — without this the bubble
   // reappears docked off the bottom edge on phones. `resolve` clamps to the
   // live innerHeight, so the dock is always on-screen on show.
-  const shown = nowPlaying != null && !onPlayingPage;
+  const shown = nowPlaying != null && !onPlayingPage && !suppressed;
   useLayoutEffect(() => {
     if (shown) setPos(resolve(stored.current.side, stored.current.topRatio));
   }, [shown]);
@@ -500,8 +506,9 @@ export function FloatingBubble({
   );
 
   // Hidden on the playing book's own page (the bottom bar owns it there), when
-  // nothing is loaded, and while the full popup is in focus.
-  if (!nowPlaying || onPlayingPage) return null;
+  // nothing is loaded, while the full popup is in focus, and when suppressed
+  // (the navbar read-aloud control already shows the now-playing state).
+  if (!nowPlaying || onPlayingPage || suppressed) return null;
 
   const slug = nowPlaying.bookSlug;
   const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;

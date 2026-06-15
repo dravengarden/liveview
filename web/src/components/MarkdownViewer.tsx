@@ -1,16 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Box, Fab } from "@mui/material";
-import {
-  GraphicEq as ReadingIcon,
-  Headphones as ReadAloudIcon,
-  Pause as PauseIcon,
-} from "@mui/icons-material";
+import { Box } from "@mui/material";
 import { READING_COLUMN_MAX } from "@/types";
 import { ImageLightbox } from "../_shell";
 import { ScrollToTopButton } from "./ScrollToTopButton";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { useInPlaceHighlight } from "@/hooks/useInPlaceHighlight";
-import { useAudioPlayer } from "@/audio/player";
 import { ensureScript, ensureStyle } from "@/ensureAsset";
 
 declare global {
@@ -47,8 +41,6 @@ interface MarkdownViewerProps {
   savedScroll?: ((path: string) => number | undefined) | undefined;
   /** Report the current scroll ratio (0..1) for a doc path (debounced upstream). */
   onSaveScroll?: ((path: string, ratio: number) => void) | undefined;
-  /** Start reading this document aloud (text-rendition TTS + in-place highlight). */
-  onReadAloud?: (() => void) | undefined;
 }
 
 // Font stack for mermaid SVG labels. Why: mermaid's built-in default is
@@ -168,7 +160,6 @@ export function MarkdownViewer({
   lineHeight,
   savedScroll,
   onSaveScroll,
-  onReadAloud,
 }: MarkdownViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   // Wrapper that hosts the reading-progress bar; carries the --lv-read-progress
@@ -194,15 +185,10 @@ export function MarkdownViewer({
   useWakeLock(!!html);
 
   // Read-along: when the audio engine is narrating THIS text chapter, highlight
-  // the spoken sentence in place. No-op during normal (silent) reading.
+  // the spoken sentence in place. No-op during normal (silent) reading. The
+  // read-aloud play/pause control itself now lives in the NavShell bar (App.tsx
+  // bookActions), not as a floating FAB over the content.
   useInPlaceHighlight(containerRef, currentPath);
-
-  // Read-aloud floating control. `readingThis` = the engine is currently on this
-  // very document (text rendition), so the button toggles play/pause; otherwise
-  // it starts read-aloud via the parent-supplied callback.
-  const { nowPlaying, playing, togglePlay } = useAudioPlayer();
-  const readingThis = nowPlaying?.rendition === "text" &&
-    nowPlaying.chapterPath === currentPath;
 
   const processContent = useCallback(() => {
     const container = containerRef.current;
@@ -829,27 +815,6 @@ export function MarkdownViewer({
           targetRef={containerRef}
           bottomLift="var(--shell-bar-h, 0px)"
         />
-        {onReadAloud && (
-          <Fab
-            color="primary"
-            size="medium"
-            aria-label={readingThis
-              ? (playing ? "Pause reading aloud" : "Resume reading aloud")
-              : "Read this page aloud"}
-            onClick={() => (readingThis ? togglePlay() : onReadAloud())}
-            sx={{
-              position: "absolute",
-              left: 16,
-              // Sit above the frosted bottom bar on mobile (0 on desktop).
-              bottom: "calc(16px + var(--shell-bar-h, 0px))",
-              zIndex: 5,
-            }}
-          >
-            {readingThis
-              ? (playing ? <PauseIcon /> : <ReadingIcon />)
-              : <ReadAloudIcon />}
-          </Fab>
-        )}
       </Box>
       <ImageLightbox
         images={images}
