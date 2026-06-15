@@ -380,13 +380,6 @@ function CompactKindBadge(
  *  *JS* that builds every card. The formatters are pure + immutable, so cache
  *  one instance per locale and reuse it (88 constructions/render → 2 lookups).
  *  Locales here are only zh-CN / en-US, so the caches stay tiny. */
-// DIAGNOSTIC (URL-gated): `?noripple` disables the shelf-card ripple, to test
-// whether a tap-started ripple, stranded on the shelf when you return, is what
-// re-rasterizes the revealed shelf and freezes the return on mobile WebKit.
-const DIAG_NORIPPLE =
-  typeof window !== "undefined" &&
-  new URLSearchParams(window.location.search).has("noripple");
-
 const toLocale = (lang: string): string => (lang === "zh" ? "zh-CN" : "en-US");
 const DATE_FMT = new Map<string, Intl.DateTimeFormat>();
 function dateFmt(lang: string): Intl.DateTimeFormat {
@@ -729,11 +722,9 @@ const ShelfCard = memo(function ShelfCard({
         ...(compactCards && {
           backgroundImage: compactTint(b.slug),
         }),
-        // content-visibility A/B (lv-v130): REMOVED again, this time measured via
-        // the /api/perf beacon. WebKit's render-in of content-visibility:auto
-        // cards on the shelf reveal is the leading suspect for the consistent
-        // ~480ms paint on return. If the beacon shows paint drop, this stays out
-        // (the card is memoized, so plain render is cheap); if not, restore it.
+        // (No content-visibility:auto on the cards: it interacted badly with the
+        // shelf reveal — flash/stall — and the card is memoized, so a plain render
+        // is cheap enough to skip the optimization.)
         // Hover lift is a pointer affordance; on touch it fires on
         // every scroll-tap and forces a repaint mid-scroll, so gate
         // the transition + lift behind a real hover-capable pointer.
@@ -746,15 +737,7 @@ const ShelfCard = memo(function ShelfCard({
         },
       }}
     >
-      {
-        /* Standard MUI ripple. (NOTE: a stranded ripple on return — it lingers
-        ~2s after coming back from a book — turned out to be a SYMPTOM, not the
-        cause: the main thread is blocked on return, so the ripple just can't be
-        cleaned up until the block clears. Disabling it removed the ripple but not
-        the freeze, so the ripple stays; the real ~2s block is measured via the
-        /api/perf beacon. See App's return path.) */
-      }
-      <CardActionArea onClick={() => onOpen(b.slug)} disableRipple={DIAG_NORIPPLE}>
+      <CardActionArea onClick={() => onOpen(b.slug)}>
         {
           /* Cover: the book's own image when it has one, else a
         slug-keyed gradient + the kind icon. Top-left badge: a

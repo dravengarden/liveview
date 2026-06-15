@@ -3,7 +3,6 @@ import { nativeNavPop, nativeNavPush, nativeNavReady } from "@/native-nav";
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -234,41 +233,6 @@ interface UntranslatedNotice {
   shown: string;
 }
 
-// DIAGNOSTIC (iOS return-to-shelf freeze): timestamp set the instant a
-// return-to-shelf is triggered (swipe/back-button → backToLanding, or system
-// back → popstate). A useLayoutEffect below reads it once the shelf has
-// re-rendered, splitting the freeze into JS/commit vs browser paint and beaconing
-// it to /api/perf so we can localize it on the real device. Remove once fixed.
-let returnNavStart = 0;
-
-// PROBE (lv-v146): the return freeze only repros under a REAL tap to enter; the
-// leading suspect is a stranded MUI ripple (a tap whose release is swallowed by
-// the navigation leaves the ripple animating on the hidden shelf card, which
-// re-rasterizes the whole shelf when revealed). Alternate a non-destructive
-// cleanup on every other return and tag the beacon with `v` (0 = control, 1 =
-// cleanup) so ONE on-device session shows whether the cleanup drops paint.
-let probeReturnCount = 0;
-let probeVariant = 0;
-function applyReturnProbe(): void {
-  probeVariant = probeReturnCount % 2;
-  probeReturnCount += 1;
-  if (probeVariant !== 1) return;
-  try {
-    // Kill any stranded ripple elements before the shelf is revealed.
-    document
-      .querySelectorAll(
-        ".MuiTouchRipple-rippleVisible, .MuiTouchRipple-root .MuiTouchRipple-child",
-      )
-      .forEach((el) => el.remove());
-    // Drop focus so no :focus-styled card repaints on reveal.
-    if (document.activeElement instanceof HTMLElement) {
-      document.activeElement.blur();
-    }
-  } catch {
-    // best-effort probe
-  }
-}
-
 export function App(): React.JSX.Element {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [books, setBooks] = useState<Book[]>([]);
@@ -399,18 +363,6 @@ export function App(): React.JSX.Element {
   const updateBanner = useConnectionBanner();
   useEffect(() => {
     if (updateBanner?.kind !== "update") return;
-    // Beacon detection so we can confirm it reaches the device (diagnostic).
-    try {
-      navigator.sendBeacon?.(
-        "/api/perf",
-        JSON.stringify({
-          ev: "update-detected",
-          at: currentPath === null ? "shelf" : "book",
-        }),
-      );
-    } catch {
-      // best-effort
-    }
     if (currentPath === null) void applyUpdate();
   }, [updateBanner, currentPath]);
 
@@ -424,43 +376,6 @@ export function App(): React.JSX.Element {
   // The active book is the first path segment; null ⇒ the landing bookshelf.
   const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;
   const activeBook = books.find((b) => b.slug === activeSlug) ?? null;
-  // How the kept-alive shelf is HIDDEN while a book is open. Default is
-  // `display: none` — the shelf leaves the render tree entirely (no layout, no
-  // paint, NO composited layer), so returning is a fresh render, not a reveal of a
-  // kept-alive layer. `opacity: 0` and `visibility: hidden` both keep the shelf in
-  // the layer tree; on mobile WebKit, revealing it inside the swipe-back touch
-  // gesture re-rasterized the whole shelf — the ~480ms return freeze. display:none
-  // resets the scroller, so we save/restore its offset (effects below).
-  // `?shelfhide=opacity|visibility|unmount` overrides for A/B.
-  const shelfHideMode = useMemo(
-    () =>
-      (typeof window !== "undefined" &&
-        new URLSearchParams(window.location.search).get("shelfhide")) ||
-      "display",
-    [],
-  );
-  const shelfHidden = activeSlug !== null; // a book is open
-  const shelfMounted = shelfHideMode !== "unmount" || !shelfHidden;
-  // display:none / unmount drop the shelf from layout, resetting its scroller to 0.
-  // Track the live offset (the scroller stays in the DOM under display:none, so the
-  // listener survives) and restore it the frame the shelf is revealed.
-  const shelfScrollRef = useRef(0);
-  useEffect(() => {
-    if (shelfHideMode === "opacity" || shelfHideMode === "visibility") return;
-    const el = document.querySelector<HTMLElement>('[data-lv-scroller="shelf"]');
-    if (!el) return;
-    const onScroll = (): void => {
-      shelfScrollRef.current = el.scrollTop;
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [shelfHideMode, shelfMounted, books.length]);
-  useLayoutEffect(() => {
-    if (shelfHidden) return; // restore only on reveal
-    if (shelfHideMode === "opacity" || shelfHideMode === "visibility") return;
-    const el = document.querySelector<HTMLElement>('[data-lv-scroller="shelf"]');
-    if (el && shelfScrollRef.current > 0) el.scrollTop = shelfScrollRef.current;
-  }, [shelfHidden, shelfHideMode]);
   // Are we ON the playing book's inline audio page (where the read-along reader
   // already shows full controls)? If so the floating bubble hides; everywhere
   // else (text page, another book, the shelf) it shows as the now-playing handle.
@@ -627,7 +542,6 @@ export function App(): React.JSX.Element {
   // progress side by side; within a rendition the most-recent chapter wins.
   // Keyed by book slug for the landing.
   const progressBySlug = useMemo(() => {
-    const _t0 = performance.now();
     // PERF: O(tree + rows), not O(rows × tree). The old code called findNode(tree,…)
     // AND flattenTracks(book) for EVERY recent-progress row — walking the whole
     // forest and re-flattening a book's spine per row. That's the return-from-book
@@ -680,19 +594,6 @@ export function App(): React.JSX.Element {
         fraction,
         updatedAt: r.updated_at,
       };
-    }
-    // DIAGNOSTIC: beacon this compute's time when it's non-trivial, to confirm on
-    // the device whether it was the return freeze.
-    const _dur = Math.round(performance.now() - _t0);
-    if (_dur > 20) {
-      try {
-        navigator.sendBeacon?.(
-          "/api/perf",
-          JSON.stringify({ ev: "pbs", ms: _dur, rows: recentProgress.length }),
-        );
-      } catch {
-        // best-effort
-      }
     }
     return out;
   }, [recentProgress, tree, uiLang]);
@@ -991,146 +892,20 @@ export function App(): React.JSX.Element {
   // Return to the landing bookshelf.
   const backToLanding = useCallback(() => {
     // Native iOS shell only: snapshot the current book + reveal the held shelf
-    // snapshot, so the shelf appears instantly and the ~480ms re-composite below
+    // snapshot, so the shelf appears instantly and the shelf re-composite below
     // happens behind the snapshot. No-op (false) off-shell → unchanged web return.
     const native = nativeNavPop();
-    returnNavStart = performance.now(); // DIAGNOSTIC: time the return-to-shelf
-    applyReturnProbe();
     writeHash(null, null, null, false);
     setCurrentPath(null);
     currentPathRef.current = null;
     setCurrentContent(null);
     setUntranslated(null);
-    // Tell native the shelf has painted (after the freeze frame) so it swaps the
-    // held snapshot for the live webview. Double-rAF = through the first painted
-    // frame, exactly when the diagnostic beacon measures `paint`.
+    // Tell native the shelf has painted so it swaps the held snapshot for the live
+    // webview. Double-rAF = through the first painted frame.
     if (native) {
       requestAnimationFrame(() => requestAnimationFrame(() => nativeNavReady()));
     }
   }, []);
-
-  // DIAGNOSTIC harness (URL-gated): `?returnonly` does NOT enter books; it just
-  // returns to the shelf every `?period` ms whenever a book is open. Pair it with
-  // a REAL tap (osascript-driven) to enter — the only way to reproduce the freeze,
-  // since synthetic dispatchEvent taps never trigger the real touch path.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    if (!params.has("returnonly")) return;
-    const period = Number(params.get("period")) || 2200;
-    const id = window.setInterval(() => {
-      if (currentPathRef.current !== null) backToLanding();
-    }, period);
-    return () => window.clearInterval(id);
-  }, [backToLanding]);
-
-  // DIAGNOSTIC harness (URL-gated): `?autoreturn=N` drives N enter→return cycles
-  // automatically so the return freeze can be measured/profiled in a simulator
-  // with NO human tapping. Each return fires the existing /api/perf "return"
-  // beacon, so paint timing for any build is readable from the server log.
-  // No effect unless the param is present.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    if (!params.has("autoreturn")) return;
-    if (books.length === 0) return;
-    const n = Number(params.get("autoreturn")) || 6;
-    // `?dwell=MS` = time spent IN the book before returning (default 1.9s). Long
-    // dwell tests whether WebKit purges the hidden shelf's tiles over time (the
-    // freeze may only hit after the shelf has been hidden a while). `?gap=MS` =
-    // time on the shelf between cycles. `?book=last|N` picks which book to open.
-    const dwell = Number(params.get("dwell")) || 1900;
-    const gap = Number(params.get("gap")) || 1700;
-    const bookSel = params.get("book");
-    const idx =
-      bookSel === "last"
-        ? books.length - 1
-        : bookSel
-          ? Math.min(Number(bookSel) || 0, books.length - 1)
-          : 0;
-    const slug = books[idx]?.slug;
-    if (!slug) return;
-    // `?tap=1` enters via a REAL pointer/click on the first shelf card (firing
-    // MUI's ripple + the touch path) instead of calling enterBook() directly —
-    // to test whether the tap/ripple, not the navigation, is what makes the
-    // RETURN freeze (a ripple stranded on the revealed shelf re-rasterizes it).
-    const tapMode = params.has("tap");
-    const doEnter = (): void => {
-      if (tapMode) {
-        const card = document.querySelector<HTMLElement>(
-          ".MuiCardActionArea-root",
-        );
-        if (card) {
-          const r = card.getBoundingClientRect();
-          const x = r.left + r.width / 2;
-          const y = r.top + r.height / 2;
-          const base = { bubbles: true, cancelable: true, clientX: x, clientY: y };
-          // Start the ripple (pointerdown/mousedown) and navigate (click), but
-          // OMIT pointerup/mouseup unless ?taprelease — mimicking a real tap
-          // whose release is swallowed by the navigation, leaving MUI's ripple
-          // exit-animation untriggered → a ripple stranded on the hidden shelf.
-          card.dispatchEvent(
-            new PointerEvent("pointerdown", { ...base, pointerId: 1, pointerType: "touch" }),
-          );
-          card.dispatchEvent(new MouseEvent("mousedown", base));
-          if (params.has("taprelease")) {
-            card.dispatchEvent(
-              new PointerEvent("pointerup", { ...base, pointerId: 1, pointerType: "touch" }),
-            );
-            card.dispatchEvent(new MouseEvent("mouseup", base));
-          }
-          card.dispatchEvent(new MouseEvent("click", base));
-          return;
-        }
-      }
-      enterBook(slug);
-    };
-    let cycle = 0;
-    let cancelled = false;
-    const timers: number[] = [];
-    // `?shelfscroll=PX` scrolls the shelf down before entering, so the revealed
-    // shelf on return is at a non-zero scroll offset (the user's shelf is always
-    // scrolled) — tests whether a scrolled scroll-container reveal is the freeze.
-    const shelfScroll = Number(params.get("shelfscroll")) || 0;
-    // `?bookscroll=PX` scrolls the open book mid-dwell (lazy-loading more content
-    // / more reader layers) before returning — tests whether a scrolled/heavier
-    // reader teardown is the freeze.
-    const bookScroll = Number(params.get("bookscroll")) || 0;
-    const step = (): void => {
-      if (cancelled || cycle >= n) return;
-      cycle += 1;
-      if (shelfScroll > 0) {
-        const sc = document.querySelector<HTMLElement>(
-          '[data-lv-scroller="shelf"]',
-        );
-        if (sc) sc.scrollTop = shelfScroll;
-      }
-      doEnter();
-      if (bookScroll > 0) {
-        timers.push(
-          window.setTimeout(() => {
-            const rs = document.querySelector<HTMLElement>(
-              '[data-lv-scroller="reader"]',
-            );
-            if (rs) rs.scrollTop = bookScroll;
-          }, Math.max(400, dwell - 500)),
-        );
-      }
-      timers.push(
-        window.setTimeout(() => {
-          if (cancelled) return;
-          backToLanding();
-          timers.push(window.setTimeout(step, gap));
-        }, dwell),
-      );
-    };
-    timers.push(window.setTimeout(step, 1500));
-    return () => {
-      cancelled = true;
-      timers.forEach((t) => window.clearTimeout(t));
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [books.length]);
 
   // iOS-style left-edge swipe → back to the shelf. A standalone PWA has no
   // browser back-swipe, so we synthesise it: a touch that STARTS within EDGE px
@@ -1145,7 +920,6 @@ export function App(): React.JSX.Element {
     }
     const EDGE = 28;
     const THRESH = 70;
-    const swipeFix = new URLSearchParams(window.location.search).has("swipefix");
     let sx = 0;
     let sy = 0;
     let tracking = false;
@@ -1188,13 +962,6 @@ export function App(): React.JSX.Element {
           tracking = false; // a vertical scroll — let it go
         }
       }
-      // ?swipefix: swallow the horizontal-swipe default (overscroll/rubber-band)
-      // so WebKit doesn't promote/settle a transient compositing layer that makes
-      // the subsequent shelf reveal re-rasterize (~450ms). Needs a non-passive
-      // listener (registered below) for preventDefault to take effect.
-      if (decided && horiz && swipeFix && e.cancelable) {
-        e.preventDefault();
-      }
     };
     const onEnd = (e: TouchEvent): void => {
       if (!tracking) {
@@ -1208,31 +975,11 @@ export function App(): React.JSX.Element {
       const dx = t.clientX - sx;
       const dy = t.clientY - sy;
       if (horiz && dx > THRESH && Math.abs(dx) > Math.abs(dy)) {
-        // Revealing the shelf SYNCHRONOUSLY inside this touchend handler makes
-        // iOS WebKit re-rasterize the whole shelf inside the touch-gesture
-        // context — the ~480ms return freeze (real swipe froze, a programmatic
-        // backToLanding from a timer did not). Defer to the next frame so the
-        // gesture fully ends first and the reveal paints in a clean frame.
-        // `?deferback` toggles for A/B; once confirmed this becomes the default.
-        // Reveal the shelf from a FRESH MACROTASK, not synchronously inside this
-        // touchend handler. Calling backToLanding() directly here froze the
-        // return ~480ms on mobile WebKit: the shelf reveal runs inside the touch-
-        // interaction context, where WebKit does it synchronously and re-rasterizes
-        // the whole shelf. A programmatic return from a timer never froze. A rAF
-        // (v149) did NOT fix it — rAF is coupled to the interaction frame's render;
-        // a setTimeout is a fresh task, decoupled from the gesture. `?deferback=MS`
-        // overrides the delay; `?defersync` restores the old synchronous path (A/B).
-        const params = new URLSearchParams(window.location.search);
-        const dm = Number(params.get("deferback"));
-        if (params.has("defersync")) {
-          backToLanding();
-        } else {
-          window.setTimeout(() => backToLanding(), dm > 0 ? dm : 0);
-        }
+        backToLanding();
       }
     };
     globalThis.addEventListener("touchstart", onStart, { passive: true });
-    globalThis.addEventListener("touchmove", onMove, { passive: !swipeFix });
+    globalThis.addEventListener("touchmove", onMove, { passive: true });
     globalThis.addEventListener("touchend", onEnd, { passive: true });
     globalThis.addEventListener("touchcancel", onEnd, { passive: true });
     return () => {
@@ -1393,8 +1140,6 @@ export function App(): React.JSX.Element {
   // Handle browser back/forward navigation.
   useEffect(() => {
     const handlePopState = (): void => {
-      returnNavStart = performance.now(); // DIAGNOSTIC: time the return-to-shelf
-      applyReturnProbe();
       void restoreFromHash(false);
     };
     window.addEventListener("popstate", handlePopState);
@@ -1402,49 +1147,6 @@ export function App(): React.JSX.Element {
       window.removeEventListener("popstate", handlePopState);
     };
   }, [restoreFromHash]);
-
-  // DIAGNOSTIC: measure the return-to-shelf freeze on the real device and beacon
-  // it. Fires when currentPath becomes null after a return was triggered (guarded
-  // by returnNavStart so a fresh shelf load doesn't beacon). useLayoutEffect runs
-  // after the DOM commit (reader unmounted, shelf revealed) but BEFORE paint, so
-  // `commit` = JS render+commit time; `paint` (after two rAFs) = through the first
-  // painted frame. commit≈block ⇒ JS/DOM (reader unmount or shelf render);
-  // paint−commit≈block ⇒ browser layout/paint of the reveal. Remove once fixed.
-  useLayoutEffect(() => {
-    if (currentPath !== null || returnNavStart === 0) return;
-    const t0 = returnNavStart;
-    returnNavStart = 0;
-    const commit = Math.round(performance.now() - t0);
-    // Force the pending style+layout synchronously here and time it — this
-    // ISOLATES the layout cost from paint/composite. If `layout` ≈ the freeze ⇒
-    // layout-bound; if `layout` is small but `paint` is large ⇒ paint/composite.
-    const lt = performance.now();
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-    document.body.offsetHeight;
-    const layout = Math.round(performance.now() - lt);
-    // MessageChannel round-trip fires as soon as the MAIN THREAD is free (a
-    // macrotask), regardless of the compositor/frame. So: `mc` small but `paint`
-    // (2× rAF) large ⇒ the main thread is FREE and the freeze is compositor/
-    // rendering, not JS. `mc` ≈ `paint` ⇒ the main thread is BLOCKED (JS/sync).
-    const ch = new MessageChannel();
-    ch.port1.onmessage = () => {
-      const mc = Math.round(performance.now() - t0);
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const paint = Math.round(performance.now() - t0);
-          try {
-            navigator.sendBeacon?.(
-              "/api/perf",
-              JSON.stringify({ ev: "return", v: probeVariant, commit, layout, mc, paint }),
-            );
-          } catch {
-            // best-effort diagnostic
-          }
-        });
-      });
-    };
-    ch.port2.postMessage(0);
-  }, [currentPath]);
 
   // ── Inline audio: two effects keep the view and the playback engine in sync ──
   // A) view → engine: viewing an audio chapter makes the engine play it,
@@ -1763,34 +1465,24 @@ export function App(): React.JSX.Element {
               cards are still skipped by content-visibility, and the scroll
               offset is preserved.) */
           }
-          {shelfMounted && (
-            <Box
-              sx={{
-                position: "absolute",
-                inset: 0,
-                flexDirection: "column",
-                pointerEvents: shelfHidden ? "none" : "auto",
-                // Hide mode (default visibility): see shelfHideMode above.
-                ...(shelfHideMode === "display"
-                  ? { display: shelfHidden ? "none" : "flex" }
-                  : { display: "flex" }),
-                ...(shelfHideMode === "opacity"
-                  ? { opacity: shelfHidden ? 0 : 1 }
-                  : {}),
-                ...(shelfHideMode === "visibility"
-                  ? { visibility: shelfHidden ? "hidden" : "visible" }
-                  : {}),
-              }}
-            >
-              <Landing
-                books={books}
-                progress={progressBySlug}
-                onOpen={enterBook}
-                settingsSlot={settingsButton}
-                navbarAtBottom={navbarAtBottom}
-              />
-            </Box>
-          )}
+          <Box
+            sx={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              flexDirection: "column",
+              opacity: activeSlug === null ? 1 : 0,
+              pointerEvents: activeSlug === null ? "auto" : "none",
+            }}
+          >
+            <Landing
+              books={books}
+              progress={progressBySlug}
+              onOpen={enterBook}
+              settingsSlot={settingsButton}
+              navbarAtBottom={navbarAtBottom}
+            />
+          </Box>
           {activeSlug !== null && (
             <NavShell
               appKey="liveview"

@@ -479,48 +479,6 @@ async fn run_preview(args: cli::PreviewArgs) -> Result<(), String> {
 /// Build the reader's axum app (API routes + SPA assets) over any backend.
 /// Shared by the deployed server (`run`) and the filesystem preview
 /// (`run_preview`): one router, two content backends.
-/// Lightweight access log for the version-revealing requests only (the shell,
-/// the service worker, the build-id probe, and the content-hashed entry bundle)
-/// — NOT the chatty asset/api traffic. Lets us see exactly which build + SW a
-/// given client (User-Agent) actually fetches, to tell a real in-app perf
-/// regression apart from a stale PWA cache that never loaded the new bundle.
-#[cfg(feature = "embedded")]
-async fn log_access(
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let path = req.uri().path();
-    let interesting = path == "/"
-        || path == "/sw.js"
-        || path == "/api/version"
-        || path.starts_with("/assets/index-");
-    let line = interesting.then(|| {
-        let ua = req
-            .headers()
-            .get(header::USER_AGENT)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("-")
-            .to_string();
-        (path.to_string(), ua)
-    });
-    let res = next.run(req).await;
-    if let Some((path, ua)) = line {
-        tracing::info!(status = res.status().as_u16(), path = %path, ua = %ua, "access");
-    }
-    res
-}
-
-/// Receives the client return-to-shelf perf beacon and logs it with the
-/// User-Agent. Diagnostic for the iOS-only freeze; remove once root-caused.
-async fn api_perf(headers: axum::http::HeaderMap, body: String) -> impl IntoResponse {
-    let ua = headers
-        .get(header::USER_AGENT)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("-");
-    tracing::info!(ua = %ua, %body, "perf");
-    StatusCode::NO_CONTENT
-}
-
 fn build_app(state: SharedState) -> Router {
     let api_router = Router::new()
         .route("/api/books", get(api_books))
@@ -540,9 +498,6 @@ fn build_app(state: SharedState) -> Router {
         // a top-level /version would fall into the cache-first bucket and serve
         // a stale build id right after a deploy, defeating the whole check.
         .route("/api/version", get(version))
-        // Diagnostic: a tiny client perf beacon (return-to-shelf timing) so we can
-        // localize the iOS-only freeze on the real device. Remove once root-caused.
-        .route("/api/perf", axum::routing::post(api_perf))
         .route("/ws", get(server::ws::ws_handler))
         .with_state(state.clone());
 
@@ -554,7 +509,6 @@ fn build_app(state: SharedState) -> Router {
             .route("/{*path}", get(embedded_assets::serve_root))
             .fallback(get(embedded_assets::serve_index))
             .layer(Extension(state))
-            .layer(axum::middleware::from_fn(log_access))
     }
 
     #[cfg(not(feature = "embedded"))]
