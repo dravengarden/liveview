@@ -1,57 +1,14 @@
 import { rem } from "@/px";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
-import {
-  Box,
-  Button,
-  CircularProgress,
-  Fade,
-  Grow,
-  IconButton,
-  Menu,
-  MenuItem,
-  Typography,
-} from "@mui/material";
-import { alpha } from "@mui/material/styles";
-import {
-  Bedtime,
-  Cast as CastIcon,
-  Close,
-  DeleteOutline as DeleteIcon,
-  Headphones as AudiobookIcon,
-  NorthEast as OpenIcon,
-  Pause,
-  PlayArrow,
-  SkipNext,
-  SkipPrevious,
-} from "@mui/icons-material";
-import { BottomSheet, haptic, useAnyDetentSheetOpen } from "../_shell";
-import { Forward15Icon, Replay15Icon } from "./Skip15Icons";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Box, CircularProgress } from "@mui/material";
+import { Headphones as AudiobookIcon } from "@mui/icons-material";
+import { haptic, useAnyDetentSheetOpen } from "../_shell";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
 
-/** Stable hue from a slug → a calm gradient cover stand-in (mirrors the shelf
- *  / mini-player). Kept local on purpose: the same 6-liner lives in
- *  MiniPlayer / Landing / NowPlayingPopup — the established convention here is
- *  to duplicate this trivial helper rather than share a module, so a feature
- *  branch shouldn't be the thing that refactors all four. */
-function coverGradient(slug: string): string {
-  let h = 0;
-  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) | 0;
-  const hue = Math.abs(h) % 360;
-  return `linear-gradient(135deg, hsl(${hue} 52% 52%), hsl(${
-    (hue + 38) % 360
-  } 48% 42%))`;
-}
-
-/** The same hue, but TRANSLUCENT — a tinted glass version for the frosted puck:
- *  the book colour is just a wash over a backdrop-blur, so the page reads through
- *  it (iOS material look) instead of an opaque disc. A real cover image, when
+/** The same slug hue as the shelf/cover, but TRANSLUCENT — a tinted glass version
+ *  for the frosted puck: the book colour is just a wash over a backdrop-blur, so
+ *  the page reads through it (iOS material look). A real cover image, when
  *  present, still sits opaque on top — only the gradient fallback turns to glass. */
 function coverGlass(slug: string): string {
   let h = 0;
@@ -72,22 +29,7 @@ const PEEK = 0.15; // fraction of the bubble that tucks off-edge when idle —
 // "the player disappeared".
 const IDLE_OPACITY = 0.7; // how faint it gets when idle (still recedes, but
 // stays plainly visible, not nearly-gone)
-const CARD_H = 224; // approx control-card height, for bottom-clamping the card
-/** Playback-speed options for the card's speed menu (same list as the full player). */
-const RATES = [0.75, 1, 1.25, 1.5, 2, 2.25, 2.5, 2.75, 3] as const;
-/** Sleep-timer options in minutes (mirrors the full player). */
-const SLEEP_MINUTES = [15, 30, 45, 60, 90] as const;
 const POS_KEY = "lv-audio-bubble-pos";
-
-/** Compact sleep-timer label: 15m / 60→1h / 90→1h30m (same as the full player). */
-function fmtSleep(min: number): string {
-  if (min >= 60) {
-    const h = Math.floor(min / 60);
-    const m = min % 60;
-    return m === 0 ? `${h}h` : `${h}h${m}m`;
-  }
-  return `${min}m`;
-}
 
 type Side = "left" | "right";
 interface StoredPos {
@@ -138,25 +80,25 @@ function resolve(side: Side, topRatio: number): Pos {
 
 /**
  * The floating now-playing bubble — shown when audio is loaded but the user has
- * navigated AWAY from the playing book (browsing another book or the shelf),
+ * navigated AWAY from the playing content (browsing another book or the shelf),
  * where the full bottom bar would just be in the way. It's the unobtrusive,
  * out-of-the-way counterpart to {@link MiniPlayer}: a semi-transparent, draggable
  * artwork puck (WeChat 浮窗 / iOS AssistiveTouch lineage) that
  *
  *  - docks to the nearest left/right edge (magnetic snap on release),
- *  - remembers where the user parked it (localStorage; device-local on purpose —
- *    a phone and a desktop want it in different places),
+ *  - remembers where the user parked it (localStorage; device-local on purpose),
  *  - fades + tucks half behind the edge when idle so it never fights the text,
- *  - and on a *tap* (not a drag) opens a compact control card: prev / play-pause
- *    / next, plus a tap on the artwork/title to jump back into the full player.
+ *  - and on a *tap* (not a drag) opens the shared PlaybackSheet — the ONE playback
+ *    control panel (transport + speed + sleep), the same one the navbar listen
+ *    control opens. The puck is purely a launcher; it owns no controls itself.
  *
  * Mutually exclusive with the bottom bar: the bar owns the playing book's page,
- * this owns everywhere else. Both hide while the popup is expanded.
+ * this owns everywhere else. Both hide while the popup / a sheet is open.
  */
 export function FloatingBubble({
   onPlayingPage,
   suppressed = false,
-  onOpenPlayer,
+  onOpenControls,
 }: {
   onPlayingPage: boolean;
   /** Hide the bubble even though playback is active — used when another bar
@@ -164,34 +106,15 @@ export function FloatingBubble({
    *  control while you're viewing the very chapter being read aloud), so we
    *  don't show two "now playing" affordances for the same session. */
   suppressed?: boolean;
-  onOpenPlayer: () => void;
+  /** Open the shared playback-control sheet (the puck's only action). */
+  onOpenControls: () => void;
 }): React.JSX.Element | null {
   const { t } = useI18n();
-  const {
-    nowPlaying,
-    playing,
-    loading,
-    currentTime,
-    duration,
-    canPrev,
-    canNext,
-    togglePlay,
-    nextChapter,
-    prevChapter,
-    skip,
-    rate,
-    setRate,
-    sleepMinutes,
-    sleepRemainingMin,
-    setSleepTimer,
-    stop,
-    playingElsewhere,
-    playHere,
-  } = useAudioPlayer();
+  const { nowPlaying, currentTime, duration } = useAudioPlayer();
 
-  // A DetentSheet (settings / TOC / confirm) renders inline, so its z-index is
-  // trapped below this root-level fixed puck — it would otherwise show through
-  // an open sheet. Recede while any sheet is up.
+  // A DetentSheet (settings / TOC / the PlaybackSheet itself) renders inline, so
+  // its z-index is trapped below this root-level fixed puck — it would otherwise
+  // show through an open sheet. Recede while any sheet is up.
   const sheetOpen = useAnyDetentSheetOpen();
 
   const stored = useRef<StoredPos>(loadPos());
@@ -199,26 +122,10 @@ export function FloatingBubble({
     resolve(stored.current.side, stored.current.topRatio)
   );
   const [dragging, setDragging] = useState(false);
-  const [controlsOpen, setControlsOpen] = useState(false);
   const [idle, setIdle] = useState(false);
-  const [speedAnchor, setSpeedAnchor] = useState<HTMLElement | null>(null);
-  const [sleepAnchor, setSleepAnchor] = useState<HTMLElement | null>(null);
-  // Tapping the card's delete asks first (one tap would otherwise drop the
-  // now-playing mid-listen).
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  // Accumulating rotation for the ∓15s skip glyphs (one smooth turn per tap).
-  const [backSpin, setBackSpin] = useState(0);
-  const [fwdSpin, setFwdSpin] = useState(0);
 
   const elRef = useRef<HTMLDivElement | null>(null);
-  const cardRef = useRef<HTMLDivElement | null>(null);
   const idleTimer = useRef<number | undefined>(undefined);
-  // True only between a pointerdown that landed ON the scrim and its click, so
-  // the scrim closes on a genuine tap of itself — NOT on the synthetic click
-  // iOS fires right after the bubble tap that OPENED the card (whose pointerdown
-  // was on the bubble), which would otherwise close it instantly.
-  const scrimPressed = useRef(false);
-  const [cardDragging, setCardDragging] = useState(false);
   // Mutable drag bookkeeping — kept in a ref so pointermove can update the DOM
   // directly (no per-move re-render) and only commit to state on release.
   const drag = useRef({
@@ -232,20 +139,8 @@ export function FloatingBubble({
     y: 0,
     id: -1,
   });
-  const cardDrag = useRef({
-    active: false,
-    moved: false,
-    startX: 0,
-    startY: 0,
-    baseX: 0,
-    baseY: 0,
-    x: 0,
-    y: 0,
-    id: -1,
-  });
 
   // Persist a docked position (side + vertical ratio) to localStorage and state.
-  // Shared by the bubble drag and the expanded-card drag so both stay in sync.
   const commitPos = useCallback((side: Side, topRatio: number) => {
     const r = clamp01(topRatio);
     stored.current = { side, topRatio: r };
@@ -275,12 +170,10 @@ export function FloatingBubble({
     };
   }, [poke]);
 
-  // Re-resolve the dock against the CURRENT viewport each time the bubble
-  // becomes visible. It stays mounted (returns null while hidden) the whole
-  // session, so `pos` can be stale from an earlier/taller viewport (and the
-  // resize listener can't update an absent element) — without this the bubble
-  // reappears docked off the bottom edge on phones. `resolve` clamps to the
-  // live innerHeight, so the dock is always on-screen on show.
+  // Re-resolve the dock against the CURRENT viewport each time the bubble becomes
+  // visible. It stays mounted (returns null while hidden) the whole session, so
+  // `pos` can be stale from an earlier/taller viewport — without this the bubble
+  // reappears docked off the bottom edge on phones.
   const shown = nowPlaying != null && !onPlayingPage && !suppressed;
   useLayoutEffect(() => {
     if (shown) setPos(resolve(stored.current.side, stored.current.topRatio));
@@ -288,16 +181,13 @@ export function FloatingBubble({
 
   // Single source of truth for the bubble's position: inline left/top. Applied
   // here whenever `pos` settles (mount, edge-snap on release, resize) — the drag
-  // handler writes inline directly mid-gesture and skips this (dragging guard),
-  // so a release always animates from the finger to the snapped edge.
+  // handler writes inline directly mid-gesture and skips this (dragging guard).
   useLayoutEffect(() => {
     const el = elRef.current;
     if (el && !dragging) {
-      // Clamp to the LIVE viewport on apply: `pos` may have been resolved
-      // against a taller innerHeight (the app opened at a different height, an
-      // iOS address-bar/rotation change, a PWA standalone height), which would
-      // otherwise dock the bubble below the bottom edge — invisible, the "no
-      // bubble on my phone" bug.
+      // Clamp to the LIVE viewport on apply: `pos` may have been resolved against
+      // a taller innerHeight (rotation, iOS address bar, PWA height), which would
+      // otherwise dock the bubble below the bottom edge — invisible.
       const x = Math.min(
         Math.max(MARGIN, pos.x),
         Math.max(MARGIN, window.innerWidth - SIZE - MARGIN),
@@ -309,11 +199,6 @@ export function FloatingBubble({
       el.style.left = `${x}px`;
       el.style.top = `${y}px`;
     }
-    // `shown` is a dep so this re-runs when the bubble (un)mounts: it's null
-    // while hidden, so on reappear the freshly-mounted element must get its
-    // inline left/top set even when `pos` is unchanged — otherwise it falls to
-    // its static flow position (the bottom of the page → off-screen), which was
-    // the real "no bubble on my phone" bug.
   }, [pos.x, pos.y, dragging, shown]);
 
   const onPointerDown = useCallback(
@@ -356,8 +241,8 @@ export function FloatingBubble({
     const ny = Math.min(vh - SIZE - MARGIN, Math.max(MARGIN, d.baseY + dy));
     d.x = nx;
     d.y = ny;
-    // Drive the DOM directly during the drag for 1:1 finger tracking; React
-    // state is only updated once, on release (which snaps to the edge).
+    // Drive the DOM directly during the drag for 1:1 finger tracking; React state
+    // is only updated once, on release (which snaps to the edge).
     if (elRef.current) {
       elRef.current.style.left = `${nx}px`;
       elRef.current.style.top = `${ny}px`;
@@ -375,12 +260,11 @@ export function FloatingBubble({
         // capture may already be lost (pointercancel) — ignore
       }
       if (!d.moved) {
-        // A tap, not a drag → toggle the control card. Explicit haptic: the
-        // bubble uses a custom pointer-capture gesture (not a plain onClick), so
-        // the global haptic delegation can't see this tap. (Coalesced, so it
-        // never double-buzzes with delegation.)
+        // A tap, not a drag → open the shared playback sheet. Explicit haptic:
+        // the bubble uses a custom pointer-capture gesture (not a plain onClick),
+        // so the global haptic delegation can't see this tap.
         haptic("light");
-        setControlsOpen((o) => !o);
+        onOpenControls();
         poke();
         return;
       }
@@ -392,687 +276,105 @@ export function FloatingBubble({
       const yMax = Math.max(yMin, vh - SIZE - MARGIN);
       const topRatio = yMax > yMin ? (d.y - yMin) / (yMax - yMin) : 0;
       commitPos(side, topRatio);
-      // Docked to an edge — a light tick confirms the snap. (A tap, handled
-      // above, already buzzes via its clickable; this is the gesture case that
-      // haptic delegation can't see.)
+      // Docked to an edge — a light tick confirms the snap.
       haptic("light");
       poke();
     },
-    [commitPos, poke],
-  );
-
-  // ── Expanded-card drag — the card has its OWN grab handle so the user can
-  // reposition it while it's open; on release it edge-snaps and writes the same
-  // shared docked position the bubble reads, so collapsing lands it in place. ──
-  const cardWidth = (): number => Math.min(320, window.innerWidth - 24);
-
-  const cardDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      try {
-        e.currentTarget.setPointerCapture(e.pointerId);
-      } catch {
-        // synthetic / odd pointer — handle's own move/up still drive the drag
-      }
-      const vw = window.innerWidth;
-      const cw = cardWidth();
-      const baseX = pos.side === "right" ? vw - cw - MARGIN : MARGIN;
-      const baseY = Math.min(
-        Math.max(MARGIN, pos.y),
-        window.innerHeight - CARD_H - MARGIN,
-      );
-      cardDrag.current = {
-        active: true,
-        moved: false,
-        startX: e.clientX,
-        startY: e.clientY,
-        baseX,
-        baseY,
-        x: baseX,
-        y: baseY,
-        id: e.pointerId,
-      };
-      poke();
-    },
-    [pos.side, pos.y, poke],
-  );
-
-  const cardMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    const d = cardDrag.current;
-    if (!d.active || e.pointerId !== d.id) return;
-    const dx = e.clientX - d.startX;
-    const dy = e.clientY - d.startY;
-    if (!d.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
-      d.moved = true;
-      setCardDragging(true);
-    }
-    if (!d.moved) return;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const cw = cardWidth();
-    const nx = Math.min(vw - cw - MARGIN, Math.max(MARGIN, d.baseX + dx));
-    const ny = Math.min(vh - CARD_H - MARGIN, Math.max(MARGIN, d.baseY + dy));
-    d.x = nx;
-    d.y = ny;
-    if (cardRef.current) {
-      cardRef.current.style.left = `${nx}px`;
-      cardRef.current.style.top = `${ny}px`;
-    }
-  }, []);
-
-  const cardUp = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      const d = cardDrag.current;
-      if (!d.active || e.pointerId !== d.id) return;
-      d.active = false;
-      try {
-        e.currentTarget.releasePointerCapture(e.pointerId);
-      } catch {
-        // capture may already be lost — ignore
-      }
-      setCardDragging(false);
-      // A tap on the handle (no movement) is a no-op — it must NOT close the
-      // card (that's the X / backdrop's job).
-      if (!d.moved) {
-        poke();
-        return;
-      }
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      const cw = cardWidth();
-      const side: Side = d.x + cw / 2 < vw / 2 ? "left" : "right";
-      // Map the card's top onto the bubble's vertical range so the collapsed
-      // bubble re-appears where the card was parked.
-      const yMin = MARGIN;
-      const yMax = Math.max(yMin, vh - SIZE - MARGIN);
-      const topRatio = yMax > yMin ? (d.y - yMin) / (yMax - yMin) : 0;
-      // Snap the (still-open) card to the docked edge: overwrite the inline
-      // left/top the drag wrote with the resolved edge position, so it doesn't
-      // sit wherever the finger let go.
-      if (cardRef.current) {
-        cardRef.current.style.left = `${
-          side === "right" ? vw - cw - MARGIN : MARGIN
-        }px`;
-        cardRef.current.style.top = `${
-          Math.min(
-            Math.max(MARGIN, resolve(side, topRatio).y),
-            vh - CARD_H - MARGIN,
-          )
-        }px`;
-      }
-      commitPos(side, topRatio);
-      poke();
-    },
-    [commitPos, poke],
+    [commitPos, onOpenControls, poke],
   );
 
   // Hidden on the playing book's own page (the bottom bar owns it there), when
-  // nothing is loaded, while the full popup is in focus, and when suppressed
-  // (the navbar read-aloud control already shows the now-playing state).
+  // nothing is loaded, while a sheet/popup is in focus, and when suppressed (the
+  // navbar read-aloud control already shows the now-playing state).
   if (!nowPlaying || onPlayingPage || suppressed) return null;
 
   const slug = nowPlaying.bookSlug;
   const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;
-  const tucked = idle && !dragging && !controlsOpen;
-  // Fully hidden + inert while its own card or any DetentSheet is open.
-  const hidden = controlsOpen || sheetOpen;
-  // One equal segment of the bottom utility bar (speed / sleep / delete) — a
-  // reset <button> that flex-fills its third of the bar and highlights on hover.
-  const segSx = {
-    all: "unset",
-    boxSizing: "border-box",
-    flex: 1,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 0.5,
-    py: 1,
-    cursor: "pointer",
-    color: "text.secondary",
-    transition: "background-color .15s",
-    "&:hover": { bgcolor: "action.selected" },
-  } as const;
-  // The card docks to the same edge as the bubble; clamp its top so it never
-  // spills off the bottom of the screen. Positioned with left (not a right
-  // anchor) so a drag and the edge-snap share one coordinate space.
-  const cardTop = Math.min(
-    Math.max(MARGIN, pos.y),
-    window.innerHeight - CARD_H - MARGIN,
-  );
-  const cardW = cardWidth();
-  const cardLeft = pos.side === "right"
-    ? window.innerWidth - cardW - MARGIN
-    : MARGIN;
+  const tucked = idle && !dragging;
+  const hidden = sheetOpen;
 
   return (
-    <>
-      {
-        /* Collapsed bubble: draggable artwork puck with a progress ring. A tap
-          opens the control card; a drag relocates + edge-snaps it. */
-      }
+    /* Collapsed bubble: draggable artwork puck with a progress ring. A tap opens
+       the shared PlaybackSheet; a drag relocates + edge-snaps it. */
+    <Box
+      ref={elRef}
+      role="button"
+      aria-label={t("audiobook.nowPlaying")}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onPointerEnter={poke}
+      sx={(theme) => ({
+        position: "fixed",
+        // left/top are NOT set here: they're driven solely by inline style (the
+        // layout effect above + the drag handler).
+        width: SIZE,
+        height: SIZE,
+        zIndex: theme.zIndex.fab,
+        touchAction: "none",
+        userSelect: "none",
+        WebkitUserSelect: "none",
+        WebkitTouchCallout: "none",
+        cursor: dragging ? "grabbing" : "grab",
+        opacity: hidden ? 0 : tucked ? IDLE_OPACITY : 0.92,
+        pointerEvents: hidden ? "none" : "auto",
+        // Idle tuck: slide a sliver off the docked edge when untouched.
+        transform: tucked
+          ? `translateX(${pos.side === "right" ? PEEK * 100 : -PEEK * 100}%)`
+          : "none",
+        transition: dragging
+          ? "none"
+          : "left .26s cubic-bezier(.2,.8,.2,1), top .26s cubic-bezier(.2,.8,.2,1), opacity .3s, transform .18s cubic-bezier(.2,.8,.2,1)",
+      })}
+    >
+      <CircularProgress
+        variant="determinate"
+        value={pct}
+        size={SIZE}
+        thickness={2.4}
+        aria-hidden
+        sx={{ position: "absolute", inset: 0, color: "primary.main" }}
+      />
       <Box
-        ref={elRef}
-        role="button"
-        aria-label={t("audiobook.nowPlaying")}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onPointerEnter={poke}
-        sx={(theme) => ({
-          position: "fixed",
-          // left/top are NOT set here: they're driven solely by inline style
-          // (the layout effect below + the drag handler). Putting them in `sx`
-          // too made the leftover inline value from a drag override the emotion
-          // class, so the bubble froze mid-screen instead of snapping to the edge.
-          width: SIZE,
-          height: SIZE,
-          zIndex: theme.zIndex.fab,
-          touchAction: "none",
-          userSelect: "none",
-          WebkitUserSelect: "none",
-          WebkitTouchCallout: "none",
-          cursor: dragging ? "grabbing" : "grab",
-          opacity: hidden ? 0 : tucked ? IDLE_OPACITY : 0.92,
-          pointerEvents: hidden ? "none" : "auto",
-          // Idle tuck: slide a sliver off the docked edge when untouched.
-          transform: tucked
-            ? `translateX(${pos.side === "right" ? PEEK * 100 : -PEEK * 100}%)`
-            : "none",
-          transition: dragging
-            ? "none"
-            : "left .26s cubic-bezier(.2,.8,.2,1), top .26s cubic-bezier(.2,.8,.2,1), opacity .3s, transform .18s cubic-bezier(.2,.8,.2,1)",
-        })}
-      >
-        <CircularProgress
-          variant="determinate"
-          value={pct}
-          size={SIZE}
-          thickness={2.4}
-          aria-hidden
-          sx={{ position: "absolute", inset: 0, color: "primary.main" }}
-        />
-        <Box
-          sx={{
-            position: "absolute",
-            inset: 5,
-            borderRadius: "50%",
-            overflow: "hidden",
-            // Frosted puck: a translucent tint over a backdrop blur, so the page
-            // shows through it as glass. A cover image (below) overlays opaque, so
-            // only the gradient-fallback puck reads as frosted.
-            background: coverGlass(slug),
-            backdropFilter: "blur(16px) saturate(180%)",
-            WebkitBackdropFilter: "blur(16px) saturate(180%)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            boxShadow: 2,
-          }}
-        >
-          {nowPlaying.cover
-            ? (
-              <Box
-                component="img"
-                src={`/api/cover?book=${encodeURIComponent(slug)}`}
-                alt=""
-                draggable={false}
-                sx={{
-                  position: "absolute",
-                  inset: 0,
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "cover",
-                }}
-              />
-            )
-            : (
-              <AudiobookIcon
-                sx={{ fontSize: rem(22), color: "rgba(255,255,255,0.92)" }}
-              />
-            )}
-          {
-            /* Just the artwork + the progress ring around it — no play-state glyph
-              over the centre (it read as clutter / a fake button). The ring
-              conveys progress; play/pause lives in the tap-to-open card. */
-          }
-        </Box>
-      </Box>
-
-      {
-        /* Modal scrim — a dim backdrop (like the settings sheet) that makes the
-          card read as a modal; tapping the dark area closes it. Closes on the
-          full CLICK, not pointerdown: closing on pointerdown removes the scrim
-          before iOS synthesises the tap's click, which then lands on the book
-          card underneath and navigates (the click-through / "ghost click" bug).
-          Keeping the scrim mounted through the click lets it swallow the tap —
-          exactly what MUI's Modal backdrop does. */
-      }
-      <Fade in={controlsOpen} unmountOnExit>
-        <Box
-          onPointerDown={() => {
-            scrimPressed.current = true;
-          }}
-          onPointerCancel={() => {
-            scrimPressed.current = false;
-          }}
-          onClick={() => {
-            if (!scrimPressed.current) return;
-            scrimPressed.current = false;
-            setControlsOpen(false);
-            poke();
-          }}
-          sx={(theme) => ({
-            position: "fixed",
-            inset: 0,
-            // ABOVE the bottom navbar (appBar) — at fab-1 the scrim sat under the
-            // navbar (appBar), so the dim covered the page but the bar stayed
-            // bright (the reported bug). Still below the TOC sheet (1250) + modals.
-            zIndex: theme.zIndex.appBar + 1,
-            // Lighter scrim than a solid modal: the card is frosted glass, so a
-            // heavy black dim would just mud it — let the page read THROUGH.
-            bgcolor: "rgba(0,0,0,0.3)",
-          })}
-        />
-      </Fade>
-      <Grow
-        in={controlsOpen}
-        unmountOnExit
-        style={{
-          transformOrigin: pos.side === "right"
-            ? "right center"
-            : "left center",
+        sx={{
+          position: "absolute",
+          inset: 5,
+          borderRadius: "50%",
+          overflow: "hidden",
+          // Frosted puck: a translucent tint over a backdrop blur, so the page
+          // shows through it as glass. A cover image (below) overlays opaque.
+          background: coverGlass(slug),
+          backdropFilter: "blur(16px) saturate(180%)",
+          WebkitBackdropFilter: "blur(16px) saturate(180%)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          boxShadow: 2,
         }}
       >
-        <Box
-          ref={cardRef}
-          sx={(theme) => ({
-            position: "fixed",
-            top: cardDragging ? cardDrag.current.y : cardTop,
-            left: cardDragging ? cardDrag.current.x : cardLeft,
-            // Above the raised scrim (appBar+1), so the card stays bright while
-            // the scrim dims the page AND the navbar beneath it.
-            zIndex: theme.zIndex.appBar + 2,
-            display: "flex",
-            flexDirection: "column",
-            gap: 0.5,
-            px: 1,
-            pb: 1,
-            pt: 0.25,
-            width: cardW,
-            // Frosted glass: translucent surface + backdrop blur so the page
-            // (under the light scrim) diffuses through it, matching the app's
-            // other frosted chrome (bars / status strip). The border + shadow
-            // keep the glass edge legible.
-            bgcolor: alpha(theme.palette.background.paper, 0.72),
-            backdropFilter: "blur(24px) saturate(180%)",
-            WebkitBackdropFilter: "blur(24px) saturate(180%)",
-            borderRadius: 4,
-            boxShadow: 8,
-            border: 1,
-            borderColor: "divider",
-          })}
-        >
-          {
-            /* Drag handle + close: drag the grip to reposition the whole widget
-              (edge-snaps + persists on release); the X dismisses the card. */
-          }
-          <Box
-            sx={{
-              position: "relative",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              height: 22,
-              touchAction: "none",
-              cursor: cardDragging ? "grabbing" : "grab",
-            }}
-            onPointerDown={cardDown}
-            onPointerMove={cardMove}
-            onPointerUp={cardUp}
-            onPointerCancel={cardUp}
-          >
+        {nowPlaying.cover
+          ? (
             <Box
-              sx={{
-                width: 34,
-                height: 4,
-                borderRadius: 2,
-                bgcolor: "text.disabled",
-                opacity: 0.5,
-              }}
-            />
-            <IconButton
-              aria-label={t("audiobook.collapse")}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => {
-                setControlsOpen(false);
-                poke();
-              }}
-              size="small"
+              component="img"
+              src={`/api/cover?book=${encodeURIComponent(slug)}`}
+              alt=""
+              draggable={false}
               sx={{
                 position: "absolute",
-                right: -4,
-                top: -2,
-                color: "text.secondary",
-              }}
-            >
-              <Close fontSize="small" />
-            </IconButton>
-          </Box>
-
-          {
-            /* Row 1 — now-playing identity, and the PROMINENT "go to current"
-              action. Styled as a filled, clearly-tappable button (not bare
-              text) with a trailing open-glyph, so jumping back into the playing
-              book reads as the card's primary affordance. */
-          }
-          <Box
-            component="button"
-            aria-label={t("audiobook.goToCurrent")}
-            onClick={() => {
-              onOpenPlayer();
-              setControlsOpen(false);
-            }}
-            sx={{
-              all: "unset",
-              display: "flex",
-              alignItems: "center",
-              gap: 1,
-              minWidth: 0,
-              cursor: "pointer",
-              borderRadius: 2.5,
-              p: 0.75,
-              bgcolor: "action.hover",
-              transition: "background-color .15s",
-              "&:hover": { bgcolor: "action.selected" },
-            }}
-          >
-            <Box
-              sx={{
-                flexShrink: 0,
-                width: 40,
-                height: 40,
-                borderRadius: "50%",
-                overflow: "hidden",
-                position: "relative",
-                background: coverGradient(slug),
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              {nowPlaying.cover
-                ? (
-                  <Box
-                    component="img"
-                    src={`/api/cover?book=${encodeURIComponent(slug)}`}
-                    alt=""
-                    sx={{
-                      position: "absolute",
-                      inset: 0,
-                      width: "100%",
-                      height: "100%",
-                      objectFit: "cover",
-                    }}
-                  />
-                )
-                : (
-                  <AudiobookIcon
-                    sx={{ fontSize: rem(21), color: "rgba(255,255,255,0.92)" }}
-                  />
-                )}
-            </Box>
-            <Box sx={{ minWidth: 0, flex: 1 }}>
-              <Typography variant="body2" fontWeight={700} noWrap>
-                {nowPlaying.chapterLabel}
-              </Typography>
-              <Typography
-                variant="caption"
-                color={playingElsewhere ? "primary.main" : "text.secondary"}
-                noWrap
-                sx={{ display: "block" }}
-              >
-                {playingElsewhere
-                  ? t("audiobook.playingElsewhere", {
-                    device: playingElsewhere.label,
-                  })
-                  : nowPlaying.bookLabel}
-              </Typography>
-            </Box>
-            <OpenIcon
-              sx={{
-                flexShrink: 0,
-                fontSize: rem(18),
-                color: "primary.main",
-                mr: 0.25,
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
               }}
             />
-          </Box>
-
-          {
-            /* Row 2 — primary transport, centred: prev-chapter · −15s ·
-              play/pause · +15s · next-chapter. */
-          }
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-evenly",
-            }}
-          >
-            <IconButton
-              aria-label={t("audiobook.prevChapter")}
-              onClick={prevChapter}
-              disabled={!canPrev}
-              sx={{ width: 40, height: 40 }}
-            >
-              <SkipPrevious />
-            </IconButton>
-            <IconButton
-              aria-label={t("audiobook.skipBack")}
-              onClick={() => {
-                skip(-15);
-                setBackSpin((s) => s - 360);
-              }}
-              sx={{ width: 40, height: 40 }}
-            >
-              <Replay15Icon
-                sx={{
-                  transform: `rotate(${backSpin}deg)`,
-                  transition: "transform .5s cubic-bezier(.2,.8,.2,1)",
-                }}
-              />
-            </IconButton>
-            <IconButton
-              aria-label={playingElsewhere
-                ? t("audiobook.playHere")
-                : playing
-                ? t("audiobook.pause")
-                : t("audiobook.play")}
-              onClick={playingElsewhere ? playHere : togglePlay}
-              color="primary"
-              sx={{ width: 52, height: 52 }}
-            >
-              {loading ? <CircularProgress size={26} /> : playingElsewhere
-                // Take-over affordance: cast/handoff glyph instead of resume.
-                ? <CastIcon sx={{ fontSize: rem(30) }} />
-                : playing
-                ? <Pause sx={{ fontSize: rem(34) }} />
-                : <PlayArrow sx={{ fontSize: rem(34) }} />}
-            </IconButton>
-            <IconButton
-              aria-label={t("audiobook.skipForward")}
-              onClick={() => {
-                skip(15);
-                setFwdSpin((s) => s + 360);
-              }}
-              sx={{ width: 40, height: 40 }}
-            >
-              <Forward15Icon
-                sx={{
-                  transform: `rotate(${fwdSpin}deg)`,
-                  transition: "transform .5s cubic-bezier(.2,.8,.2,1)",
-                }}
-              />
-            </IconButton>
-            <IconButton
-              aria-label={t("audiobook.nextChapter")}
-              onClick={nextChapter}
-              disabled={!canNext}
-              sx={{ width: 40, height: 40 }}
-            >
-              <SkipNext />
-            </IconButton>
-          </Box>
-
-          {
-            /* Row 3 — secondary actions grouped into ONE soft segmented bar
-              (speed · sleep · delete), filling the card width in equal thirds.
-              Replaces a hard divider + three edge-pinned buttons that read as
-              stranded with big gaps; the grouped bar is cohesive and uses the
-              space. Hairline separators sit between segments. */
-          }
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "stretch",
-              bgcolor: "action.hover",
-              borderRadius: 2,
-              overflow: "hidden",
-            }}
-          >
-            {/* Speed — opens the rate menu (mirrors the full player). */}
-            <Box
-              component="button"
-              aria-label={t("audiobook.speed")}
-              aria-haspopup="true"
-              onClick={(e) => setSpeedAnchor(e.currentTarget)}
-              sx={segSx}
-            >
-              <Box component="span" sx={{ fontSize: rem(14), fontWeight: 700 }}>
-                {rate}×
-              </Box>
-            </Box>
-
-            {/* Sleep timer — moon when off, remaining time (accent) when armed. */}
-            <Box
-              component="button"
-              aria-label={t("audiobook.sleepTimer")}
-              aria-haspopup="true"
-              onClick={(e) => setSleepAnchor(e.currentTarget)}
-              sx={{ ...segSx, borderLeft: 1, borderColor: "divider" }}
-            >
-              {sleepRemainingMin > 0
-                ? (
-                  <Typography
-                    variant="body2"
-                    fontWeight={700}
-                    color="primary"
-                    sx={{ fontVariantNumeric: "tabular-nums" }}
-                  >
-                    {fmtSleep(sleepRemainingMin)}
-                  </Typography>
-                )
-                : <Bedtime sx={{ fontSize: rem(22) }} />}
-            </Box>
-
-            {/* Delete — stop playback + dismiss the bubble (asks first). */}
-            <Box
-              component="button"
-              aria-label={t("audiobook.stop")}
-              onClick={() => setConfirmOpen(true)}
-              sx={{
-                ...segSx,
-                borderLeft: 1,
-                borderColor: "divider",
-                color: "error.main",
-              }}
-            >
-              <DeleteIcon sx={{ fontSize: rem(21) }} />
-            </Box>
-          </Box>
-        </Box>
-      </Grow>
-
-      {/* Playback-speed menu — a popup over the card (above the fab z-index). */}
-      <Menu
-        anchorEl={speedAnchor}
-        open={speedAnchor !== null}
-        onClose={() => setSpeedAnchor(null)}
-        anchorOrigin={{ vertical: "top", horizontal: "center" }}
-        transformOrigin={{ vertical: "bottom", horizontal: "center" }}
-      >
-        {RATES.map((r) => (
-          <MenuItem
-            key={r}
-            selected={r === rate}
-            onClick={() => {
-              setRate(r);
-              setSpeedAnchor(null);
-            }}
-          >
-            {r}×
-          </MenuItem>
-        ))}
-      </Menu>
-
-      {/* Sleep-timer menu — Off + the same minute options as the full player. */}
-      <Menu
-        anchorEl={sleepAnchor}
-        open={sleepAnchor !== null}
-        onClose={() => setSleepAnchor(null)}
-        anchorOrigin={{ vertical: "top", horizontal: "center" }}
-        transformOrigin={{ vertical: "bottom", horizontal: "center" }}
-      >
-        <MenuItem
-          selected={sleepMinutes === 0}
-          onClick={() => {
-            setSleepTimer(0);
-            setSleepAnchor(null);
-          }}
-        >
-          {t("audiobook.sleepOff")}
-        </MenuItem>
-        {SLEEP_MINUTES.map((m) => (
-          <MenuItem
-            key={m}
-            selected={m === sleepMinutes}
-            onClick={() => {
-              setSleepTimer(m);
-              setSleepAnchor(null);
-            }}
-          >
-            {fmtSleep(m)}
-          </MenuItem>
-        ))}
-      </Menu>
-
-      {/* Confirm before stopping — destructive, so it asks first. */}
-      <BottomSheet
-        open={confirmOpen}
-        onClose={() => setConfirmOpen(false)}
-        title={t("audiobook.stopConfirmTitle")}
-        actions={
-          <>
-            <Button color="inherit" onClick={() => setConfirmOpen(false)}>
-              {t("audiobook.cancel")}
-            </Button>
-            <Button
-              color="error"
-              variant="contained"
-              onClick={() => {
-                setConfirmOpen(false);
-                stop();
-              }}
-            >
-              {t("audiobook.stop")}
-            </Button>
-          </>
-        }
-      >
-        <Typography variant="body2" color="text.secondary">
-          {t("audiobook.stopConfirmBody")}
-        </Typography>
-      </BottomSheet>
-    </>
+          )
+          : (
+            <AudiobookIcon
+              sx={{ fontSize: rem(22), color: "rgba(255,255,255,0.92)" }}
+            />
+          )}
+      </Box>
+    </Box>
   );
 }

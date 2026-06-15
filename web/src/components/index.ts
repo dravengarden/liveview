@@ -6,6 +6,7 @@ export { AudiobookPlayer } from "./AudiobookPlayer";
 export { NowPlayingPopup } from "./NowPlayingPopup";
 export { MiniPlayer } from "./MiniPlayer";
 export { FloatingBubble } from "./FloatingBubble";
+export { PlaybackSheet } from "./PlaybackSheet";
 export { Landing } from "./Landing";
 export { ReconnectBanner } from "./ReconnectBanner";
 export { ScrollToTopButton } from "./ScrollToTopButton";

@@ -5,13 +5,10 @@ import {
   Box,
   CircularProgress,
   IconButton,
-  MenuItem,
-  Select,
   Slider,
   Typography,
 } from "@mui/material";
 import {
-  Bedtime,
   Cast as CastIcon,
   MyLocation,
   Pause,
@@ -21,6 +18,7 @@ import {
 } from "@mui/icons-material";
 import { alpha } from "@mui/material/styles";
 import { Forward15Icon, Replay15Icon } from "./Skip15Icons";
+import { fmtTime, SleepChip, SpeedChip } from "@/audio/playback-ui";
 import { useAudioPlayer } from "@/audio/player";
 import { READING_COLUMN_MAX } from "@/types";
 import { useI18n } from "@/i18n";
@@ -35,28 +33,6 @@ interface AudiobookPlayerProps {
   /** Persist playback progress (chapter path + 0..1 fraction) — same store as
    *  text reading, so the shelf card can show an audio %. */
   onSaveScroll?: (path: string, ratio: number) => void;
-}
-
-const RATES = [0.75, 1, 1.25, 1.5, 2, 2.25, 2.5, 2.75, 3];
-// Sleep-timer options in minutes (0 = off). Capped at 90.
-const SLEEP_MINUTES = [15, 30, 45, 60, 90];
-
-function fmtTime(sec: number): string {
-  if (!Number.isFinite(sec)) return "0:00";
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-/** Compact sleep-timer label: 15m / 60→1h / 90→1h30m. Used for both the menu
- *  options and the live remaining display. */
-function fmtSleep(min: number): string {
-  if (min >= 60) {
-    const h = Math.floor(min / 60);
-    const m = min % 60;
-    return m === 0 ? `${h}h` : `${h}h${m}m`;
-  }
-  return `${min}m`;
 }
 
 /** The full read-along reader for the currently-playing chapter: the spoken text
@@ -76,7 +52,6 @@ export function AudiobookPlayer(
     playing,
     loading,
     error,
-    rate,
     currentTime,
     duration,
     canPrev,
@@ -85,10 +60,6 @@ export function AudiobookPlayer(
     seek,
     skip,
     seekToSentence,
-    setRate,
-    sleepMinutes,
-    sleepRemainingMin,
-    setSleepTimer,
     nextChapter,
     prevChapter,
     playingElsewhere,
@@ -193,22 +164,6 @@ export function AudiobookPlayer(
   // the centre — content wider than it (the "1h30m" sleep label) overflows into
   // the empty space around the cluster, it isn't clipped.
   const CHIP_W = 40;
-  // Chip is sized to its content (NOT a fixed width) and centred by its CHIP_W
-  // wrapper — the same wrapper the follow toggle uses — so the two left controls
-  // share one true centre line regardless of MUI's internal select sizing.
-  const chipSelectSx = {
-    "& .MuiSelect-select": {
-      py: 0.5,
-      // MUI reserves padding-right (24px) for the dropdown icon even with
-      // IconComponent removed; force it off both sides so nothing is clipped.
-      px: "0 !important",
-      minHeight: "44px !important",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 0.25,
-    },
-  } as const;
   // A fixed-width slot that centres one transport "ear" (follow toggle / speed
   // chip), so they line up in one column on the rows above/below.
   const earSx = {
@@ -217,75 +172,6 @@ export function AudiobookPlayer(
     display: "flex",
     justifyContent: "center",
   } as const;
-
-  const speedChip = (
-    <Select
-      variant="standard"
-      disableUnderline
-      IconComponent={() => null}
-      value={rate}
-      onChange={(e) => {
-        setRate(Number(e.target.value));
-      }}
-      aria-label={t("audiobook.speed")}
-      renderValue={(v) => (
-        <Typography
-          component="span"
-          variant="body2"
-          fontWeight={700}
-          sx={{ fontVariantNumeric: "tabular-nums" }}
-        >
-          {`${v}×`}
-        </Typography>
-      )}
-      sx={chipSelectSx}
-    >
-      {RATES.map((r) => (
-        <MenuItem key={r} value={r}>
-          {r}×
-        </MenuItem>
-      ))}
-    </Select>
-  );
-
-  const sleepActive = sleepRemainingMin > 0;
-  const sleepChip = (
-    <Select
-      variant="standard"
-      disableUnderline
-      IconComponent={() => null}
-      value={sleepMinutes}
-      onChange={(e) => {
-        setSleepTimer(Number(e.target.value));
-      }}
-      aria-label={t("audiobook.sleepTimer")}
-      renderValue={() =>
-        // Off → just the moon. Armed → only the remaining time (no moon), so the
-        // longest label (e.g. "1h30m") fits the fixed-width chip without being
-        // clipped by the icon.
-        sleepActive
-          ? (
-            <Typography
-              component="span"
-              variant="body2"
-              fontWeight={700}
-              color="primary"
-              sx={{ fontVariantNumeric: "tabular-nums" }}
-            >
-              {fmtSleep(sleepRemainingMin)}
-            </Typography>
-          )
-          : <Bedtime sx={{ fontSize: rem(22), color: "text.secondary" }} />}
-      sx={chipSelectSx}
-    >
-      <MenuItem value={0}>{t("audiobook.sleepOff")}</MenuItem>
-      {SLEEP_MINUTES.map((m) => (
-        <MenuItem key={m} value={m}>
-          {fmtSleep(m)}
-        </MenuItem>
-      ))}
-    </Select>
-  );
 
   const followBtn = (
     <IconButton
@@ -393,13 +279,17 @@ export function AudiobookPlayer(
         minHeight: tap(58),
       }}
     >
-      <Box sx={earSx}>{speedChip}</Box>
+      <Box sx={earSx}>
+        <SpeedChip />
+      </Box>
       {mainCluster}
       {
         /* Same earSx slot as the speed chip — both controls centred in a CHIP_W
           ear, so the left "2×" and the right sleep button are symmetric. */
       }
-      <Box sx={earSx}>{sleepChip}</Box>
+      <Box sx={earSx}>
+        <SleepChip />
+      </Box>
     </Box>
   );
 
