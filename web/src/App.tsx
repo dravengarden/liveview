@@ -424,25 +424,42 @@ export function App(): React.JSX.Element {
   const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;
   const activeBook = books.find((b) => b.slug === activeSlug) ?? null;
   // How the kept-alive shelf is HIDDEN while a book is open. Default is
-  // `visibility: hidden` — it preserves layout + scroll position but the subtree
-  // is NOT painted, so the return reveal is a plain repaint, not an opacity-group
-  // offscreen COMPOSITE. `opacity: 0` (the old default) kept a fully-transparent
-  // composited layer that iOS WebKit re-rasterized whole on reveal — inside the
-  // swipe-back touch gesture that was the ~480ms return freeze. content-visibility
-  // (the original reason opacity:0 was picked over visibility) was dropped in
-  // v130, so visibility:hidden no longer pops the cards in. `?shelfhide=` overrides
-  // (opacity | display | unmount) for A/B.
+  // `display: none` — the shelf leaves the render tree entirely (no layout, no
+  // paint, NO composited layer), so returning is a fresh render, not a reveal of a
+  // kept-alive layer. `opacity: 0` and `visibility: hidden` both keep the shelf in
+  // the layer tree; on mobile WebKit, revealing it inside the swipe-back touch
+  // gesture re-rasterized the whole shelf — the ~480ms return freeze. display:none
+  // resets the scroller, so we save/restore its offset (effects below).
+  // `?shelfhide=opacity|visibility|unmount` overrides for A/B.
   const shelfHideMode = useMemo(
     () =>
       (typeof window !== "undefined" &&
         new URLSearchParams(window.location.search).get("shelfhide")) ||
-      "visibility",
+      "display",
     [],
   );
   const shelfHidden = activeSlug !== null; // a book is open
-  // visibility/opacity keep the scroller laid out (offset preserved for free);
-  // unmount/display reset it (acceptable — those are A/B-only comparison modes).
   const shelfMounted = shelfHideMode !== "unmount" || !shelfHidden;
+  // display:none / unmount drop the shelf from layout, resetting its scroller to 0.
+  // Track the live offset (the scroller stays in the DOM under display:none, so the
+  // listener survives) and restore it the frame the shelf is revealed.
+  const shelfScrollRef = useRef(0);
+  useEffect(() => {
+    if (shelfHideMode === "opacity" || shelfHideMode === "visibility") return;
+    const el = document.querySelector<HTMLElement>('[data-lv-scroller="shelf"]');
+    if (!el) return;
+    const onScroll = (): void => {
+      shelfScrollRef.current = el.scrollTop;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [shelfHideMode, shelfMounted, books.length]);
+  useLayoutEffect(() => {
+    if (shelfHidden) return; // restore only on reveal
+    if (shelfHideMode === "opacity" || shelfHideMode === "visibility") return;
+    const el = document.querySelector<HTMLElement>('[data-lv-scroller="shelf"]');
+    if (el && shelfScrollRef.current > 0) el.scrollTop = shelfScrollRef.current;
+  }, [shelfHidden, shelfHideMode]);
   // Are we ON the playing book's inline audio page (where the read-along reader
   // already shows full controls)? If so the floating bubble hides; everywhere
   // else (text page, another book, the shelf) it shows as the now-playing handle.
