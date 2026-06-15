@@ -1052,6 +1052,10 @@ export function App(): React.JSX.Element {
     // shelf on return is at a non-zero scroll offset (the user's shelf is always
     // scrolled) — tests whether a scrolled scroll-container reveal is the freeze.
     const shelfScroll = Number(params.get("shelfscroll")) || 0;
+    // `?bookscroll=PX` scrolls the open book mid-dwell (lazy-loading more content
+    // / more reader layers) before returning — tests whether a scrolled/heavier
+    // reader teardown is the freeze.
+    const bookScroll = Number(params.get("bookscroll")) || 0;
     const step = (): void => {
       if (cancelled || cycle >= n) return;
       cycle += 1;
@@ -1062,6 +1066,16 @@ export function App(): React.JSX.Element {
         if (sc) sc.scrollTop = shelfScroll;
       }
       doEnter();
+      if (bookScroll > 0) {
+        timers.push(
+          window.setTimeout(() => {
+            const rs = document.querySelector<HTMLElement>(
+              '[data-lv-scroller="reader"]',
+            );
+            if (rs) rs.scrollTop = bookScroll;
+          }, Math.max(400, dwell - 500)),
+        );
+      }
       timers.push(
         window.setTimeout(() => {
           if (cancelled) return;
