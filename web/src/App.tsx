@@ -1174,13 +1174,20 @@ export function App(): React.JSX.Element {
         // backToLanding from a timer did not). Defer to the next frame so the
         // gesture fully ends first and the reveal paints in a clean frame.
         // `?deferback` toggles for A/B; once confirmed this becomes the default.
-        const dm = Number(
-          new URLSearchParams(window.location.search).get("deferback"),
-        );
-        if (dm > 0) {
-          window.setTimeout(() => backToLanding(), dm);
-        } else {
+        // Reveal the shelf from a FRESH MACROTASK, not synchronously inside this
+        // touchend handler. Calling backToLanding() directly here froze the
+        // return ~480ms on mobile WebKit: the shelf reveal runs inside the touch-
+        // interaction context, where WebKit does it synchronously and re-rasterizes
+        // the whole shelf. A programmatic return from a timer never froze. A rAF
+        // (v149) did NOT fix it — rAF is coupled to the interaction frame's render;
+        // a setTimeout is a fresh task, decoupled from the gesture. `?deferback=MS`
+        // overrides the delay; `?defersync` restores the old synchronous path (A/B).
+        const params = new URLSearchParams(window.location.search);
+        const dm = Number(params.get("deferback"));
+        if (params.has("defersync")) {
           backToLanding();
+        } else {
+          window.setTimeout(() => backToLanding(), dm > 0 ? dm : 0);
         }
       }
     };
