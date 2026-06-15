@@ -380,6 +380,13 @@ function CompactKindBadge(
  *  *JS* that builds every card. The formatters are pure + immutable, so cache
  *  one instance per locale and reuse it (88 constructions/render → 2 lookups).
  *  Locales here are only zh-CN / en-US, so the caches stay tiny. */
+// DIAGNOSTIC (URL-gated): `?noripple` disables the shelf-card ripple, to test
+// whether a tap-started ripple, stranded on the shelf when you return, is what
+// re-rasterizes the revealed shelf and freezes the return on mobile WebKit.
+const DIAG_NORIPPLE =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).has("noripple");
+
 const toLocale = (lang: string): string => (lang === "zh" ? "zh-CN" : "en-US");
 const DATE_FMT = new Map<string, Intl.DateTimeFormat>();
 function dateFmt(lang: string): Intl.DateTimeFormat {
@@ -747,7 +754,7 @@ const ShelfCard = memo(function ShelfCard({
         the freeze, so the ripple stays; the real ~2s block is measured via the
         /api/perf beacon. See App's return path.) */
       }
-      <CardActionArea onClick={() => onOpen(b.slug)}>
+      <CardActionArea onClick={() => onOpen(b.slug)} disableRipple={DIAG_NORIPPLE}>
         {
           /* Cover: the book's own image when it has one, else a
         slug-keyed gradient + the kind icon. Top-left badge: a
