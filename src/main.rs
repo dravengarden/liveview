@@ -479,6 +479,37 @@ async fn run_preview(args: cli::PreviewArgs) -> Result<(), String> {
 /// Build the reader's axum app (API routes + SPA assets) over any backend.
 /// Shared by the deployed server (`run`) and the filesystem preview
 /// (`run_preview`): one router, two content backends.
+/// Lightweight access log for the version-revealing requests only (the shell,
+/// the service worker, the build-id probe, and the content-hashed entry bundle)
+/// — NOT the chatty asset/api traffic. Lets us see exactly which build + SW a
+/// given client (User-Agent) actually fetches, to tell a real in-app perf
+/// regression apart from a stale PWA cache that never loaded the new bundle.
+#[cfg(feature = "embedded")]
+async fn log_access(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = req.uri().path();
+    let interesting = path == "/"
+        || path == "/sw.js"
+        || path == "/api/version"
+        || path.starts_with("/assets/index-");
+    let line = interesting.then(|| {
+        let ua = req
+            .headers()
+            .get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("-")
+            .to_string();
+        (path.to_string(), ua)
+    });
+    let res = next.run(req).await;
+    if let Some((path, ua)) = line {
+        tracing::info!(status = res.status().as_u16(), path = %path, ua = %ua, "access");
+    }
+    res
+}
+
 fn build_app(state: SharedState) -> Router {
     let api_router = Router::new()
         .route("/api/books", get(api_books))
@@ -509,6 +540,7 @@ fn build_app(state: SharedState) -> Router {
             .route("/{*path}", get(embedded_assets::serve_root))
             .fallback(get(embedded_assets::serve_index))
             .layer(Extension(state))
+            .layer(axum::middleware::from_fn(log_access))
     }
 
     #[cfg(not(feature = "embedded"))]
