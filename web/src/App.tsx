@@ -563,6 +563,26 @@ export function App(): React.JSX.Element {
   // progress side by side; within a rendition the most-recent chapter wins.
   // Keyed by book slug for the landing.
   const progressBySlug = useMemo(() => {
+    const _t0 = performance.now();
+    // PERF: O(tree + rows), not O(rows × tree). The old code called findNode(tree,…)
+    // AND flattenTracks(book) for EVERY recent-progress row — walking the whole
+    // forest and re-flattening a book's spine per row. That's the return-from-book
+    // freeze on a slow device (iPad: ~hundreds of ms; fast desktop hid it at a few
+    // ms), and it's INDEPENDENT of how many books the shelf shows (why filtering
+    // didn't help). Here we index only the books that actually have progress, each
+    // flattened ONCE, then do O(1) lookups per row.
+    const slugs = new Set(recentProgress.map((r) => r.path.split("/")[0] ?? ""));
+    const nodeByPath = new Map<string, TreeNode>();
+    const leavesBySlug = new Map<string, ReturnType<typeof flattenTracks>>();
+    const indexNode = (n: TreeNode): void => {
+      nodeByPath.set(n.path, n);
+      n.children?.forEach(indexNode);
+    };
+    for (const top of tree) {
+      if (!slugs.has(top.path)) continue; // only books with recent progress
+      indexNode(top);
+      leavesBySlug.set(top.path, flattenTracks(top.children, uiLang));
+    }
     const out: Record<string, BookProgress> = {};
     const at: Record<string, { text: number; audio: number }> = {};
     for (const r of recentProgress) {
@@ -575,18 +595,16 @@ export function App(): React.JSX.Element {
       // so the newest chapter wins if that ever changes.
       if (seen[kind] && r.updated_at <= seen[kind]) continue;
       seen[kind] = r.updated_at;
-      const node = findNode(tree, r.path);
+      const node = nodeByPath.get(r.path);
       const chapterLabel =
         (node && ((uiLang && node.titles?.[uiLang]) || node.name)) ||
         r.path.split("/").pop() ||
         r.path;
       // Book-level progress: where this chapter sits in the book's ordered spine,
-      // plus its in-chapter scroll, over the chapter count. The shelf's `tree` is
-      // the full forest, so the book's leaves are available here. (Audio resume
-      // paths (.spoken.md) aren't in the text spine → idx < 0 → scroll fallback.)
+      // plus its in-chapter scroll, over the chapter count. (Audio resume paths
+      // (.spoken.md) aren't in the text spine → idx < 0 → scroll fallback.)
       const scroll = Math.min(1, Math.max(0, r.scroll));
-      const bookNode = tree.find((n) => n.path === slug);
-      const leaves = bookNode ? flattenTracks(bookNode.children, uiLang) : [];
+      const leaves = leavesBySlug.get(slug) ?? [];
       const idx = leaves.findIndex((l) => l.path === r.path);
       const fraction = leaves.length > 0 && idx >= 0
         ? (idx + scroll) / leaves.length
@@ -598,6 +616,19 @@ export function App(): React.JSX.Element {
         fraction,
         updatedAt: r.updated_at,
       };
+    }
+    // DIAGNOSTIC: beacon this compute's time when it's non-trivial, to confirm on
+    // the device whether it was the return freeze.
+    const _dur = Math.round(performance.now() - _t0);
+    if (_dur > 20) {
+      try {
+        navigator.sendBeacon?.(
+          "/api/perf",
+          JSON.stringify({ ev: "pbs", ms: _dur, rows: recentProgress.length }),
+        );
+      } catch {
+        // best-effort
+      }
     }
     return out;
   }, [recentProgress, tree, uiLang]);
