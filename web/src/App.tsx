@@ -1174,8 +1174,11 @@ export function App(): React.JSX.Element {
         // backToLanding from a timer did not). Defer to the next frame so the
         // gesture fully ends first and the reveal paints in a clean frame.
         // `?deferback` toggles for A/B; once confirmed this becomes the default.
-        if (new URLSearchParams(window.location.search).has("deferback")) {
-          requestAnimationFrame(() => backToLanding());
+        const dm = Number(
+          new URLSearchParams(window.location.search).get("deferback"),
+        );
+        if (dm > 0) {
+          window.setTimeout(() => backToLanding(), dm);
         } else {
           backToLanding();
         }
