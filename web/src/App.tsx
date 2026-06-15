@@ -270,6 +270,8 @@ export function App(): React.JSX.Element {
   // Refs for matching live WebSocket updates against what's currently shown
   // (the shown edition may differ from `lang` when falling back).
   const currentPathRef = useRef<string | null>(null);
+  // Keep-alive cache of the rendered reader (NavShell) — see the render site.
+  const readerElRef = useRef<React.JSX.Element | null>(null);
   const contentLangRef = useRef<string>("");
   // The rendition whose spine `tree` currently holds. Live tree updates (which
   // arrive as the default text spine) must not clobber a non-text spine.
@@ -1508,9 +1510,19 @@ export function App(): React.JSX.Element {
               navbarAtBottom={navbarAtBottom}
             />
           </Box>
-          {activeSlug !== null && (
-            <NavShell
-              appKey="liveview"
+          {(() => {
+            // Keep-alive reader. Cache the rendered NavShell and keep showing it
+            // (frozen at the last book) while on the shelf, just hidden — so
+            // returning is an opacity composite, NOT a NavShell teardown. The
+            // teardown is a ~460ms full-screen recomposite freeze on iPad/WebKit
+            // (device-measured: commit ~10ms, layout ~25ms, paint/composite
+            // ~460ms, independent of shelf or book content). The reader's layers
+            // free + content swaps only when a NEW book opens, where a content
+            // load is already expected.
+            const live = activeSlug !== null
+              ? (
+                <NavShell
+                  appKey="liveview"
               barPosition={navbarAtBottom ? "bottom" : "top"}
               // Frosted-overlay bar ONLY on the compact (bottom-bar) tier, where
               // the reader runs full-height and content scrolls under the bar
@@ -1609,8 +1621,29 @@ export function App(): React.JSX.Element {
                     onReadAloud={handleReadAloud}
                   />
                 )}
-            </NavShell>
-          )}
+                </NavShell>
+              )
+              : null;
+            if (live) readerElRef.current = live;
+            const el = live ?? readerElRef.current;
+            return el
+              ? (
+                <Box
+                  sx={{
+                    position: "absolute",
+                    inset: 0,
+                    // Hidden + click-through on the shelf; the shelf (sibling
+                    // below) shows through and takes the taps. Frozen reader stays
+                    // mounted so there's no teardown freeze on return.
+                    opacity: activeSlug === null ? 0 : 1,
+                    pointerEvents: activeSlug === null ? "none" : "auto",
+                  }}
+                >
+                  {el}
+                </Box>
+              )
+              : null;
+          })()}
         </Box>
       </Box>
       {
