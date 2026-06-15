@@ -96,10 +96,19 @@ static id lv_wk_init(id self, SEL _cmd, CGRect frame, id configuration) {
         // it's a Swift @objc(SnapshotNavController) class whose +installOnWebView:
         // registers the "lvNativeNav" WKScriptMessageHandler. The web half no-ops
         // off-shell, so this is the ONLY place the native transition is wired in.
-        Class navCls = NSClassFromString(@"SnapshotNavController");
         SEL installSel = NSSelectorFromString(@"installOnWebView:");
+        Class navCls = NSClassFromString(@"SnapshotNavController");
         if (navCls && [navCls respondsToSelector:installSel]) {
             ((void (*)(id, SEL, id))objc_msgSend)(navCls, installSel, wv);
+        }
+        // Native media-control bridge (shared-utils native-media): owns
+        // MPRemoteCommandCenter + MPNowPlayingInfoCenter + AVAudioSession route/
+        // interruption handling, bridged to the web <audio> — reliable AirPods /
+        // lock-screen / CarPlay where the WKWebView MediaSession is not. Same
+        // dynamic, header-free install as the nav controller above.
+        Class mediaCls = NSClassFromString(@"NativeMediaController");
+        if (mediaCls && [mediaCls respondsToSelector:installSel]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(mediaCls, installSel, wv);
         }
     }
     return wv;
