@@ -423,18 +423,26 @@ export function App(): React.JSX.Element {
   // The active book is the first path segment; null ⇒ the landing bookshelf.
   const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;
   const activeBook = books.find((b) => b.slug === activeSlug) ?? null;
-  // DIAGNOSTIC harness (URL-gated, no effect in normal use): `?shelfhide=unmount`
-  // unmounts the shelf while a book is open instead of hiding it at opacity:0,
-  // so a return remounts it fresh — an A/B against the opacity-reveal repaint
-  // that we suspect is the mobile-WebKit return freeze. Read once.
-  const diagShelfUnmount = useMemo(
+  // How the kept-alive shelf is HIDDEN while a book is open. Default is
+  // `visibility: hidden` — it preserves layout + scroll position but the subtree
+  // is NOT painted, so the return reveal is a plain repaint, not an opacity-group
+  // offscreen COMPOSITE. `opacity: 0` (the old default) kept a fully-transparent
+  // composited layer that iOS WebKit re-rasterized whole on reveal — inside the
+  // swipe-back touch gesture that was the ~480ms return freeze. content-visibility
+  // (the original reason opacity:0 was picked over visibility) was dropped in
+  // v130, so visibility:hidden no longer pops the cards in. `?shelfhide=` overrides
+  // (opacity | display | unmount) for A/B.
+  const shelfHideMode = useMemo(
     () =>
-      typeof window !== "undefined" &&
-      new URLSearchParams(window.location.search).get("shelfhide") ===
-        "unmount",
+      (typeof window !== "undefined" &&
+        new URLSearchParams(window.location.search).get("shelfhide")) ||
+      "visibility",
     [],
   );
-  const shelfShown = !diagShelfUnmount || activeSlug === null;
+  const shelfHidden = activeSlug !== null; // a book is open
+  // visibility/opacity keep the scroller laid out (offset preserved for free);
+  // unmount/display reset it (acceptable — those are A/B-only comparison modes).
+  const shelfMounted = shelfHideMode !== "unmount" || !shelfHidden;
   // Are we ON the playing book's inline audio page (where the read-along reader
   // already shows full controls)? If so the floating bubble hides; everywhere
   // else (text page, another book, the shelf) it shows as the now-playing handle.
@@ -1723,15 +1731,23 @@ export function App(): React.JSX.Element {
               cards are still skipped by content-visibility, and the scroll
               offset is preserved.) */
           }
-          {shelfShown && (
+          {shelfMounted && (
             <Box
               sx={{
                 position: "absolute",
                 inset: 0,
-                display: "flex",
                 flexDirection: "column",
-                opacity: diagShelfUnmount ? 1 : activeSlug === null ? 1 : 0,
-                pointerEvents: activeSlug === null ? "auto" : "none",
+                pointerEvents: shelfHidden ? "none" : "auto",
+                // Hide mode (default visibility): see shelfHideMode above.
+                ...(shelfHideMode === "display"
+                  ? { display: shelfHidden ? "none" : "flex" }
+                  : { display: "flex" }),
+                ...(shelfHideMode === "opacity"
+                  ? { opacity: shelfHidden ? 0 : 1 }
+                  : {}),
+                ...(shelfHideMode === "visibility"
+                  ? { visibility: shelfHidden ? "hidden" : "visible" }
+                  : {}),
               }}
             >
               <Landing
