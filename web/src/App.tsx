@@ -966,13 +966,42 @@ export function App(): React.JSX.Element {
           : 0;
     const slug = books[idx]?.slug;
     if (!slug) return;
+    // `?tap=1` enters via a REAL pointer/click on the first shelf card (firing
+    // MUI's ripple + the touch path) instead of calling enterBook() directly —
+    // to test whether the tap/ripple, not the navigation, is what makes the
+    // RETURN freeze (a ripple stranded on the revealed shelf re-rasterizes it).
+    const tapMode = params.has("tap");
+    const doEnter = (): void => {
+      if (tapMode) {
+        const card = document.querySelector<HTMLElement>(
+          ".MuiCardActionArea-root",
+        );
+        if (card) {
+          const r = card.getBoundingClientRect();
+          const x = r.left + r.width / 2;
+          const y = r.top + r.height / 2;
+          const base = { bubbles: true, cancelable: true, clientX: x, clientY: y };
+          card.dispatchEvent(
+            new PointerEvent("pointerdown", { ...base, pointerId: 1, pointerType: "touch" }),
+          );
+          card.dispatchEvent(new MouseEvent("mousedown", base));
+          card.dispatchEvent(
+            new PointerEvent("pointerup", { ...base, pointerId: 1, pointerType: "touch" }),
+          );
+          card.dispatchEvent(new MouseEvent("mouseup", base));
+          card.dispatchEvent(new MouseEvent("click", base));
+          return;
+        }
+      }
+      enterBook(slug);
+    };
     let cycle = 0;
     let cancelled = false;
     const timers: number[] = [];
     const step = (): void => {
       if (cancelled || cycle >= n) return;
       cycle += 1;
-      enterBook(slug);
+      doEnter();
       timers.push(
         window.setTimeout(() => {
           if (cancelled) return;
