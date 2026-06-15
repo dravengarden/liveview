@@ -8,6 +8,13 @@ import {
   useState,
 } from "react";
 import type { Mark, SpokenContent } from "@/types";
+import {
+  nativeMediaAvailable,
+  nativeMediaClear,
+  nativeMediaSetNowPlaying,
+  nativeMediaSetState,
+  onNativeMediaCommand,
+} from "@/native-media";
 import { useI18n } from "@/i18n";
 import { loadServerSetting } from "@/syncBackends";
 import {
@@ -832,6 +839,10 @@ export function AudioPlayerProvider(
   // OS / lock-screen / headphone controls. Metadata follows the chapter; the
   // handlers are wired once.
   useEffect(() => {
+    // Native iOS shell: the native media bridge OWNS the OS controls (see the
+    // onNativeMediaCommand effect below) — don't ALSO wire web MediaSession, they'd
+    // fight over the same MPRemoteCommandCenter commands.
+    if (nativeMediaAvailable()) return;
     if (!("mediaSession" in navigator)) return;
     const ms = navigator.mediaSession;
     ms.setActionHandler("play", () => {
@@ -866,6 +877,7 @@ export function AudioPlayerProvider(
   }, [nextChapter, prevChapter]);
 
   useEffect(() => {
+    if (nativeMediaAvailable()) return; // native owns MPNowPlayingInfoCenter
     if (!("mediaSession" in navigator)) return;
     if (!nowPlaying) {
       navigator.mediaSession.metadata = null;
@@ -891,6 +903,7 @@ export function AudioPlayerProvider(
   }, [nowPlaying]);
 
   useEffect(() => {
+    if (nativeMediaAvailable()) return; // native owns playbackState via setState
     if (!("mediaSession" in navigator)) return;
     navigator.mediaSession.playbackState = playing
       ? "playing"
@@ -1010,6 +1023,80 @@ export function AudioPlayerProvider(
       updatePositionState(a);
     }
   }, []);
+  // ── Native iOS media bridge (shared-utils native-media) ──────────────────────
+  // On the native shell the OS controls (AirPods / lock screen / CarPlay) run
+  // through native MPRemoteCommandCenter + MPNowPlayingInfoCenter — reliable where
+  // the WKWebView MediaSession is not. Apply native commands to the audio element,
+  // and feed native the now-playing metadata + transport state. No-ops off-shell.
+  useEffect(() => {
+    if (!nativeMediaAvailable()) return;
+    return onNativeMediaCommand((cmd) => {
+      switch (cmd.type) {
+        case "play":
+          playHere();
+          break;
+        case "pause":
+          audioRef.current?.pause();
+          break;
+        case "toggle":
+          togglePlay();
+          break;
+        case "next":
+          nextChapter();
+          break;
+        case "prev":
+          prevChapter();
+          break;
+        case "skipforward":
+          skip(cmd.seconds);
+          break;
+        case "skipbackward":
+          skip(-cmd.seconds);
+          break;
+        case "seek":
+          seek(cmd.position);
+          break;
+      }
+    });
+  }, [togglePlay, playHere, skip, seek, nextChapter, prevChapter]);
+
+  useEffect(() => {
+    if (!nativeMediaAvailable()) return;
+    if (!nowPlaying) {
+      nativeMediaClear();
+      return;
+    }
+    nativeMediaSetNowPlaying({
+      title: nowPlaying.chapterLabel,
+      artist: nowPlaying.bookLabel,
+      album: nowPlaying.bookLabel,
+      // Absolute URL — native URLSession can't resolve a relative path.
+      artworkUrl: `${globalThis.location.origin}/api/artwork?book=${
+        encodeURIComponent(nowPlaying.bookSlug)
+      }`,
+      duration,
+    });
+  }, [nowPlaying, duration]);
+
+  useEffect(() => {
+    if (!nativeMediaAvailable() || !nowPlaying) return;
+    const push = (): void => {
+      nativeMediaSetState({
+        playing,
+        position: audioRef.current?.currentTime ?? currentTime,
+        rate,
+      });
+    };
+    push();
+    if (!playing) return;
+    // Low-frequency tick — iOS extrapolates the scrubber between pushes from
+    // elapsed + rate, so this just corrects drift / a seek.
+    const id = window.setInterval(push, 1500);
+    return () => window.clearInterval(id);
+    // currentTime intentionally omitted — the interval reads it fresh off the ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, rate, nowPlaying]);
+
   const stop = useCallback(() => {
     const a = audioRef.current;
     if (a) {
