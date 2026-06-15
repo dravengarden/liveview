@@ -1191,19 +1191,28 @@ export function App(): React.JSX.Element {
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     document.body.offsetHeight;
     const layout = Math.round(performance.now() - lt);
-    requestAnimationFrame(() => {
+    // MessageChannel round-trip fires as soon as the MAIN THREAD is free (a
+    // macrotask), regardless of the compositor/frame. So: `mc` small but `paint`
+    // (2× rAF) large ⇒ the main thread is FREE and the freeze is compositor/
+    // rendering, not JS. `mc` ≈ `paint` ⇒ the main thread is BLOCKED (JS/sync).
+    const ch = new MessageChannel();
+    ch.port1.onmessage = () => {
+      const mc = Math.round(performance.now() - t0);
       requestAnimationFrame(() => {
-        const paint = Math.round(performance.now() - t0);
-        try {
-          navigator.sendBeacon?.(
-            "/api/perf",
-            JSON.stringify({ ev: "return", commit, layout, paint }),
-          );
-        } catch {
-          // best-effort diagnostic
-        }
+        requestAnimationFrame(() => {
+          const paint = Math.round(performance.now() - t0);
+          try {
+            navigator.sendBeacon?.(
+              "/api/perf",
+              JSON.stringify({ ev: "return", commit, layout, mc, paint }),
+            );
+          } catch {
+            // best-effort diagnostic
+          }
+        });
       });
-    });
+    };
+    ch.port2.postMessage(0);
   }, [currentPath]);
 
   // ── Inline audio: two effects keep the view and the playback engine in sync ──
