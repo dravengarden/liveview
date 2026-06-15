@@ -29,7 +29,7 @@ import {
   MenuBook as BookIcon,
   Search as SearchIcon,
 } from "@mui/icons-material";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { memo, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { Book, BookProgress, ReadingProgress } from "@/types";
 import {
   type ShelfSort,
@@ -616,6 +616,399 @@ function GroupSection({
   );
 }
 
+interface ShelfCardProps {
+  book: Book;
+  category: Category;
+  hasText: boolean;
+  hasAudio: boolean;
+  progress: BookProgress | undefined;
+  compactCards: boolean;
+  onOpen: (slug: string, renditionKind?: string) => void;
+  t: ReturnType<typeof useI18n>["t"];
+  lang: string;
+  nowMinute: number;
+}
+
+// One shelf card for a single entry, memoized at module level. The shelf
+// re-renders on every return from a book (only the read book's progress
+// changed), so an un-memoized card closure rebuilt all ~44 cards each time —
+// the bulk of the return-from-book freeze. As a memoized component, only the
+// card whose props actually changed re-renders. `nowMinute` (minute-bucketed
+// clock) keeps the relative "updated" stamp's prop stable across renders within
+// a minute so it doesn't defeat the memo. The markup is byte-for-byte the
+// previous inline card body.
+const ShelfCard = memo(function ShelfCard({
+  book: b,
+  category,
+  hasText,
+  hasAudio,
+  progress: bp,
+  compactCards,
+  onOpen,
+  t,
+  lang,
+  nowMinute,
+}: ShelfCardProps): React.JSX.Element {
+  const langs = b.langs;
+  // Progress is split by rendition: a text+audio book shows
+  // BOTH a reading and a listening meter; single-rendition
+  // books show just the one. The "continue" line resumes the
+  // most-recently-opened rendition.
+  const textP = bp?.text;
+  const audioP = bp?.audio;
+  // Book-level progress (how far through the spine), not
+  // the in-chapter scroll — so resuming at the top of a
+  // late chapter doesn't read 0%. See ReadingProgress.fraction.
+  const pctOf = (r: ReadingProgress): number =>
+    Math.min(
+      100,
+      Math.max(0, Math.round(r.fraction * 100)),
+    );
+  const resume = textP && audioP
+    ? (textP.updatedAt >= audioP.updatedAt
+      ? textP
+      : audioP)
+    : (textP ?? audioP);
+  // The dual-format card shows a rendition switch; the
+  // highlighted "current" segment is the last-used one
+  // (most-recent progress), defaulting to reading for a
+  // never-opened book (the default rendition of a "book").
+  const activeKind: "text" | "audio" = textP && audioP
+    ? (audioP.updatedAt > textP.updatedAt
+      ? "audio"
+      : "text")
+    : audioP
+    ? "audio"
+    : "text";
+  // Stamps line: the book's content recency (the shelf's
+  // default sort key) — when it was last added/edited, shown
+  // relative. "Updated" when it changed after first
+  // appearing, else "Added". The absolute creation date
+  // trails as a second fact only when the book has since
+  // been updated (otherwise it duplicates the line above).
+  const changedAfterAdd = Boolean(
+    b.updated_at && b.updated_at !== b.created_at,
+  );
+  const changedRel = fmtRelative(
+    b.updated_at || b.created_at,
+    nowMinute,
+    lang,
+  );
+  const createdStr = fmtDate(b.created_at, lang);
+  const stamps = [
+    changedRel &&
+    t(
+      changedAfterAdd
+        ? "landing.updatedRel"
+        : "landing.addedRel",
+      { time: changedRel },
+    ),
+    changedAfterAdd && createdStr &&
+    t("landing.added", { date: createdStr }),
+  ].filter((s): s is string => Boolean(s));
+  return (
+    <Card
+      variant="outlined"
+      sx={{
+        mb: "20px",
+        borderRadius: 2,
+        overflow: "hidden",
+        // Compact cards drop the cover band, so carry the book's
+        // slug-keyed colour as a faint FROSTED wash tinting the whole
+        // card — the same two-stop gradient as the cover, but
+        // translucent and diffuse (磨砂玻璃), composited over the
+        // card's paper surface. Distinguishes each book without the
+        // 104px band or a hard colour bar.
+        ...(compactCards && {
+          backgroundImage: compactTint(b.slug),
+        }),
+        // Skip layout/paint for off-screen cards. The shelf is a
+        // tall list; on a phone (and right after returning from a
+        // book, when the whole shelf re-lays-out at once) the
+        // browser was laying out + painting every card every frame,
+        // which made the first second of scrolling drop inputs.
+        // content-visibility:auto lets the engine skip cards outside
+        // the viewport; contain-intrinsic-size reserves a plausible
+        // box so the scrollbar stays stable. Scoped to xs — that's
+        // where the long single column makes the perf win matter;
+        // sm+ has fewer cards per column and we keep them painted.
+        contentVisibility: { xs: "auto", sm: "visible" },
+        containIntrinsicSize: {
+          // Compact cards drop the 104px cover band, so they
+          // reserve a shorter off-screen box — otherwise the
+          // over-estimate leaves the scrollbar long until the
+          // cards paint in.
+          xs: compactCards ? "0 150px" : "0 320px",
+          sm: "auto",
+        },
+        // Hover lift is a pointer affordance; on touch it fires on
+        // every scroll-tap and forces a repaint mid-scroll, so gate
+        // the transition + lift behind a real hover-capable pointer.
+        "@media (hover: hover)": {
+          transition: "box-shadow 0.18s, transform 0.18s",
+          "&:hover": {
+            boxShadow: 4,
+            transform: "translateY(-2px)",
+          },
+        },
+      }}
+    >
+      {
+        /* Standard MUI ripple. (It was dropped once because the
+      shelf was hidden with visibility:hidden while a book was
+      open, which stranded the ripple's exit animation; the
+      shelf now stays painted via opacity:0, so the ripple
+      completes normally.) */
+      }
+      <CardActionArea onClick={() => onOpen(b.slug)}>
+        {
+          /* Cover: the book's own image when it has one, else a
+        slug-keyed gradient + the kind icon. Top-left badge: a
+        book offering BOTH renditions gets a segmented switch
+        (📖 | 🎧) showing both formats + the current one, each
+        opening that rendition; otherwise a single kind badge
+        (Audiobook-only / Book / Docs). Progress is a labeled
+        meter row in the body. */
+        }
+        {!compactCards && (
+          <BookCover book={b} category={category}>
+            {hasText && hasAudio
+              ? (
+                <CoverRenditionSwitch
+                  slug={b.slug}
+                  activeKind={activeKind}
+                  onOpen={onOpen}
+                  bookLabel={t("landing.bookBadge")}
+                  audioLabel={t("landing.audiobookBadge")}
+                />
+              )
+              : (
+                // Single-format kind badge — ICON ONLY (no
+                // text): the glyph already names the kind and
+                // the big cover icon repeats it, so the label
+                // was redundant. PRIMARY colour (not neutral):
+                // a lone badge means that format is the active
+                // one, so it reads like the highlighted segment
+                // of the dual-format switch.
+                <Box
+                  aria-label={t(
+                    category === "docs"
+                      ? "landing.docsBadge"
+                      : hasAudio
+                      ? "landing.audiobookBadge"
+                      : "landing.bookBadge",
+                  )}
+                  sx={{
+                    position: "absolute",
+                    top: 8,
+                    left: 8,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    px: 1,
+                    py: 0.5,
+                    borderRadius: 5,
+                    bgcolor: "primary.main",
+                    color: "primary.contrastText",
+                  }}
+                >
+                  {category === "docs"
+                    ? (
+                      <DocsIcon
+                        sx={{ fontSize: rem(17) }}
+                      />
+                    )
+                    : hasAudio
+                    ? (
+                      <AudiobookIcon
+                        sx={{ fontSize: rem(17) }}
+                      />
+                    )
+                    : (
+                      <BookIcon
+                        sx={{ fontSize: rem(17) }}
+                      />
+                    )}
+                </Box>
+              )}
+          </BookCover>
+        )}
+        <Box sx={{ p: 1.75 }}>
+          {
+            /* Title row. In compact mode the cover band (and its
+              📖|🎧 switch) is gone, so a dual-rendition book gets
+              an INLINE switch here at the title's trailing edge —
+              still lets you open text vs audio straight from the
+              shelf. Single-kind books need no switch. */
+          }
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: 1,
+            }}
+          >
+            <Typography
+              variant="subtitle1"
+              fontWeight={700}
+              sx={{ lineHeight: 1.3, minWidth: 0 }}
+            >
+              {b.label}
+            </Typography>
+            {compactCards && (
+              hasText && hasAudio
+                ? (
+                  <CoverRenditionSwitch
+                    slug={b.slug}
+                    activeKind={activeKind}
+                    onOpen={onOpen}
+                    bookLabel={t("landing.bookBadge")}
+                    audioLabel={t("landing.audiobookBadge")}
+                    inline
+                  />
+                )
+                : (
+                  <CompactKindBadge
+                    category={category}
+                    label={t(
+                      category === "docs"
+                        ? "landing.docsBadge"
+                        : category === "audiobook"
+                        ? "landing.audiobookBadge"
+                        : "landing.bookBadge",
+                    )}
+                  />
+                )
+            )}
+          </Box>
+          {b.description
+            ? (
+              <Typography
+                variant="body2"
+                color="text.secondary"
+                sx={{
+                  mt: 0.5,
+                  // Clamp long blurbs but let short ones stay short —
+                  // the height variance is what makes the masonry work.
+                  display: "-webkit-box",
+                  WebkitLineClamp: 5,
+                  WebkitBoxOrient: "vertical",
+                  overflow: "hidden",
+                }}
+              >
+                {b.description}
+              </Typography>
+            )
+            : (
+              <Typography
+                variant="body2"
+                color="text.disabled"
+                fontStyle="italic"
+                sx={{ mt: 0.5 }}
+              >
+                /{b.slug}
+              </Typography>
+            )}
+          {
+            /* Progress as a labeled meter per rendition —
+            reading and/or listening, side by side. The
+            mode icon names each; the fill + % show how
+            far. A clean per-item meter (Audiobookshelf /
+            Plex idiom) instead of stacked naked bars. */
+          }
+          {
+            /* Always show a meter for EACH rendition the book
+              offers — reading and/or listening — even when it
+              has never been opened (it reads 0% until there's
+              progress). A book's place on the shelf should show
+              where you are at a glance, 0% included, so a fresh
+              book isn't visually indistinguishable from one
+              that's simply lost its meter; gated on the book
+              HAVING a rendition (not on progress existing), so a
+              bare docs tree with neither stays meter-free. */
+          }
+          {(hasText || hasAudio) && (
+            <Box
+              sx={{ display: "flex", gap: 1, mt: 1.25 }}
+            >
+              {hasText && (
+                <ProgressMeter
+                  icon={
+                    <BookIcon
+                      sx={{ fontSize: rem(15) }}
+                    />
+                  }
+                  pct={textP ? pctOf(textP) : 0}
+                />
+              )}
+              {hasAudio && (
+                <ProgressMeter
+                  icon={
+                    <AudiobookIcon
+                      sx={{ fontSize: rem(15) }}
+                    />
+                  }
+                  pct={audioP ? pctOf(audioP) : 0}
+                />
+              )}
+            </Box>
+          )}
+          {
+            /* Resume the most-recently-opened rendition. */
+          }
+          {resume && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{
+                display: "block",
+                mt: 1,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+              title={resume.chapterLabel}
+            >
+              {t("landing.continue", {
+                chapter: resume.chapterLabel,
+              })}
+            </Typography>
+          )}
+          {langs.length > 1 && (
+            <Box
+              sx={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 0.5,
+                mt: 1,
+              }}
+            >
+              {langs.map((l) => (
+                <Chip
+                  key={l.lang}
+                  label={l.label}
+                  size="small"
+                  variant="outlined"
+                />
+              ))}
+            </Box>
+          )}
+          {stamps.length > 0 && (
+            <Typography
+              variant="caption"
+              color="text.disabled"
+              sx={{ display: "block", mt: 1 }}
+            >
+              {stamps.join(" · ")}
+            </Typography>
+          )}
+        </Box>
+      </CardActionArea>
+    </Card>
+  );
+});
+
 /**
  * The "bookshelf" landing page: a sticky navbar (title · search · filters ·
  * settings · launcher) over a masonry of book cards.
@@ -656,10 +1049,13 @@ export function Landing({
   // Multi-select kind filter; an empty selection means "all kinds".
   const [kinds, setKinds] = useState<Category[]>([]);
 
-  // One clock read per render, shared by every card's relative "updated" stamp.
-  // The shelf re-renders on each return from a book, so the relative times
-  // refresh then without a per-second ticker.
-  const now = Date.now();
+  // Bucket the clock to the MINUTE so the memoized ShelfCard's props are
+  // stable across renders within a minute (the relative "updated" stamp only
+  // needs minute resolution) — re-rendering every card every frame to refresh
+  // it was the bulk of the return-from-book freeze. The shelf re-renders on
+  // each return from a book, so the relative times still refresh then without
+  // a per-second ticker.
+  const nowMinute = Math.floor(Date.now() / 60_000) * 60_000;
 
   // One card per book (audio rides along as a badge on text+audio books),
   // ordered by the Settings → Library → Sort preference. Default "updated":
@@ -826,374 +1222,25 @@ export function Landing({
     };
   }, []);
 
-  // One shelf card for a single entry. Extracted so the flat shelf and each
-  // grouped section render the identical card markup — captures the surrounding
-  // closures (progress / now / lang / t / onOpen / compactCards). The markup is
-  // byte-for-byte the previous inline card body.
-  const renderCard = (e: ShelfEntry): React.JSX.Element => {
-    const b = e.book;
-    const category = e.category;
-    const langs = b.langs;
-    // Progress is split by rendition: a text+audio book shows
-    // BOTH a reading and a listening meter; single-rendition
-    // books show just the one. The "continue" line resumes the
-    // most-recently-opened rendition.
-    const bp = progress[b.slug];
-    const textP = bp?.text;
-    const audioP = bp?.audio;
-    // Book-level progress (how far through the spine), not
-    // the in-chapter scroll — so resuming at the top of a
-    // late chapter doesn't read 0%. See ReadingProgress.fraction.
-    const pctOf = (r: ReadingProgress): number =>
-      Math.min(
-        100,
-        Math.max(0, Math.round(r.fraction * 100)),
-      );
-    const resume = textP && audioP
-      ? (textP.updatedAt >= audioP.updatedAt
-        ? textP
-        : audioP)
-      : (textP ?? audioP);
-    // The dual-format card shows a rendition switch; the
-    // highlighted "current" segment is the last-used one
-    // (most-recent progress), defaulting to reading for a
-    // never-opened book (the default rendition of a "book").
-    const activeKind: "text" | "audio" = textP && audioP
-      ? (audioP.updatedAt > textP.updatedAt
-        ? "audio"
-        : "text")
-      : audioP
-      ? "audio"
-      : "text";
-    // Stamps line: the book's content recency (the shelf's
-    // default sort key) — when it was last added/edited, shown
-    // relative. "Updated" when it changed after first
-    // appearing, else "Added". The absolute creation date
-    // trails as a second fact only when the book has since
-    // been updated (otherwise it duplicates the line above).
-    const changedAfterAdd = Boolean(
-      b.updated_at && b.updated_at !== b.created_at,
-    );
-    const changedRel = fmtRelative(
-      b.updated_at || b.created_at,
-      now,
-      lang,
-    );
-    const createdStr = fmtDate(b.created_at, lang);
-    const stamps = [
-      changedRel &&
-      t(
-        changedAfterAdd
-          ? "landing.updatedRel"
-          : "landing.addedRel",
-        { time: changedRel },
-      ),
-      changedAfterAdd && createdStr &&
-      t("landing.added", { date: createdStr }),
-    ].filter((s): s is string => Boolean(s));
-    return (
-      <Card
-        key={b.slug}
-        variant="outlined"
-        sx={{
-          mb: "20px",
-          borderRadius: 2,
-          overflow: "hidden",
-          // Compact cards drop the cover band, so carry the book's
-          // slug-keyed colour as a faint FROSTED wash tinting the whole
-          // card — the same two-stop gradient as the cover, but
-          // translucent and diffuse (磨砂玻璃), composited over the
-          // card's paper surface. Distinguishes each book without the
-          // 104px band or a hard colour bar.
-          ...(compactCards && {
-            backgroundImage: compactTint(b.slug),
-          }),
-          // Skip layout/paint for off-screen cards. The shelf is a
-          // tall list; on a phone (and right after returning from a
-          // book, when the whole shelf re-lays-out at once) the
-          // browser was laying out + painting every card every frame,
-          // which made the first second of scrolling drop inputs.
-          // content-visibility:auto lets the engine skip cards outside
-          // the viewport; contain-intrinsic-size reserves a plausible
-          // box so the scrollbar stays stable. Scoped to xs — that's
-          // where the long single column makes the perf win matter;
-          // sm+ has fewer cards per column and we keep them painted.
-          contentVisibility: { xs: "auto", sm: "visible" },
-          containIntrinsicSize: {
-            // Compact cards drop the 104px cover band, so they
-            // reserve a shorter off-screen box — otherwise the
-            // over-estimate leaves the scrollbar long until the
-            // cards paint in.
-            xs: compactCards ? "0 150px" : "0 320px",
-            sm: "auto",
-          },
-          // Hover lift is a pointer affordance; on touch it fires on
-          // every scroll-tap and forces a repaint mid-scroll, so gate
-          // the transition + lift behind a real hover-capable pointer.
-          "@media (hover: hover)": {
-            transition: "box-shadow 0.18s, transform 0.18s",
-            "&:hover": {
-              boxShadow: 4,
-              transform: "translateY(-2px)",
-            },
-          },
-        }}
-      >
-        {
-          /* Standard MUI ripple. (It was dropped once because the
-        shelf was hidden with visibility:hidden while a book was
-        open, which stranded the ripple's exit animation; the
-        shelf now stays painted via opacity:0, so the ripple
-        completes normally.) */
-        }
-        <CardActionArea onClick={() => onOpen(b.slug)}>
-          {
-            /* Cover: the book's own image when it has one, else a
-          slug-keyed gradient + the kind icon. Top-left badge: a
-          book offering BOTH renditions gets a segmented switch
-          (📖 | 🎧) showing both formats + the current one, each
-          opening that rendition; otherwise a single kind badge
-          (Audiobook-only / Book / Docs). Progress is a labeled
-          meter row in the body. */
-          }
-          {!compactCards && (
-            <BookCover book={b} category={category}>
-              {e.hasText && e.hasAudio
-                ? (
-                  <CoverRenditionSwitch
-                    slug={b.slug}
-                    activeKind={activeKind}
-                    onOpen={onOpen}
-                    bookLabel={t("landing.bookBadge")}
-                    audioLabel={t("landing.audiobookBadge")}
-                  />
-                )
-                : (
-                  // Single-format kind badge — ICON ONLY (no
-                  // text): the glyph already names the kind and
-                  // the big cover icon repeats it, so the label
-                  // was redundant. PRIMARY colour (not neutral):
-                  // a lone badge means that format is the active
-                  // one, so it reads like the highlighted segment
-                  // of the dual-format switch.
-                  <Box
-                    aria-label={t(
-                      category === "docs"
-                        ? "landing.docsBadge"
-                        : e.hasAudio
-                        ? "landing.audiobookBadge"
-                        : "landing.bookBadge",
-                    )}
-                    sx={{
-                      position: "absolute",
-                      top: 8,
-                      left: 8,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      px: 1,
-                      py: 0.5,
-                      borderRadius: 5,
-                      bgcolor: "primary.main",
-                      color: "primary.contrastText",
-                    }}
-                  >
-                    {category === "docs"
-                      ? (
-                        <DocsIcon
-                          sx={{ fontSize: rem(17) }}
-                        />
-                      )
-                      : e.hasAudio
-                      ? (
-                        <AudiobookIcon
-                          sx={{ fontSize: rem(17) }}
-                        />
-                      )
-                      : (
-                        <BookIcon
-                          sx={{ fontSize: rem(17) }}
-                        />
-                      )}
-                  </Box>
-                )}
-            </BookCover>
-          )}
-          <Box sx={{ p: 1.75 }}>
-            {
-              /* Title row. In compact mode the cover band (and its
-                📖|🎧 switch) is gone, so a dual-rendition book gets
-                an INLINE switch here at the title's trailing edge —
-                still lets you open text vs audio straight from the
-                shelf. Single-kind books need no switch. */
-            }
-            <Box
-              sx={{
-                display: "flex",
-                alignItems: "flex-start",
-                justifyContent: "space-between",
-                gap: 1,
-              }}
-            >
-              <Typography
-                variant="subtitle1"
-                fontWeight={700}
-                sx={{ lineHeight: 1.3, minWidth: 0 }}
-              >
-                {b.label}
-              </Typography>
-              {compactCards && (
-                e.hasText && e.hasAudio
-                  ? (
-                    <CoverRenditionSwitch
-                      slug={b.slug}
-                      activeKind={activeKind}
-                      onOpen={onOpen}
-                      bookLabel={t("landing.bookBadge")}
-                      audioLabel={t("landing.audiobookBadge")}
-                      inline
-                    />
-                  )
-                  : (
-                    <CompactKindBadge
-                      category={category}
-                      label={t(
-                        category === "docs"
-                          ? "landing.docsBadge"
-                          : category === "audiobook"
-                          ? "landing.audiobookBadge"
-                          : "landing.bookBadge",
-                      )}
-                    />
-                  )
-              )}
-            </Box>
-            {b.description
-              ? (
-                <Typography
-                  variant="body2"
-                  color="text.secondary"
-                  sx={{
-                    mt: 0.5,
-                    // Clamp long blurbs but let short ones stay short —
-                    // the height variance is what makes the masonry work.
-                    display: "-webkit-box",
-                    WebkitLineClamp: 5,
-                    WebkitBoxOrient: "vertical",
-                    overflow: "hidden",
-                  }}
-                >
-                  {b.description}
-                </Typography>
-              )
-              : (
-                <Typography
-                  variant="body2"
-                  color="text.disabled"
-                  fontStyle="italic"
-                  sx={{ mt: 0.5 }}
-                >
-                  /{b.slug}
-                </Typography>
-              )}
-            {
-              /* Progress as a labeled meter per rendition —
-              reading and/or listening, side by side. The
-              mode icon names each; the fill + % show how
-              far. A clean per-item meter (Audiobookshelf /
-              Plex idiom) instead of stacked naked bars. */
-            }
-            {
-              /* Always show a meter for EACH rendition the book
-                offers — reading and/or listening — even when it
-                has never been opened (it reads 0% until there's
-                progress). A book's place on the shelf should show
-                where you are at a glance, 0% included, so a fresh
-                book isn't visually indistinguishable from one
-                that's simply lost its meter; gated on the book
-                HAVING a rendition (not on progress existing), so a
-                bare docs tree with neither stays meter-free. */
-            }
-            {(e.hasText || e.hasAudio) && (
-              <Box
-                sx={{ display: "flex", gap: 1, mt: 1.25 }}
-              >
-                {e.hasText && (
-                  <ProgressMeter
-                    icon={
-                      <BookIcon
-                        sx={{ fontSize: rem(15) }}
-                      />
-                    }
-                    pct={textP ? pctOf(textP) : 0}
-                  />
-                )}
-                {e.hasAudio && (
-                  <ProgressMeter
-                    icon={
-                      <AudiobookIcon
-                        sx={{ fontSize: rem(15) }}
-                      />
-                    }
-                    pct={audioP ? pctOf(audioP) : 0}
-                  />
-                )}
-              </Box>
-            )}
-            {
-              /* Resume the most-recently-opened rendition. */
-            }
-            {resume && (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{
-                  display: "block",
-                  mt: 1,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                }}
-                title={resume.chapterLabel}
-              >
-                {t("landing.continue", {
-                  chapter: resume.chapterLabel,
-                })}
-              </Typography>
-            )}
-            {langs.length > 1 && (
-              <Box
-                sx={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 0.5,
-                  mt: 1,
-                }}
-              >
-                {langs.map((l) => (
-                  <Chip
-                    key={l.lang}
-                    label={l.label}
-                    size="small"
-                    variant="outlined"
-                  />
-                ))}
-              </Box>
-            )}
-            {stamps.length > 0 && (
-              <Typography
-                variant="caption"
-                color="text.disabled"
-                sx={{ display: "block", mt: 1 }}
-              >
-                {stamps.join(" · ")}
-              </Typography>
-            )}
-          </Box>
-        </CardActionArea>
-      </Card>
-    );
-  };
+  // One shelf card for a single entry. Thin wrapper that builds props for the
+  // module-level memoized <ShelfCard> — so the flat shelf and each grouped
+  // section render the identical card, and when only one book's progress
+  // changes (returning from a book) only that one card re-renders.
+  const renderCard = (e: ShelfEntry): React.JSX.Element => (
+    <ShelfCard
+      key={e.book.slug}
+      book={e.book}
+      category={e.category}
+      hasText={e.hasText}
+      hasAudio={e.hasAudio}
+      progress={progress[e.book.slug]}
+      compactCards={compactCards}
+      onOpen={onOpen}
+      t={t}
+      lang={lang}
+      nowMinute={nowMinute}
+    />
+  );
 
   // The masonry markup for a set of round-robin columns: a flex row of
   // top-anchored column stacks, each a vertical stack of cards. Shared by the
