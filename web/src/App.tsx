@@ -951,7 +951,20 @@ export function App(): React.JSX.Element {
     if (!params.has("autoreturn")) return;
     if (books.length === 0) return;
     const n = Number(params.get("autoreturn")) || 6;
-    const slug = books[0]?.slug;
+    // `?dwell=MS` = time spent IN the book before returning (default 1.9s). Long
+    // dwell tests whether WebKit purges the hidden shelf's tiles over time (the
+    // freeze may only hit after the shelf has been hidden a while). `?gap=MS` =
+    // time on the shelf between cycles. `?book=last|N` picks which book to open.
+    const dwell = Number(params.get("dwell")) || 1900;
+    const gap = Number(params.get("gap")) || 1700;
+    const bookSel = params.get("book");
+    const idx =
+      bookSel === "last"
+        ? books.length - 1
+        : bookSel
+          ? Math.min(Number(bookSel) || 0, books.length - 1)
+          : 0;
+    const slug = books[idx]?.slug;
     if (!slug) return;
     let cycle = 0;
     let cancelled = false;
@@ -964,8 +977,8 @@ export function App(): React.JSX.Element {
         window.setTimeout(() => {
           if (cancelled) return;
           backToLanding();
-          timers.push(window.setTimeout(step, 1700));
-        }, 1900),
+          timers.push(window.setTimeout(step, gap));
+        }, dwell),
       );
     };
     timers.push(window.setTimeout(step, 1500));
