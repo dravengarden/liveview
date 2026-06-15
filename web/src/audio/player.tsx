@@ -619,12 +619,34 @@ export function AudioPlayerProvider(
       }
     };
 
+    // The play/pause button must ALWAYS match the element. The `play`/`pause`
+    // events alone aren't enough: loading a new chapter (a src change) pauses the
+    // element WITHOUT firing `pause`, leaving the button stuck on "playing" (the
+    // observed bug — a freshly-opened chapter showed the pause icon at 0:00). So
+    // re-derive `playing` from `audio.paused` (the single source of truth) on every
+    // transition that can change it, not just play/pause.
+    const syncPlaying = (): void => {
+      const real = !audio.paused;
+      setPlaying((prev) => (prev === real ? prev : real));
+    };
+    const SYNC_EVENTS = [
+      "playing",
+      "waiting",
+      "stalled",
+      "emptied",
+      "loadstart",
+      "canplay",
+      "seeked",
+      "ratechange",
+    ];
+
     audio.addEventListener("timeupdate", onTime);
     audio.addEventListener("loadedmetadata", onMeta);
     audio.addEventListener("durationchange", onMeta);
     audio.addEventListener("play", onPlay);
     audio.addEventListener("pause", onPause);
     audio.addEventListener("ended", onEnded);
+    for (const ev of SYNC_EVENTS) audio.addEventListener(ev, syncPlaying);
     return () => {
       audio.removeEventListener("timeupdate", onTime);
       audio.removeEventListener("loadedmetadata", onMeta);
@@ -632,6 +654,7 @@ export function AudioPlayerProvider(
       audio.removeEventListener("play", onPlay);
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("ended", onEnded);
+      for (const ev of SYNC_EVENTS) audio.removeEventListener(ev, syncPlaying);
     };
   }, [goTo, claimPlayback, releasePlayback]);
 
