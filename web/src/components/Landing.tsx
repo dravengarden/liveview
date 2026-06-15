@@ -726,8 +726,7 @@ const ShelfCard = memo(function ShelfCard({
         // shelf (the long mobile column's perf win); contain-intrinsic-size
         // reserves a plausible box so the scrollbar stays stable. (Briefly
         // suspected of an iOS return-from-book freeze, but removing it on the
-        // device changed nothing — the real cause was the stranded CardActionArea
-        // ripple; see `disableRipple` below. Kept.)
+        // device changed nothing. Kept.)
         contentVisibility: { xs: "auto", sm: "visible" },
         containIntrinsicSize: {
           xs: compactCards ? "0 150px" : "0 320px",
@@ -746,17 +745,14 @@ const ShelfCard = memo(function ShelfCard({
       }}
     >
       {
-        /* `disableRipple`: the ripple gets STRANDED on return. Tapping a card
-      fires the ripple, then the shelf instantly goes opacity:0 (App's keep-alive
-      while the book is open). On WebKit/iOS the ripple's exit animation pauses on
-      that hidden subtree and never completes; on return (opacity:1) it resumes
-      and holds the card unresponsive for ~2s before clearing — the "shelf frozen
-      for a couple seconds after coming back" report. (The earlier
-      visibility:hidden → opacity:0 switch was aimed at this same bug; it doesn't
-      dodge it on WebKit.) Tap feedback still comes from the global haptic
-      delegation, so dropping the ripple costs nothing on touch. */
+        /* Standard MUI ripple. (NOTE: a stranded ripple on return — it lingers
+        ~2s after coming back from a book — turned out to be a SYMPTOM, not the
+        cause: the main thread is blocked on return, so the ripple just can't be
+        cleaned up until the block clears. Disabling it removed the ripple but not
+        the freeze, so the ripple stays; the real ~2s block is measured via the
+        /api/perf beacon. See App's return path.) */
       }
-      <CardActionArea disableRipple onClick={() => onOpen(b.slug)}>
+      <CardActionArea onClick={() => onOpen(b.slug)}>
         {
           /* Cover: the book's own image when it has one, else a
         slug-keyed gradient + the kind icon. Top-left badge: a

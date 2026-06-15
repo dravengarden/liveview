@@ -510,6 +510,17 @@ async fn log_access(
     res
 }
 
+/// Receives the client return-to-shelf perf beacon and logs it with the
+/// User-Agent. Diagnostic for the iOS-only freeze; remove once root-caused.
+async fn api_perf(headers: axum::http::HeaderMap, body: String) -> impl IntoResponse {
+    let ua = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-");
+    tracing::info!(ua = %ua, %body, "perf");
+    StatusCode::NO_CONTENT
+}
+
 fn build_app(state: SharedState) -> Router {
     let api_router = Router::new()
         .route("/api/books", get(api_books))
@@ -529,6 +540,9 @@ fn build_app(state: SharedState) -> Router {
         // a top-level /version would fall into the cache-first bucket and serve
         // a stale build id right after a deploy, defeating the whole check.
         .route("/api/version", get(version))
+        // Diagnostic: a tiny client perf beacon (return-to-shelf timing) so we can
+        // localize the iOS-only freeze on the real device. Remove once root-caused.
+        .route("/api/perf", axum::routing::post(api_perf))
         .route("/ws", get(server::ws::ws_handler))
         .with_state(state.clone());
 

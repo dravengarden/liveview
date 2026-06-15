@@ -1,5 +1,12 @@
 import { rem } from "@/px";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { flushSync } from "react-dom";
 import {
   Alert,
@@ -224,6 +231,13 @@ interface UntranslatedNotice {
   requested: string;
   shown: string;
 }
+
+// DIAGNOSTIC (iOS return-to-shelf freeze): timestamp set the instant a
+// return-to-shelf is triggered (swipe/back-button → backToLanding, or system
+// back → popstate). A useLayoutEffect below reads it once the shelf has
+// re-rendered, splitting the freeze into JS/commit vs browser paint and beaconing
+// it to /api/perf so we can localize it on the real device. Remove once fixed.
+let returnNavStart = 0;
 
 export function App(): React.JSX.Element {
   const [tree, setTree] = useState<TreeNode[]>([]);
@@ -849,6 +863,7 @@ export function App(): React.JSX.Element {
 
   // Return to the landing bookshelf.
   const backToLanding = useCallback(() => {
+    returnNavStart = performance.now(); // DIAGNOSTIC: time the return-to-shelf
     writeHash(null, null, null, false);
     setCurrentPath(null);
     currentPathRef.current = null;
@@ -1089,6 +1104,7 @@ export function App(): React.JSX.Element {
   // Handle browser back/forward navigation.
   useEffect(() => {
     const handlePopState = (): void => {
+      returnNavStart = performance.now(); // DIAGNOSTIC: time the return-to-shelf
       void restoreFromHash(false);
     };
     window.addEventListener("popstate", handlePopState);
@@ -1096,6 +1112,33 @@ export function App(): React.JSX.Element {
       window.removeEventListener("popstate", handlePopState);
     };
   }, [restoreFromHash]);
+
+  // DIAGNOSTIC: measure the return-to-shelf freeze on the real device and beacon
+  // it. Fires when currentPath becomes null after a return was triggered (guarded
+  // by returnNavStart so a fresh shelf load doesn't beacon). useLayoutEffect runs
+  // after the DOM commit (reader unmounted, shelf revealed) but BEFORE paint, so
+  // `commit` = JS render+commit time; `paint` (after two rAFs) = through the first
+  // painted frame. commit≈block ⇒ JS/DOM (reader unmount or shelf render);
+  // paint−commit≈block ⇒ browser layout/paint of the reveal. Remove once fixed.
+  useLayoutEffect(() => {
+    if (currentPath !== null || returnNavStart === 0) return;
+    const t0 = returnNavStart;
+    returnNavStart = 0;
+    const commit = Math.round(performance.now() - t0);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const paint = Math.round(performance.now() - t0);
+        try {
+          navigator.sendBeacon?.(
+            "/api/perf",
+            JSON.stringify({ ev: "return", commit, paint }),
+          );
+        } catch {
+          // best-effort diagnostic
+        }
+      });
+    });
+  }, [currentPath]);
 
   // ── Inline audio: two effects keep the view and the playback engine in sync ──
   // A) view → engine: viewing an audio chapter makes the engine play it,
