@@ -722,16 +722,11 @@ const ShelfCard = memo(function ShelfCard({
         ...(compactCards && {
           backgroundImage: compactTint(b.slug),
         }),
-        // content-visibility:auto skips off-screen card layout/paint on the tall
-        // shelf (the long mobile column's perf win); contain-intrinsic-size
-        // reserves a plausible box so the scrollbar stays stable. (Briefly
-        // suspected of an iOS return-from-book freeze, but removing it on the
-        // device changed nothing. Kept.)
-        contentVisibility: { xs: "auto", sm: "visible" },
-        containIntrinsicSize: {
-          xs: compactCards ? "0 150px" : "0 320px",
-          sm: "auto",
-        },
+        // content-visibility A/B (lv-v130): REMOVED again, this time measured via
+        // the /api/perf beacon. WebKit's render-in of content-visibility:auto
+        // cards on the shelf reveal is the leading suspect for the consistent
+        // ~480ms paint on return. If the beacon shows paint drop, this stays out
+        // (the card is memoized, so plain render is cheap); if not, restore it.
         // Hover lift is a pointer affordance; on touch it fires on
         // every scroll-tap and forces a repaint mid-scroll, so gate
         // the transition + lift behind a real hover-capable pointer.

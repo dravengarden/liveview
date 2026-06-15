@@ -685,18 +685,3 @@ body {
 [data-theme="plum"] .hljs-class .hljs-title {
   color: #ffa657;
 }
-
-/* ── PERF A/B (lv-v128): measure backdrop-filter's share of the reveal repaint ──
-   The return-to-shelf freeze is ~480ms PAINT on the opacity reveal (device
-   beacon), and the compositor-layer promotion (v126/v127) didn't help. Make the
-   repaint cheaper instead: backdrop-filter blur is the most expensive paint op on
-   iOS/WebKit (the ~5-6 frosted bars resample+blur the cover-image cards behind
-   them on reveal). Disable it ALL and read the new `paint` from the beacon — if it
-   drops, replace with opaque surfaces; if not, revert and test the next paint
-   cost. (v122 did this blind; this time it's measured.) */
-*,
-*::before,
-*::after {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
