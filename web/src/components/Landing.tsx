@@ -545,15 +545,21 @@ function GroupSection({
           py: 1.25,
           mb: 1,
           borderRadius: 2,
-          // A real surface, not bare text: a paper-tinted frosted bar with a
-          // hairline + soft shadow so it floats above the shelf (the page bg is
-          // flat, so a `background.default` wash was invisible — it read as
-          // unstyled text with big gaps). The blur+saturate still kick in when
-          // it's stuck over scrolling cards, layering them as glass.
+          // A real surface, not bare text: a paper-tinted bar with a hairline +
+          // soft shadow so it floats above the shelf (the page bg is flat, so a
+          // `background.default` wash was invisible — it read as unstyled text
+          // with big gaps).
           border: 1,
           borderColor: "divider",
           boxShadow: 1,
-          // DIAG-blur: blur neutered to test return-freeze hypothesis
+          // Why near-opaque, NOT a backdrop-filter blur: this header lives inside
+          // the keep-alive shelf, which is hidden behind the open book via
+          // `opacity:0` and revealed (opacity 0->1) on return. On mobile WebKit
+          // (iPad/iPhone) re-rasterizing a backdrop-filter the instant its layer
+          // becomes visible is a hard compositor cliff — the return stalled
+          // ~480-530ms in paint while the main thread sat idle (mc<<paint),
+          // vs ~60ms on desktop WebKit/Blink with identical code. A solid,
+          // high-alpha fill paints for free on reveal. (Measured via /api/perf.)
           bgcolor: (t) => alpha(t.palette.background.paper, 0.97),
         }}
       >
@@ -1281,16 +1287,24 @@ export function Landing({
     >
       {
         /* ── Navbar ──────────────────────────────────────────────────────────
-          An iOS-style FROSTED-GLASS OVERLAY (matching the in-book NavShell bar +
-          the audio transport) pinned to the shelf region's top (or bottom, on
-          the mobile-browser tier), with the shelf scrolling UNDER it; the
-          scroller reserves --lv-toolbar-h at the matching edge so the cards
-          still clear it. Higher alpha (0.78) than the status strip because real
-          card content scrolls under it — the search/filter/gear legibility comes
-          first; blur+saturate match the other bars so they read as one glass
-          layer. background.default (the page bg the cards sit on), not paper. A
-          subtle edge (hairline / divider) still marks the boundary. zIndex above
-          the scroller + the back-to-top button. */
+          An iOS-style toolbar OVERLAY (matching the in-book NavShell bar + the
+          audio transport) pinned to the shelf region's top (or bottom, on the
+          mobile-browser tier), with the shelf scrolling UNDER it; the scroller
+          reserves --lv-toolbar-h at the matching edge so the cards still clear
+          it. Near-opaque (0.97) so card content scrolls cleanly out of sight
+          under it — search/filter/gear legibility comes first. background.default
+          (the page bg the cards sit on), not paper. A subtle edge (hairline /
+          divider) still marks the boundary. zIndex above the scroller + the
+          back-to-top button.
+
+          NOT a backdrop-filter blur (it used to be): this bar lives inside the
+          keep-alive shelf, hidden behind the open book via `opacity:0` and
+          revealed (opacity 0->1) on return. Re-rasterizing a backdrop-filter the
+          instant its layer becomes visible froze the return ~480-530ms in paint
+          on mobile WebKit (iPad/iPhone) while the main thread sat idle — a
+          compositor cliff that does not exist on desktop WebKit/Blink (~60ms).
+          A solid fill paints for free on reveal. See the matching note on the
+          group header above; measured via /api/perf. */
       }
       <Box
         ref={toolbarRef}
@@ -1304,7 +1318,6 @@ export function Landing({
             : { top: 0 }),
           zIndex: 6,
           borderColor: "divider",
-          // DIAG-blur: blur neutered to test return-freeze hypothesis
           bgcolor: (t) => alpha(t.palette.background.default, 0.97),
           ...(navbarAtBottom
             ? {
