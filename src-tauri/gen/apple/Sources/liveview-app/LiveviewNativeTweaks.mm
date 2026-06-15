@@ -12,6 +12,7 @@
 #import <MediaPlayer/MediaPlayer.h>
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 // (1) THE reason this shell exists: background / lock-screen audiobook playback.
 //
@@ -81,7 +82,25 @@ static id (*lv_orig_wk_init)(id, SEL, CGRect, id) = NULL;
 static id lv_wk_init(id self, SEL _cmd, CGRect frame, id configuration) {
     id wv = lv_orig_wk_init(self, _cmd, frame, configuration);
     if (wv) {
-        ((WKWebView *)wv).allowsBackForwardNavigationGestures = YES;
+        // WKWebView's built-in back-forward gesture is now OFF: the native-nav
+        // bridge below OWNS the back transition (it snapshots + slides + holds
+        // until the web is painted, which the built-in gesture does NOT — that
+        // gesture drops its snapshot the instant the hash history "navigates",
+        // before the SPA re-renders, so the ~480ms return-freeze still showed
+        // through). Leaving both on would double-animate the swipe. Web-side the
+        // left-edge swipe handler still drives backToLanding → native pop.
+        ((WKWebView *)wv).allowsBackForwardNavigationGestures = NO;
+        // Install the native snapshot-transition nav bridge (shared-utils
+        // native-nav, SnapshotNavController.swift). Looked up dynamically so this
+        // file needs no compile-time dependency on the generated -Swift.h header:
+        // it's a Swift @objc(SnapshotNavController) class whose +installOnWebView:
+        // registers the "lvNativeNav" WKScriptMessageHandler. The web half no-ops
+        // off-shell, so this is the ONLY place the native transition is wired in.
+        Class navCls = NSClassFromString(@"SnapshotNavController");
+        SEL installSel = NSSelectorFromString(@"installOnWebView:");
+        if (navCls && [navCls respondsToSelector:installSel]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(navCls, installSel, wv);
+        }
     }
     return wv;
 }
