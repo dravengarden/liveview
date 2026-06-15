@@ -44,6 +44,7 @@ import { useI18n } from "@/i18n";
 import { loadAllServerSettings, putServerSetting } from "@/syncBackends";
 import { type Track, useAudioPlayer } from "@/audio/player";
 import { useAutoUpdate } from "@/hooks/useAutoUpdate";
+import { applyUpdate, useConnectionBanner } from "@/connectionStore";
 import { NavShell } from "./_shell";
 import type {
   Book,
@@ -358,6 +359,31 @@ export function App(): React.JSX.Element {
   // blue "new version" banner instead of yanking the page out from under the
   // reader/listener. See connectionStore + ReconnectBanner.
   useAutoUpdate();
+
+  // Make the update actually LAND on an installed iOS PWA. `useAutoUpdate` only
+  // probes and raises the banner; the reload then depends on the shared overlay's
+  // 3s countdown — which a resumed iOS PWA stalls, so the app sits on an old
+  // bundle forever (observed: an iPad stuck several versions behind despite the
+  // banner firing). When a redeploy is detected AND we're on the shelf (a reload
+  // is seamless there — no reader/listener to yank), reload IMMEDIATELY instead of
+  // waiting on the countdown. Mid-book we still leave the banner to handle it.
+  const updateBanner = useConnectionBanner();
+  useEffect(() => {
+    if (updateBanner?.kind !== "update") return;
+    // Beacon detection so we can confirm it reaches the device (diagnostic).
+    try {
+      navigator.sendBeacon?.(
+        "/api/perf",
+        JSON.stringify({
+          ev: "update-detected",
+          at: currentPath === null ? "shelf" : "book",
+        }),
+      );
+    } catch {
+      // best-effort
+    }
+    if (currentPath === null) void applyUpdate();
+  }, [updateBanner, currentPath]);
 
   // When a fresh load pulls a newer playback position from another device, the
   // audio engine raises `syncNotice`; surface it through the shared snackbar
