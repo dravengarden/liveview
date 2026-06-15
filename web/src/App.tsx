@@ -1151,13 +1151,20 @@ export function App(): React.JSX.Element {
     const t0 = returnNavStart;
     returnNavStart = 0;
     const commit = Math.round(performance.now() - t0);
+    // Force the pending style+layout synchronously here and time it — this
+    // ISOLATES the layout cost from paint/composite. If `layout` ≈ the freeze ⇒
+    // layout-bound; if `layout` is small but `paint` is large ⇒ paint/composite.
+    const lt = performance.now();
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+    document.body.offsetHeight;
+    const layout = Math.round(performance.now() - lt);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         const paint = Math.round(performance.now() - t0);
         try {
           navigator.sendBeacon?.(
             "/api/perf",
-            JSON.stringify({ ev: "return", commit, paint }),
+            JSON.stringify({ ev: "return", commit, layout, paint }),
           );
         } catch {
           // best-effort diagnostic
