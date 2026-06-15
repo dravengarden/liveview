@@ -1489,16 +1489,17 @@ export function App(): React.JSX.Element {
               inset: 0,
               display: "flex",
               flexDirection: "column",
-              opacity: activeSlug === null ? 1 : 0,
+              // 0.001, NOT 0, while a book is open. Device timing (iPad/WebKit)
+              // showed the return spending ~480ms in PAINT, ~15ms in JS: WebKit
+              // DROPS the painted texture of a fully-transparent (opacity:0)
+              // subtree and repaints the whole shelf on reveal. A non-zero opacity
+              // keeps it "visible" so WebKit retains the backing store → coming
+              // back is a GPU alpha flip, not a repaint. It's imperceptible AND
+              // the opaque reader (NavShell, the sibling below) covers it anyway,
+              // so 0.001 never actually shows. (Layer promotion alone didn't fix
+              // it; the opacity value is the lever.)
+              opacity: activeSlug === null ? 1 : 0.001,
               pointerEvents: activeSlug === null ? "auto" : "none",
-              // Pin the shelf to its OWN compositor layer so the opacity flip is
-              // truly composite-only. Device timing (iPad/WebKit) showed the
-              // return spending ~500ms in PAINT, ~15ms in JS: WebKit drops the
-              // painted texture of an opacity:0 subtree and REPAINTS the whole
-              // shelf on reveal. Promoting it (will-change + translateZ) makes
-              // WebKit retain the backing store, so coming back is a GPU alpha
-              // flip, not a repaint. (Blink already did this implicitly — why it
-              // was 0ms there.)
               willChange: "opacity",
               transform: "translateZ(0)",
             }}
