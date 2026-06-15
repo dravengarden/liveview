@@ -1105,6 +1105,7 @@ export function App(): React.JSX.Element {
     }
     const EDGE = 28;
     const THRESH = 70;
+    const swipeFix = new URLSearchParams(window.location.search).has("swipefix");
     let sx = 0;
     let sy = 0;
     let tracking = false;
@@ -1147,6 +1148,13 @@ export function App(): React.JSX.Element {
           tracking = false; // a vertical scroll — let it go
         }
       }
+      // ?swipefix: swallow the horizontal-swipe default (overscroll/rubber-band)
+      // so WebKit doesn't promote/settle a transient compositing layer that makes
+      // the subsequent shelf reveal re-rasterize (~450ms). Needs a non-passive
+      // listener (registered below) for preventDefault to take effect.
+      if (decided && horiz && swipeFix && e.cancelable) {
+        e.preventDefault();
+      }
     };
     const onEnd = (e: TouchEvent): void => {
       if (!tracking) {
@@ -1174,7 +1182,7 @@ export function App(): React.JSX.Element {
       }
     };
     globalThis.addEventListener("touchstart", onStart, { passive: true });
-    globalThis.addEventListener("touchmove", onMove, { passive: true });
+    globalThis.addEventListener("touchmove", onMove, { passive: !swipeFix });
     globalThis.addEventListener("touchend", onEnd, { passive: true });
     globalThis.addEventListener("touchcancel", onEnd, { passive: true });
     return () => {
