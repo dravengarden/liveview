@@ -1465,6 +1465,16 @@ export function App(): React.JSX.Element {
               flexDirection: "column",
               opacity: activeSlug === null ? 1 : 0,
               pointerEvents: activeSlug === null ? "auto" : "none",
+              // Pin the shelf to its OWN compositor layer so the opacity flip is
+              // truly composite-only. Device timing (iPad/WebKit) showed the
+              // return spending ~500ms in PAINT, ~15ms in JS: WebKit drops the
+              // painted texture of an opacity:0 subtree and REPAINTS the whole
+              // shelf on reveal. Promoting it (will-change + translateZ) makes
+              // WebKit retain the backing store, so coming back is a GPU alpha
+              // flip, not a repaint. (Blink already did this implicitly — why it
+              // was 0ms there.)
+              willChange: "opacity",
+              transform: "translateZ(0)",
             }}
           >
             <Landing
