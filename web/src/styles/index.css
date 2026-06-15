@@ -685,20 +685,3 @@ body {
 [data-theme="plum"] .hljs-class .hljs-title {
   color: #ffa657;
 }
-
-/* ── PERF EXPERIMENT (lv-v122): disable ALL backdrop-filter ──────────────────
-   An iPad (iPadOS 18.7 / WebKit, confirmed on v121 via server logs) still
-   freezes for seconds returning to the shelf, while the same build is 0-75ms on
-   Blink. The remaining shelf cost is browser compositing, not React: WebKit
-   spends heavily re-compositing the frosted bars (the status-bar strip, the
-   per-series sticky headers, the shelf toolbar, the floating audio bubble) over
-   the cover-image cards when the shelf is revealed on return. Nuke every
-   backdrop-filter to confirm that's the cause. If it fixes the iPad freeze,
-   replace this blanket rule with opaque surfaces (optionally re-enabling frost
-   only on engines that composite it cheaply). Fully reversible. */
-*,
-*::before,
-*::after {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}

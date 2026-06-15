@@ -722,25 +722,18 @@ const ShelfCard = memo(function ShelfCard({
         ...(compactCards && {
           backgroundImage: compactTint(b.slug),
         }),
-        // Skip layout/paint for off-screen cards. The shelf is a
-        // tall list; on a phone (and right after returning from a
-        // book, when the whole shelf re-lays-out at once) the
-        // browser was laying out + painting every card every frame,
-        // which made the first second of scrolling drop inputs.
-        // content-visibility:auto lets the engine skip cards outside
-        // the viewport; contain-intrinsic-size reserves a plausible
-        // box so the scrollbar stays stable. Scoped to xs — that's
-        // where the long single column makes the perf win matter;
-        // sm+ has fewer cards per column and we keep them painted.
-        contentVisibility: { xs: "auto", sm: "visible" },
-        containIntrinsicSize: {
-          // Compact cards drop the 104px cover band, so they
-          // reserve a shorter off-screen box — otherwise the
-          // over-estimate leaves the scrollbar long until the
-          // cards paint in.
-          xs: compactCards ? "0 150px" : "0 320px",
-          sm: "auto",
-        },
+        // NOTE: `content-visibility:auto` was REMOVED here (it used to skip
+        // off-screen card layout on a tall shelf). The shelf is kept mounted at
+        // `opacity:0` while a book is open (App's keep-alive). Blink keeps the
+        // opacity:0 cards rendered, so return is a cheap opacity flip — but
+        // WebKit/iOS treats the opacity:0 subtree as not-relevant and SKIPS every
+        // content-visibility:auto card while hidden, then lays ALL of them out at
+        // once on the opacity:0→1 reveal: a multi-second main-thread FREEZE
+        // returning to the shelf on iPad (0ms on Blink — why it took a device to
+        // find). Plain rendering is cheap now that the card is memoized, and the
+        // reveal is a pure opacity flip again. (If a Blink scroll-stall on very
+        // long shelves ever returns, gate content-visibility behind a non-WebKit
+        // `@supports`, NOT a blanket restore.)
         // Hover lift is a pointer affordance; on touch it fires on
         // every scroll-tap and forces a repaint mid-scroll, so gate
         // the transition + lift behind a real hover-capable pointer.
