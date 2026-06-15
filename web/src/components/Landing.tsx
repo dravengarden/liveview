@@ -553,9 +553,8 @@ function GroupSection({
           border: 1,
           borderColor: "divider",
           boxShadow: 1,
-          bgcolor: (t) => alpha(t.palette.background.paper, 0.82),
-          backdropFilter: "blur(20px) saturate(160%)",
-          WebkitBackdropFilter: "blur(20px) saturate(160%)",
+          // DIAG-blur: blur neutered to test return-freeze hypothesis
+          bgcolor: (t) => alpha(t.palette.background.paper, 0.97),
         }}
       >
         {
@@ -1305,9 +1304,8 @@ export function Landing({
             : { top: 0 }),
           zIndex: 6,
           borderColor: "divider",
-          bgcolor: (t) => alpha(t.palette.background.default, 0.78),
-          backdropFilter: "blur(24px) saturate(180%)",
-          WebkitBackdropFilter: "blur(24px) saturate(180%)",
+          // DIAG-blur: blur neutered to test return-freeze hypothesis
+          bgcolor: (t) => alpha(t.palette.background.default, 0.97),
           ...(navbarAtBottom
             ? {
               // A hard, edge-to-edge 1px rule looks like a stray line when the

@@ -1500,9 +1500,8 @@ export function App(): React.JSX.Element {
               height: "env(safe-area-inset-top, 0px)",
               zIndex: (t) => t.zIndex.appBar,
               pointerEvents: "none",
-              bgcolor: (t) => alpha(t.palette.background.default, 0.5),
-              backdropFilter: "blur(24px) saturate(180%)",
-              WebkitBackdropFilter: "blur(24px) saturate(180%)",
+              // DIAG-blur: blur neutered to test return-freeze hypothesis
+              bgcolor: (t) => alpha(t.palette.background.default, 0.92),
             }}
           />
         )}
