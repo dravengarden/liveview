@@ -1,4 +1,5 @@
 import { rem } from "@/px";
+import { nativeNavPop, nativeNavPush, nativeNavReady } from "@/native-nav";
 import {
   useCallback,
   useEffect,
@@ -928,6 +929,10 @@ export function App(): React.JSX.Element {
     (slug: string, renditionKind?: string, replace = false) => {
       const book = books.find((b) => b.slug === slug);
       if (!book) return;
+      // Native iOS shell only: snapshot the SHELF (the current view) as the pop
+      // destination, but ONLY when entering FROM the shelf — chapter/rendition
+      // switches inside a book keep the single shelf snapshot. No-op off-shell.
+      if (currentPathRef.current === null) nativeNavPush(slug);
       // No explicit kind (a shelf-card tap) ⇒ open in the rendition last used for
       // this book (server-side pref), else its default. An explicit kind (the
       // navbar switch) wins.
@@ -985,6 +990,10 @@ export function App(): React.JSX.Element {
 
   // Return to the landing bookshelf.
   const backToLanding = useCallback(() => {
+    // Native iOS shell only: snapshot the current book + reveal the held shelf
+    // snapshot, so the shelf appears instantly and the ~480ms re-composite below
+    // happens behind the snapshot. No-op (false) off-shell → unchanged web return.
+    const native = nativeNavPop();
     returnNavStart = performance.now(); // DIAGNOSTIC: time the return-to-shelf
     applyReturnProbe();
     writeHash(null, null, null, false);
@@ -992,6 +1001,12 @@ export function App(): React.JSX.Element {
     currentPathRef.current = null;
     setCurrentContent(null);
     setUntranslated(null);
+    // Tell native the shelf has painted (after the freeze frame) so it swaps the
+    // held snapshot for the live webview. Double-rAF = through the first painted
+    // frame, exactly when the diagnostic beacon measures `paint`.
+    if (native) {
+      requestAnimationFrame(() => requestAnimationFrame(() => nativeNavReady()));
+    }
   }, []);
 
   // DIAGNOSTIC harness (URL-gated): `?returnonly` does NOT enter books; it just
