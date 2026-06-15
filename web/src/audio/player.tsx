@@ -69,6 +69,9 @@ export interface AudioPlayer {
   sentences: string[];
   /** Index of the sentence being spoken, or -1. */
   currentIdx: number;
+  /** Read fraction (0–1) WITHIN the current sentence — drives the karaoke
+   *  read-so-far wipe. 0 when nothing is playing. */
+  currentProgress: number;
   playing: boolean;
   /** True while fetching sentences + synthesizing audio (first play is slow). */
   loading: boolean;
@@ -1128,11 +1131,25 @@ export function AudioPlayerProvider(
     posStore.set({ path: "", t: 0 });
   }, []);
 
+  // Within-sentence read fraction (0–1) for the karaoke read-so-far wipe: the
+  // playhead's position between this sentence's start mark and the next one's.
+  const currentProgress = useMemo(() => {
+    const m = marksRef.current;
+    const cur = m[currentIdx];
+    if (currentIdx < 0 || !cur) return 0;
+    const start = cur.start_ms / 1000;
+    const next = m[currentIdx + 1];
+    const end = next ? next.start_ms / 1000 : (duration || start + 1);
+    if (end <= start) return 0;
+    return Math.min(1, Math.max(0, (currentTime - start) / (end - start)));
+  }, [currentTime, currentIdx, duration]);
+
   const value = useMemo<AudioPlayer>(
     () => ({
       nowPlaying,
       sentences,
       currentIdx,
+      currentProgress,
       playing,
       loading,
       error,
@@ -1166,6 +1183,7 @@ export function AudioPlayerProvider(
       nowPlaying,
       sentences,
       currentIdx,
+      currentProgress,
       playing,
       loading,
       error,

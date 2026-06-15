@@ -72,6 +72,7 @@ export function AudiobookPlayer(
     nowPlaying,
     sentences,
     currentIdx,
+    currentProgress,
     playing,
     loading,
     error,
@@ -486,24 +487,41 @@ export function AudiobookPlayer(
                   onClick={() => {
                     handleSentenceClick(i);
                   }}
-                  sx={(theme) => ({
-                    cursor: "pointer",
-                    borderRadius: 0.5,
-                    transition: "background-color 0.15s ease",
-                    // Themed soft highlight: a tint of the active theme's accent
-                    // (blue / brown / amber per theme) instead of a fixed orange,
-                    // so it never clashes and the text stays readable on top.
-                    bgcolor: i === currentIdx
-                      ? alpha(theme.palette.primary.main, 0.28)
-                      : "transparent",
-                    color: "inherit",
-                    px: i === currentIdx ? 0.25 : 0,
-                    "&:hover": {
-                      bgcolor: i === currentIdx
-                        ? alpha(theme.palette.primary.main, 0.28)
-                        : theme.palette.action.hover,
-                    },
-                  })}
+                  sx={(theme) => {
+                    const active = i === currentIdx;
+                    // Read-along highlight in THIS theme's accent (blue / brown /
+                    // amber / violet per theme). Three things make it read well on
+                    // every surface:
+                    //  • per-theme accent (not a fixed colour) so it never clashes;
+                    //  • stronger on DARK themes — a low-alpha accent over near-black
+                    //    just muddies, so dark surfaces get more of the accent;
+                    //  • non-current sentences DIMMED so the current line pops even
+                    //    before the band (the Apple-Books focus pattern); and
+                    //  • a karaoke read-so-far WIPE within the current sentence: a
+                    //    hard edge at the playhead's within-sentence fraction, the
+                    //    read part stronger than the not-yet part.
+                    const dark = theme.palette.mode === "dark";
+                    const accent = theme.palette.primary.main;
+                    const weak = alpha(accent, dark ? 0.16 : 0.1);
+                    const strong = alpha(accent, dark ? 0.42 : 0.26);
+                    const p = Math.round(currentProgress * 1000) / 10; // 0–100
+                    const wipe = `linear-gradient(to right, ${strong} ${p}%, ${weak} ${
+                      Math.min(100, p + 1.5)
+                    }%)`;
+                    return {
+                      cursor: "pointer",
+                      borderRadius: 0.5,
+                      transition: "opacity 0.15s ease",
+                      background: active ? wipe : "transparent",
+                      opacity: active ? 1 : 0.5,
+                      color: "inherit",
+                      px: active ? 0.25 : 0,
+                      "&:hover": {
+                        background: active ? wipe : theme.palette.action.hover,
+                        opacity: active ? 1 : 0.78,
+                      },
+                    };
+                  }}
                 >
                   {s}
                   {" "}
