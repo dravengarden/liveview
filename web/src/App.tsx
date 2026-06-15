@@ -395,6 +395,18 @@ export function App(): React.JSX.Element {
   // The active book is the first path segment; null ⇒ the landing bookshelf.
   const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;
   const activeBook = books.find((b) => b.slug === activeSlug) ?? null;
+  // DIAGNOSTIC harness (URL-gated, no effect in normal use): `?shelfhide=unmount`
+  // unmounts the shelf while a book is open instead of hiding it at opacity:0,
+  // so a return remounts it fresh — an A/B against the opacity-reveal repaint
+  // that we suspect is the mobile-WebKit return freeze. Read once.
+  const diagShelfUnmount = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("shelfhide") ===
+        "unmount",
+    [],
+  );
+  const shelfShown = !diagShelfUnmount || activeSlug === null;
   // Are we ON the playing book's inline audio page (where the read-along reader
   // already shows full controls)? If so the floating bubble hides; everywhere
   // else (text page, another book, the shelf) it shows as the now-playing handle.
@@ -927,6 +939,42 @@ export function App(): React.JSX.Element {
     setCurrentContent(null);
     setUntranslated(null);
   }, []);
+
+  // DIAGNOSTIC harness (URL-gated): `?autoreturn=N` drives N enter→return cycles
+  // automatically so the return freeze can be measured/profiled in a simulator
+  // with NO human tapping. Each return fires the existing /api/perf "return"
+  // beacon, so paint timing for any build is readable from the server log.
+  // No effect unless the param is present.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("autoreturn")) return;
+    if (books.length === 0) return;
+    const n = Number(params.get("autoreturn")) || 6;
+    const slug = books[0]?.slug;
+    if (!slug) return;
+    let cycle = 0;
+    let cancelled = false;
+    const timers: number[] = [];
+    const step = (): void => {
+      if (cancelled || cycle >= n) return;
+      cycle += 1;
+      enterBook(slug);
+      timers.push(
+        window.setTimeout(() => {
+          if (cancelled) return;
+          backToLanding();
+          timers.push(window.setTimeout(step, 1700));
+        }, 1900),
+      );
+    };
+    timers.push(window.setTimeout(step, 1500));
+    return () => {
+      cancelled = true;
+      timers.forEach((t) => window.clearTimeout(t));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [books.length]);
 
   // iOS-style left-edge swipe → back to the shelf. A standalone PWA has no
   // browser back-swipe, so we synthesise it: a touch that STARTS within EDGE px
@@ -1530,24 +1578,26 @@ export function App(): React.JSX.Element {
               cards are still skipped by content-visibility, and the scroll
               offset is preserved.) */
           }
-          <Box
-            sx={{
-              position: "absolute",
-              inset: 0,
-              display: "flex",
-              flexDirection: "column",
-              opacity: activeSlug === null ? 1 : 0,
-              pointerEvents: activeSlug === null ? "auto" : "none",
-            }}
-          >
-            <Landing
-              books={books}
-              progress={progressBySlug}
-              onOpen={enterBook}
-              settingsSlot={settingsButton}
-              navbarAtBottom={navbarAtBottom}
-            />
-          </Box>
+          {shelfShown && (
+            <Box
+              sx={{
+                position: "absolute",
+                inset: 0,
+                display: "flex",
+                flexDirection: "column",
+                opacity: diagShelfUnmount ? 1 : activeSlug === null ? 1 : 0,
+                pointerEvents: activeSlug === null ? "auto" : "none",
+              }}
+            >
+              <Landing
+                books={books}
+                progress={progressBySlug}
+                onOpen={enterBook}
+                settingsSlot={settingsButton}
+                navbarAtBottom={navbarAtBottom}
+              />
+            </Box>
+          )}
           {activeSlug !== null && (
             <NavShell
               appKey="liveview"
