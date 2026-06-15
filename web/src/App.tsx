@@ -240,6 +240,34 @@ interface UntranslatedNotice {
 // it to /api/perf so we can localize it on the real device. Remove once fixed.
 let returnNavStart = 0;
 
+// PROBE (lv-v146): the return freeze only repros under a REAL tap to enter; the
+// leading suspect is a stranded MUI ripple (a tap whose release is swallowed by
+// the navigation leaves the ripple animating on the hidden shelf card, which
+// re-rasterizes the whole shelf when revealed). Alternate a non-destructive
+// cleanup on every other return and tag the beacon with `v` (0 = control, 1 =
+// cleanup) so ONE on-device session shows whether the cleanup drops paint.
+let probeReturnCount = 0;
+let probeVariant = 0;
+function applyReturnProbe(): void {
+  probeVariant = probeReturnCount % 2;
+  probeReturnCount += 1;
+  if (probeVariant !== 1) return;
+  try {
+    // Kill any stranded ripple elements before the shelf is revealed.
+    document
+      .querySelectorAll(
+        ".MuiTouchRipple-rippleVisible, .MuiTouchRipple-root .MuiTouchRipple-child",
+      )
+      .forEach((el) => el.remove());
+    // Drop focus so no :focus-styled card repaints on reveal.
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  } catch {
+    // best-effort probe
+  }
+}
+
 export function App(): React.JSX.Element {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [books, setBooks] = useState<Book[]>([]);
@@ -933,6 +961,7 @@ export function App(): React.JSX.Element {
   // Return to the landing bookshelf.
   const backToLanding = useCallback(() => {
     returnNavStart = performance.now(); // DIAGNOSTIC: time the return-to-shelf
+    applyReturnProbe();
     writeHash(null, null, null, false);
     setCurrentPath(null);
     currentPathRef.current = null;
@@ -1273,6 +1302,7 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     const handlePopState = (): void => {
       returnNavStart = performance.now(); // DIAGNOSTIC: time the return-to-shelf
+      applyReturnProbe();
       void restoreFromHash(false);
     };
     window.addEventListener("popstate", handlePopState);
@@ -1313,7 +1343,7 @@ export function App(): React.JSX.Element {
           try {
             navigator.sendBeacon?.(
               "/api/perf",
-              JSON.stringify({ ev: "return", commit, layout, mc, paint }),
+              JSON.stringify({ ev: "return", v: probeVariant, commit, layout, mc, paint }),
             );
           } catch {
             // best-effort diagnostic
