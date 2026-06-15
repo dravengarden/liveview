@@ -152,7 +152,7 @@ import WebKit
     let a = UIViewPropertyAnimator(duration: Self.slide, dampingRatio: 1) {
       detailCover.transform = CGAffineTransform(translationX: w, y: 0)
     }
-    a.addCompletion { detailCover.removeFromSuperview() }
+    a.addCompletion { _ in detailCover.removeFromSuperview() }
     a.startAnimation()
 
     DispatchQueue.main.asyncAfter(deadline: .now() + Self.readyTimeout) { [weak self] in
