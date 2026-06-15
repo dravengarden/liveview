@@ -940,6 +940,21 @@ export function App(): React.JSX.Element {
     setUntranslated(null);
   }, []);
 
+  // DIAGNOSTIC harness (URL-gated): `?returnonly` does NOT enter books; it just
+  // returns to the shelf every `?period` ms whenever a book is open. Pair it with
+  // a REAL tap (osascript-driven) to enter — the only way to reproduce the freeze,
+  // since synthetic dispatchEvent taps never trigger the real touch path.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("returnonly")) return;
+    const period = Number(params.get("period")) || 2200;
+    const id = window.setInterval(() => {
+      if (currentPathRef.current !== null) backToLanding();
+    }, period);
+    return () => window.clearInterval(id);
+  }, [backToLanding]);
+
   // DIAGNOSTIC harness (URL-gated): `?autoreturn=N` drives N enter→return cycles
   // automatically so the return freeze can be measured/profiled in a simulator
   // with NO human tapping. Each return fires the existing /api/perf "return"
