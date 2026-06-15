@@ -1,6 +1,17 @@
 @import "./markdown.css";
 @import "./highlight.css";
 
+/* A horizontal left-edge swipe-back, on mobile WebKit, rubber-bands/overscrolls
+   the scroller and promotes a transient compositing layer; the shelf reveal that
+   follows then re-rasterizes the whole shelf (~450ms return freeze, reproduced on
+   the sim: real swipe froze, a programmatic return did not). Containing overscroll
+   removes the rubber-band so no transient layer is left for the reveal to fight. */
+html,
+body,
+[data-lv-scroller] {
+  overscroll-behavior: none;
+}
+
 :root {
   font-family:
     -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica,
