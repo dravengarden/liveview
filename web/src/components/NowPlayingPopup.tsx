@@ -1,5 +1,5 @@
 import { rem } from "@/px";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Box,
   IconButton,
@@ -165,6 +165,81 @@ export function NowPlayingPopup(
 
   const collapse = (): void => setExpanded(false);
 
+  // iOS-style left-edge swipe-back for the mobile full sheet — the SAME gesture
+  // as the text reader (App.tsx), but the popup is a fixed overlay the global
+  // handler intentionally skips (inOverlay), so it owns its own. A touch that
+  // STARTS within EDGE px of the left edge and drags right slides the read-along
+  // content off to the right (an interactive "return" preview); released past
+  // THRESH it collapses the popup, otherwise it springs back. Transform is driven
+  // imperatively on a ref so the drag tracks the finger without re-rendering, and
+  // lives on an INNER wrapper — the outer surface is owned by <Slide> (open/close
+  // transform), which our translate would otherwise fight.
+  const dragRef = useRef<HTMLDivElement>(null);
+  const gesture = useRef({
+    sx: 0,
+    sy: 0,
+    tracking: false,
+    decided: false,
+    horiz: false,
+  });
+  const EDGE = 28;
+  const THRESH = 80;
+  const setDragX = (px: number, animate: boolean): void => {
+    const el = dragRef.current;
+    if (!el) return;
+    el.style.transition = animate
+      ? "transform 0.22s cubic-bezier(0.2, 0, 0, 1)"
+      : "none";
+    el.style.transform = px === 0 ? "" : `translateX(${px}px)`;
+  };
+  const onDragStart = (e: React.TouchEvent): void => {
+    const t = e.touches[0];
+    // Skip when a nested sheet (the TOC) owns the gesture, or the touch didn't
+    // start at the screen's left edge.
+    if (!t || tocOpen || t.clientX > EDGE) return;
+    gesture.current = {
+      sx: t.clientX,
+      sy: t.clientY,
+      tracking: true,
+      decided: false,
+      horiz: false,
+    };
+  };
+  const onDragMove = (e: React.TouchEvent): void => {
+    const g = gesture.current;
+    if (!g.tracking) return;
+    const t = e.touches[0];
+    if (!t) return;
+    const dx = t.clientX - g.sx;
+    const dy = t.clientY - g.sy;
+    if (!g.decided && (Math.abs(dx) > 12 || Math.abs(dy) > 12)) {
+      g.decided = true;
+      g.horiz = dx > 0 && Math.abs(dx) > Math.abs(dy);
+      // A vertical scroll — release the gesture so the reader scrolls normally.
+      if (!g.horiz) g.tracking = false;
+    }
+    if (g.decided && g.horiz) setDragX(Math.max(0, dx), false);
+  };
+  const onDragEnd = (e: React.TouchEvent): void => {
+    const g = gesture.current;
+    if (!g.tracking) return;
+    g.tracking = false;
+    const t = e.changedTouches[0];
+    const dx = t ? t.clientX - g.sx : 0;
+    if (g.horiz && dx > THRESH) {
+      // Finish the slide off-screen, THEN collapse — the surface is already gone
+      // to the right, so the Modal's unmount (Slide-down) isn't visible.
+      const el = dragRef.current;
+      if (el) {
+        el.style.transition = "transform 0.2s cubic-bezier(0.4, 0, 0.2, 1)";
+        el.style.transform = "translateX(100%)";
+      }
+      window.setTimeout(collapse, 180);
+    } else {
+      setDragX(0, true);
+    }
+  };
+
   // The collapse handle + chapter title, shared header row.
   const header = (
     <Box
@@ -252,9 +327,26 @@ export function NowPlayingPopup(
           bgcolor: "background.default",
           display: "flex",
           flexDirection: "column",
+          // Clip the off-screen slide-out so the swipe-back can't reveal a
+          // horizontal scrollbar past the right edge.
+          overflow: "hidden",
         }}
       >
-        {body}
+        <Box
+          ref={dragRef}
+          onTouchStart={onDragStart}
+          onTouchMove={onDragMove}
+          onTouchEnd={onDragEnd}
+          onTouchCancel={onDragEnd}
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {body}
+        </Box>
         {
           /* Chapter list as the app's canonical bottom sheet (slide-up momentum
           sheet on mobile — the standard audiobook-TOC affordance), NOT a bespoke
