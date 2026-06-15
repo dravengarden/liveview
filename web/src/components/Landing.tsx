@@ -722,18 +722,17 @@ const ShelfCard = memo(function ShelfCard({
         ...(compactCards && {
           backgroundImage: compactTint(b.slug),
         }),
-        // NOTE: `content-visibility:auto` was REMOVED here (it used to skip
-        // off-screen card layout on a tall shelf). The shelf is kept mounted at
-        // `opacity:0` while a book is open (App's keep-alive). Blink keeps the
-        // opacity:0 cards rendered, so return is a cheap opacity flip — but
-        // WebKit/iOS treats the opacity:0 subtree as not-relevant and SKIPS every
-        // content-visibility:auto card while hidden, then lays ALL of them out at
-        // once on the opacity:0→1 reveal: a multi-second main-thread FREEZE
-        // returning to the shelf on iPad (0ms on Blink — why it took a device to
-        // find). Plain rendering is cheap now that the card is memoized, and the
-        // reveal is a pure opacity flip again. (If a Blink scroll-stall on very
-        // long shelves ever returns, gate content-visibility behind a non-WebKit
-        // `@supports`, NOT a blanket restore.)
+        // content-visibility:auto skips off-screen card layout/paint on the tall
+        // shelf (the long mobile column's perf win); contain-intrinsic-size
+        // reserves a plausible box so the scrollbar stays stable. (Briefly
+        // suspected of an iOS return-from-book freeze, but removing it on the
+        // device changed nothing — the real cause was the stranded CardActionArea
+        // ripple; see `disableRipple` below. Kept.)
+        contentVisibility: { xs: "auto", sm: "visible" },
+        containIntrinsicSize: {
+          xs: compactCards ? "0 150px" : "0 320px",
+          sm: "auto",
+        },
         // Hover lift is a pointer affordance; on touch it fires on
         // every scroll-tap and forces a repaint mid-scroll, so gate
         // the transition + lift behind a real hover-capable pointer.
@@ -747,13 +746,17 @@ const ShelfCard = memo(function ShelfCard({
       }}
     >
       {
-        /* Standard MUI ripple. (It was dropped once because the
-      shelf was hidden with visibility:hidden while a book was
-      open, which stranded the ripple's exit animation; the
-      shelf now stays painted via opacity:0, so the ripple
-      completes normally.) */
+        /* `disableRipple`: the ripple gets STRANDED on return. Tapping a card
+      fires the ripple, then the shelf instantly goes opacity:0 (App's keep-alive
+      while the book is open). On WebKit/iOS the ripple's exit animation pauses on
+      that hidden subtree and never completes; on return (opacity:1) it resumes
+      and holds the card unresponsive for ~2s before clearing — the "shelf frozen
+      for a couple seconds after coming back" report. (The earlier
+      visibility:hidden → opacity:0 switch was aimed at this same bug; it doesn't
+      dodge it on WebKit.) Tap feedback still comes from the global haptic
+      delegation, so dropping the ripple costs nothing on touch. */
       }
-      <CardActionArea onClick={() => onOpen(b.slug)}>
+      <CardActionArea disableRipple onClick={() => onOpen(b.slug)}>
         {
           /* Cover: the book's own image when it has one, else a
         slug-keyed gradient + the kind icon. Top-left badge: a
