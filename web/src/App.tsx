@@ -1160,7 +1160,17 @@ export function App(): React.JSX.Element {
       const dx = t.clientX - sx;
       const dy = t.clientY - sy;
       if (horiz && dx > THRESH && Math.abs(dx) > Math.abs(dy)) {
-        backToLanding();
+        // Revealing the shelf SYNCHRONOUSLY inside this touchend handler makes
+        // iOS WebKit re-rasterize the whole shelf inside the touch-gesture
+        // context — the ~480ms return freeze (real swipe froze, a programmatic
+        // backToLanding from a timer did not). Defer to the next frame so the
+        // gesture fully ends first and the reveal paints in a clean frame.
+        // `?deferback` toggles for A/B; once confirmed this becomes the default.
+        if (new URLSearchParams(window.location.search).has("deferback")) {
+          requestAnimationFrame(() => backToLanding());
+        } else {
+          backToLanding();
+        }
       }
     };
     globalThis.addEventListener("touchstart", onStart, { passive: true });
