@@ -1048,9 +1048,19 @@ export function App(): React.JSX.Element {
     let cycle = 0;
     let cancelled = false;
     const timers: number[] = [];
+    // `?shelfscroll=PX` scrolls the shelf down before entering, so the revealed
+    // shelf on return is at a non-zero scroll offset (the user's shelf is always
+    // scrolled) — tests whether a scrolled scroll-container reveal is the freeze.
+    const shelfScroll = Number(params.get("shelfscroll")) || 0;
     const step = (): void => {
       if (cancelled || cycle >= n) return;
       cycle += 1;
+      if (shelfScroll > 0) {
+        const sc = document.querySelector<HTMLElement>(
+          '[data-lv-scroller="shelf"]',
+        );
+        if (sc) sc.scrollTop = shelfScroll;
+      }
       doEnter();
       timers.push(
         window.setTimeout(() => {
