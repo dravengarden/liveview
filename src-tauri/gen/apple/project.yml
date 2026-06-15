@@ -68,6 +68,10 @@ targets:
         LIBRARY_SEARCH_PATHS[arch=arm64]: $(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)
         ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
         EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
+        # Compile the Swift sources (SnapshotNavController.swift — native-nav). The
+        # target was ObjC-only before; without an explicit version Xcode errors on
+        # the first .swift. swift-5.0 libs are already on LIBRARY_SEARCH_PATHS above.
+        SWIFT_VERSION: "5.0"
       groups: [app]
     dependencies:
       - framework: libapp.a
