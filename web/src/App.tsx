@@ -981,14 +981,20 @@ export function App(): React.JSX.Element {
           const x = r.left + r.width / 2;
           const y = r.top + r.height / 2;
           const base = { bubbles: true, cancelable: true, clientX: x, clientY: y };
+          // Start the ripple (pointerdown/mousedown) and navigate (click), but
+          // OMIT pointerup/mouseup unless ?taprelease — mimicking a real tap
+          // whose release is swallowed by the navigation, leaving MUI's ripple
+          // exit-animation untriggered → a ripple stranded on the hidden shelf.
           card.dispatchEvent(
             new PointerEvent("pointerdown", { ...base, pointerId: 1, pointerType: "touch" }),
           );
           card.dispatchEvent(new MouseEvent("mousedown", base));
-          card.dispatchEvent(
-            new PointerEvent("pointerup", { ...base, pointerId: 1, pointerType: "touch" }),
-          );
-          card.dispatchEvent(new MouseEvent("mouseup", base));
+          if (params.has("taprelease")) {
+            card.dispatchEvent(
+              new PointerEvent("pointerup", { ...base, pointerId: 1, pointerType: "touch" }),
+            );
+            card.dispatchEvent(new MouseEvent("mouseup", base));
+          }
           card.dispatchEvent(new MouseEvent("click", base));
           return;
         }
