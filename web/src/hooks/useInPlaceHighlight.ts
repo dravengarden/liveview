@@ -195,6 +195,14 @@ export function useInPlaceHighlight(
   // Sticky follow: auto-scroll keeps the spoken line in view; a manual scroll
   // turns it off (so re-reading isn't fought), the jump button turns it back on.
   const [following, setFollowing] = useState(true);
+  // True WHILE the user is actively scrolling (drag + its momentum/bounce). The
+  // per-tick karaoke wipe is frozen during this window: iOS runs the scroll-edge
+  // rubber-band as an async compositor animation, and a main-thread CSS-Highlight
+  // repaint mid-bounce cancels it — so the wipe (4–10×/s) was eating the bounce.
+  const scrollSuspendRef = useRef(false);
+  // Bumped when a user scroll settles, to re-run the wipe once and snap the
+  // highlight back to the live playback position after the freeze.
+  const [scrollSettle, setScrollSettle] = useState(0);
   // The spoken line's live range, so the jump button can re-centre on it.
   const curRangeRef = useRef<Range | null>(null);
   // Per-chapter located map (unit idx → block slice), computed ONCE per units
@@ -254,17 +262,41 @@ export function useInPlaceHighlight(
   }, [nowPlaying?.chapterPath]);
 
   // A manual scroll (wheel / touch drag) means the reader took over — stop
-  // auto-following so we don't yank them back. Programmatic scrollBy (followScroll)
-  // doesn't fire these, so the follow never cancels itself.
+  // auto-following so we don't yank them back, AND open the wipe-suspend window so
+  // the boundary rubber-band survives (see scrollSuspendRef). Programmatic
+  // scrollBy (followScroll) fires neither wheel nor touchmove, so it never arms
+  // the window — only a genuine user gesture does.
   useEffect(() => {
     const scroller = scrollerRef.current;
     if (!active || !scroller) return undefined;
-    const off = (): void => setFollowing(false);
-    scroller.addEventListener("wheel", off, { passive: true });
-    scroller.addEventListener("touchmove", off, { passive: true });
+    let idle: number | undefined;
+    const disarm = (): void => {
+      scrollSuspendRef.current = false;
+      setScrollSettle((s) => s + 1); // re-run the wipe → snap to the live position
+    };
+    // A user gesture: drop follow + suspend the wipe, (re)arming the idle timer.
+    const arm = (): void => {
+      setFollowing(false);
+      scrollSuspendRef.current = true;
+      if (idle !== undefined) clearTimeout(idle);
+      idle = window.setTimeout(disarm, 200);
+    };
+    // Momentum/bounce after the finger lifts fires `scroll` but no touchmove —
+    // keep the window open while it's still moving, but ONLY if a gesture armed it
+    // (so a programmatic followScroll's scroll events never suspend the wipe).
+    const keepAlive = (): void => {
+      if (!scrollSuspendRef.current) return;
+      if (idle !== undefined) clearTimeout(idle);
+      idle = window.setTimeout(disarm, 200);
+    };
+    scroller.addEventListener("wheel", arm, { passive: true });
+    scroller.addEventListener("touchmove", arm, { passive: true });
+    scroller.addEventListener("scroll", keepAlive, { passive: true });
     return () => {
-      scroller.removeEventListener("wheel", off);
-      scroller.removeEventListener("touchmove", off);
+      if (idle !== undefined) clearTimeout(idle);
+      scroller.removeEventListener("wheel", arm);
+      scroller.removeEventListener("touchmove", arm);
+      scroller.removeEventListener("scroll", keepAlive);
     };
   }, [active, scrollerRef]);
 
@@ -343,6 +375,10 @@ export function useInPlaceHighlight(
       ".markdown-body",
     );
     if (!active || !api || !body) return undefined;
+    // Frozen while the user is scrolling: skip the repaint so iOS's rubber-band
+    // isn't cancelled (the last-painted wipe simply stays). The scrollSettle bump
+    // re-runs this the moment the scroll stops, snapping the wipe to live.
+    if (scrollSuspendRef.current) return undefined;
     const unit = units[currentIdx];
     const loc = unit && unit.kind === "prose" && unit.text.trim()
       ? ensureLocated(body).get(currentIdx)
@@ -380,6 +416,7 @@ export function useInPlaceHighlight(
     playing,
     scrollerRef,
     ensureLocated,
+    scrollSettle, // re-run once a user scroll settles → snap the wipe back to live
   ]);
 
   // Tap / long-press to seek.
