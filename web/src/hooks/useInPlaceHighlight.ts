@@ -73,22 +73,25 @@ function highlightApi(): {
   };
 }
 
-/** Where `target` sits inside `root`, located over the rendered text with ALL
- *  whitespace stripped (from both sides), so the match is whitespace-insensitive.
- *  Why strip rather than collapse: a CommonMark soft line-break in the markdown
- *  source renders as a SPACE in the HTML, but the server's spoken-unit text has
- *  none — and CJK has no inter-character spaces, so any source line-wrap inside a
- *  sentence injected a space the unit text lacked, breaking the match (≈45% of
- *  units in a wrapped CJK chapter). Both the unit text and the HTML derive from
- *  the same source, and we match whole sentences, so dropping every space on both
- *  sides is unambiguous. `map[i]` is the DOM (node, offset) of stripped char i;
- *  the highlight Range spans the intervening spaces in the DOM regardless. */
+/** A located unit: where its text sits in its block's whitespace-stripped char
+ *  stream. `map` is the SHARED per-block (node, offset) of stripped char i (units
+ *  in the same block share one map); `[at, at+len)` is this unit's slice. */
 interface Located {
   map: { node: Text; offset: number }[];
   at: number;
   len: number;
 }
-function locateText(root: HTMLElement, target: string): Located | null {
+
+/** A block's text with ALL whitespace stripped, plus the DOM (node, offset) of
+ *  each kept char. Whitespace is stripped (not collapsed) because a CommonMark
+ *  soft line-break renders as a SPACE in the HTML while the server's spoken-unit
+ *  text has none — and CJK has no inter-character spaces, so any source line-wrap
+ *  inside a sentence injected a space the unit text lacked (broke ≈45% of units in
+ *  a wrapped CJK chapter). Matching whitespace-insensitively is unambiguous since
+ *  both sides derive from the same source; the Range spans the DOM spaces anyway. */
+function normalizeBlock(
+  root: HTMLElement,
+): { norm: string; map: { node: Text; offset: number }[] } {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let norm = "";
   const map: { node: Text; offset: number }[] = [];
@@ -104,14 +107,51 @@ function locateText(root: HTMLElement, target: string): Located | null {
     }
     node = walker.nextNode();
   }
-  const needle = target.replace(/\s+/g, "");
-  if (!needle) return null;
-  const at = norm.indexOf(needle);
-  if (at < 0) return null;
-  return { map, at, len: needle.length };
+  return { norm, map };
 }
 
-/** A Range over chars [fromFrac, toFrac] of a located match (fractions 0..1). */
+/** Locate EVERY prose unit in the chapter, keyed by unit idx → its block slice.
+ *
+ *  The fix for repeated text: a unit used to be located independently via
+ *  `indexOf(needle)` (FIRST occurrence), so when the same phrase recurred in a
+ *  block (e.g. `[论文/预印本]` ending several list items, the whole `<ul>` being
+ *  ONE block) the Nth sentence highlighted the FIRST occurrence — the highlight
+ *  jumped to the wrong place. Units are the in-order partition of their block's
+ *  text, so we instead match per block with a FORWARD CURSOR: each unit is found
+ *  AFTER the previous one ended (`indexOf(needle, cursor)`). Position, not just
+ *  content, disambiguates — deterministic and correct regardless of repeats.
+ *
+ *  Blocks must already be numbered with `data-blk`. */
+function locateChapter(
+  body: HTMLElement,
+  units: Unit[],
+): Map<number, Located> {
+  const out = new Map<number, Located>();
+  const byBlk = new Map<number, Unit[]>();
+  for (const u of units) {
+    if (u.kind !== "prose" || !u.text.trim()) continue;
+    const arr = byBlk.get(u.blk);
+    if (arr) arr.push(u);
+    else byBlk.set(u.blk, [u]);
+  }
+  for (const [blk, blkUnits] of byBlk) {
+    const blockEl = body.querySelector<HTMLElement>(`[data-blk="${blk}"]`);
+    if (!blockEl) continue;
+    const { norm, map } = normalizeBlock(blockEl);
+    let cursor = 0;
+    for (const u of blkUnits) {
+      const needle = u.text.replace(/\s+/g, "");
+      if (!needle) continue;
+      const at = norm.indexOf(needle, cursor); // forward cursor disambiguates repeats
+      if (at < 0) continue; // markup mismatch — leave this unit unhighlighted
+      out.set(u.idx, { map, at, len: needle.length });
+      cursor = at + needle.length;
+    }
+  }
+  return out;
+}
+
+/** A Range over chars [fromFrac, toFrac] of a located unit (fractions 0..1). */
 function rangeOf(loc: Located, fromFrac: number, toFrac: number): Range | null {
   const a = loc.at + Math.floor(fromFrac * loc.len);
   const bChar = loc.at + Math.floor(toFrac * loc.len);
@@ -123,17 +163,6 @@ function rangeOf(loc: Located, fromFrac: number, toFrac: number): Range | null {
   range.setStart(start.node, start.offset);
   range.setEnd(end.node, end.offset + 1);
   return range;
-}
-
-/** Full DOM range of a prose unit located in the rendered markdown — null if the
- *  unit is non-prose or its text can't be matched in its block (markup mismatch).
- *  Blocks must already be numbered with `data-blk`. */
-function unitRange(body: HTMLElement, unit: Unit | undefined): Range | null {
-  if (!unit || unit.kind !== "prose" || !unit.text.trim()) return null;
-  const blockEl = body.querySelector<HTMLElement>(`[data-blk="${unit.blk}"]`);
-  if (!blockEl) return null;
-  const loc = locateText(blockEl, unit.text);
-  return loc ? rangeOf(loc, 0, 1) : null;
 }
 
 /** Sticky follow: keep `range` in a comfortable upper-middle band of `scroller`,
@@ -166,6 +195,24 @@ export function useInPlaceHighlight(
   const [following, setFollowing] = useState(true);
   // The spoken line's live range, so the jump button can re-centre on it.
   const curRangeRef = useRef<Range | null>(null);
+  // Per-chapter located map (unit idx → block slice), computed ONCE per units
+  // array (it's positional, so it's stable for the rendered chapter) and reused
+  // by the trail + wipe effects. Keyed by the `units` identity it was built for.
+  const locatedRef = useRef<Map<number, Located>>(new Map());
+  const locatedForRef = useRef<Unit[] | null>(null);
+  const ensureLocated = useCallback((body: HTMLElement): Map<number, Located> => {
+    if (locatedForRef.current !== units) {
+      // Number top-level blocks in document order — the same order spoken_units
+      // assigns `blk`. Idempotent.
+      const blocks = body.children;
+      for (let i = 0; i < blocks.length; i++) {
+        (blocks[i] as HTMLElement).dataset["blk"] = String(i);
+      }
+      locatedRef.current = locateChapter(body, units);
+      locatedForRef.current = units;
+    }
+    return locatedRef.current;
+  }, [units]);
 
   const active = nowPlaying?.rendition === "text" &&
     nowPlaying.chapterPath === currentPath;
@@ -239,18 +286,14 @@ export function useInPlaceHighlight(
       api?.clearAll();
       return undefined;
     }
-    // Number top-level blocks in document order — the same order `spoken_units`
-    // assigns `blk`. Idempotent.
-    const blocks = body.children;
-    for (let i = 0; i < blocks.length; i++) {
-      (blocks[i] as HTMLElement).dataset["blk"] = String(i);
-    }
+    const located = ensureLocated(body);
 
     // The read trail: every sentence before the current one, soft tint.
     const done = api.make();
     done.priority = 0;
     for (let i = 0; i < currentIdx; i++) {
-      const r = unitRange(body, units[i]);
+      const loc = located.get(i);
+      const r = loc && rangeOf(loc, 0, 1);
       if (r) done.add(r);
     }
 
@@ -260,7 +303,8 @@ export function useInPlaceHighlight(
     const blockEl = unit
       ? body.querySelector<HTMLElement>(`[data-blk="${unit.blk}"]`)
       : null;
-    const curRange = unit ? unitRange(body, unit) : null;
+    const curLoc = located.get(currentIdx);
+    const curRange = curLoc ? rangeOf(curLoc, 0, 1) : null;
     const sentence = api.make();
     sentence.priority = 1;
     if (curRange) {
@@ -284,7 +328,7 @@ export function useInPlaceHighlight(
       followScroll(scroller, curRange);
     }
     return () => api.clearAll();
-  }, [active, units, currentIdx, playing, following, scrollerRef]);
+  }, [active, units, currentIdx, playing, following, scrollerRef, ensureLocated]);
 
   // The read-so-far wipe WITHIN the current sentence — strongest tint, the
   // precise position. Updates every audio tick: within a sentence it only GROWS
@@ -298,16 +342,9 @@ export function useInPlaceHighlight(
     );
     if (!active || !api || !body) return undefined;
     const unit = units[currentIdx];
-    if (!unit || unit.kind !== "prose" || !unit.text.trim()) {
-      api.remove(HL_ACTIVE);
-      return undefined;
-    }
-    const blockEl = body.querySelector<HTMLElement>(`[data-blk="${unit.blk}"]`);
-    if (!blockEl) {
-      api.remove(HL_ACTIVE);
-      return undefined;
-    }
-    const loc = locateText(blockEl, unit.text);
+    const loc = unit && unit.kind === "prose" && unit.text.trim()
+      ? ensureLocated(body).get(currentIdx)
+      : undefined;
     if (!loc) {
       api.remove(HL_ACTIVE);
       return undefined;
@@ -332,7 +369,16 @@ export function useInPlaceHighlight(
       api.set(HL_ACTIVE, h);
     }
     return undefined;
-  }, [active, units, marks, currentIdx, currentTime, playing, scrollerRef]);
+  }, [
+    active,
+    units,
+    marks,
+    currentIdx,
+    currentTime,
+    playing,
+    scrollerRef,
+    ensureLocated,
+  ]);
 
   // Tap / long-press to seek.
   //   • PLAYING → a plain tap on a paragraph jumps playback to its first sentence
