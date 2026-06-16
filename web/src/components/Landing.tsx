@@ -1184,18 +1184,30 @@ export function Landing({
     const regionEl = shelfRegionRef.current;
     if (!vv || !regionEl) return undefined;
     const apply = (): void => {
-      const inset = Math.max(
-        0,
-        globalThis.innerHeight - vv.height - vv.offsetTop,
-      );
+      // ONLY lift for a real on-screen keyboard — i.e. a focused text field.
+      // Without this gate, a transient VisualViewport offset (the back-to-shelf
+      // snapshot transition momentarily shifts the viewport) was read as a huge
+      // "keyboard" inset and stuck with no event to reset it, floating the toolbar
+      // mid-screen on return. No focus ⇒ no keyboard ⇒ inset 0 (toolbar at edge).
+      const ae = document.activeElement;
+      const editing = ae instanceof HTMLElement &&
+        (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" ||
+          ae.isContentEditable);
+      const inset = editing
+        ? Math.max(0, globalThis.innerHeight - vv.height - vv.offsetTop)
+        : 0;
       regionEl.style.setProperty("--lv-kb-inset", `${inset}px`);
     };
     apply();
     vv.addEventListener("resize", apply);
     vv.addEventListener("scroll", apply);
+    // Reset the instant the search field blurs (e.g. before navigating away), so
+    // we never leave a stale lift behind for the return.
+    document.addEventListener("focusout", apply);
     return () => {
       vv.removeEventListener("resize", apply);
       vv.removeEventListener("scroll", apply);
+      document.removeEventListener("focusout", apply);
     };
   }, []);
 
