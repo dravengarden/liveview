@@ -312,9 +312,16 @@ export function useInPlaceHighlight(
       api.remove(HL_ACTIVE);
       return undefined;
     }
+    // PAUSED: fill the WHOLE current sentence with the strong tint, so the line
+    // you stopped on stays clearly highlighted ("you are here") instead of fading
+    // to the faint base when the live wipe stops. PLAYING: the wipe tracks the
+    // spoken word by time fraction. (Resuming snaps the wipe back to the live
+    // position and grows from there.)
     const mk = marks[currentIdx];
     const span = mk ? mk.end_ms - mk.start_ms : 0;
-    const frac = mk && span > 0
+    const frac = !playing
+      ? 1
+      : mk && span > 0
       ? Math.min(1, Math.max(0, (currentTime * 1000 - mk.start_ms) / span))
       : 1;
     const wipe = rangeOf(loc, 0, frac);
@@ -325,7 +332,7 @@ export function useInPlaceHighlight(
       api.set(HL_ACTIVE, h);
     }
     return undefined;
-  }, [active, units, marks, currentIdx, currentTime, scrollerRef]);
+  }, [active, units, marks, currentIdx, currentTime, playing, scrollerRef]);
 
   // Tap / long-press to seek.
   //   • PLAYING → a plain tap on a paragraph jumps playback to its first sentence
