@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Box } from "@mui/material";
+import { KeyboardArrowDown } from "@mui/icons-material";
 import { READING_COLUMN_MAX } from "@/types";
 import { ImageLightbox } from "../_shell";
 import { ScrollToTopButton } from "./ScrollToTopButton";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { useInPlaceHighlight } from "@/hooks/useInPlaceHighlight";
+import { useI18n } from "@/i18n";
 import { ensureScript, ensureStyle } from "@/ensureAsset";
 
 declare global {
@@ -185,10 +187,11 @@ export function MarkdownViewer({
   useWakeLock(!!html);
 
   // Read-along: when the audio engine is narrating THIS text chapter, highlight
-  // the spoken sentence in place. No-op during normal (silent) reading. The
-  // read-aloud play/pause control itself now lives in the NavShell bar (App.tsx
-  // bookActions), not as a floating FAB over the content.
-  useInPlaceHighlight(containerRef, currentPath);
+  // the spoken sentence in place + sticky-follow it. No-op during normal (silent)
+  // reading. The play/pause control lives in the NavShell bar (App.tsx
+  // bookActions); `follow` drives the "back to narration" pill below.
+  const follow = useInPlaceHighlight(containerRef, currentPath);
+  const { t } = useI18n();
 
   const processContent = useCallback(() => {
     const container = containerRef.current;
@@ -815,6 +818,48 @@ export function MarkdownViewer({
           targetRef={containerRef}
           bottomLift="var(--shell-bar-h, 0px)"
         />
+        {
+          /* "Back to narration" pill — appears ONLY while read-aloud is on this
+            chapter AND the reader has scrolled away from the spoken line (follow
+            off). Tapping re-centres on it and resumes sticky follow, then the pill
+            hides itself. Bottom-centre so it's clear of the back-to-top FAB. */
+        }
+        {follow.active && !follow.following && (
+          <Box
+            role="button"
+            tabIndex={0}
+            aria-label={t("audiobook.backToNarration")}
+            onClick={follow.jumpToCurrent}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") follow.jumpToCurrent();
+            }}
+            sx={{
+              position: "absolute",
+              bottom: "calc(20px + var(--shell-bar-h, 0px))",
+              left: "50%",
+              transform: "translateX(-50%)",
+              zIndex: 6,
+              display: "flex",
+              alignItems: "center",
+              gap: 0.5,
+              pl: 1,
+              pr: 1.5,
+              py: 0.75,
+              borderRadius: 999,
+              cursor: "pointer",
+              color: "primary.contrastText",
+              bgcolor: "primary.main",
+              boxShadow: 3,
+              fontSize: "0.85rem",
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+              "&:active": { transform: "translateX(-50%) scale(0.97)" },
+            }}
+          >
+            <KeyboardArrowDown sx={{ fontSize: "1.25rem" }} />
+            {t("audiobook.backToNarration")}
+          </Box>
+        )}
       </Box>
       <ImageLightbox
         images={images}

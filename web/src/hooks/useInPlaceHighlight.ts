@@ -1,7 +1,24 @@
-import { type RefObject, useEffect, useState } from "react";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { haptic } from "../_shell";
 import { useAudioPlayer } from "@/audio/player";
 import type { Mark, SpokenUnits, Unit } from "@/types";
+
+/** Follow-mode controls the hook hands back, so the reader can show a
+ *  "back to narration" affordance and re-centre when the reader scrolled away. */
+export interface ReadAlongFollow {
+  /** Read-aloud is narrating THIS chapter (controls below are meaningful). */
+  active: boolean;
+  /** Auto-scroll is currently keeping the spoken line in view. */
+  following: boolean;
+  /** Re-centre on the spoken line and resume following. */
+  jumpToCurrent: () => void;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // In-place read-along highlight for the rich text reader (ADHD focus mode).
@@ -119,14 +136,36 @@ function unitRange(body: HTMLElement, unit: Unit | undefined): Range | null {
   return loc ? rangeOf(loc, 0, 1) : null;
 }
 
+/** Sticky follow: keep `range` in a comfortable upper-middle band of `scroller`,
+ *  gently scrolling only when it drifts out — so the spoken line stays put without
+ *  a jerk on every sentence. Uses scrollBy (not scrollIntoView) so it never fires
+ *  the manual-scroll cancel that wheel/touch do. */
+function followScroll(scroller: HTMLElement, range: Range): void {
+  const rr = range.getBoundingClientRect();
+  const sr = scroller.getBoundingClientRect();
+  const top = sr.top + sr.height * 0.2;
+  const bottom = sr.top + sr.height * 0.62;
+  if (rr.top < top || rr.top > bottom) {
+    scroller.scrollBy({
+      top: rr.top - (sr.top + sr.height * 0.32),
+      behavior: "smooth",
+    });
+  }
+}
+
 export function useInPlaceHighlight(
   scrollerRef: RefObject<HTMLElement | null>,
   currentPath: string | null,
-): void {
+): ReadAlongFollow {
   const { nowPlaying, currentIdx, currentTime, playing, seekToSentence } =
     useAudioPlayer();
   const [units, setUnits] = useState<Unit[]>([]);
   const [marks, setMarks] = useState<Mark[]>([]);
+  // Sticky follow: auto-scroll keeps the spoken line in view; a manual scroll
+  // turns it off (so re-reading isn't fought), the jump button turns it back on.
+  const [following, setFollowing] = useState(true);
+  // The spoken line's live range, so the jump button can re-centre on it.
+  const curRangeRef = useRef<Range | null>(null);
 
   const active = nowPlaying?.rendition === "text" &&
     nowPlaying.chapterPath === currentPath;
@@ -159,6 +198,26 @@ export function useInPlaceHighlight(
       cancelled = true;
     };
   }, [active, nowPlaying?.chapterPath, nowPlaying?.lang]);
+
+  // A fresh chapter should auto-follow from the top again.
+  useEffect(() => {
+    setFollowing(true);
+  }, [nowPlaying?.chapterPath]);
+
+  // A manual scroll (wheel / touch drag) means the reader took over — stop
+  // auto-following so we don't yank them back. Programmatic scrollBy (followScroll)
+  // doesn't fire these, so the follow never cancels itself.
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!active || !scroller) return undefined;
+    const off = (): void => setFollowing(false);
+    scroller.addEventListener("wheel", off, { passive: true });
+    scroller.addEventListener("touchmove", off, { passive: true });
+    return () => {
+      scroller.removeEventListener("wheel", off);
+      scroller.removeEventListener("touchmove", off);
+    };
+  }, [active, scrollerRef]);
 
   // Trail + focus. Rebuilt only when the CURRENT sentence changes (NOT every
   // audio tick). Reading leaves a progress trail: every already-read sentence
@@ -201,35 +260,31 @@ export function useInPlaceHighlight(
     const blockEl = unit
       ? body.querySelector<HTMLElement>(`[data-blk="${unit.blk}"]`)
       : null;
+    const curRange = unit ? unitRange(body, unit) : null;
     const sentence = api.make();
     sentence.priority = 1;
-    if (unit && blockEl) {
-      const r = unitRange(body, unit);
-      if (r) {
-        sentence.add(r);
-      } else if (unit.kind !== "prose") {
-        const block = document.createRange();
-        block.selectNodeContents(blockEl);
-        sentence.add(block);
-      }
+    if (curRange) {
+      sentence.add(curRange);
+    } else if (unit && blockEl && unit.kind !== "prose") {
+      const block = document.createRange();
+      block.selectNodeContents(blockEl);
+      sentence.add(block);
     }
 
     api.clearAll();
     api.set(HL_DONE, done);
     api.set(HL_SENTENCE, sentence);
 
-    // Follow-scroll on sentence change only, and only while playing, so we don't
-    // fight a reader who scrolled back to re-read.
+    // Remember the spoken line (for the jump button) and sticky-follow it on
+    // sentence change — only while playing AND following, so a reader who scrolled
+    // away to re-read is left alone.
+    if (curRange) curRangeRef.current = curRange;
     const scroller = scrollerRef.current;
-    if (playing && scroller && blockEl) {
-      const r = blockEl.getBoundingClientRect();
-      const s = scroller.getBoundingClientRect();
-      if (r.top < s.top + 40 || r.bottom > s.bottom - 40) {
-        blockEl.scrollIntoView({ block: "center", behavior: "smooth" });
-      }
+    if (playing && following && scroller && curRange) {
+      followScroll(scroller, curRange);
     }
     return () => api.clearAll();
-  }, [active, units, currentIdx, playing, scrollerRef]);
+  }, [active, units, currentIdx, playing, following, scrollerRef]);
 
   // The read-so-far wipe WITHIN the current sentence — strongest tint, the
   // precise position. Updates every audio tick: within a sentence it only GROWS
@@ -295,6 +350,7 @@ export function useInPlaceHighlight(
       const unit = units.find((u) => u.blk === blk && u.kind === "prose");
       if (!unit) return false;
       seekToSentence(unit.idx);
+      setFollowing(true); // you picked a spot — follow it from here
       return true;
     };
 
@@ -359,4 +415,14 @@ export function useInPlaceHighlight(
       body.removeEventListener("pointercancel", cancel);
     };
   }, [active, playing, units, seekToSentence, scrollerRef]);
+
+  const jumpToCurrent = useCallback(() => {
+    setFollowing(true);
+    const scroller = scrollerRef.current;
+    if (scroller && curRangeRef.current) {
+      followScroll(scroller, curRangeRef.current);
+    }
+  }, [scrollerRef]);
+
+  return { active, following, jumpToCurrent };
 }
