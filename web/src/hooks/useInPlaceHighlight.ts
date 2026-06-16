@@ -55,9 +55,16 @@ function highlightApi(): {
   };
 }
 
-/** Where `target` sits inside `root`, located over the rendered text with
- *  whitespace collapsed (so the server's join-wrapped sentence text matches the
- *  HTML). `map[i]` is the DOM (node, offset) of normalized char i. */
+/** Where `target` sits inside `root`, located over the rendered text with ALL
+ *  whitespace stripped (from both sides), so the match is whitespace-insensitive.
+ *  Why strip rather than collapse: a CommonMark soft line-break in the markdown
+ *  source renders as a SPACE in the HTML, but the server's spoken-unit text has
+ *  none — and CJK has no inter-character spaces, so any source line-wrap inside a
+ *  sentence injected a space the unit text lacked, breaking the match (≈45% of
+ *  units in a wrapped CJK chapter). Both the unit text and the HTML derive from
+ *  the same source, and we match whole sentences, so dropping every space on both
+ *  sides is unambiguous. `map[i]` is the DOM (node, offset) of stripped char i;
+ *  the highlight Range spans the intervening spaces in the DOM regardless. */
 interface Located {
   map: { node: Text; offset: number }[];
   at: number;
@@ -67,28 +74,19 @@ function locateText(root: HTMLElement, target: string): Located | null {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   let norm = "";
   const map: { node: Text; offset: number }[] = [];
-  let prevSpace = false;
   let node = walker.nextNode();
   while (node) {
     const tn = node as Text;
     const s = tn.data;
     for (let i = 0; i < s.length; i++) {
       const ch = s[i] ?? "";
-      if (/\s/.test(ch)) {
-        if (!prevSpace) {
-          norm += " ";
-          map.push({ node: tn, offset: i });
-          prevSpace = true;
-        }
-      } else {
-        norm += ch;
-        map.push({ node: tn, offset: i });
-        prevSpace = false;
-      }
+      if (/\s/.test(ch)) continue; // drop every space — match is ws-insensitive
+      norm += ch;
+      map.push({ node: tn, offset: i });
     }
     node = walker.nextNode();
   }
-  const needle = target.replace(/\s+/g, " ").trim();
+  const needle = target.replace(/\s+/g, "");
   if (!needle) return null;
   const at = norm.indexOf(needle);
   if (at < 0) return null;
