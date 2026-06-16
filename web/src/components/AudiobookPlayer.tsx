@@ -111,10 +111,9 @@ export function AudiobookPlayer(
       <Box
         ref={scrollRef}
         // Tag the audio read-along scroller so the navbar title-tap
-        // (scrollReaderTop in App.tsx, the iOS tap-to-top gesture) finds and
-        // scrolls it — the same `[data-lv-scroller="reader"]` hook the text
-        // reader (MarkdownViewer) uses. Without this the gesture was a no-op on
-        // the audio page.
+        // (scrollReaderBottom in App.tsx) and the scroll-to-top FAB find and
+        // scroll it — the same `[data-lv-scroller="reader"]` hook the text reader
+        // (MarkdownViewer) uses. Without this the gesture was a no-op here.
         data-lv-scroller="reader"
         onWheel={cancelFollow}
         onTouchMove={cancelFollow}

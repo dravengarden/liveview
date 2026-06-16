@@ -431,13 +431,15 @@ export function App(): React.JSX.Element {
   const onPlayingPage = nowPlaying != null &&
     activeSlug === nowPlaying.bookSlug && rendition === "audio";
 
-  // Tap the top bar to jump the reader back to the top — the iOS
-  // "tap the status bar" gesture. The reader's scroll container is the one
-  // tagged `data-lv-scroller="reader"` (MarkdownViewer); query it lazily so a
-  // chapter remount (which swaps the node) never leaves a stale ref.
-  const scrollReaderTop = useCallback(() => {
-    document.querySelector<HTMLElement>('[data-lv-scroller="reader"]')
-      ?.scrollTo({ top: 0, behavior: "smooth" });
+  // Tap the BOTTOM nav bar's title to jump the reader to the BOTTOM (the bar sits
+  // at the bottom, so down-to-the-end is the spatially natural direction; the
+  // scroll-to-top FAB owns the other direction). The reader's scroll container is
+  // the one tagged `data-lv-scroller="reader"` (MarkdownViewer / AudiobookPlayer);
+  // query it lazily so a chapter remount (which swaps the node) never leaves a
+  // stale ref.
+  const scrollReaderBottom = useCallback(() => {
+    const el = document.querySelector<HTMLElement>('[data-lv-scroller="reader"]');
+    el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, []);
   // Scroll whichever view is showing back to the top. Every scrollable view
   // tags its container `data-lv-scroller` (the shelf, and the book/audiobook
@@ -1581,8 +1583,8 @@ export function App(): React.JSX.Element {
                 <Box
                   role="button"
                   tabIndex={0}
-                  aria-label={t("app.scrollTop")}
-                  onClick={scrollReaderTop}
+                  aria-label={t("app.scrollBottom")}
+                  onClick={scrollReaderBottom}
                   sx={{
                     minWidth: 0,
                     cursor: "pointer",
