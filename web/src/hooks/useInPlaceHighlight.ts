@@ -203,6 +203,14 @@ export function useInPlaceHighlight(
   // Bumped when a user scroll settles, to re-run the wipe once and snap the
   // highlight back to the live playback position after the freeze.
   const [scrollSettle, setScrollSettle] = useState(0);
+  // Heartbeat that re-asserts the highlight WHILE PAUSED. iOS WebKit purges the
+  // CSS Custom Highlight overlay once the page goes idle, and when paused there's
+  // no repaint trigger (currentTime is frozen) to restore it — so the "you are
+  // here" line vanishes a beat after you pause. (While PLAYING the per-tick wipe
+  // repaints constantly, hiding the purge.) Re-painting on this tick keeps the
+  // current line lit until you resume or exit read-aloud. Effect set up below
+  // (needs `active`, defined later).
+  const [pausedBeat, setPausedBeat] = useState(0);
   // The spoken line's live range, so the jump button can re-centre on it.
   const curRangeRef = useRef<Range | null>(null);
   // Per-chapter located map (unit idx → block slice), computed ONCE per units
@@ -300,6 +308,16 @@ export function useInPlaceHighlight(
     };
   }, [active, scrollerRef]);
 
+  // Paused-highlight heartbeat (see pausedBeat). Only runs while read-aloud is
+  // loaded AND paused — when playing, the wipe's own per-tick repaint covers it,
+  // and when inactive there's nothing to keep lit. ~600ms is frequent enough that
+  // a purged line returns almost immediately, cheap enough to be invisible.
+  useEffect(() => {
+    if (!active || playing) return undefined;
+    const id = window.setInterval(() => setPausedBeat((b) => b + 1), 600);
+    return () => window.clearInterval(id);
+  }, [active, playing]);
+
   // Trail + focus. Rebuilt only when the CURRENT sentence changes (NOT every
   // audio tick). Reading leaves a progress trail: every already-read sentence
   // keeps a soft tint, the current sentence a medium tint; the per-tick wipe
@@ -382,6 +400,7 @@ export function useInPlaceHighlight(
     scrollerRef,
     ensureLocated,
     scrollSettle,
+    pausedBeat, // re-assert the trail after an iOS purge while paused
   ]);
 
   // The read-so-far wipe WITHIN the current sentence — strongest tint, the
@@ -437,6 +456,7 @@ export function useInPlaceHighlight(
     scrollerRef,
     ensureLocated,
     scrollSettle, // re-run once a user scroll settles → snap the wipe back to live
+    pausedBeat, // re-assert the paused line after an iOS highlight purge
   ]);
 
   // Tap / long-press to seek.
