@@ -23,6 +23,27 @@
 body {
   margin: 0;
   padding: 0;
+  /* App chrome is NOT selectable text. Without this, an errant tap/drag on a
+     control selects its label and leaves iOS's blue text-selection handles stuck
+     on it (reported on the read-along "Back to narration" pill and the navbar
+     title). Reading content + real text inputs opt back in below, so book text is
+     still selectable/copyable. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* The exceptions: actual reading text and form fields stay selectable. (The
+   read-aloud long-press handler still toggles an inline `user-select: none` on
+   .markdown-body while paused — inline wins, so seek-on-long-press is unaffected;
+   when playing it's removed and this `text` takes over again.) */
+.markdown-body,
+input,
+textarea,
+[contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
 
 /* Mobile (bottom-navbar) reading view: the in-book reader runs full-height with
