@@ -320,6 +320,12 @@ export function useInPlaceHighlight(
       api?.clearAll();
       return undefined;
     }
+    // Frozen during a user scroll, same as the wipe — so the trail doesn't keep
+    // advancing sentence-to-sentence (its clearAll would also blink the wipe off)
+    // while you scroll. The whole highlight holds still, then snaps to live on
+    // settle (scrollSettle). The cleanup below must NOT clear while suspended, or
+    // a sentence change mid-scroll would blank everything.
+    if (scrollSuspendRef.current) return undefined;
     const located = ensureLocated(body);
 
     // The read trail: every sentence before the current one, soft tint.
@@ -361,8 +367,22 @@ export function useInPlaceHighlight(
     if (playing && following && scroller && curRange) {
       followScroll(scroller, curRange);
     }
-    return () => api.clearAll();
-  }, [active, units, currentIdx, playing, following, scrollerRef, ensureLocated]);
+    // Conditional: a re-run mid-scroll (suspended) must keep the frozen paint, not
+    // clear it. When the scroll settles the effect re-runs with suspend already
+    // off, so this clears normally and the body repaints to the live position.
+    return () => {
+      if (!scrollSuspendRef.current) api.clearAll();
+    };
+  }, [
+    active,
+    units,
+    currentIdx,
+    playing,
+    following,
+    scrollerRef,
+    ensureLocated,
+    scrollSettle,
+  ]);
 
   // The read-so-far wipe WITHIN the current sentence — strongest tint, the
   // precise position. Updates every audio tick: within a sentence it only GROWS
