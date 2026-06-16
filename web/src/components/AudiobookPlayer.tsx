@@ -41,6 +41,10 @@ interface AudiobookPlayerProps {
   onSaveScroll?: (path: string, ratio: number) => void;
 }
 
+/** Transport band top/bottom padding (MUI spacing units → ×8px). The SAME value
+ *  on both edges so the controls sit vertically centred (symmetric whitespace). */
+const SLAB_PAD_Y = 0.75;
+
 /** The full read-along reader for the currently-playing chapter: the spoken text
  *  with the narrated sentence highlighted, an explicit (cancelable) follow mode,
  *  and the transport. All playback state comes from the root audio engine, so
@@ -516,16 +520,19 @@ export function AudiobookPlayer(
           // corner radius.
           pl: "max(env(safe-area-inset-left, 0px), 12px)",
           pr: "max(env(safe-area-inset-right, 0px), 12px)",
-          // Top breathing — kept tight so the transport band is compact on every
-          // size (a hair more on the one-row layout where it's the only padding).
-          pt: oneRow ? rem(1) : rem(0.5),
-          // Bottom inset: when a bottom nav bar sits below us it already clears
-          // the home indicator, so just a hair of breathing room (no doubled
-          // gap). Otherwise (nav bar on top, player at the screen edge) sit ~8px
-          // tighter than the inset so the bar isn't bottom-heavy.
+          // SYMMETRIC top/bottom breathing so the controls sit vertically centred
+          // in the band (the prior pt≈1px vs pb≈4px made them hug the top — the
+          // reported asymmetry). One value for both edges.
+          pt: SLAB_PAD_Y,
+          // When a bottom nav bar sits below us it already clears the home
+          // indicator, so the bottom just mirrors the top. Otherwise (nav bar on
+          // top, player at the screen edge) the home-indicator inset takes over,
+          // floored at the same breathing value so it's never tighter than the top.
           pb: navbarAtBottom
-            ? 0.5
-            : "max(calc(env(safe-area-inset-bottom, 0px) - 8px), 4px)",
+            ? SLAB_PAD_Y
+            : `max(calc(env(safe-area-inset-bottom, 0px) - 8px), ${
+              SLAB_PAD_Y * 8
+            }px)`,
         }}
       >
         {oneRow
