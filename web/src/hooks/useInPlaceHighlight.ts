@@ -1,4 +1,5 @@
 import { type RefObject, useEffect, useState } from "react";
+import { haptic } from "../_shell";
 import { useAudioPlayer } from "@/audio/player";
 import type { Mark, SpokenUnits, Unit } from "@/types";
 
@@ -271,29 +272,91 @@ export function useInPlaceHighlight(
     return undefined;
   }, [active, units, marks, currentIdx, currentTime, scrollerRef]);
 
-  // Tap-to-seek: only WHILE PLAYING, clicking a paragraph jumps playback to its
-  // first sentence — the "follow my eyes" reposition the user wants while
-  // listening. When the narration is PAUSED (or not on this chapter), a tap is
-  // just the reader touching the page, so it does NOTHING: it must never seek or
-  // auto-start playback (the dominant interaction here is silent reading, and an
-  // accidental paragraph tap hijacking playback was the top complaint). Ignores
-  // links/images (the reader's own handlers own those). To start narration from a
-  // specific spot: play (navbar control), then tap — now it seeks.
+  // Tap / long-press to seek.
+  //   • PLAYING → a plain tap on a paragraph jumps playback to its first sentence
+  //     (the "follow my eyes" reposition you want while listening).
+  //   • PAUSED  → a tap does NOTHING (a stray touch during silent reading must
+  //     never hijack playback — that was the top complaint). A deliberate
+  //     LONG-PRESS instead seeks AND starts playback from that paragraph, so you
+  //     can begin narration at a chosen spot on purpose.
+  // Ignores links/images (the reader's own handlers own those).
   useEffect(() => {
     const body = scrollerRef.current?.querySelector<HTMLElement>(
       ".markdown-body",
     );
-    if (!active || !playing || !body) return undefined;
-    const onClick = (e: MouseEvent): void => {
-      const target = e.target as HTMLElement;
-      if (target.closest("a") || target.closest("img")) return;
-      const blockEl = target.closest<HTMLElement>("[data-blk]");
-      if (!blockEl) return;
+    if (!active || !body) return undefined;
+
+    const seekAtTarget = (target: EventTarget | null): boolean => {
+      const el = target as HTMLElement | null;
+      if (!el || el.closest("a") || el.closest("img")) return false;
+      const blockEl = el.closest<HTMLElement>("[data-blk]");
+      if (!blockEl) return false;
       const blk = Number(blockEl.dataset["blk"]);
       const unit = units.find((u) => u.blk === blk && u.kind === "prose");
-      if (unit) seekToSentence(unit.idx);
+      if (!unit) return false;
+      seekToSentence(unit.idx);
+      return true;
     };
+
+    const onClick = (e: MouseEvent): void => {
+      if (playing) seekAtTarget(e.target);
+    };
+
+    // Long-press, paused only. Cancelled by a drag or an early release, so it
+    // never fires on a tap or a scroll.
+    const LONG_MS = 450;
+    let timer: number | undefined;
+    let sx = 0;
+    let sy = 0;
+    let pressTarget: EventTarget | null = null;
+    const cancel = (): void => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+    };
+    const onPointerDown = (e: PointerEvent): void => {
+      if (playing) return; // playing uses the plain tap above
+      sx = e.clientX;
+      sy = e.clientY;
+      pressTarget = e.target;
+      cancel();
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        if (seekAtTarget(pressTarget)) haptic("medium");
+      }, LONG_MS);
+    };
+    const onPointerMove = (e: PointerEvent): void => {
+      if (
+        timer !== undefined &&
+        (Math.abs(e.clientX - sx) > 10 || Math.abs(e.clientY - sy) > 10)
+      ) cancel();
+    };
+
+    // While read-aloud is loaded but PAUSED, the long-press is OUR gesture — turn
+    // off iOS's native text selection / callout so it reads as "seek here", not a
+    // text selection. Restored when playing or when read-aloud ends.
+    if (!playing) {
+      body.style.setProperty("-webkit-user-select", "none");
+      body.style.setProperty("user-select", "none");
+      body.style.setProperty("-webkit-touch-callout", "none");
+    }
+
     body.addEventListener("click", onClick);
-    return () => body.removeEventListener("click", onClick);
+    body.addEventListener("pointerdown", onPointerDown);
+    body.addEventListener("pointermove", onPointerMove);
+    body.addEventListener("pointerup", cancel);
+    body.addEventListener("pointercancel", cancel);
+    return () => {
+      cancel();
+      body.style.removeProperty("-webkit-user-select");
+      body.style.removeProperty("user-select");
+      body.style.removeProperty("-webkit-touch-callout");
+      body.removeEventListener("click", onClick);
+      body.removeEventListener("pointerdown", onPointerDown);
+      body.removeEventListener("pointermove", onPointerMove);
+      body.removeEventListener("pointerup", cancel);
+      body.removeEventListener("pointercancel", cancel);
+    };
   }, [active, playing, units, seekToSentence, scrollerRef]);
 }
