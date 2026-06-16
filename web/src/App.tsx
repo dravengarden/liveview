@@ -1477,7 +1477,16 @@ export function App(): React.JSX.Element {
             top: 0,
             left: 0,
             right: 0,
-            height: "env(safe-area-inset-top, 0px)",
+            // Span the status-bar strip. On a notched phone the safe-area inset
+            // (~47px) is plenty, but a no-notch iPad reports ~0 — leaving NOTHING
+            // to tap (the reported "tapping the top does nothing"). Floor it to a
+            // real status-bar height so the gesture works there too. ONLY in
+            // bottom-navbar mode: in top-navbar mode a fixed strip at this zIndex
+            // would shadow the navbar's top edge and eat its button taps. (Desktop
+            // is top-navbar, inset 0 → 0-height, unaffected.)
+            height: navbarAtBottom
+              ? "max(env(safe-area-inset-top, 0px), 24px)"
+              : "env(safe-area-inset-top, 0px)",
             zIndex: (t) => t.zIndex.appBar + 1,
             // The tap is wired with NATIVE pointer events (statusBarTapRef effect
             // above), NOT React onClick: iOS WKWebView doesn't reliably deliver a
