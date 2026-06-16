@@ -1,5 +1,11 @@
 import { rem, tap } from "@/px";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Alert,
   Box,
@@ -82,15 +88,25 @@ export function AudiobookPlayer(
   // the NavShell bar below it (--shell-bar-h) in one calc.
   const rootRef = useRef<HTMLDivElement>(null);
   const transportRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  // Lay the transport out in ONE row (scrubber + controls together) when the bar
+  // is wide enough to fit it, else TWO rows. Measured off the transport's own
+  // width (NOT the viewport — in the desktop popup it's only the right pane), so
+  // it adapts to iPad / desktop / split-view, not just a device guess. The layout
+  // switch changes the bar's HEIGHT, not its width, so this never feedback-loops.
+  const [oneRow, setOneRow] = useState(false);
+  // useLayoutEffect: measure + set `oneRow` BEFORE the first paint, so a wide
+  // screen never flashes the two-row layout for a frame on open.
+  useLayoutEffect(() => {
     const transportEl = transportRef.current;
     const rootEl = rootRef.current;
     if (!transportEl || !rootEl) return;
+    const ONE_ROW_MIN = 600; // px of transport width that comfortably fits one row
     const publish = (): void => {
       rootEl.style.setProperty(
         "--lv-transport-h",
         `${transportEl.offsetHeight}px`,
       );
+      setOneRow(transportEl.clientWidth >= ONE_ROW_MIN);
     };
     publish();
     const ro = new ResizeObserver(publish);
@@ -255,6 +271,45 @@ export function AudiobookPlayer(
         <SkipNext sx={{ fontSize: rem(33) }} />
       </IconButton>
     </Box>
+  );
+
+  // Scrubber pieces — reused by both the one-row (wide) and two-row (narrow)
+  // transport layouts, so the time labels + seek bar are defined once.
+  const timeStart = (
+    <Typography
+      variant="caption"
+      sx={{
+        minWidth: 36,
+        textAlign: "right",
+        fontVariantNumeric: "tabular-nums",
+      }}
+    >
+      {fmtTime(currentTime)}
+    </Typography>
+  );
+  const scrubber = (
+    <Slider
+      min={0}
+      max={duration || 1}
+      value={Math.min(currentTime, duration || 1)}
+      onChange={onSeekBar}
+      disabled={loading || duration === 0}
+      aria-label={t("audiobook.seek")}
+      sx={{
+        flex: 1,
+        py: 1,
+        "& .MuiSlider-thumb": { width: 20, height: 20 },
+        "& .MuiSlider-rail, & .MuiSlider-track": { height: 6 },
+      }}
+    />
+  );
+  const timeEnd = (
+    <Typography
+      variant="caption"
+      sx={{ minWidth: 40, fontVariantNumeric: "tabular-nums" }}
+    >
+      {fmtTime(duration)}
+    </Typography>
   );
 
   // A single control row on every breakpoint: the play cluster centred, with the
@@ -461,8 +516,9 @@ export function AudiobookPlayer(
           // corner radius.
           pl: "max(env(safe-area-inset-left, 0px), 12px)",
           pr: "max(env(safe-area-inset-right, 0px), 12px)",
-          // Top breathing scales with the font (no tap-target here, so no floor).
-          pt: rem(4),
+          // Top breathing scales with the font. Tighter in the two-row (narrow)
+          // layout so the stacked rows read compact on a phone.
+          pt: oneRow ? rem(4) : rem(1.5),
           // Bottom inset: when a bottom nav bar sits below us it already clears
           // the home indicator, so just a hair of breathing room (no doubled
           // gap). Otherwise (nav bar on top, player at the screen edge) sit ~8px
@@ -472,52 +528,44 @@ export function AudiobookPlayer(
             : "max(calc(env(safe-area-inset-bottom, 0px) - 8px), 4px)",
         }}
       >
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-          {
-            /* Follow toggle lives on the scrubber row (not the transport row): it
-              governs read-along scrolling, not playback, and parking it here
-              keeps the transport row narrow enough for one line on a 375px
-              iPhone. */
-          }
-          {
-            /* Same CHIP_W centring slot as the speed chip below (earSx), so the
-              crosshair and the "2×" share one true centre line. */
-          }
-          <Box sx={earSx}>{followBtn}</Box>
-          <Typography
-            variant="caption"
-            sx={{
-              minWidth: 36,
-              textAlign: "right",
-              fontVariantNumeric: "tabular-nums",
-            }}
-          >
-            {fmtTime(currentTime)}
-          </Typography>
-          <Slider
-            min={0}
-            max={duration || 1}
-            value={Math.min(currentTime, duration || 1)}
-            onChange={onSeekBar}
-            disabled={loading || duration === 0}
-            aria-label={t("audiobook.seek")}
-            // Bigger drag target: a 20px thumb + a taller rail and vertical
-            // padding so the scrub bar is easy to grab on touch.
-            sx={{
-              flex: 1,
-              py: 1.25,
-              "& .MuiSlider-thumb": { width: 20, height: 20 },
-              "& .MuiSlider-rail, & .MuiSlider-track": { height: 6 },
-            }}
-          />
-          <Typography
-            variant="caption"
-            sx={{ minWidth: 40, fontVariantNumeric: "tabular-nums" }}
-          >
-            {fmtTime(duration)}
-          </Typography>
-        </Box>
-        {transportControls}
+        {oneRow
+          ? (
+            // Wide (iPad / desktop): everything on ONE row — follow · play cluster
+            // · scrubber (flex) · speed · sleep.
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 1,
+                minHeight: tap(58),
+              }}
+            >
+              <Box sx={earSx}>{followBtn}</Box>
+              {mainCluster}
+              {timeStart}
+              {scrubber}
+              {timeEnd}
+              <Box sx={earSx}>
+                <SpeedChip />
+              </Box>
+              <Box sx={earSx}>
+                <SleepChip />
+              </Box>
+            </Box>
+          )
+          : (
+            // Narrow (iPhone): TWO rows — scrubber (follow at its left) above the
+            // play/speed/sleep control row.
+            <>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <Box sx={earSx}>{followBtn}</Box>
+                {timeStart}
+                {scrubber}
+                {timeEnd}
+              </Box>
+              {transportControls}
+            </>
+          )}
       </Box>
     </Box>
   );
