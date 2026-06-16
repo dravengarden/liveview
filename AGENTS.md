@@ -80,10 +80,11 @@ shared across all the portal apps, not just liveview).
 - **Diagram theming**: mermaid renders natively per light/dark mode (re-render,
   not invert); book SVGs use an invert-filter; the lightbox must **NOT** invert
   theme-native mermaid. (memory: liveview-diagram-rendering)
-- **Multi-client**: single-active-player handoff (stable device id + per-tab
-  instance id + WS setting broadcast). `crypto.randomUUID` needs a secure
-  context; `persisted()` doesn't write its initial value until the first `.set()`.
-  (memory: liveview-multi-client)
+- **Multi-device**: each device plays INDEPENDENTLY — the old single-active-player
+  mutual exclusion (claim/heartbeat/"playing elsewhere") was removed (lv-v172).
+  The cross-device RESUME pointer (sessionStore/posStore) + rate/sleep prefs are
+  kept but only reconcile at STARTUP, never mid-playback. (`persisted()` still
+  doesn't write its initial value until the first `.set()`.)
 - **PWA / native**: hard iOS limits (lock-screen/background audio needs the Tauri
   shell, not the PWA). The Tauri macOS build must pin `time = 0.3.47` (0.3.48
   trips an E0119 in tauri-utils); `src-tauri/Cargo.lock` is untracked, so the pin
