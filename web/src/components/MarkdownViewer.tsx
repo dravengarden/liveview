@@ -47,6 +47,10 @@ interface MarkdownViewerProps {
   /** True when the nav bar sits at the bottom — passed to the read-aloud
    *  <PlaybackBar> so it drops its own home-indicator inset (the bar below owns it). */
   navbarAtBottom?: boolean | undefined;
+  /** Footer rendered under the content, inside the reading column — the prev/next
+   *  <ChapterPager>. Scrolls with the text and clears the bottom bars via the
+   *  scroller's own foot padding. */
+  footer?: React.ReactNode;
 }
 
 // Font stack for mermaid SVG labels. Why: mermaid's built-in default is
@@ -167,6 +171,7 @@ export function MarkdownViewer({
   savedScroll,
   onSaveScroll,
   navbarAtBottom,
+  footer,
 }: MarkdownViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   // Wrapper that hosts the reading-progress bar; carries the --lv-read-progress
@@ -817,6 +822,13 @@ export function MarkdownViewer({
             sx={innerSx}
             dangerouslySetInnerHTML={{ __html: html }}
           />
+          {/* Prev/next chapter pager — same centred reading column as the text
+              above, so it lines up; scrolls with the content. */}
+          {footer && (
+            <Box sx={{ maxWidth: `${READING_COLUMN_MAX}px`, mx: "auto" }}>
+              {footer}
+            </Box>
+          )}
         </Box>
         {
           /* Back-to-top — absolute within this relative wrapper. The bottom nav bar

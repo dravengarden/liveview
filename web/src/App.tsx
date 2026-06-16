@@ -26,6 +26,7 @@ import {
 import {
   AudiobookPlayer,
   ContentViewer,
+  ChapterPager,
   FloatingBubble,
   Landing,
   PlaybackSheet,
@@ -1341,6 +1342,26 @@ export function App(): React.JSX.Element {
   const hasAudio = bookRenditions.some((r) => r.kind === "audio");
   const hasText = bookRenditions.some((r) => r.kind === "text");
 
+  // Bottom prev/next chapter pager, shown under both the text reader and the
+  // audiobook read-along. Built from the active rendition's ordered spine;
+  // navigation is uniform — openFile(path, lang, rendition) loads the text
+  // chapter, or seeds the audio read-along via the view→engine effect.
+  const chapterPager = useMemo(() => {
+    const spine = flattenTracks(activeTree, uiLang);
+    const i = spine.findIndex((c) => c.path === currentPath);
+    if (i < 0) return null;
+    const prev = i > 0 ? spine[i - 1] : undefined;
+    const next = i < spine.length - 1 ? spine[i + 1] : undefined;
+    if (!prev && !next) return null;
+    return (
+      <ChapterPager
+        prev={prev}
+        next={next}
+        onNavigate={(path) => void openFile(path, lang, rendition)}
+      />
+    );
+  }, [activeTree, uiLang, currentPath, openFile, lang, rendition]);
+
   // Tapping the floating bubble's artwork returns to the playing book's inline
   // audio page (re-entering at the chapter it's on).
   const openPlayingAudio = useCallback(() => {
@@ -1653,6 +1674,7 @@ export function App(): React.JSX.Element {
                     lineHeight={menuBarSettings.lineHeight}
                     navbarAtBottom={navbarAtBottom}
                     onSaveScroll={saveProgress}
+                    footer={chapterPager}
                   />
                 )
                 : (
@@ -1667,6 +1689,7 @@ export function App(): React.JSX.Element {
                     savedScroll={savedScroll}
                     onSaveScroll={saveProgress}
                     navbarAtBottom={navbarAtBottom}
+                    footer={chapterPager}
                   />
                 )}
             </NavShell>

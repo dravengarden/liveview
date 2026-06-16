@@ -3,6 +3,7 @@ export { MarkdownViewer } from "./MarkdownViewer";
 export { SettingsButton } from "./SettingsDialog";
 export { ContentViewer } from "./ContentViewer";
 export { AudiobookPlayer } from "./AudiobookPlayer";
+export { ChapterPager } from "./ChapterPager";
 export { NowPlayingPopup } from "./NowPlayingPopup";
 export { MiniPlayer } from "./MiniPlayer";
 export { FloatingBubble } from "./FloatingBubble";

@@ -17,6 +17,8 @@ interface AudiobookPlayerProps {
   /** Persist playback progress (chapter path + 0..1 fraction) — same store as
    *  text reading, so the shelf card can show an audio %. */
   onSaveScroll?: (path: string, ratio: number) => void;
+  /** Footer under the read-along text — the prev/next <ChapterPager>. */
+  footer?: React.ReactNode;
 }
 
 /** The full read-along reader for the currently-playing chapter: the spoken text
@@ -25,7 +27,7 @@ interface AudiobookPlayerProps {
  *  audio engine, so this view is purely a window onto it — leaving it never stops
  *  the audio. */
 export function AudiobookPlayer(
-  { contentMaxWidth, lineHeight, navbarAtBottom = false, onSaveScroll }:
+  { contentMaxWidth, lineHeight, navbarAtBottom = false, onSaveScroll, footer }:
     AudiobookPlayerProps,
 ): React.JSX.Element {
   const { t } = useI18n();
@@ -217,6 +219,8 @@ export function AudiobookPlayer(
                 </Box>
               ))
             )}
+          {/* Prev/next chapter pager — inside the centred reading column. */}
+          {footer}
         </Box>
       </Box>
 

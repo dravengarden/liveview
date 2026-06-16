@@ -51,6 +51,8 @@ interface ContentViewerProps {
   /** True when the nav bar sits at the bottom — forwarded to the read-aloud
    *  <PlaybackBar> overlay so it drops its own home-indicator inset. */
   navbarAtBottom?: boolean | undefined;
+  /** Footer pinned under the markdown content — the prev/next <ChapterPager>. */
+  footer?: React.ReactNode;
 }
 
 /** Spinner shown while a code-split viewer chunk downloads. */
@@ -81,6 +83,7 @@ export function ContentViewer({
   savedScroll,
   onSaveScroll,
   navbarAtBottom,
+  footer,
 }: ContentViewerProps): React.JSX.Element {
   const { t } = useI18n();
   if (!currentPath) {
@@ -114,6 +117,7 @@ export function ContentViewer({
           savedScroll={savedScroll}
           onSaveScroll={onSaveScroll}
           navbarAtBottom={navbarAtBottom}
+          footer={footer}
         />
       );
       break;
