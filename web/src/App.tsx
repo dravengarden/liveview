@@ -303,6 +303,36 @@ export function App(): React.JSX.Element {
       setBookPrefs(out);
     });
   }, []);
+
+  // Repaint the reading scrollers when the app returns from the background. iOS
+  // WKWebView frees a backgrounded scroller's compositor layers to reclaim
+  // memory, so on resume the read-along / text column shows BLANK (the content is
+  // still in the DOM, just not rasterized) until something forces a repaint. A
+  // `translateZ(0)` nudge (added, flushed, removed next frame) re-promotes the
+  // layer and forces a re-rasterize — imperceptible (no visual move), keeps scroll
+  // position, and is far better than the blank. Covers both readers + the shelf
+  // (every `[data-lv-scroller]`). `pageshow` covers a bfcache restore too.
+  useEffect(() => {
+    const repaint = (): void => {
+      if (document.visibilityState !== "visible") return;
+      for (
+        const el of document.querySelectorAll<HTMLElement>("[data-lv-scroller]")
+      ) {
+        el.style.transform = "translateZ(0)";
+        void el.offsetHeight; // flush the style so the toggle actually re-rasterizes
+        requestAnimationFrame(() => {
+          el.style.transform = "";
+        });
+      }
+    };
+    document.addEventListener("visibilitychange", repaint);
+    window.addEventListener("pageshow", repaint);
+    return () => {
+      document.removeEventListener("visibilitychange", repaint);
+      window.removeEventListener("pageshow", repaint);
+    };
+  }, []);
+
   const saveBookPref = useCallback(
     (slug: string, patch: { rendition?: string; lang?: string }) => {
       setBookPrefs((prev) => ({

@@ -5,6 +5,7 @@ import {
   Box,
   CircularProgress,
   IconButton,
+  Skeleton,
   Slider,
   Typography,
 } from "@mui/material";
@@ -345,18 +346,23 @@ export function AudiobookPlayer(
             fontSize: "1.05rem",
           }}
         >
-          {loading && sentences.length === 0
+          {sentences.length === 0
             ? (
+              // No sentences yet — the chapter's text is still loading (or being
+              // synthesized). Show a shimmer skeleton of text lines, NOT a blank
+              // column or a lone spinner, so the read-along never reads as empty.
               <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 1.5,
-                  color: "text.secondary",
-                }}
+                aria-label={t("audiobook.loading")}
+                sx={{ display: "flex", flexDirection: "column", gap: 0.75 }}
               >
-                <CircularProgress size={20} />
-                <Typography>{t("audiobook.loading")}</Typography>
+                {[96, 88, 92, 70, 94, 84, 90, 62, 86].map((w, i) => (
+                  <Skeleton
+                    key={i}
+                    variant="text"
+                    width={`${w}%`}
+                    sx={{ fontSize: "1.2rem" }}
+                  />
+                ))}
               </Box>
             )
             : (
