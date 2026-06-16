@@ -1376,17 +1376,24 @@
 
 /* In-place read-along highlight (CSS Custom Highlight API; see
    useInPlaceHighlight). Highlight pseudo-elements only accept a small set of
-   properties (background-color honored, border-radius not). Two layers: the
-   whole current sentence is a faint context tint; the "read-so-far" wipe within
-   it (registered later → painted on top) is the strong current-position cue. */
+   properties (background-color honored, border-radius not). THREE layers, by
+   ascending paint priority: (0) the read trail — every already-read sentence at
+   a soft tint, a reading-progress cue; (1) the current sentence, medium tint, the
+   focus; (2) the "read-so-far" wipe within it, the strong current-position cue. */
+::highlight(lv-read-done) {
+  background-color: rgba(240, 168, 40, 0.13);
+}
 ::highlight(lv-reading) {
-  background-color: rgba(240, 168, 40, 0.16);
+  background-color: rgba(240, 168, 40, 0.2);
 }
 ::highlight(lv-reading-active) {
   background-color: rgba(240, 168, 40, 0.42);
 }
+:root[data-color-scheme="dark"] ::highlight(lv-read-done) {
+  background-color: rgba(255, 200, 80, 0.1);
+}
 :root[data-color-scheme="dark"] ::highlight(lv-reading) {
-  background-color: rgba(255, 200, 80, 0.14);
+  background-color: rgba(255, 200, 80, 0.18);
 }
 :root[data-color-scheme="dark"] ::highlight(lv-reading-active) {
   background-color: rgba(255, 200, 80, 0.38);

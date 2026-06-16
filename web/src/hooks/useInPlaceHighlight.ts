@@ -15,11 +15,15 @@ import type { Mark, SpokenUnits, Unit } from "@/types";
 // active, so normal reading is completely unaffected.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const HL_SENTENCE = "lv-reading"; // whole current sentence (dominant cue)
-const HL_ACTIVE = "lv-reading-active"; // read-so-far wipe within the sentence
+const HL_DONE = "lv-read-done"; // every already-read sentence (the progress trail)
+const HL_SENTENCE = "lv-reading"; // whole current sentence (focus)
+const HL_ACTIVE = "lv-reading-active"; // read-so-far wipe within the current sentence
 
 interface HighlightLike {
   add(range: Range): void;
+  // Paint order: higher wins. done(0) < sentence(1) < active(2), so the strong
+  // wipe sits on top of the sentence tint, both above the soft read trail.
+  priority?: number;
 }
 /** The CSS Custom Highlight API, typed minimally + feature-detected (so we never
  *  conflict with the DOM lib's own defs and degrade cleanly where unsupported,
@@ -27,11 +31,16 @@ interface HighlightLike {
 function highlightApi(): {
   set: (name: string, h: HighlightLike) => void;
   remove: (name: string) => void;
+  clearAll: () => void;
   make: () => HighlightLike;
 } | null {
   const g = globalThis as unknown as {
     CSS?: {
-      highlights?: { set(n: string, h: HighlightLike): void; delete(n: string): void };
+      highlights?: {
+        set(n: string, h: HighlightLike): void;
+        delete(n: string): void;
+        clear(): void;
+      };
     };
     Highlight?: { new (): HighlightLike };
   };
@@ -41,6 +50,7 @@ function highlightApi(): {
   return {
     set: (name, h) => reg.set(name, h),
     remove: (name) => reg.delete(name),
+    clearAll: () => reg.clear(),
     make: () => new Ctor(),
   };
 }
@@ -99,6 +109,17 @@ function rangeOf(loc: Located, fromFrac: number, toFrac: number): Range | null {
   return range;
 }
 
+/** Full DOM range of a prose unit located in the rendered markdown — null if the
+ *  unit is non-prose or its text can't be matched in its block (markup mismatch).
+ *  Blocks must already be numbered with `data-blk`. */
+function unitRange(body: HTMLElement, unit: Unit | undefined): Range | null {
+  if (!unit || unit.kind !== "prose" || !unit.text.trim()) return null;
+  const blockEl = body.querySelector<HTMLElement>(`[data-blk="${unit.blk}"]`);
+  if (!blockEl) return null;
+  const loc = locateText(blockEl, unit.text);
+  return loc ? rangeOf(loc, 0, 1) : null;
+}
+
 export function useInPlaceHighlight(
   scrollerRef: RefObject<HTMLElement | null>,
   currentPath: string | null,
@@ -140,15 +161,24 @@ export function useInPlaceHighlight(
     };
   }, [active, nowPlaying?.chapterPath, nowPlaying?.lang]);
 
-  // Paint the highlight(s) for the current unit and keep it on screen.
+  // Trail + focus. Rebuilt only when the CURRENT sentence changes (NOT every
+  // audio tick). Reading leaves a progress trail: every already-read sentence
+  // keeps a soft tint, the current sentence a medium tint; the per-tick wipe
+  // (effect below) layers the strong read-so-far cue on top.
+  //
+  // Why clear ALL then repaint: iOS WebKit's CSS-Highlight invalidation is
+  // unreliable — replacing a moving highlight left stale paint of already-passed
+  // sentences as "ghosts" (the patchy trail the user saw). Clearing the whole
+  // registry on each sentence change forces a clean repaint; the read trail is
+  // then rebuilt deterministically (and only grows forward), so what shows always
+  // matches the real read position — no ghosts, no gaps on bold lead-ins.
   useEffect(() => {
     const api = highlightApi();
     const body = scrollerRef.current?.querySelector<HTMLElement>(
       ".markdown-body",
     );
     if (!active || !api || !body) {
-      api?.remove(HL_SENTENCE);
-      api?.remove(HL_ACTIVE);
+      api?.clearAll();
       return undefined;
     }
     // Number top-level blocks in document order — the same order `spoken_units`
@@ -158,71 +188,90 @@ export function useInPlaceHighlight(
       (blocks[i] as HTMLElement).dataset["blk"] = String(i);
     }
 
-    const clear = (): void => {
-      api.remove(HL_SENTENCE);
-      api.remove(HL_ACTIVE);
-    };
+    // The read trail: every sentence before the current one, soft tint.
+    const done = api.make();
+    done.priority = 0;
+    for (let i = 0; i < currentIdx; i++) {
+      const r = unitRange(body, units[i]);
+      if (r) done.add(r);
+    }
+
+    // The current sentence (full extent), medium tint — the focus. Non-prose
+    // blocks (image / code / table / math) outline the whole block instead.
     const unit = units[currentIdx];
-    if (!unit) {
-      clear();
-      return undefined;
-    }
-    const blockEl = body.querySelector<HTMLElement>(`[data-blk="${unit.blk}"]`);
-    if (!blockEl) {
-      clear();
-      return undefined;
-    }
-
-    const loc = unit.kind === "prose" && unit.text.trim()
-      ? locateText(blockEl, unit.text)
+    const blockEl = unit
+      ? body.querySelector<HTMLElement>(`[data-blk="${unit.blk}"]`)
       : null;
-
-    if (loc) {
-      // Whole sentence (dominant), plus the read-so-far wipe by time fraction.
-      const full = rangeOf(loc, 0, 1);
-      if (full) {
-        const h = api.make();
-        h.add(full);
-        api.set(HL_SENTENCE, h);
+    const sentence = api.make();
+    sentence.priority = 1;
+    if (unit && blockEl) {
+      const r = unitRange(body, unit);
+      if (r) {
+        sentence.add(r);
+      } else if (unit.kind !== "prose") {
+        const block = document.createRange();
+        block.selectNodeContents(blockEl);
+        sentence.add(block);
       }
-      const mk = marks[currentIdx];
-      const span = mk ? mk.end_ms - mk.start_ms : 0;
-      const frac = mk && span > 0
-        ? Math.min(1, Math.max(0, (currentTime * 1000 - mk.start_ms) / span))
-        : 1;
-      const wipe = rangeOf(loc, 0, frac);
-      if (wipe) {
-        const h = api.make();
-        h.add(wipe);
-        api.set(HL_ACTIVE, h);
-      }
-    } else if (unit.kind !== "prose") {
-      // A non-prose block (image / code / table / math): outline the whole
-      // block so the reader sees where the narration is pointing.
-      const range = document.createRange();
-      range.selectNodeContents(blockEl);
-      const h = api.make();
-      h.add(range);
-      api.set(HL_SENTENCE, h);
-      api.remove(HL_ACTIVE);
-    } else {
-      // A prose sentence we couldn't locate in its block (text/markup
-      // mismatch): show NO highlight rather than lighting up the whole block.
-      clear();
     }
 
-    // Follow-scroll only when the spoken block has drifted off screen, so we
-    // don't fight a reader who scrolled back to re-read.
+    api.clearAll();
+    api.set(HL_DONE, done);
+    api.set(HL_SENTENCE, sentence);
+
+    // Follow-scroll on sentence change only, and only while playing, so we don't
+    // fight a reader who scrolled back to re-read.
     const scroller = scrollerRef.current;
-    if (playing && scroller) {
+    if (playing && scroller && blockEl) {
       const r = blockEl.getBoundingClientRect();
       const s = scroller.getBoundingClientRect();
       if (r.top < s.top + 40 || r.bottom > s.bottom - 40) {
         blockEl.scrollIntoView({ block: "center", behavior: "smooth" });
       }
     }
-    return clear;
-  }, [active, units, marks, currentIdx, currentTime, playing, scrollerRef]);
+    return () => api.clearAll();
+  }, [active, units, currentIdx, playing, scrollerRef]);
+
+  // The read-so-far wipe WITHIN the current sentence — strongest tint, the
+  // precise position. Updates every audio tick: within a sentence it only GROWS
+  // (each range is a superset of the last), so replacing it never needs a clear
+  // and never ghosts. Moving to the next sentence is the trail effect's job
+  // (with its clear()), so this only ever paints the current sentence.
+  useEffect(() => {
+    const api = highlightApi();
+    const body = scrollerRef.current?.querySelector<HTMLElement>(
+      ".markdown-body",
+    );
+    if (!active || !api || !body) return undefined;
+    const unit = units[currentIdx];
+    if (!unit || unit.kind !== "prose" || !unit.text.trim()) {
+      api.remove(HL_ACTIVE);
+      return undefined;
+    }
+    const blockEl = body.querySelector<HTMLElement>(`[data-blk="${unit.blk}"]`);
+    if (!blockEl) {
+      api.remove(HL_ACTIVE);
+      return undefined;
+    }
+    const loc = locateText(blockEl, unit.text);
+    if (!loc) {
+      api.remove(HL_ACTIVE);
+      return undefined;
+    }
+    const mk = marks[currentIdx];
+    const span = mk ? mk.end_ms - mk.start_ms : 0;
+    const frac = mk && span > 0
+      ? Math.min(1, Math.max(0, (currentTime * 1000 - mk.start_ms) / span))
+      : 1;
+    const wipe = rangeOf(loc, 0, frac);
+    if (wipe) {
+      const h = api.make();
+      h.priority = 2;
+      h.add(wipe);
+      api.set(HL_ACTIVE, h);
+    }
+    return undefined;
+  }, [active, units, marks, currentIdx, currentTime, scrollerRef]);
 
   // Tap-to-seek: only WHILE PLAYING, clicking a paragraph jumps playback to its
   // first sentence — the "follow my eyes" reposition the user wants while
