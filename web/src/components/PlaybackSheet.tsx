@@ -9,7 +9,6 @@ import {
   Typography,
 } from "@mui/material";
 import {
-  Cast as CastIcon,
   Pause,
   PlayArrow,
   SkipNext,
@@ -56,8 +55,6 @@ export function PlaybackSheet({
     seek,
     prevChapter,
     nextChapter,
-    playingElsewhere,
-    playHere,
     stop,
   } = useAudioPlayer();
   // Stop drops the now-playing + resume position, so it asks first (a stray tap
@@ -109,9 +106,7 @@ export function PlaybackSheet({
             <Typography variant="caption" color="text.secondary" noWrap
               sx={{ display: "block" }}
             >
-              {playingElsewhere
-                ? t("audiobook.playingElsewhere", { device: playingElsewhere.label })
-                : nowPlaying.bookLabel}
+              {nowPlaying.bookLabel}
             </Typography>
           </Box>
         </Box>
@@ -168,7 +163,7 @@ export function PlaybackSheet({
             <Replay15Icon sx={{ fontSize: rem(26) }} />
           </IconButton>
           <IconButton
-            onClick={() => (playingElsewhere ? playHere() : togglePlay())}
+            onClick={() => togglePlay()}
             aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
             sx={{
               width: tap(64),
@@ -180,8 +175,6 @@ export function PlaybackSheet({
           >
             {loading
               ? <CircularProgress size={26} color="inherit" />
-              : playingElsewhere
-              ? <CastIcon sx={{ fontSize: rem(30) }} />
               : playing
               ? <Pause sx={{ fontSize: rem(34) }} />
               : <PlayArrow sx={{ fontSize: rem(34) }} />}

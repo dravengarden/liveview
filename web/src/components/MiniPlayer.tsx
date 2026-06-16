@@ -8,7 +8,6 @@ import {
   Typography,
 } from "@mui/material";
 import {
-  Cast as CastIcon,
   Headphones as AudiobookIcon,
   Pause,
   PlayArrow,
@@ -59,8 +58,6 @@ export function MiniPlayer(
     togglePlay,
     nextChapter,
     prevChapter,
-    playingElsewhere,
-    playHere,
   } = useAudioPlayer();
 
   if (expanded || !nowPlaying || !onPlayingPage) return null;
@@ -155,15 +152,11 @@ export function MiniPlayer(
             </Typography>
             <Typography
               variant="caption"
-              color={playingElsewhere ? "primary.main" : "text.secondary"}
+              color="text.secondary"
               noWrap
               sx={{ display: "block" }}
             >
-              {playingElsewhere
-                ? t("audiobook.playingElsewhere", {
-                  device: playingElsewhere.label,
-                })
-                : nowPlaying.bookLabel}
+              {nowPlaying.bookLabel}
             </Typography>
           </Box>
         </ButtonBase>
@@ -190,19 +183,13 @@ export function MiniPlayer(
             <SkipPrevious sx={{ fontSize: rem(34) }} />
           </IconButton>
           <IconButton
-            aria-label={playingElsewhere
-              ? t("audiobook.playHere")
-              : playing
-              ? t("audiobook.pause")
-              : t("audiobook.play")}
-            onClick={playingElsewhere ? playHere : togglePlay}
+            aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
+            onClick={togglePlay}
             color="primary"
             sx={{ width: 60, height: 60 }}
           >
-            {loading ? <CircularProgress size={30} /> : playingElsewhere
-              // Take-over affordance: a cast/handoff look so it reads as "pull
-              // playback here" rather than a plain resume.
-              ? <CastIcon sx={{ fontSize: rem(34) }} />
+            {loading
+              ? <CircularProgress size={30} />
               : playing
               ? <Pause sx={{ fontSize: rem(39) }} />
               : <PlayArrow sx={{ fontSize: rem(39) }} />}
