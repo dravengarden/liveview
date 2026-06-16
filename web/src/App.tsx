@@ -21,10 +21,6 @@ import { alpha } from "@mui/material/styles";
 import {
   Close as CloseIcon,
   Headphones as AudiobookIcon,
-  MenuBook as ReadIcon,
-  Pause as PauseIcon,
-  PlayArrow as PlayIcon,
-  Tune as TuneIcon,
 } from "@mui/icons-material";
 import {
   AudiobookPlayer,
@@ -390,8 +386,7 @@ export function App(): React.JSX.Element {
     playChapter: audioPlayChapter,
     syncNotice,
     nowPlaying,
-    playing,
-    togglePlay,
+    stop: stopPlayback,
   } = useAudioPlayer();
   // Mirror of `nowPlaying` for the view→engine effect's guard. That effect must
   // react ONLY to view-led navigation (currentPath), never to engine-led chapter
@@ -1342,8 +1337,6 @@ export function App(): React.JSX.Element {
   // which open the global listening popup for this book.
   const hasAudio = bookRenditions.some((r) => r.kind === "audio");
   const hasText = bookRenditions.some((r) => r.kind === "text");
-  // Show the read/listen switch only when the book offers both renditions.
-  const showRenditionToggle = hasAudio && hasText;
 
   // Tapping the floating bubble's artwork returns to the playing book's inline
   // audio page (re-entering at the chapter it's on).
@@ -1373,111 +1366,66 @@ export function App(): React.JSX.Element {
     [activeSlug, rendition, openAudiobook, enterBook, saveBookPref],
   );
 
-  // In-book top-bar actions: the read/listen switch (when the book has both
-  // renditions) + the shared settings affordance.
   // Read-aloud of THIS text chapter is "active" when the engine is on it (text
-  // rendition, same path) — playing OR paused. The navbar control reflects that
-  // state and (when active) the floating now-playing bubble is suppressed, since
-  // the bar already represents it: one listen affordance, not two headphones.
+  // rendition, same path) — playing OR paused. Suppresses the floating bubble
+  // (the in-place <PlaybackBar> already represents it: one listen handle, not two).
   const readingThisInPlace = nowPlaying?.rendition === "text" &&
     nowPlaying.chapterPath === currentPath;
 
+  // The book is being LISTENED TO right now: either we're on its audiobook page
+  // (audio rendition) or read-aloud is narrating this very text chapter.
+  const listening = rendition === "audio" || readingThisInPlace;
+
+  // ONE headphones switch unifies what used to be a read-aloud ▶/🎚 cluster AND a
+  // [read|listen] segmented toggle. Tapping it = "listen to this book"; the
+  // section being listened to grows the shared <PlaybackBar> (audiobook page OR
+  // in-place on the text reader), so book + audiobook playback are one experience.
+  //  • book HAS an audio rendition → listen enters the curated audiobook page (and
+  //    tapping again, while there, returns to reading — the audio keeps going in
+  //    the bubble). The accepted trade-off: an audio book listens on its stripped
+  //    read-along page, not the rich markdown.
+  //  • text-only book → listen TTS-narrates the rich text in place (bar + in-place
+  //    highlight); tapping again stops it (the bar's ⏯ is for pause).
+  const onToggleListen = useCallback(() => {
+    if (rendition === "audio") {
+      // On the audiobook page → return to reading (the audio keeps going in the
+      // bubble). An audio-only book has no text to return to, so just stop.
+      if (hasText) switchRendition("text");
+      else stopPlayback();
+    } else if (hasAudio) {
+      switchRendition("audio"); // text page, book has audio → curated audiobook page
+    } else if (readingThisInPlace) {
+      stopPlayback(); // switch the in-place read-aloud off
+    } else {
+      handleReadAloud(); // start in-place TTS on this text page
+    }
+  }, [
+    rendition,
+    hasText,
+    hasAudio,
+    readingThisInPlace,
+    switchRendition,
+    stopPlayback,
+    handleReadAloud,
+  ]);
+
   const bookActions = (
     <>
-      {/* Listen control for the current rich-text page (read-aloud, in-place
-          highlight on the rendered markdown). Lives here in the bar — NOT a
-          floating FAB over the content. Only on the text rendition (the audio
-          read-along page has its own transport).
-          • idle (not reading this chapter) → ▶ start read-aloud.
-          • active → ⏸/▶ one-tap play/pause, plus a 🎚 that opens the unified
-            PlaybackSheet (speed, sleep, skip, scrubber) — the SAME panel the
-            floating bubble opens, so playback config lives in exactly one place. */}
-      {rendition === "text" && currentPath && (
-        readingThisInPlace
-          ? (
-            <>
-              <IconButton
-                aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
-                aria-pressed={playing}
-                onClick={() => togglePlay()}
-                sx={{ width: 40, height: 40, color: "primary.main" }}
-              >
-                {playing
-                  ? <PauseIcon sx={{ fontSize: rem(24) }} />
-                  : <PlayIcon sx={{ fontSize: rem(24) }} />}
-              </IconButton>
-              <IconButton
-                aria-label={t("audiobook.playback")}
-                onClick={() => setPlaybackSheetOpen(true)}
-                sx={{ width: 40, height: 40, color: "text.secondary" }}
-              >
-                <TuneIcon sx={{ fontSize: rem(22) }} />
-              </IconButton>
-            </>
-          )
-          : (
-            <IconButton
-              aria-label={t("audiobook.readAloud")}
-              onClick={() => handleReadAloud()}
-              sx={{ width: 40, height: 40, color: "text.secondary" }}
-            >
-              <PlayIcon sx={{ fontSize: rem(24) }} />
-            </IconButton>
-          )
-      )}
-      {showRenditionToggle && (
-        // Read ↔ listen as a soft pill segmented control: a subtle rounded
-        // track with two circular thumbs, the active one an accent disc. Lighter
-        // and friendlier than the boxy ToggleButtonGroup it replaces.
-        <Box
+      {/* The single "listen" headphones switch — same glyph as the floating
+          now-playing bubble, so the listen affordance is one consistent icon. */}
+      {currentPath && (hasAudio || hasText) && (
+        <IconButton
+          aria-label={listening ? t("audiobook.read") : t("audiobook.listen")}
+          aria-pressed={listening}
+          onClick={onToggleListen}
           sx={{
-            display: "flex",
-            alignItems: "center",
-            gap: "3px",
-            p: "3px",
-            borderRadius: 999,
-            bgcolor: "action.hover",
+            width: 40,
+            height: 40,
+            color: listening ? "primary.main" : "text.secondary",
           }}
         >
-          {([
-            // Icon-only read ↔ listen switch (no text — the glyphs are clear).
-            // Glyphs are rem so they scale with the font setting like every other
-            // icon; the thumb (px) stays fixed so the tap target holds.
-            {
-              kind: "text",
-              icon: <ReadIcon sx={{ fontSize: rem(20) }} />,
-              label: t("audiobook.read"),
-            },
-            {
-              kind: "audio",
-              icon: <AudiobookIcon sx={{ fontSize: rem(20) }} />,
-              label: t("audiobook.open"),
-            },
-          ] as const).map(({ kind, icon, label }) => {
-            const active = rendition === kind;
-            return (
-              <IconButton
-                key={kind}
-                aria-label={label}
-                aria-pressed={active}
-                onClick={() => switchRendition(kind)}
-                sx={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 999,
-                  color: active ? "primary.contrastText" : "text.secondary",
-                  bgcolor: active ? "primary.main" : "transparent",
-                  transition: "background-color .18s, color .18s",
-                  "&:hover": {
-                    bgcolor: active ? "primary.main" : "action.selected",
-                  },
-                }}
-              >
-                {icon}
-              </IconButton>
-            );
-          })}
-        </Box>
+          <AudiobookIcon sx={{ fontSize: rem(22) }} />
+        </IconButton>
       )}
       {settingsButton}
     </>
@@ -1702,6 +1650,7 @@ export function App(): React.JSX.Element {
                     lineHeight={menuBarSettings.lineHeight}
                     savedScroll={savedScroll}
                     onSaveScroll={saveProgress}
+                    navbarAtBottom={navbarAtBottom}
                   />
                 )}
             </NavShell>

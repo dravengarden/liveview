@@ -18,6 +18,8 @@ export interface ReadAlongFollow {
   following: boolean;
   /** Re-centre on the spoken line and resume following. */
   jumpToCurrent: () => void;
+  /** Toggle follow: on→off (let the reader wander), off→on (re-centre + stick). */
+  toggleFollow: () => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -477,5 +479,13 @@ export function useInPlaceHighlight(
     }
   }, [scrollerRef]);
 
-  return { active, following, jumpToCurrent };
+  // The shared <PlaybackBar>'s follow toggle: ON re-centres + sticks, tapping
+  // again while following turns it off (lets the reader wander without the page
+  // tugging back), symmetric with the audiobook read-along's follow button.
+  const toggleFollow = useCallback(() => {
+    if (following) setFollowing(false);
+    else jumpToCurrent();
+  }, [following, jumpToCurrent]);
+
+  return { active, following, jumpToCurrent, toggleFollow };
 }

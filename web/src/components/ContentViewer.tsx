@@ -48,6 +48,9 @@ interface ContentViewerProps {
   savedScroll?: ((path: string) => number | undefined) | undefined;
   /** Reading-progress: report current scroll ratio for a doc path. */
   onSaveScroll?: ((path: string, ratio: number) => void) | undefined;
+  /** True when the nav bar sits at the bottom — forwarded to the read-aloud
+   *  <PlaybackBar> overlay so it drops its own home-indicator inset. */
+  navbarAtBottom?: boolean | undefined;
 }
 
 /** Spinner shown while a code-split viewer chunk downloads. */
@@ -77,6 +80,7 @@ export function ContentViewer({
   lineHeight,
   savedScroll,
   onSaveScroll,
+  navbarAtBottom,
 }: ContentViewerProps): React.JSX.Element {
   const { t } = useI18n();
   if (!currentPath) {
@@ -109,6 +113,7 @@ export function ContentViewer({
           lineHeight={lineHeight}
           savedScroll={savedScroll}
           onSaveScroll={onSaveScroll}
+          navbarAtBottom={navbarAtBottom}
         />
       );
       break;

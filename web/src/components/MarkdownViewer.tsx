@@ -4,6 +4,7 @@ import { KeyboardArrowDown } from "@mui/icons-material";
 import { READING_COLUMN_MAX } from "@/types";
 import { ImageLightbox } from "../_shell";
 import { ScrollToTopButton } from "./ScrollToTopButton";
+import { PlaybackBar } from "./PlaybackBar";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { useInPlaceHighlight } from "@/hooks/useInPlaceHighlight";
 import { useI18n } from "@/i18n";
@@ -43,6 +44,9 @@ interface MarkdownViewerProps {
   savedScroll?: ((path: string) => number | undefined) | undefined;
   /** Report the current scroll ratio (0..1) for a doc path (debounced upstream). */
   onSaveScroll?: ((path: string, ratio: number) => void) | undefined;
+  /** True when the nav bar sits at the bottom — passed to the read-aloud
+   *  <PlaybackBar> so it drops its own home-indicator inset (the bar below owns it). */
+  navbarAtBottom?: boolean | undefined;
 }
 
 // Font stack for mermaid SVG labels. Why: mermaid's built-in default is
@@ -162,6 +166,7 @@ export function MarkdownViewer({
   lineHeight,
   savedScroll,
   onSaveScroll,
+  navbarAtBottom,
 }: MarkdownViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   // Wrapper that hosts the reading-progress bar; carries the --lv-read-progress
@@ -765,16 +770,21 @@ export function MarkdownViewer({
             overflow: "auto",
             // Vertical padding fixed; horizontal padding IS the reading margin.
             pt: { xs: 2, md: 4 },
-            // Foot padding ADDS the frosted bottom bar's height on the mobile tier
-            // (--shell-bar-h, published by NavShell on the content region; 0 on
-            // desktop / before measured) on top of the base breathing room, so the
-            // last paragraph scrolls fully clear of the frosted overlay bar yet the
-            // text still scrolls UNDER it. Restore-by-ratio is unaffected (it reads
+            // Foot padding ADDS the two frosted overlays the text scrolls under:
+            // the read-aloud <PlaybackBar> (--lv-transport-h; 0 unless read-aloud
+            // is on this chapter) and the NavShell bar below it (--shell-bar-h;
+            // mobile tier only, 0 on desktop / before measured) — on top of the
+            // base breathing room, so the last paragraph clears both yet the text
+            // still scrolls UNDER them. Restore-by-ratio is unaffected (it reads
             // scrollHeight after this padding is in).
             pb: {
-              xs: "calc(16px + var(--shell-bar-h, 0px))",
-              md: "calc(32px + var(--shell-bar-h, 0px))",
+              xs: "calc(16px + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
+              md: "calc(32px + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
             },
+            // Keep the spoken-line auto-centre (read-aloud follow) from parking the
+            // narrated sentence UNDER the bar near the chapter's end.
+            scrollPaddingBottom:
+              "calc(var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
             px: `${contentMaxWidth}px`,
             "& img": {
               cursor: "zoom-in",
@@ -835,7 +845,10 @@ export function MarkdownViewer({
             }}
             sx={{
               position: "absolute",
-              bottom: "calc(20px + var(--shell-bar-h, 0px))",
+              // Lift above BOTH the read-aloud bar (--lv-transport-h) and the nav
+              // bar (--shell-bar-h) so the pill never hides behind the transport.
+              bottom:
+                "calc(20px + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
               left: "50%",
               transform: "translateX(-50%)",
               zIndex: 6,
@@ -859,6 +872,22 @@ export function MarkdownViewer({
             <KeyboardArrowDown sx={{ fontSize: "1.25rem" }} />
             {t("audiobook.backToNarration")}
           </Box>
+        )}
+        {
+          /* Read-aloud transport — the SAME shared <PlaybackBar> the audiobook
+            read-along page uses, pinned as a frosted overlay over the bottom of
+            this reader while read-aloud narrates THIS chapter (in-place rich-text
+            highlight via useInPlaceHighlight). Book + audiobook playback now share
+            one bar. The follow toggle drives the in-place sticky-follow. */
+        }
+        {follow.active && (
+          <PlaybackBar
+            navbarAtBottom={navbarAtBottom}
+            follow={{
+              following: follow.following,
+              onToggle: follow.toggleFollow,
+            }}
+          />
         )}
       </Box>
       <ImageLightbox
