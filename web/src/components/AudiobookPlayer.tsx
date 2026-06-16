@@ -297,7 +297,7 @@ export function AudiobookPlayer(
       aria-label={t("audiobook.seek")}
       sx={{
         flex: 1,
-        py: 1,
+        py: 0.5,
         "& .MuiSlider-thumb": { width: 20, height: 20 },
         "& .MuiSlider-rail, & .MuiSlider-track": { height: 6 },
       }}
@@ -516,9 +516,9 @@ export function AudiobookPlayer(
           // corner radius.
           pl: "max(env(safe-area-inset-left, 0px), 12px)",
           pr: "max(env(safe-area-inset-right, 0px), 12px)",
-          // Top breathing scales with the font. Tighter in the two-row (narrow)
-          // layout so the stacked rows read compact on a phone.
-          pt: oneRow ? rem(4) : rem(1.5),
+          // Top breathing — kept tight so the transport band is compact on every
+          // size (a hair more on the one-row layout where it's the only padding).
+          pt: oneRow ? rem(1.5) : rem(0.5),
           // Bottom inset: when a bottom nav bar sits below us it already clears
           // the home indicator, so just a hair of breathing room (no doubled
           // gap). Otherwise (nav bar on top, player at the screen edge) sit ~8px
