@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Box, Skeleton } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { PlaybackBar } from "./PlaybackBar";
+import { ScrollToTopButton } from "./ScrollToTopButton";
 import { useAudioPlayer } from "@/audio/player";
 import { READING_COLUMN_MAX } from "@/types";
 import { useI18n } from "@/i18n";
@@ -219,6 +220,15 @@ export function AudiobookPlayer(
             )}
         </Box>
       </Box>
+
+      {/* Reliable "back to chapter top": iOS reserves the status-bar tap (and it
+          never reaches an inner scroll container anyway), so the read-along needs
+          the same explicit FAB the text reader has. Lifted above BOTH the
+          transport (--lv-transport-h) and the nav bar (--shell-bar-h). */}
+      <ScrollToTopButton
+        targetRef={scrollRef}
+        bottomLift="calc(var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))"
+      />
 
       <PlaybackBar
         navbarAtBottom={navbarAtBottom}
