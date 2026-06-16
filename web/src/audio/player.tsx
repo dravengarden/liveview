@@ -603,6 +603,20 @@ export function AudioPlayerProvider(
     };
   }, [goTo]);
 
+  // Keep the play/pause button honest under an audio-session INTERRUPTION (a
+  // phone call, Siri, another media app taking over). iOS pauses the <audio>
+  // element on an interruption but often fires NO `pause` event, so the events
+  // above miss it and the button stays stuck on "playing" while nothing plays.
+  // Poll the element's real `paused` while we believe we're playing and sync —
+  // cheap (one bool read/sec), and the interval stops itself the moment it does.
+  useEffect(() => {
+    if (!playing) return undefined;
+    const id = window.setInterval(() => {
+      if (audioRef.current?.paused) setPlaying(false);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [playing]);
+
   // Startup lifecycle for the server-synced audio stores: HYDRATE (load each
   // store's device-local mirror for an instant first paint) → resume the local
   // session PAUSED → CONNECT (pull the server + reconcile + live-subscribe). The
