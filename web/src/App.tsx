@@ -21,6 +21,7 @@ import { alpha } from "@mui/material/styles";
 import {
   Close as CloseIcon,
   Headphones as AudiobookIcon,
+  RecordVoiceOver as ReadAloudIcon,
 } from "@mui/icons-material";
 import {
   AudiobookPlayer,
@@ -1372,56 +1373,60 @@ export function App(): React.JSX.Element {
   const readingThisInPlace = nowPlaying?.rendition === "text" &&
     nowPlaying.chapterPath === currentPath;
 
-  // The book is being LISTENED TO right now: either we're on its audiobook page
-  // (audio rendition) or read-aloud is narrating this very text chapter.
-  const listening = rendition === "audio" || readingThisInPlace;
+  // Two ORTHOGONAL axes, never conflated into one button (the v181 mistake):
+  //
+  //  🗣 read-aloud — VOICE the current rich-text page in place (TTS + in-place
+  //     highlight, the shared <PlaybackBar>). Always means exactly this; never
+  //     navigates. Tapping while active stops it. Shown on any text edition, so a
+  //     book that ALSO has a curated audiobook can still be read aloud in place.
+  //
+  //  🎧 audiobook — the EDITION switch text ⇄ curated audiobook page. Only when
+  //     the book offers both renditions (the audiobook is a separate spine with
+  //     its own audio; switching is navigation, not "voice this page").
+  const onReadAloud = useCallback(() => {
+    if (readingThisInPlace) stopPlayback();
+    else handleReadAloud();
+  }, [readingThisInPlace, stopPlayback, handleReadAloud]);
 
-  // ONE headphones switch unifies what used to be a read-aloud ▶/🎚 cluster AND a
-  // [read|listen] segmented toggle. Tapping it = "listen to this book"; the
-  // section being listened to grows the shared <PlaybackBar> (audiobook page OR
-  // in-place on the text reader), so book + audiobook playback are one experience.
-  //  • book HAS an audio rendition → listen enters the curated audiobook page (and
-  //    tapping again, while there, returns to reading — the audio keeps going in
-  //    the bubble). The accepted trade-off: an audio book listens on its stripped
-  //    read-along page, not the rich markdown.
-  //  • text-only book → listen TTS-narrates the rich text in place (bar + in-place
-  //    highlight); tapping again stops it (the bar's ⏯ is for pause).
-  const onToggleListen = useCallback(() => {
-    if (rendition === "audio") {
-      // On the audiobook page → return to reading (the audio keeps going in the
-      // bubble). An audio-only book has no text to return to, so just stop.
-      if (hasText) switchRendition("text");
-      else stopPlayback();
-    } else if (hasAudio) {
-      switchRendition("audio"); // text page, book has audio → curated audiobook page
-    } else if (readingThisInPlace) {
-      stopPlayback(); // switch the in-place read-aloud off
-    } else {
-      handleReadAloud(); // start in-place TTS on this text page
-    }
-  }, [
-    rendition,
-    hasText,
-    hasAudio,
-    readingThisInPlace,
-    switchRendition,
-    stopPlayback,
-    handleReadAloud,
-  ]);
+  const onAudiobookEdition = useCallback(() => {
+    switchRendition(rendition === "audio" ? "text" : "audio");
+  }, [rendition, switchRendition]);
 
   const bookActions = (
     <>
-      {/* The single "listen" headphones switch — same glyph as the floating
-          now-playing bubble, so the listen affordance is one consistent icon. */}
-      {currentPath && (hasAudio || hasText) && (
+      {/* 🗣 Read this page aloud — only on a text edition (it voices the rich
+          markdown in place). A dual-rendition book keeps this AND the 🎧 switch
+          below, because they're two distinct features. */}
+      {rendition === "text" && currentPath && hasText && (
         <IconButton
-          aria-label={listening ? t("audiobook.read") : t("audiobook.listen")}
-          aria-pressed={listening}
-          onClick={onToggleListen}
+          aria-label={readingThisInPlace
+            ? t("audiobook.stopReadAloud")
+            : t("audiobook.readAloud")}
+          aria-pressed={readingThisInPlace}
+          onClick={onReadAloud}
           sx={{
             width: 40,
             height: 40,
-            color: listening ? "primary.main" : "text.secondary",
+            color: readingThisInPlace ? "primary.main" : "text.secondary",
+          }}
+        >
+          <ReadAloudIcon sx={{ fontSize: rem(22) }} />
+        </IconButton>
+      )}
+      {/* 🎧 Audiobook edition — text ⇄ curated audiobook (same glyph as the
+          floating now-playing bubble). Only for books that offer both. Accent
+          while you're on the audiobook page. */}
+      {hasAudio && hasText && currentPath && (
+        <IconButton
+          aria-label={rendition === "audio"
+            ? t("audiobook.read")
+            : t("audiobook.open")}
+          aria-pressed={rendition === "audio"}
+          onClick={onAudiobookEdition}
+          sx={{
+            width: 40,
+            height: 40,
+            color: rendition === "audio" ? "primary.main" : "text.secondary",
           }}
         >
           <AudiobookIcon sx={{ fontSize: rem(22) }} />
