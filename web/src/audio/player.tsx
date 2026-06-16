@@ -426,7 +426,17 @@ export function AudioPlayerProvider(
             const saved = Number(
               localStorage.getItem(posKey(np.chapterPath, np.lang)) ?? "",
             );
-            if (Number.isFinite(saved) && saved > 0) audio.currentTime = saved;
+            if (Number.isFinite(saved) && saved > 0) {
+              audio.currentTime = saved;
+              // Restore the VISUAL position too — the scrubber time and the
+              // spoken-sentence index — so a PAUSED resume (e.g. after a page
+              // reload, where the session is restored paused) shows the read-along
+              // highlight at where you left off, instead of a blank page until the
+              // first timeupdate. The highlight then sits on the resume line (the
+              // paused-fill makes it clearly visible).
+              setCurrentTime(saved);
+              setCurrentIdx(markIndex(marksRef.current, saved * 1000));
+            }
             if (autoplay) {
               playAudio(
                 audio,

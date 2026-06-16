@@ -1225,15 +1225,18 @@ export function App(): React.JSX.Element {
   }, [activeBook, currentPath, lang, activeTree, uiLang, audioPlayChapter]);
 
   // B) engine → view: when the engine auto-advances into the next chapter while
-  //    you're watching THIS book's audio page, follow it (URL + sidebar). Follow
-  //    ONLY when we were already in sync (so it's the engine advancing under us),
-  //    never when we just navigated somewhere the engine isn't (effect A brings
-  //    the engine to us there). Away from the audio page, the bubble tracks it.
+  //    you're following along on THIS book's reader — the audio page OR text
+  //    read-aloud — carry the page into the next chapter (so the in-place
+  //    highlight / read-along continues there). Follow ONLY when we were already
+  //    in sync (the engine advancing under us), never when we navigated somewhere
+  //    the engine isn't (effect A brings the engine to us there). Away from the
+  //    reader, the bubble tracks it.
   const syncedChapterRef = useRef<string | null>(null);
   useEffect(() => {
     const np = nowPlaying;
+    // Only while viewing the playing book in the rendition it's playing.
     if (
-      !np || activeRendition?.kind !== "audio" || activeSlug !== np.bookSlug
+      !np || activeSlug !== np.bookSlug || activeRendition?.kind !== np.rendition
     ) {
       syncedChapterRef.current = null;
       return;
@@ -1243,16 +1246,23 @@ export function App(): React.JSX.Element {
       return;
     }
     if (syncedChapterRef.current !== currentPath) return; // we weren't in sync — don't hijack
-    setCurrentPath(np.chapterPath);
-    currentPathRef.current = np.chapterPath;
-    setUntranslated(null);
     syncedChapterRef.current = np.chapterPath;
-    const langForHash = lang || null; // always pin lang (see openFile note)
-    const renditionForHash =
-      activeBook && rendition !== activeBook.default_rendition
-        ? rendition
-        : null;
-    writeHash(np.chapterPath, langForHash, renditionForHash, true);
+    if (np.rendition === "audio") {
+      // Audio renders off the engine — just move the page (no body fetch).
+      setCurrentPath(np.chapterPath);
+      currentPathRef.current = np.chapterPath;
+      setUntranslated(null);
+      const langForHash = lang || null; // always pin lang (see openFile note)
+      const renditionForHash =
+        activeBook && rendition !== activeBook.default_rendition
+          ? rendition
+          : null;
+      writeHash(np.chapterPath, langForHash, renditionForHash, true);
+    } else {
+      // Text read-aloud: load the next chapter's markdown so the in-place
+      // highlight carries into it (sticky read-along across chapters).
+      void openFile(np.chapterPath, np.lang, "text", true);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     nowPlaying,
@@ -1262,6 +1272,7 @@ export function App(): React.JSX.Element {
     activeBook,
     rendition,
     lang,
+    openFile,
   ]);
 
   // One settings affordance reused in both chrome contexts (bookshelf header +
