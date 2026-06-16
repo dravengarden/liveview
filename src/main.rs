@@ -257,6 +257,7 @@ async fn run_sync(args: cli::SyncArgs) -> Result<(), String> {
         s3_bucket: args.s3_bucket,
         tts_cmd: args.edge_tts_cmd,
         tts_voice: args.tts_voice,
+        text_audio: args.pregen_text_audio,
         render_version: args.render_version,
     };
     let report = sync::run::run(&resolved, &cfg).await?;

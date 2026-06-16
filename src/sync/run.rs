@@ -33,6 +33,9 @@ pub struct SyncCfg {
     pub s3_bucket: String,
     pub tts_cmd: String,
     pub tts_voice: String,
+    /// Pre-generate the TEXT read-aloud audio for every markdown chapter (not just
+    /// the audiobook rendition). Big one-time backfill; incremental thereafter.
+    pub text_audio: bool,
     /// Bumped when the renderer changes, to force a full re-render.
     pub render_version: i32,
 }
@@ -61,6 +64,10 @@ struct LeafApply {
     source: PathBuf,
     /// `Some(voice)` ⇒ an audiobook `.spoken.md` (pre-generate mp3 + marks).
     voice: Option<String>,
+    /// `Some(voice)` ⇒ a TEXT markdown chapter to pre-generate read-aloud audio
+    /// for (units-driven synth, like the server's on-demand path). Set only when
+    /// `cfg.text_audio` is on. Mutually exclusive with `voice` above.
+    text_voice: Option<String>,
     /// blake3 of the source bytes (= the Merkle leaf hash input).
     content_hash: String,
 }
@@ -107,6 +114,16 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
 
     for book in &resolved.books {
         corpus_slugs.push(book.slug.clone());
+
+        // The voice text read-aloud uses for this book: its audiobook rendition's
+        // voice if any, else the global default — same choice the server's
+        // on-demand `ensure_text_audio` makes, so pre-gen ≡ on-demand output.
+        let text_voice_for_book = book
+            .renditions
+            .iter()
+            .find(|r| r.kind == RenditionKind::Audio)
+            .and_then(|r| r.voice.clone())
+            .unwrap_or_else(|| cfg.tts_voice.clone());
 
         // Cover → rustfs (content-addressed). Referenced by books.cover_hash, so
         // the orphan GC spares it (see orphan_asset_hashes).
@@ -184,15 +201,26 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                     let is_audio = rend.kind == RenditionKind::Audio && rel.ends_with(".spoken.md");
                     let voice = is_audio
                         .then(|| rend.voice.clone().unwrap_or_else(|| cfg.tts_voice.clone()));
+                    // Text read-aloud pre-gen target: a markdown chapter of the
+                    // text rendition, when enabled. (Never an audiobook chapter —
+                    // that's `voice` above.)
+                    let text_voice = (cfg.text_audio
+                        && rend.kind == RenditionKind::Text
+                        && matches!(&ft, FileType::Markdown))
+                    .then(|| text_voice_for_book.clone());
 
                     // Leaf kind folds the transform + version so a renderer or
                     // voice change re-applies the leaf even with identical source.
+                    // A text-audio leaf folds its voice too, so enabling pre-gen
+                    // (or changing the voice) re-applies the leaf and backfills it.
                     let kind = if is_audio {
                         format!(
                             "audio:{}:{}",
                             cfg.render_version,
                             voice.as_deref().unwrap_or("")
                         )
+                    } else if let Some(tv) = &text_voice {
+                        format!("text:{}:tts:{tv}", cfg.render_version)
                     } else if is_text(&ft) {
                         format!("text:{}", cfg.render_version)
                     } else {
@@ -218,6 +246,7 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                             file_type: ft,
                             source: abs,
                             voice,
+                            text_voice,
                             content_hash,
                         },
                     );
@@ -388,11 +417,12 @@ async fn apply_plan(
             .get(&leaf.path)
             .ok_or_else(|| format!("internal: no apply for {}", leaf.path))?;
         apply_leaf(a, store, obj, cfg).await?;
-        // Audio chapters land their row here but commit their Merkle node only
-        // after the slow audio pass generates the mp3 — so an interrupted run
-        // re-generates the audio rather than treating it as done. Non-audio
-        // leaves are fully applied → commit now (content first, node = marker).
-        if a.voice.is_none() {
+        // Audio chapters (audiobook OR text read-aloud pre-gen) land their row
+        // here but commit their Merkle node only after the slow audio pass
+        // generates the mp3 — so an interrupted run re-generates the audio rather
+        // than treating it as done. Leaves with no audio are fully applied →
+        // commit now (content first, node = marker).
+        if a.voice.is_none() && a.text_voice.is_none() {
             commit_leaf(store, leaf, &node_hash).await?;
             report.put += 1;
         }
@@ -423,9 +453,13 @@ async fn commit_leaf(store: &PgStore, leaf: &Leaf, node_hash: &str) -> Result<()
         .map_err(|e| format!("commit leaf node: {e}"))
 }
 
-/// Slow audio pass: for each audio chapter not yet generated (its Merkle node is
-/// absent), synthesize mp3 + marks via edge-tts, store them in rustfs, record
-/// them on the chapter, then commit the node. Resumable per chapter.
+/// Slow audio pass: for each chapter that needs audio and isn't yet generated
+/// (its Merkle node is absent), synthesize mp3 + marks via edge-tts, store them in
+/// rustfs, record them on the chapter, then commit the node. Resumable per
+/// chapter. Covers BOTH the audiobook rendition (`voice`, sentence-level script
+/// from the `.spoken.md`) and — when `cfg.text_audio` is on — the text read-aloud
+/// (`text_voice`, unit-level synth of the displayed markdown, byte-for-byte the
+/// same path the server's on-demand `ensure_text_audio` runs, so pre-gen ≡ lazy).
 async fn generate_audio(
     plan: &Plan,
     applies: &BTreeMap<String, LeafApply>,
@@ -438,7 +472,9 @@ async fn generate_audio(
         let a = applies
             .get(&leaf.path)
             .ok_or_else(|| format!("internal: no apply for {}", leaf.path))?;
-        let Some(voice) = &a.voice else { continue };
+        if a.voice.is_none() && a.text_voice.is_none() {
+            continue; // not an audio leaf
+        }
         let node_hash = crate::sync::merkle::leaf_hash(leaf);
         if store
             .get_merkle_node(&node_hash)
@@ -450,16 +486,64 @@ async fn generate_audio(
         }
         let src = std::fs::read_to_string(&a.source)
             .map_err(|e| format!("read {}: {e}", a.source.display()))?;
-        let sentences = spoken::spoken_sentences(&src);
-        let (mp3, marks) =
-            crate::server::audio::synthesize(&cfg.tts_cmd, voice, &sentences).await?;
+
+        let (mp3, marks, rendition) = if let Some(voice) = &a.voice {
+            // Audiobook: the curated `.spoken.md` script, sentence by sentence.
+            let sentences = spoken::spoken_sentences(&src);
+            let (mp3, marks) =
+                crate::server::audio::synthesize(&cfg.tts_cmd, voice, &sentences).await?;
+            (mp3, marks, "audio")
+        } else {
+            // Text read-aloud: one clip per UNIT of the displayed markdown (prose
+            // verbatim; non-prose optionally narrated, else a silent dwell), so the
+            // mark index matches the in-place highlight — identical to on-demand.
+            let voice = a.text_voice.as_deref().unwrap_or(cfg.tts_voice.as_str());
+            let units = spoken::spoken_units(&src);
+            if units.is_empty() {
+                // Nothing speakable (e.g. a pure-code chapter): mark done with no
+                // audio, so the sync doesn't retry it every run.
+                commit_leaf(store, leaf, &node_hash).await?;
+                continue;
+            }
+            let mut texts: Vec<String> = Vec::with_capacity(units.len());
+            for u in &units {
+                if u.kind == spoken::UnitKind::Prose {
+                    texts.push(u.text.clone());
+                } else {
+                    texts.push(
+                        crate::server::narrate::narrate(u.kind, &u.src, &a.lang)
+                            .await
+                            .unwrap_or_default(),
+                    );
+                }
+            }
+            // NON-fatal, unlike the audiobook above: text read-aloud pre-gen is an
+            // optimization over the server's on-demand synth, so a TTS hiccup
+            // during the whole-corpus backfill must NOT abort the content sync.
+            // Skip (leaf stays uncommitted → retried next sync); on-demand covers
+            // it meanwhile.
+            let (mp3, marks) =
+                match crate::server::audio::synthesize(&cfg.tts_cmd, voice, &texts).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(
+                            "text-audio pre-gen {}/{}: {e} — leaving it to on-demand",
+                            a.book_slug,
+                            a.rel_path
+                        );
+                        continue;
+                    }
+                };
+            (mp3, marks, "text")
+        };
+
         let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
         let audio_hash = put_blob(obj, store, mp3, "audio/mpeg").await?;
         let marks_hash = put_blob(obj, store, marks_json, "application/json").await?;
         store
             .set_chapter_audio(
                 &a.book_slug,
-                "audio",
+                rendition,
                 &a.lang,
                 &a.rel_path,
                 &audio_hash,
@@ -654,6 +738,7 @@ mod tests {
             s3_bucket: "liveview-itest".to_string(),
             tts_cmd: "edge-tts".to_string(),
             tts_voice: "zh-CN-XiaoxiaoNeural".to_string(),
+            text_audio: false,
             render_version: 1,
         })
     }

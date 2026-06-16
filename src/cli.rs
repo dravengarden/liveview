@@ -185,6 +185,20 @@ pub struct SyncArgs {
     )]
     pub tts_voice: String,
 
+    /// Pre-generate the TEXT read-aloud audio (edge-tts + marks) for every
+    /// markdown chapter during sync, so the reader's first play is instant
+    /// instead of waiting on an on-demand synth. Incremental + resumable like the
+    /// audiobook pre-gen. Off by default — enabling it triggers a large one-time
+    /// TTS backfill of the whole corpus (the server's on-demand path covers
+    /// anything not yet reached, so the reader keeps working meanwhile).
+    #[arg(
+        long,
+        env = "LIVEVIEW_PREGEN_TEXT_AUDIO",
+        action = clap::ArgAction::Set,
+        default_value_t = false
+    )]
+    pub pregen_text_audio: bool,
+
     /// Bump to force a full re-render (renderer upgrade).
     #[arg(long, default_value_t = 1)]
     pub render_version: i32,
