@@ -1,5 +1,6 @@
 import { type RefObject, useEffect, useState } from "react";
 import { Fab, Fade } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import { KeyboardArrowUp as UpIcon } from "@mui/icons-material";
 import { useI18n } from "@/i18n";
 
@@ -58,12 +59,28 @@ export function ScrollToTopButton(
           bottom:
             `calc(16px + env(safe-area-inset-bottom, 0px) + ${bottomLift})`,
           zIndex: 3,
-          // Neutral chrome (not the brand accent — it's utility, not status):
-          // a paper disc with a muted glyph that reads on any theme.
-          bgcolor: "background.paper",
+          // Frosted glass, like the floating now-playing bubble: a theme-adaptive
+          // translucent tint over a backdrop blur, so the page shows through it as
+          // glass. A hairline divider edge keeps the disc legible over busy text;
+          // a muted glyph reads on any theme.
           color: "text.secondary",
-          boxShadow: 3,
-          "&:hover": { bgcolor: "background.paper" },
+          bgcolor: (t) =>
+            alpha(
+              t.palette.background.paper,
+              t.palette.mode === "dark" ? 0.5 : 0.62,
+            ),
+          backdropFilter: "blur(16px) saturate(180%)",
+          WebkitBackdropFilter: "blur(16px) saturate(180%)",
+          border: 1,
+          borderColor: "divider",
+          boxShadow: 2,
+          "&:hover": {
+            bgcolor: (t) =>
+              alpha(
+                t.palette.background.paper,
+                t.palette.mode === "dark" ? 0.65 : 0.78,
+              ),
+          },
         }}
       >
         <UpIcon />
