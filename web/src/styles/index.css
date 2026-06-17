@@ -46,16 +46,6 @@ textarea,
   -webkit-touch-callout: default;
 }
 
-/* No rubber-band overscroll on the reader. The bounce drags content PAST the
-   bounds, under the frosted bottom nav bar + the scroll-to-top FAB, and iOS
-   re-renders their backdrop-filter blur out of sync each frame → the edge
-   shimmer/jitter (鬼畜) at the very top and bottom. A crisp stop removes it for
-   every frosted layer at once (and blocks accidental scroll-chaining / pull-to-
-   reload in the PWA). Trade-off: no bounce — incl. the read-aloud page. */
-[data-lv-scroller="reader"] {
-  overscroll-behavior-y: none;
-}
-
 /* Mobile (bottom-navbar) reading view: the in-book reader runs full-height with
    the navbar at the bottom, so its top would sit UNDER the iOS status bar /
    Dynamic Island. Add a scroll-WITH-content spacer of the top safe-area inset at

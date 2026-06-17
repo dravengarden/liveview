@@ -1,6 +1,5 @@
 import { type RefObject, useEffect, useState } from "react";
 import { Fab, Fade } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import { KeyboardArrowUp as UpIcon } from "@mui/icons-material";
 import { useI18n } from "@/i18n";
 
@@ -59,28 +58,16 @@ export function ScrollToTopButton(
           bottom:
             `calc(16px + env(safe-area-inset-bottom, 0px) + ${bottomLift})`,
           zIndex: 3,
-          // Frosted glass, like the floating now-playing bubble: a theme-adaptive
-          // translucent tint over a backdrop blur, so the page shows through it as
-          // glass. A hairline divider edge keeps the disc legible over busy text;
-          // a muted glyph reads on any theme.
+          // SOLID MUI disc (was frosted glass). The backdrop blur re-rendered out
+          // of sync with the bottom rubber-band → edge jitter; an opaque paper
+          // disc has no backdrop to re-sample, so the bounce stays smooth. A
+          // hairline divider edge + muted glyph keep it light on any theme.
           color: "text.secondary",
-          bgcolor: (t) =>
-            alpha(
-              t.palette.background.paper,
-              t.palette.mode === "dark" ? 0.5 : 0.62,
-            ),
-          backdropFilter: "blur(16px) saturate(180%)",
-          WebkitBackdropFilter: "blur(16px) saturate(180%)",
+          bgcolor: "background.paper",
           border: 1,
           borderColor: "divider",
           boxShadow: 2,
-          "&:hover": {
-            bgcolor: (t) =>
-              alpha(
-                t.palette.background.paper,
-                t.palette.mode === "dark" ? 0.65 : 0.78,
-              ),
-          },
+          "&:hover": { bgcolor: "background.paper" },
         }}
       >
         <UpIcon />
