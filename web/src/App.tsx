@@ -17,6 +17,7 @@ import {
   ThemeProvider,
   Typography,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import {
   Close as CloseIcon,
   Headphones as AudiobookIcon,
@@ -1540,11 +1541,9 @@ export function App(): React.JSX.Element {
               height: "env(safe-area-inset-top, 0px)",
               zIndex: (t) => t.zIndex.appBar,
               pointerEvents: "none",
-              // SOLID (was frosted): an opaque status-bar backing so content
-              // scrolls under it cleanly. The frosted blur re-rendered out of sync
-              // with the top rubber-band → edge jitter; opaque has no backdrop to
-              // re-sample, so the bounce stays smooth.
-              bgcolor: "background.default",
+              bgcolor: (t) => alpha(t.palette.background.default, 0.5),
+              backdropFilter: "blur(24px) saturate(180%)",
+              WebkitBackdropFilter: "blur(24px) saturate(180%)",
             }}
           />
         )}
@@ -1594,14 +1593,13 @@ export function App(): React.JSX.Element {
             <NavShell
               appKey="liveview"
               barPosition={navbarAtBottom ? "bottom" : "top"}
-              // SOLID bar (no frosted overlay). The frosted-glass bar was an
-              // iOS-style overlay the reader scrolled UNDER, but its backdrop-blur
-              // re-rendered out of sync with the rubber-band each frame → visible
-              // edge jitter (鬼畜) at the very top/bottom. Going solid drops the
-              // backdrop-filter entirely, so the bounce stays smooth. --shell-bar-h
-              // is no longer published; every reader var(--shell-bar-h, 0px) falls
-              // back to 0 (content sits above the solid bar, nothing to clear).
-              barFrosted={false}
+              // Frosted-overlay bar ONLY on the compact (bottom-bar) tier, where
+              // the reader runs full-height and content scrolls under the bar
+              // (iOS-style). On desktop the bar is a top sibling above a
+              // persistent sidebar, so it stays the solid flex sibling — a
+              // frosted desktop bar would also float over the sidebar. The
+              // reader scroller pads itself by --shell-bar-h (index.css).
+              barFrosted={navbarAtBottom}
               title={
                 <Box
                   role="button"

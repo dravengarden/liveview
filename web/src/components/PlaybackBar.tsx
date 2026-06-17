@@ -7,6 +7,7 @@ import {
   Slider,
   Typography,
 } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import {
   MyLocation,
   Pause,
@@ -234,11 +235,14 @@ export function PlaybackBar(
         bottom: "var(--shell-bar-h, 0px)",
         borderTop: 1,
         borderColor: "divider",
-        // SOLID (was frosted to match the old glass NavShell bar). The backdrop
-        // blur re-rendered out of sync with the rubber-band → edge jitter; opaque
-        // has no backdrop to re-sample, so the bounce under it stays smooth. Now
-        // matches the solid NavShell bar below.
-        bgcolor: "background.default",
+        // Same milky glass recipe as the NavShell bar below so they read as one slab.
+        bgcolor: (t) =>
+          alpha(
+            t.palette.background.default,
+            t.palette.mode === "dark" ? 0.72 : 0.76,
+          ),
+        backdropFilter: "blur(30px) saturate(200%)",
+        WebkitBackdropFilter: "blur(30px) saturate(200%)",
         pl: "max(env(safe-area-inset-left, 0px), 12px)",
         pr: "max(env(safe-area-inset-right, 0px), 12px)",
         // SYMMETRIC top/bottom so the controls sit vertically centred.
