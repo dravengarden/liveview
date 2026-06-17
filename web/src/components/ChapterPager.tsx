@@ -34,7 +34,12 @@ export function ChapterPager(
     const isPrev = dir === "prev";
     return (
       <Button
-        variant="outlined"
+        // Filled (no outline). A 1px high-contrast border on content sitting at
+        // the very bottom shimmers during the iOS rubber-band — the spring
+        // oscillates the content sub-pixel and the thin line re-rasterizes each
+        // frame ("鬼畜"). A soft filled background has only a low-contrast edge, so
+        // it stays steady through the bounce.
+        variant="text"
         onClick={() => onNavigate(link.path)}
         sx={{
           flex: 1,
@@ -42,16 +47,13 @@ export function ChapterPager(
           textTransform: "none",
           textAlign: isPrev ? "left" : "right",
           color: "text.primary",
-          borderColor: "divider",
+          bgcolor: "action.hover",
           borderRadius: 2,
           px: 1.5,
           py: 1,
           gap: 1,
           justifyContent: isPrev ? "flex-start" : "flex-end",
-          "&:hover": {
-            borderColor: "text.secondary",
-            bgcolor: "action.hover",
-          },
+          "&:hover": { bgcolor: "action.selected" },
         }}
       >
         {isPrev && (
