@@ -620,7 +620,12 @@ export function MarkdownViewer({
       if (!el || restoringRef.current || !currentPath) return;
       const max = el.scrollHeight - el.clientHeight;
       if (max <= 0) return; // not scrollable yet — don't clobber with 0
-      const ratio = el.scrollTop / max;
+      // CLAMP to [0,1]: on iOS the rubber-band overscroll drives scrollTop
+      // NEGATIVE at the top and PAST max at the bottom, so the raw ratio goes
+      // <0 / >1. Fed into the progress bar's scaleX that flipped/mirrored the bar
+      // at the top (鬼畜) and overshot it at the bottom (抖动), oscillating every
+      // frame through the bounce. Clamping pins the bar at its ends instead.
+      const ratio = Math.min(1, Math.max(0, el.scrollTop / max));
       // Drive the progress bar via a CSS var (no React re-render per scroll).
       wrapperRef.current?.style.setProperty(
         "--lv-read-progress",
