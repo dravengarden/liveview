@@ -23,7 +23,15 @@ const idle = (): Promise<void> =>
 
 interface ManifestChapter {
   id: string; // "rendition/lang/rel_path"
+  audio?: { hash: string | null };
 }
+
+const splitId = (id: string): [string, string, string] | null => {
+  const a = id.indexOf("/");
+  const b = id.indexOf("/", a + 1);
+  if (a < 0 || b < 0) return null;
+  return [id.slice(0, a), id.slice(a + 1, b), id.slice(b + 1)];
+};
 
 /**
  * Prefetch every text chapter of `slug` into the SW cache (read-offline). Skips
@@ -40,13 +48,10 @@ export async function prefetchBookText(slug: string): Promise<void> {
     if (!res.ok) return;
     const data = (await res.json()) as { chapters: ManifestChapter[] };
     for (const ch of data.chapters) {
-      const slash1 = ch.id.indexOf("/");
-      const slash2 = ch.id.indexOf("/", slash1 + 1);
-      if (slash1 < 0 || slash2 < 0) continue;
-      const rendition = ch.id.slice(0, slash1);
+      const parts = splitId(ch.id);
+      if (!parts) continue;
+      const [rendition, lang, rel] = parts;
       if (rendition !== "text") continue; // Lane A = text only
-      const lang = ch.id.slice(slash1 + 1, slash2);
-      const rel = ch.id.slice(slash2 + 1);
       await idle();
       if (!navigator.onLine) break;
       try {
@@ -62,6 +67,47 @@ export async function prefetchBookText(slug: string): Promise<void> {
     // offline / transient — try again next open (we keep it in sweptText only on
     // a clean run path; remove so a failed sweep can retry).
     sweptText.delete(slug);
+  } finally {
+    inFlight = Math.max(0, inFlight - 1);
+    setPrefetching(inFlight);
+  }
+}
+
+/**
+ * Prefetch a book's AUDIO (mp3 + marks) into the SW cache — the "save offline"
+ * path (Lane B). Opt-in (audio is MBs/chapter), so it's only called when the
+ * user toggles a book for offline. The SW's mediaCacheFirst stores the full
+ * body, so offline playback + seeking work. Only chapters whose audio is already
+ * baked (`audio.hash`) are pulled; the rest fill in on their `chapter-ready`.
+ */
+export async function prefetchBookAudio(slug: string): Promise<void> {
+  if (!navigator.onLine) return;
+  inFlight++;
+  setPrefetching(inFlight);
+  try {
+    const res = await fetch(`/api/manifest/${encodeURIComponent(slug)}`);
+    if (!res.ok) return;
+    const data = (await res.json()) as { chapters: ManifestChapter[] };
+    for (const ch of data.chapters) {
+      if (!ch.audio?.hash) continue; // audio not baked yet
+      const parts = splitId(ch.id);
+      if (!parts) continue;
+      const [rendition, lang, rel] = parts;
+      const q = `path=${encodeURIComponent(`${slug}/${rel}`)}` +
+        `&lang=${encodeURIComponent(lang)}&rendition=${encodeURIComponent(rendition)}`;
+      await idle();
+      if (!navigator.onLine) break;
+      try {
+        // `prefetch=1` tells the SW to download the full body + cache it (a normal
+        // play streams Range and isn't cached). marks are small 200s (auto-cached).
+        await fetch(`/api/audio?${q}&prefetch=1`);
+        await fetch(`/api/marks?${q}`);
+      } catch {
+        // best-effort
+      }
+    }
+  } catch {
+    // offline / transient
   } finally {
     inFlight = Math.max(0, inFlight - 1);
     setPrefetching(inFlight);
