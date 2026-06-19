@@ -542,6 +542,109 @@ async fn api_tasks(State(state): State<SharedState>) -> impl IntoResponse {
     }
 }
 
+/// `GET /api/blob/<content_hash>` — an immutable content-addressed blob (audio,
+/// marks, image bytes) from rustfs, for the SW's offline cache. `immutable` ⇒
+/// the SW caches forever, never revalidates; Range supports audio seeking.
+async fn api_blob(
+    State(state): State<SharedState>,
+    axum::extract::Path(hash): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+) -> impl IntoResponse {
+    let mime = match state.store.get_asset(&hash).await {
+        Ok(Some(a)) => a.mime,
+        _ => "application/octet-stream".to_string(),
+    };
+    let Ok(data) = state.obj.get(&hash).await else {
+        return (StatusCode::NOT_FOUND, "blob not found").into_response();
+    };
+    let total = data.len() as u64;
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| parse_range(v, total));
+    let base = Response::builder()
+        .header(header::CONTENT_TYPE, &mime)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable");
+    match range {
+        Some((start, end)) => base
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{total}"))
+            .header(header::CONTENT_LENGTH, end - start + 1)
+            .body(Body::from(data[start as usize..=end as usize].to_vec()))
+            .unwrap()
+            .into_response(),
+        None => base
+            .status(StatusCode::OK)
+            .header(header::CONTENT_LENGTH, total)
+            .body(Body::from(data))
+            .unwrap()
+            .into_response(),
+    }
+}
+
+/// `GET /api/manifest` — the top-level Merkle manifest: the deploy root + each
+/// book's subtree hash (the SW's O(1) "anything changed?" + per-book prune) plus
+/// an audio-readiness rollup for the shelf badge.
+async fn api_manifest(State(state): State<SharedState>) -> impl IntoResponse {
+    let (root, books) = state.store.manifest_books().await.unwrap_or((None, Vec::new()));
+    let mut audio: std::collections::HashMap<String, (i64, i64)> = std::collections::HashMap::new();
+    for r in state.store.audio_task_rollup().await.unwrap_or_default() {
+        if let Some(s) = r.book_slug {
+            audio.insert(s, (r.done, r.total));
+        }
+    }
+    let updated: std::collections::HashMap<String, i64> = state
+        .store
+        .list_books()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|b| (b.slug, b.updated_at))
+        .collect();
+    let arr: Vec<_> = books
+        .iter()
+        .map(|(slug, hash)| {
+            let (done, total) = audio.get(slug).copied().unwrap_or((0, 0));
+            serde_json::json!({
+                "slug": slug,
+                "subtree_hash": hash,
+                "updated_at": updated.get(slug).copied().unwrap_or(0),
+                "audio": {"done": done, "total": total},
+            })
+        })
+        .collect();
+    Json(serde_json::json!({ "root": root, "books": arr })).into_response()
+}
+
+/// `GET /api/manifest/<slug>` — one book's content-addressed chapters (audio +
+/// assets) with blob sizes + audio-task status (the SW's Lane-B prefetch index +
+/// the per-chapter readiness signal). Text/HTML is Lane A, not here.
+async fn api_manifest_book(
+    State(state): State<SharedState>,
+    axum::extract::Path(slug): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let chapters = state.store.manifest_chapters(&slug).await.unwrap_or_default();
+    let arr: Vec<_> = chapters
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "id": format!("{}/{}/{}", c.rendition, c.lang, c.rel_path),
+                "audio": {
+                    "status": c.status,
+                    "hash": c.audio_hash,
+                    "marks_hash": c.marks_hash,
+                    "bytes": c.audio_size,
+                },
+                "asset": c.asset_hash.as_ref().map(|h| serde_json::json!({
+                    "hash": h, "bytes": c.asset_size,
+                })),
+            })
+        })
+        .collect();
+    Json(serde_json::json!({ "slug": slug, "chapters": arr })).into_response()
+}
+
 fn build_app(state: SharedState) -> Router {
     let api_router = Router::new()
         .route("/api/books", get(api_books))
@@ -559,6 +662,11 @@ fn build_app(state: SharedState) -> Router {
         .route("/api/settings", get(api_settings_get).put(api_settings_put))
         // Audio-generation status (per-book + global) for the Sync sheet.
         .route("/api/tasks", get(api_tasks))
+        // Content-addressed immutable blob (audio / marks / images) for the SW's
+        // offline cache (Lane B), + the Merkle manifest the SW diffs.
+        .route("/api/blob/{hash}", get(api_blob))
+        .route("/api/manifest", get(api_manifest))
+        .route("/api/manifest/{slug}", get(api_manifest_book))
         // Under /api/ so the service worker treats it network-first (sw.js):
         // a top-level /version would fall into the cache-first bucket and serve
         // a stale build id right after a deploy, defeating the whole check.

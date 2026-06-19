@@ -116,6 +116,24 @@ pub struct AudioTaskRollup {
     pub pending: i64,
 }
 
+/// One chapter's heavy-blob + audio-readiness row for `/api/manifest/<slug>` —
+/// the content-addressed index the SW prefetches (Lane B) and the readiness UX
+/// reads. Text/HTML is Lane A (standard PWA cache), so it isn't here.
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
+pub struct ManifestChapter {
+    pub rendition: String,
+    pub lang: String,
+    pub rel_path: String,
+    pub audio_hash: Option<String>,
+    pub marks_hash: Option<String>,
+    pub audio_size: Option<i64>,
+    pub asset_hash: Option<String>,
+    pub asset_size: Option<i64>,
+    /// Audio task status (queued/running/done/failed) — `None` ⇒ no audio / never
+    /// queued.
+    pub status: Option<String>,
+}
+
 /// One document's saved scroll position (0..1 ratio). Wire-compatible with the
 /// old SQLite `ProgressEntry`.
 #[derive(Clone, Debug, Serialize, sqlx::FromRow)]
@@ -784,6 +802,46 @@ impl PgStore {
         .bind(lang)
         .bind(rel_path)
         .fetch_optional(&self.pool)
+        .await
+    }
+
+    // ── Merkle manifest (exposed DAG for the SW) ──────────────────────────────
+
+    /// The deploy root + its per-book child subtree hashes — the top-level
+    /// manifest the SW diffs (root unchanged ⇒ nothing to sync; a changed book
+    /// subtree ⇒ fetch that book's sub-manifest). Empty before the first sync.
+    pub async fn manifest_books(&self) -> Result<(Option<String>, Vec<(String, String)>), sqlx::Error> {
+        let root = self.deploy_root().await?;
+        let children = match &root {
+            Some(r) => match self.get_merkle_node(r).await? {
+                Some(n) if n.kind == "tree" => {
+                    serde_json::from_str::<Vec<(String, String)>>(&n.payload).unwrap_or_default()
+                }
+                _ => Vec::new(),
+            },
+            None => Vec::new(),
+        };
+        Ok((root, children))
+    }
+
+    /// One book's content-addressed chapters (audio + assets) with blob sizes and
+    /// audio-task status, for `/api/manifest/<slug>`.
+    pub async fn manifest_chapters(&self, slug: &str) -> Result<Vec<ManifestChapter>, sqlx::Error> {
+        sqlx::query_as::<_, ManifestChapter>(
+            "SELECT c.rendition, c.lang, c.rel_path,
+                    c.audio_hash, c.marks_hash, aa.size AS audio_size,
+                    c.asset_hash, ab.size AS asset_size, t.status
+             FROM chapters c
+             LEFT JOIN assets aa ON aa.content_hash = c.audio_hash
+             LEFT JOIN assets ab ON ab.content_hash = c.asset_hash
+             LEFT JOIN audio_tasks t
+               ON t.book_slug = c.book_slug AND t.rendition = c.rendition
+              AND t.lang = c.lang AND t.rel_path = c.rel_path
+             WHERE c.book_slug = $1
+             ORDER BY c.rendition, c.lang, c.rel_path",
+        )
+        .bind(slug)
+        .fetch_all(&self.pool)
         .await
     }
 

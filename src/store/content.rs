@@ -15,7 +15,8 @@
 use async_trait::async_trait;
 
 use crate::store::pg::{
-    AssetRow, AudioTaskRollup, BookRow, ChapterRow, EditionRow, ProgressEntry, RenditionRow,
+    AssetRow, AudioTaskRollup, BookRow, ChapterRow, EditionRow, ManifestChapter, ProgressEntry,
+    RenditionRow,
 };
 
 /// Catalog structure + chapter/asset access the reader needs. The deployed
@@ -96,6 +97,14 @@ pub trait ContentStore: Send + Sync {
     /// Per-book + global audio-generation rollup for the status surface (the Sync
     /// sheet). The filesystem `preview` backend has no queue → empty.
     async fn audio_task_rollup(&self) -> Result<Vec<AudioTaskRollup>, String>;
+
+    /// Manifest top level: deploy root + per-book subtree hashes (the SW diffs
+    /// this). Empty before the first sync / on the preview backend.
+    async fn manifest_books(&self) -> Result<(Option<String>, Vec<(String, String)>), String>;
+
+    /// One book's content-addressed chapters (audio + assets) for the SW's
+    /// Lane-B prefetch + the readiness UX. Empty on the preview backend.
+    async fn manifest_chapters(&self, slug: &str) -> Result<Vec<ManifestChapter>, String>;
 }
 
 /// Content-addressed blob bytes: rustfs (deployed) or an in-memory map (preview).
@@ -200,6 +209,14 @@ impl ContentStore for PgStore {
     }
     async fn audio_task_rollup(&self) -> Result<Vec<AudioTaskRollup>, String> {
         PgStore::audio_task_rollup(self)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    async fn manifest_books(&self) -> Result<(Option<String>, Vec<(String, String)>), String> {
+        PgStore::manifest_books(self).await.map_err(|e| e.to_string())
+    }
+    async fn manifest_chapters(&self, slug: &str) -> Result<Vec<ManifestChapter>, String> {
+        PgStore::manifest_chapters(self, slug)
             .await
             .map_err(|e| e.to_string())
     }
