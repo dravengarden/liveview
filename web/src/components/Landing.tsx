@@ -50,6 +50,7 @@ import {
   useShelfSort,
 } from "@/hooks";
 import { useI18n } from "@/i18n";
+import { useSyncStatus } from "@/syncStore";
 import { ScrollToTopButton } from "./ScrollToTopButton";
 
 interface LandingProps {
@@ -959,6 +960,9 @@ interface ShelfCardProps {
   hasAudio: boolean;
   progress: BookProgress | undefined;
   compactCards: boolean;
+  /** This book's audiobook audio is still being generated in the background — a
+   *  subtle "generating" micro-badge; text stays fully usable. */
+  generating?: boolean | undefined;
   onOpen: (slug: string, renditionKind?: string) => void;
   t: ReturnType<typeof useI18n>["t"];
   lang: string;
@@ -980,6 +984,7 @@ const ShelfCard = memo(function ShelfCard({
   hasAudio,
   progress: bp,
   compactCards,
+  generating,
   onOpen,
   t,
   lang,
@@ -1049,6 +1054,7 @@ const ShelfCard = memo(function ShelfCard({
         mb: "20px",
         borderRadius: 2,
         overflow: "hidden",
+        position: "relative",
         // Compact cards drop the cover band, so carry the book's
         // slug-keyed colour as a faint FROSTED wash tinting the whole
         // card — the same two-stop gradient as the cover, but
@@ -1073,6 +1079,38 @@ const ShelfCard = memo(function ShelfCard({
         },
       }}
     >
+      {/* Subtle "audio generating" micro-badge — top-right, pointer-transparent,
+          low-weight. Text reading is unaffected; this just informs. */}
+      {generating && (
+        <Box
+          aria-label={t("sync.generating")}
+          sx={{
+            position: "absolute",
+            top: 6,
+            right: 6,
+            zIndex: 2,
+            display: "flex",
+            alignItems: "center",
+            gap: 0.5,
+            px: 0.75,
+            py: 0.25,
+            borderRadius: 999,
+            pointerEvents: "none",
+            color: "common.white",
+            bgcolor: (th) => alpha(th.palette.common.black, 0.45),
+            backdropFilter: "blur(6px)",
+            WebkitBackdropFilter: "blur(6px)",
+          }}
+        >
+          <AudiobookIcon sx={{ fontSize: rem(13) }} />
+          <Typography
+            variant="caption"
+            sx={{ fontSize: rem(10), lineHeight: 1, fontWeight: 600 }}
+          >
+            {t("sync.generating")}
+          </Typography>
+        </Box>
+      )}
       <CardActionArea onClick={() => onOpen(b.slug)}>
         {
           /* Cover: the book's own image when it has one, else a
@@ -1352,6 +1390,12 @@ export function Landing({
 }: LandingProps): React.JSX.Element {
   const { t, lang } = useI18n();
   const sort = useShelfSort();
+  // Books whose audiobook audio is still generating — drives the card micro-badge.
+  const syncStatus = useSyncStatus();
+  const generatingSlugs = useMemo(
+    () => new Set(syncStatus.books.filter((b) => b.pending > 0).map((b) => b.slug)),
+    [syncStatus],
+  );
   // Compact shelf: drop each card's coloured cover band to pack more per screen.
   const compactCards = useCompactCards();
   // Group-by-series: when "collection", the shelf splits into collapsible
@@ -1568,6 +1612,7 @@ export function Landing({
       hasAudio={e.hasAudio}
       progress={progress[e.book.slug]}
       compactCards={compactCards}
+      generating={generatingSlugs.has(e.book.slug)}
       onOpen={onOpen}
       t={t}
       lang={lang}
