@@ -11,3 +11,4 @@ export { PlaybackSheet } from "./PlaybackSheet";
 export { Landing } from "./Landing";
 export { ReconnectBanner } from "./ReconnectBanner";
 export { ScrollToTopButton } from "./ScrollToTopButton";
+export { SyncIndicator } from "./SyncIndicator";

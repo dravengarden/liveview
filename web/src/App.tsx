@@ -33,6 +33,7 @@ import {
   ReconnectBanner,
   SettingsButton,
   Sidebar,
+  SyncIndicator,
 } from "@/components";
 import {
   useFont,
@@ -1729,6 +1730,9 @@ export function App(): React.JSX.Element {
         suppressed={readingThisInPlace}
         onOpenControls={() => setPlaybackSheetOpen(true)}
       />
+      {/* Ambient background-work indicator (audio generation + offline prefetch)
+          → the Sync sheet. Low-weight; only shows while something is in flight. */}
+      <SyncIndicator />
       <PlaybackSheet
         open={playbackSheetOpen}
         onClose={() => setPlaybackSheetOpen(false)}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import type { FileType, TreeNode, WsMessage } from "@/types";
 import { connectionLost, connectionReady } from "@/connectionStore";
 import { emitServerSettingPush } from "@/syncBackends";
+import { dispatchChapterReady } from "@/syncStore";
 
 interface UseWebSocketOptions {
   onContentUpdate: (
@@ -33,7 +34,22 @@ export function useWebSocket(
 
     ws.onmessage = (event: MessageEvent<string>) => {
       try {
-        const msg = JSON.parse(event.data) as WsMessage;
+        // The audio worker pushes a lower-cased `chapter-ready` (not part of the
+        // WsMessage union) when a chapter's audio finishes baking.
+        const raw = JSON.parse(event.data) as { type?: string } & Record<
+          string,
+          string
+        >;
+        if (raw.type === "chapter-ready") {
+          dispatchChapterReady({
+            book: raw["book"] ?? "",
+            rendition: raw["rendition"] ?? "",
+            lang: raw["lang"] ?? "",
+            path: raw["path"] ?? "",
+          });
+          return;
+        }
+        const msg = raw as unknown as WsMessage;
         if (msg.type === "ContentUpdate") {
           onContentUpdate(msg.path, msg.lang, msg.file_type, msg.content);
         } else if (msg.type === "TreeUpdate") {
