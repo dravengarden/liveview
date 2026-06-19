@@ -87,6 +87,35 @@ pub struct MerkleNode {
     pub payload: String,
 }
 
+/// A claimed audio-generation task — one chapter leaf the worker must synth.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct AudioTask {
+    pub book_slug: String,
+    pub rendition: String,
+    pub lang: String,
+    pub rel_path: String,
+    pub content_hash: String,
+    pub leaf_kind: String,
+    pub voice: String,
+    pub status: String,
+    pub priority: i32,
+    pub attempts: i32,
+    pub error: Option<String>,
+    pub enqueued_at: i64,
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+}
+
+/// Per-book (NULL slug = global) audio-task counts for the status surface.
+#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
+pub struct AudioTaskRollup {
+    pub book_slug: Option<String>,
+    pub done: i64,
+    pub total: i64,
+    pub failed: i64,
+    pub pending: i64,
+}
+
 /// One document's saved scroll position (0..1 ratio). Wire-compatible with the
 /// old SQLite `ProgressEntry`.
 #[derive(Clone, Debug, Serialize, sqlx::FromRow)]
@@ -569,6 +598,193 @@ impl PgStore {
             .execute(&self.pool)
             .await
             .map(|_| ())
+    }
+
+    // ── Audio task queue ──────────────────────────────────────────────────────
+
+    /// Enqueue (or refresh) the audio task for a chapter leaf. Idempotent: if a
+    /// task already exists, a CHANGED `content_hash` re-queues it (new source →
+    /// regenerate); an UNCHANGED one leaves a `running`/`done` task alone (so a
+    /// re-sync doesn't redo finished work) but only refreshes `priority` upward
+    /// (an interactive request can promote a queued backfill task).
+    pub async fn enqueue_audio_task(
+        &self,
+        book_slug: &str,
+        rendition: &str,
+        lang: &str,
+        rel_path: &str,
+        content_hash: &str,
+        leaf_kind: &str,
+        voice: &str,
+        priority: i32,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO audio_tasks
+                 (book_slug, rendition, lang, rel_path, content_hash, leaf_kind,
+                  voice, status, priority, attempts, enqueued_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,'queued',$8,0,$9)
+             ON CONFLICT (book_slug, rendition, lang, rel_path) DO UPDATE SET
+                 leaf_kind   = EXCLUDED.leaf_kind,
+                 voice       = EXCLUDED.voice,
+                 priority    = GREATEST(audio_tasks.priority, EXCLUDED.priority),
+                 -- new source ⇒ re-queue from scratch; same source ⇒ keep status.
+                 content_hash = EXCLUDED.content_hash,
+                 status      = CASE WHEN audio_tasks.content_hash <> EXCLUDED.content_hash
+                                    THEN 'queued' ELSE audio_tasks.status END,
+                 attempts    = CASE WHEN audio_tasks.content_hash <> EXCLUDED.content_hash
+                                    THEN 0 ELSE audio_tasks.attempts END,
+                 error       = CASE WHEN audio_tasks.content_hash <> EXCLUDED.content_hash
+                                    THEN NULL ELSE audio_tasks.error END",
+        )
+        .bind(book_slug)
+        .bind(rendition)
+        .bind(lang)
+        .bind(rel_path)
+        .bind(content_hash)
+        .bind(leaf_kind)
+        .bind(voice)
+        .bind(priority)
+        .bind(now_millis())
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+    }
+
+    /// Atomically claim the next runnable task (highest priority, oldest first),
+    /// flipping it to `running`. `FOR UPDATE SKIP LOCKED` lets multiple worker
+    /// slots claim distinct rows without racing. Returns `None` when the queue is
+    /// drained.
+    pub async fn claim_audio_task(&self) -> Result<Option<AudioTask>, sqlx::Error> {
+        sqlx::query_as::<_, AudioTask>(
+            "UPDATE audio_tasks SET status = 'running', started_at = $1, attempts = attempts + 1
+             WHERE (book_slug, rendition, lang, rel_path) = (
+                 SELECT book_slug, rendition, lang, rel_path FROM audio_tasks
+                 WHERE status = 'queued'
+                 ORDER BY priority DESC, enqueued_at ASC
+                 FOR UPDATE SKIP LOCKED
+                 LIMIT 1
+             )
+             RETURNING book_slug, rendition, lang, rel_path, content_hash,
+                       leaf_kind, voice, status, priority, attempts, error,
+                       enqueued_at, started_at, finished_at",
+        )
+        .bind(now_millis())
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    /// Mark a claimed task done.
+    pub async fn finish_audio_task(
+        &self,
+        book_slug: &str,
+        rendition: &str,
+        lang: &str,
+        rel_path: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE audio_tasks SET status = 'done', finished_at = $5, error = NULL
+             WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4",
+        )
+        .bind(book_slug)
+        .bind(rendition)
+        .bind(lang)
+        .bind(rel_path)
+        .bind(now_millis())
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+    }
+
+    /// Mark a claimed task failed (or re-queue for another attempt, capped).
+    pub async fn fail_audio_task(
+        &self,
+        book_slug: &str,
+        rendition: &str,
+        lang: &str,
+        rel_path: &str,
+        error: &str,
+        max_attempts: i32,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE audio_tasks SET
+                 status = CASE WHEN attempts >= $6 THEN 'failed' ELSE 'queued' END,
+                 error = $5, finished_at = $7
+             WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4",
+        )
+        .bind(book_slug)
+        .bind(rendition)
+        .bind(lang)
+        .bind(rel_path)
+        .bind(error)
+        .bind(max_attempts)
+        .bind(now_millis())
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+    }
+
+    /// Startup reaper: a `running` task left by a crashed/restarted server is
+    /// re-queued so the worker picks it up again.
+    pub async fn requeue_running_audio_tasks(&self) -> Result<u64, sqlx::Error> {
+        sqlx::query("UPDATE audio_tasks SET status = 'queued', started_at = NULL WHERE status = 'running'")
+            .execute(&self.pool)
+            .await
+            .map(|r| r.rows_affected())
+    }
+
+    /// Re-queue all `failed` tasks (the `liveview tasks retry` path); scope to one
+    /// book when `book_slug` is `Some`.
+    pub async fn retry_failed_audio_tasks(
+        &self,
+        book_slug: Option<&str>,
+    ) -> Result<u64, sqlx::Error> {
+        let q = match book_slug {
+            Some(_) => "UPDATE audio_tasks SET status='queued', attempts=0, error=NULL WHERE status='failed' AND book_slug=$1",
+            None => "UPDATE audio_tasks SET status='queued', attempts=0, error=NULL WHERE status='failed'",
+        };
+        let mut query = sqlx::query(q);
+        if let Some(s) = book_slug {
+            query = query.bind(s);
+        }
+        query.execute(&self.pool).await.map(|r| r.rows_affected())
+    }
+
+    /// Per-book + global audio-task rollup for the status surface (the Sync sheet
+    /// + the manifest readiness rollup). Returns `(book_slug, done, total,
+    /// failed)` rows; a NULL `book_slug` row carries the global totals.
+    pub async fn audio_task_rollup(&self) -> Result<Vec<AudioTaskRollup>, sqlx::Error> {
+        sqlx::query_as::<_, AudioTaskRollup>(
+            "SELECT book_slug,
+                    COUNT(*) FILTER (WHERE status='done')                       AS done,
+                    COUNT(*)                                                    AS total,
+                    COUNT(*) FILTER (WHERE status='failed')                     AS failed,
+                    COUNT(*) FILTER (WHERE status IN ('queued','running'))      AS pending
+             FROM audio_tasks GROUP BY book_slug",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// The audio task status for one chapter, if any (drives the per-chapter
+    /// readiness UX). Returns the `status` string or `None` (no task = no audio
+    /// or never queued).
+    pub async fn audio_task_status(
+        &self,
+        book_slug: &str,
+        rendition: &str,
+        lang: &str,
+        rel_path: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM audio_tasks
+             WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4",
+        )
+        .bind(book_slug)
+        .bind(rendition)
+        .bind(lang)
+        .bind(rel_path)
+        .fetch_optional(&self.pool)
+        .await
     }
 
     // ── Reading progress + settings (ported 1:1 from the SQLite store) ────────

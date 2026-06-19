@@ -17,7 +17,9 @@ use crate::config::{BookState, RenditionKind};
 use crate::server::tree::build_virtual_tree;
 use crate::shared::FileType;
 use crate::store::content::{BlobStore, ContentStore};
-use crate::store::pg::{AssetRow, BookRow, ChapterRow, EditionRow, ProgressEntry, RenditionRow};
+use crate::store::pg::{
+    AssetRow, AudioTaskRollup, BookRow, ChapterRow, EditionRow, ProgressEntry, RenditionRow,
+};
 
 pub struct FsStore {
     books: Vec<BookState>,
@@ -259,6 +261,9 @@ impl ContentStore for FsStore {
     }
     async fn settings_set(&self, _key: &str, _value: &str) -> Result<(), String> {
         Ok(())
+    }
+    async fn audio_task_rollup(&self) -> Result<Vec<AudioTaskRollup>, String> {
+        Ok(Vec::new()) // preview has no task queue
     }
 }
 

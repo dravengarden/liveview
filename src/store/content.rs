@@ -14,7 +14,9 @@
 
 use async_trait::async_trait;
 
-use crate::store::pg::{AssetRow, BookRow, ChapterRow, EditionRow, ProgressEntry, RenditionRow};
+use crate::store::pg::{
+    AssetRow, AudioTaskRollup, BookRow, ChapterRow, EditionRow, ProgressEntry, RenditionRow,
+};
 
 /// Catalog structure + chapter/asset access the reader needs. The deployed
 /// backend serves rows pre-rendered at `sync` time; the filesystem backend
@@ -90,6 +92,10 @@ pub trait ContentStore: Send + Sync {
     async fn progress_upsert(&self, path: &str, scroll: f64) -> Result<(), String>;
     async fn settings_all(&self) -> Result<Vec<(String, String)>, String>;
     async fn settings_set(&self, key: &str, value: &str) -> Result<(), String>;
+
+    /// Per-book + global audio-generation rollup for the status surface (the Sync
+    /// sheet). The filesystem `preview` backend has no queue → empty.
+    async fn audio_task_rollup(&self) -> Result<Vec<AudioTaskRollup>, String>;
 }
 
 /// Content-addressed blob bytes: rustfs (deployed) or an in-memory map (preview).
@@ -189,6 +195,11 @@ impl ContentStore for PgStore {
     }
     async fn settings_set(&self, key: &str, value: &str) -> Result<(), String> {
         PgStore::settings_set(self, key, value)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    async fn audio_task_rollup(&self) -> Result<Vec<AudioTaskRollup>, String> {
+        PgStore::audio_task_rollup(self)
             .await
             .map_err(|e| e.to_string())
     }

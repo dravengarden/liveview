@@ -15,6 +15,7 @@ use aws_sdk_s3::Client;
 
 pub type Result<T> = std::result::Result<T, String>;
 
+#[derive(Clone)]
 pub struct ObjStore {
     client: Client,
     bucket: String,

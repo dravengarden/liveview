@@ -74,6 +74,27 @@ pub enum Command {
     /// rendering each chapter on demand. For local preview and the visual-QA
     /// loop (`chart-review`), which needs a real reader URL without deploying.
     Preview(PreviewArgs),
+
+    /// Inspect / manage the async audio-generation queue the in-server worker
+    /// drains (sync enqueues; the worker synthesizes). Prints per-book progress
+    /// by default; `--retry` re-queues failed tasks.
+    Tasks(TasksArgs),
+}
+
+/// Args for `liveview tasks`.
+#[derive(Args, Debug, Clone)]
+pub struct TasksArgs {
+    /// `postgres://…` URL for the private liveview db.
+    #[arg(long, env = "DATABASE_URL")]
+    pub database_url: String,
+
+    /// Re-queue failed tasks (instead of printing status).
+    #[arg(long)]
+    pub retry: bool,
+
+    /// Limit `--retry` to one book by slug.
+    #[arg(long)]
+    pub book: Option<String>,
 }
 
 /// Args for `liveview preview`. Resolves the corpus the same way `sync` /

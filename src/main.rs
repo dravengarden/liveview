@@ -183,6 +183,13 @@ fn main() {
                 std::process::exit(2);
             }
         }
+        // `liveview tasks` — inspect / retry the async audio queue.
+        Some(Command::Tasks(args)) => {
+            if let Err(e) = rt.block_on(run_tasks(args)) {
+                eprintln!("tasks error: {e}");
+                std::process::exit(1);
+            }
+        }
         // Default — run the server. It reads only the `[server]` block (host /
         // port / open) from the config; content comes from pg + rustfs, so it
         // never resolves or touches the corpus filesystem.
@@ -264,6 +271,7 @@ async fn run_sync(args: cli::SyncArgs) -> Result<(), String> {
     tracing::info!(
         books = report.books,
         put = report.put,
+        enqueued = report.enqueued,
         skipped = report.skipped,
         deleted = report.deleted,
         orphans_gc = report.orphans_gc,
@@ -273,14 +281,45 @@ async fn run_sync(args: cli::SyncArgs) -> Result<(), String> {
     );
     let root_short = &report.root[..report.root.len().min(12)];
     println!(
-        "sync: {} books, {} put, {} skipped, {} deleted, {} gc'd, {} check warnings, root {root_short}",
+        "sync: {} books, {} put, {} audio queued, {} skipped, {} deleted, {} gc'd, {} check warnings, root {root_short}",
         report.books,
         report.put,
+        report.enqueued,
         report.skipped,
         report.deleted,
         report.orphans_gc,
         report.check_warnings
     );
+    Ok(())
+}
+
+/// `liveview tasks` entry point: print the audio-generation rollup, or `--retry`
+/// re-queues failed tasks.
+async fn run_tasks(args: cli::TasksArgs) -> Result<(), String> {
+    let pg = PgStore::open(&args.database_url)
+        .await
+        .map_err(|e| format!("connect postgres: {e}"))?;
+    pg.migrate().await.map_err(|e| format!("migrate: {e}"))?;
+    if args.retry {
+        let n = pg
+            .retry_failed_audio_tasks(args.book.as_deref())
+            .await
+            .map_err(|e| e.to_string())?;
+        println!("tasks: re-queued {n} failed task(s)");
+        return Ok(());
+    }
+    let mut rows = pg.audio_task_rollup().await.map_err(|e| e.to_string())?;
+    rows.sort_by(|a, z| a.book_slug.cmp(&z.book_slug));
+    for r in &rows {
+        let who = r.book_slug.as_deref().unwrap_or("(global)");
+        println!(
+            "  {who:32}  {:>4}/{:<4} done   {:>3} pending   {:>3} failed",
+            r.done, r.total, r.pending, r.failed
+        );
+    }
+    if rows.is_empty() {
+        println!("tasks: queue empty");
+    }
     Ok(())
 }
 
@@ -399,6 +438,9 @@ async fn run(cli: Cli, server: config::ServerCfg) {
         eprintln!("migrate: {e}");
         std::process::exit(2);
     }
+    // Concrete handles for the audio worker (the task queue + Merkle commit are
+    // pg-specific, so the worker holds these rather than the trait objects).
+    let worker_pg = pg.clone();
     let store: Arc<dyn crate::store::content::ContentStore> = Arc::new(pg);
     let objstore = ObjStore::connect(
         &conf.s3_endpoint,
@@ -410,6 +452,7 @@ async fn run(cli: Cli, server: config::ServerCfg) {
         eprintln!("rustfs bucket: {e}");
         std::process::exit(2);
     }
+    let worker_obj = objstore.clone();
     let obj: Arc<dyn crate::store::content::BlobStore> = Arc::new(objstore);
     let catalog = match Catalog::load(store.as_ref()).await {
         Ok(c) => c,
@@ -422,13 +465,20 @@ async fn run(cli: Cli, server: config::ServerCfg) {
 
     let (tx, _rx) = broadcast::channel::<String>(64);
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let tts_cmd = env("LIVEVIEW_EDGE_TTS_CMD").unwrap_or_else(|| "edge-tts".to_string());
+    let tts_voice =
+        env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string());
+
+    // Drain the audio task queue in the background (sync only enqueues now).
+    crate::server::audio_worker::spawn(worker_pg, worker_obj, tts_cmd.clone(), tx.clone());
+
     let state: SharedState = Arc::new(AppState {
         tx,
         store,
         obj,
         catalog: RwLock::new(catalog),
-        tts_cmd: env("LIVEVIEW_EDGE_TTS_CMD").unwrap_or_else(|| "edge-tts".to_string()),
-        tts_voice: env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string()),
+        tts_cmd,
+        tts_voice,
         book_end_cue: Default::default(),
         audio_synth_locks: Default::default(),
     });
@@ -480,6 +530,18 @@ async fn run_preview(args: cli::PreviewArgs) -> Result<(), String> {
 /// Build the reader's axum app (API routes + SPA assets) over any backend.
 /// Shared by the deployed server (`run`) and the filesystem preview
 /// (`run_preview`): one router, two content backends.
+/// `GET /api/tasks` — the audio-generation rollup (per-book + a NULL-slug global
+/// row) the Sync sheet renders: `{done, total, failed, pending}` per book.
+async fn api_tasks(State(state): State<SharedState>) -> impl IntoResponse {
+    match state.store.audio_task_rollup().await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => {
+            tracing::warn!(error = %e, "audio task rollup failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "rollup").into_response()
+        }
+    }
+}
+
 fn build_app(state: SharedState) -> Router {
     let api_router = Router::new()
         .route("/api/books", get(api_books))
@@ -495,6 +557,8 @@ fn build_app(state: SharedState) -> Router {
         .route("/api/progress", get(api_progress_get).put(api_progress_put))
         .route("/api/progress/recent", get(api_progress_recent))
         .route("/api/settings", get(api_settings_get).put(api_settings_put))
+        // Audio-generation status (per-book + global) for the Sync sheet.
+        .route("/api/tasks", get(api_tasks))
         // Under /api/ so the service worker treats it network-first (sw.js):
         // a top-level /version would fall into the cache-first bucket and serve
         // a stale build id right after a deploy, defeating the whole check.
