@@ -563,6 +563,28 @@ export function App(): React.JSX.Element {
     })();
   }, []);
 
+  // Manual refresh, driven by the shelf's pull-to-refresh: re-fetch the book
+  // list AND reading progress. The shelf re-sorts itself (useShelfSort + the
+  // entries memo), so the order after a refresh always matches Settings → Sort.
+  // A short floor keeps the spinner from flashing on a fast network.
+  const refreshBooks = useCallback(async () => {
+    await Promise.all([
+      (async () => {
+        try {
+          const res = await fetch("/api/books");
+          setBooks((await res.json()) as Book[]);
+        } catch (e) {
+          console.error("Failed to refresh books:", e);
+        }
+      })(),
+      (async () => {
+        const rows = await loadRecent();
+        setRecentProgress(rows);
+      })(),
+      new Promise((r) => setTimeout(r, 450)),
+    ]);
+  }, [loadRecent]);
+
   // Refresh the landing's reading-progress whenever the bookshelf is shown
   // (initial load and every return from a book). Skip the state update when the
   // fetched rows are identical to what we already hold: returning from a book
@@ -1587,6 +1609,7 @@ export function App(): React.JSX.Element {
               onOpen={enterBook}
               settingsSlot={settingsButton}
               navbarAtBottom={navbarAtBottom}
+              onRefresh={refreshBooks}
             />
           </Box>
           {activeSlug !== null && (

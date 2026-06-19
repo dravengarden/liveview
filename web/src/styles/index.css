@@ -20,6 +20,13 @@
   box-sizing: border-box;
 }
 
+/* Pull-to-refresh spinner rotation (the shelf's PTR indicator). */
+@keyframes lv-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 body {
   margin: 0;
   padding: 0;
