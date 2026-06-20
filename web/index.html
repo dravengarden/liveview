@@ -31,6 +31,75 @@
     <!-- App-shell splash (the spinner + #root markup) is injected at build time
          by the vite splashInjector plugin from the shared @shared-utils/ui
          splashHtml() — one source across all atlantis apps. -->
+
+    <!-- One-shot boot self-heal. If the app shell fails to start — a hashed
+         chunk 404s, or a stale precache references a chunk that no longer
+         exists, so React never initializes (the classic `useSyncExternalStore
+         of null` white screen) — wipe the SW + versioned caches (keeping the
+         immutable lv-blobs library) and hard-reload ONCE. Installed in <head>
+         so it also catches a failure of the entry module itself, which code
+         inside that module never could. sessionStorage-guarded against reload
+         loops; main.tsx clears the guard once the app has actually mounted, so
+         a genuine (non-cache) error can't loop and a later staleness can still
+         heal. Belt-and-suspenders behind the build-stamped SW precache. -->
+    <script>
+      (function () {
+        var KEY = "lv-boot-heal";
+        function isBootFailure(msg) {
+          return /useSyncExternalStore|dynamically imported module|Importing a module script failed|Failed to fetch|ChunkLoadError|error loading dynamically/i.test(
+            msg || "",
+          );
+        }
+        function heal(msg) {
+          if (!isBootFailure(msg)) return;
+          try {
+            if (sessionStorage.getItem(KEY)) return;
+            sessionStorage.setItem(KEY, "1");
+          } catch (_) {
+            return;
+          }
+          var reload = function () {
+            location.reload();
+          };
+          Promise.resolve()
+            .then(function () {
+              return self.caches
+                ? caches.keys().then(function (keys) {
+                    return Promise.all(
+                      keys
+                        .filter(function (k) {
+                          return k !== "lv-blobs";
+                        })
+                        .map(function (k) {
+                          return caches.delete(k);
+                        }),
+                    );
+                  })
+                : null;
+            })
+            .then(function () {
+              return navigator.serviceWorker
+                ? navigator.serviceWorker
+                    .getRegistrations()
+                    .then(function (regs) {
+                      return Promise.all(
+                        regs.map(function (r) {
+                          return r.unregister();
+                        }),
+                      );
+                    })
+                : null;
+            })
+            .then(reload, reload);
+        }
+        addEventListener("error", function (e) {
+          heal((e && e.message) || (e && e.error && e.error.message));
+        });
+        addEventListener("unhandledrejection", function (e) {
+          heal(e && e.reason && (e.reason.message || String(e.reason)));
+        });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

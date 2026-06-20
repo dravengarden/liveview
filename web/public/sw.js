@@ -1,9 +1,22 @@
 // LiveView service worker — offline app shell + content + media.
 //
-// Hand-rolled (no Workbox). Bump VERSION to invalidate the shell/runtime/api
-// caches on the next visit; the immutable content-addressed BLOB cache is
-// version-INDEPENDENT (it survives deploys — its keys are content hashes).
-const VERSION = "lv-v214";
+// Hand-rolled (no Workbox). VERSION and SHELL_ASSETS are STAMPED AT BUILD TIME
+// by the `lv-stamp-sw` Vite plugin (web/vite.config.ts):
+//   - VERSION  → a content hash of the shipped app-shell asset set, so a UI
+//     change auto-invalidates the shell/runtime/api caches and an unchanged
+//     redeploy is a no-op. No hand-bumped magic string to forget.
+//   - SHELL_ASSETS → the exact hashed /assets/*.js + *.css that index.html boots
+//     from, so the offline shell is precached ATOMICALLY with the code it needs:
+//     install caches index.html AND its chunks together, or fails and leaves the
+//     old SW serving — never a half-cached shell that white-screens because a
+//     referenced chunk is missing.
+// The "lv-dev" / [] values below are the dev placeholders an unstamped build
+// carries (the SW only registers in PROD); the plugin asserts it replaced both.
+// The immutable content-addressed BLOB cache is version-INDEPENDENT (it survives
+// deploys — its keys are content hashes).
+const VERSION = "lv-dev";
+// Build-stamped: the exact hashed /assets/*.js + *.css index.html loads.
+const SHELL_ASSETS = [];
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const API_CACHE = `${VERSION}-api`;
@@ -14,7 +27,12 @@ const AUDIO_CACHE = `${VERSION}-audio`;
 // so the offline library survives deploys (an immutable hash never goes stale).
 const BLOB_CACHE = "lv-blobs";
 
-const SHELL = ["/", "/index.html", "/favicon.svg", "/manifest.webmanifest"];
+// The app shell: the static entry points PLUS the build-stamped hashed chunks
+// index.html boots from — precached as one atomic unit so the offline / network-
+// first-fallback shell is always bootable, never an index.html whose code 404s.
+const SHELL = ["/", "/index.html", "/favicon.svg", "/manifest.webmanifest"].concat(
+  SHELL_ASSETS,
+);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -108,7 +126,11 @@ async function staleWhileRevalidate(req, cacheName) {
       return res;
     })
     .catch(() => undefined);
-  return cached || (await network) || fetch(req);
+  // Final fallback before a bare network retry: a cross-cache lookup, so a
+  // chunk precached in SHELL_CACHE (the offline shell) is still served when the
+  // RUNTIME_CACHE misses AND the network is down — without this, an offline
+  // boot off the precached shell would 404 its own code.
+  return cached || (await network) || (await caches.match(req)) || fetch(req);
 }
 
 // Audio: cache hit → Range-from-cache; explicit prefetch (`?prefetch=1`) →

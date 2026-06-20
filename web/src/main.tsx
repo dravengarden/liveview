@@ -29,6 +29,16 @@ createRoot(rootElement).render(
   </StrictMode>,
 );
 
+// Reaching this line means the entry chunk loaded and React initialized — i.e.
+// the shell booted fine. Clear the one-shot boot-heal guard (set by the inline
+// recovery script in index.html) so a future stale-cache failure can self-heal
+// again rather than being suppressed for the rest of the session.
+try {
+  sessionStorage.removeItem("lv-boot-heal");
+} catch {
+  // sessionStorage may be unavailable (private mode / sandbox) — non-fatal.
+}
+
 // Register the PWA service worker (production builds only — in dev the Vite
 // server owns the page and a SW would serve stale modules).
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
