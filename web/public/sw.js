@@ -3,7 +3,7 @@
 // Hand-rolled (no Workbox). Bump VERSION to invalidate the shell/runtime/api
 // caches on the next visit; the immutable content-addressed BLOB cache is
 // version-INDEPENDENT (it survives deploys — its keys are content hashes).
-const VERSION = "lv-v205";
+const VERSION = "lv-v206";
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const API_CACHE = `${VERSION}-api`;

@@ -6,12 +6,11 @@ import {
 } from "@mui/material";
 import { useEffect, useState } from "react";
 import { alpha } from "@mui/material/styles";
-import { ExpandMore, GraphicEq } from "@mui/icons-material";
+import { CloudDownload, ExpandMore, GraphicEq } from "@mui/icons-material";
 import { DetentSheet } from "../_shell";
 import { useNavbarAtBottom } from "@/hooks";
 import {
   type BookAudioStatus,
-  isSyncActive,
   refreshSyncStatus,
   useSyncStatus,
 } from "@/syncStore";
@@ -38,43 +37,38 @@ export function SyncIndicator(): React.JSX.Element | null {
   // top, so the strip rides at top:0 as a hairline above it.
   const navbarAtBottom = useNavbarAtBottom();
   const [open, setOpen] = useState(false);
-  const active = isSyncActive(status);
 
-  // Initial fetch, then poll while anything is in flight (progress ticks down).
+  // The strip surfaces only GENUINE background work — audio GENERATION. Routine
+  // offline prefetch (warming text/audio as you browse) is instant-ish and stays
+  // SILENT: it never pops the top strip. So "nothing needs sync" ⇒ no strip.
+  const g = status.global;
+  const generatingBooks = status.books.filter(
+    (b) => b.pending > 0 || b.failed > 0,
+  );
+  const activeCount = status.books.filter((b) => b.pending > 0).length;
+  const generating = g.pending > 0;
+  const pct = g.total > 0 ? Math.round((g.done / g.total) * 100) : null;
+  // The strip's short label (it also carries the count + a progress filament).
+  const barLabel = activeCount > 1
+    ? t("sync.generatingN", { n: activeCount })
+    : t("sync.generating");
+
+  // Initial fetch, then poll while work is in flight (progress ticks) or while
+  // the sheet is open (so a prefetch row updates live).
   useEffect(() => {
     void refreshSyncStatus();
   }, []);
   useEffect(() => {
-    if (!active) return undefined;
+    if (!generating && !open) return undefined;
     const id = window.setInterval(() => void refreshSyncStatus(), 5000);
     return () => window.clearInterval(id);
-  }, [active]);
+  }, [generating, open]);
 
-  // Aggregate MULTIPLE concurrent tasks into one summary: the bar is a summary,
-  // the sheet is the per-task breakdown. `pct` is the overall audio progress.
-  const g = status.global;
-  const activeBooks = status.books.filter((b) => b.pending > 0).length;
-  const pct = g.total > 0 ? Math.round((g.done / g.total) * 100) : null;
-  // The bar's short label (it also carries the count + a progress filament).
-  const barLabel = g.pending > 0
-    ? (activeBooks > 1 ? t("sync.generatingN", { n: activeBooks }) : t("sync.generating"))
-    : status.prefetching > 0
-    ? t("sync.prefetching")
-    : t("sync.upToDate");
-  // The sheet's peek line — a fuller sentence.
-  const headline = status.prefetching > 0 && g.pending > 0
-    ? t("sync.busy")
-    : g.pending > 0
-    ? t("sync.generatingAudio", { done: g.done, total: g.total })
-    : status.prefetching > 0
-    ? t("sync.prefetching")
-    : t("sync.upToDate");
-
-  if (!active && !open) return null;
+  if (!generating && !open) return null;
 
   return (
     <>
-      {active && !open && (
+      {generating && !open && (
         <Box
           role="button"
           tabIndex={0}
@@ -173,37 +167,40 @@ export function SyncIndicator(): React.JSX.Element | null {
         ariaLabel={t("sync.title")}
         frosted
         header={
-          <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+          // px matches the body's px:2 so the title aligns with the rows below.
+          <Typography variant="subtitle1" sx={{ fontWeight: 700, px: 2, pb: 0.5 }}>
             {t("sync.title")}
           </Typography>
         }
       >
-        <Box sx={{ px: 2, pb: 2, display: "flex", flexDirection: "column", gap: 2 }}>
-          {/* Peek line — the dominant activity. */}
-          <Typography variant="body2" color="text.secondary">
-            {headline}
-          </Typography>
+        <Box sx={{ px: 2, pb: 2, display: "flex", flexDirection: "column", gap: 1.5 }}>
+          {/* One row per currently-syncing resource, each with its own progress.
+              Generation rows are determinate (done/total); the offline prefetch is
+              indeterminate (no per-file total). */}
+          {generatingBooks.map((b) => <GeneratingRow key={b.slug} book={b} t={t} />)}
 
-          {/* Generating group — books with audio in flight. */}
-          {status.books.some((b) => b.pending > 0 || b.failed > 0) && (
-            <Box>
-              <Typography
-                variant="overline"
-                color="text.secondary"
-                sx={{ display: "block", mb: 0.5 }}
-              >
-                {t("sync.generating")}
-              </Typography>
-              {status.books
-                .filter((b) => b.pending > 0 || b.failed > 0)
-                .map((b) => <GeneratingRow key={b.slug} book={b} t={t} />)}
+          {status.prefetching > 0 && (
+            <Box sx={{ py: 0.5 }}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+                <CloudDownload sx={{ fontSize: 16, color: "text.secondary" }} />
+                <Typography variant="body2" noWrap sx={{ flex: 1, fontWeight: 600 }}>
+                  {t("sync.prefetching")}
+                </Typography>
+              </Box>
+              <LinearProgress sx={{ height: 4, borderRadius: 2 }} />
             </Box>
+          )}
+
+          {!generating && status.prefetching === 0 && (
+            <Typography variant="body2" color="text.secondary">
+              {t("sync.upToDate")}
+            </Typography>
           )}
 
           {/* Offline is automatic — no per-book switches. Reading is cached on
               open; audio is cached as you listen (content-addressed, survives
               deploys). Just a reassuring one-liner. */}
-          <Typography variant="caption" color="text.disabled">
+          <Typography variant="caption" color="text.disabled" sx={{ mt: 0.5 }}>
             {t("sync.offlineAuto")}
           </Typography>
         </Box>
