@@ -289,6 +289,20 @@ export function useTheme(): UseThemeResult {
             },
           },
         },
+        // A tooltip is a POINTER-HOVER affordance, not a touch one. MUI also
+        // shows it on a touch long-press (enterTouchDelay) and keeps it up for
+        // leaveTouchDelay (~1.5s) — so tapping a control that ALSO opens a sheet
+        // (e.g. the nav ≡ "Menu") flashed the tooltip on top of the sheet it had
+        // just opened: the tooltip portals at zIndex.tooltip = 1500, above the
+        // modal band = 1300. That's not a z-index to chase per-button — the fix
+        // is to stop touch from triggering tooltips at all. Disable ONLY the
+        // touch listener (theme-wide, so every Tooltip in the app inherits it):
+        // mouse hover still shows them on desktop, keyboard focus-visible still
+        // shows them for a11y, and touch shows nothing — no tooltip can ever
+        // float over a sheet/dialog again. Root cause, one place. (ui.md §7)
+        MuiTooltip: {
+          defaultProps: { disableTouchListener: true },
+        },
         // Touch ergonomics (ui.md §7): on a coarse pointer no interactive control
         // drops below the ~40px tap-target floor, even when size="small" is asked
         // for desktop density — "mobile never small". Desktop keeps the compact size.
