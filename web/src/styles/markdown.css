@@ -388,7 +388,18 @@
   display: block;
   width: max-content;
   max-width: 100%;
-  overflow: auto;
+  /* A `display:block` table is its own scroll container so a wide table scrolls
+     sideways instead of pushing the page out. But `overflow: auto` on BOTH axes
+     (with no momentum hint) made iOS WebKit hand vertical flicks landing on the
+     table to the table's own main-thread scroller, fighting the page scroller —
+     so scrolling the page over a table janked while everything else was smooth.
+     A table never overflows vertically (it sizes to its rows), so pin overflow-y
+     to `hidden`: vertical flicks pass straight through to the reader scroller.
+     Keep overflow-x: auto for the wide-table case, with compositor-thread
+     momentum scrolling — same pattern as `.katex-display` above. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
   font-variant: tabular-nums;
 }
 
