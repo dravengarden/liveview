@@ -44,7 +44,7 @@ import {
   useWebSocket,
 } from "@/hooks";
 import { useI18n } from "@/i18n";
-import { prefetchBookText } from "@/prefetch";
+import { prefetchBookAudio, prefetchBookText } from "@/prefetch";
 import { loadAllServerSettings, putServerSetting } from "@/syncBackends";
 import { type Track, useAudioPlayer } from "@/audio/player";
 import { useAutoUpdate } from "@/hooks/useAutoUpdate";
@@ -428,10 +428,15 @@ export function App(): React.JSX.Element {
   // The active book is the first path segment; null ⇒ the landing bookshelf.
   const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;
   const activeBook = books.find((b) => b.slug === activeSlug) ?? null;
-  // Opening a book quietly warms the rest of its chapters' text into the SW
-  // cache (read-offline), idle-scheduled + once per book/session.
+  // Opening a book quietly warms the rest of its chapters into the SW cache —
+  // text (read-offline) AND any baked audio (listen-offline) — idle-scheduled +
+  // once per book/session. Audio is opt-OUT-free now: just opening a book makes
+  // its already-generated audio offline-available (a text-only book's audio
+  // sweep is a no-op). Cheap on repeat opens: the SW short-circuits cache hits.
   useEffect(() => {
-    if (activeSlug) void prefetchBookText(activeSlug);
+    if (!activeSlug) return;
+    void prefetchBookText(activeSlug);
+    void prefetchBookAudio(activeSlug);
   }, [activeSlug]);
   // Are we ON the playing book's inline audio page (where the read-along reader
   // already shows full controls)? If so the floating bubble hides; everywhere

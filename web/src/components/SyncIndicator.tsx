@@ -1,11 +1,10 @@
-import { useEffect, useState } from "react";
 import {
   Box,
   CircularProgress,
   LinearProgress,
-  Switch,
   Typography,
 } from "@mui/material";
+import { useEffect, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import { ExpandMore, GraphicEq } from "@mui/icons-material";
 import { DetentSheet } from "../_shell";
@@ -16,9 +15,6 @@ import {
   refreshSyncStatus,
   useSyncStatus,
 } from "@/syncStore";
-import { setSavedOffline, useSavedOffline } from "@/offlineStore";
-import { prefetchBookAudio } from "@/prefetch";
-import type { Book } from "@/types";
 import { useI18n } from "@/i18n";
 
 /**
@@ -29,37 +25,20 @@ import { useI18n } from "@/i18n";
  * a progress filament along its bottom edge. Deliberately NOT a floating card —
  * no shadow, no rounded corners, no border ring — so it reads as part of the
  * chrome (a sibling of the nav bar) rather than something hovering over it.
- * Tapping it opens the Sync sheet (per-resource breakdown + offline controls).
- * Calm-tech: the user knows, but it weighs almost nothing.
+ * Tapping it opens the Sync sheet (per-task progress breakdown). Offline is
+ * automatic — reading and listened audio are cached as you go, no per-book
+ * toggle — so the sheet is purely a status view. Calm-tech: the user knows, but
+ * it weighs almost nothing.
  */
 export function SyncIndicator(): React.JSX.Element | null {
   const { t } = useI18n();
   const status = useSyncStatus();
-  const saved = useSavedOffline();
   // On mobile the nav bar drops to the bottom, leaving the top free for this
   // strip (under the safe-area status bar). On desktop the NavShell bar owns the
   // top, so the strip rides at top:0 as a hairline above it.
   const navbarAtBottom = useNavbarAtBottom();
   const [open, setOpen] = useState(false);
-  const [audioBooks, setAudioBooks] = useState<Book[]>([]);
   const active = isSyncActive(status);
-
-  // Load the books-with-audio list when the sheet opens (for the offline toggles).
-  useEffect(() => {
-    if (!open || audioBooks.length > 0) return;
-    void (async () => {
-      try {
-        const res = await fetch("/api/books");
-        if (!res.ok) return;
-        const all = (await res.json()) as Book[];
-        setAudioBooks(
-          all.filter((b) => b.renditions.some((r) => r.kind === "audio")),
-        );
-      } catch {
-        // offline — leave empty
-      }
-    })();
-  }, [open, audioBooks.length]);
 
   // Initial fetch, then poll while anything is in flight (progress ticks down).
   useEffect(() => {
@@ -221,52 +200,12 @@ export function SyncIndicator(): React.JSX.Element | null {
             </Box>
           )}
 
-          {/* Offline group — per-book "save audio offline" toggles. Text is
-              always cached on open; this opts a book's (heavy) audio into the SW
-              cache so it plays offline. */}
-          <Box>
-            <Typography
-              variant="overline"
-              color="text.secondary"
-              sx={{ display: "block", mb: 0.5 }}
-            >
-              {t("sync.offline")}
-            </Typography>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ display: "block", mb: 1 }}
-            >
-              {t("sync.offlineHint")}
-            </Typography>
-            {audioBooks.length === 0
-              ? (
-                <Typography variant="body2" color="text.secondary">
-                  {t("sync.offlineNone")}
-                </Typography>
-              )
-              : (
-                audioBooks.map((b) => (
-                  <Box
-                    key={b.slug}
-                    sx={{ display: "flex", alignItems: "center", gap: 1, py: 0.25 }}
-                  >
-                    <Typography variant="body2" noWrap sx={{ flex: 1 }}>
-                      {b.label}
-                    </Typography>
-                    <Switch
-                      size="small"
-                      checked={saved.has(b.slug)}
-                      onChange={(_e, on) => {
-                        setSavedOffline(b.slug, on);
-                        if (on) void prefetchBookAudio(b.slug);
-                      }}
-                      inputProps={{ "aria-label": b.label }}
-                    />
-                  </Box>
-                ))
-              )}
-          </Box>
+          {/* Offline is automatic — no per-book switches. Reading is cached on
+              open; audio is cached as you listen (content-addressed, survives
+              deploys). Just a reassuring one-liner. */}
+          <Typography variant="caption" color="text.disabled">
+            {t("sync.offlineAuto")}
+          </Typography>
         </Box>
       </DetentSheet>
     </>

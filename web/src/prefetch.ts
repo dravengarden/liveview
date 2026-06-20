@@ -11,6 +11,7 @@ import { setPrefetching } from "@/syncStore";
 
 /** Books already swept this session (cheap dedup; the SW holds the real cache). */
 const sweptText = new Set<string>();
+const sweptAudio = new Set<string>();
 let inFlight = 0;
 
 const idle = (): Promise<void> =>
@@ -74,14 +75,18 @@ export async function prefetchBookText(slug: string): Promise<void> {
 }
 
 /**
- * Prefetch a book's AUDIO (mp3 + marks) into the SW cache — the "save offline"
- * path (Lane B). Opt-in (audio is MBs/chapter), so it's only called when the
- * user toggles a book for offline. The SW's mediaCacheFirst stores the full
- * body, so offline playback + seeking work. Only chapters whose audio is already
- * baked (`audio.hash`) are pulled; the rest fill in on their `chapter-ready`.
+ * Prefetch a book's AUDIO (mp3 + marks) into the SW cache — Lane B (listen
+ * offline). Fired automatically when a book is opened (offline is opt-out-free);
+ * a text-only book has no baked-audio chapters, so its sweep is a no-op. The SW
+ * caches the full body, so offline playback + seeking work; repeat opens are
+ * cheap (the SW short-circuits cache hits, and `sweptAudio` skips the re-loop).
+ * Only chapters whose audio is already baked (`audio.hash`) are pulled; the rest
+ * become offline-available on first play (the SW caches every play in the
+ * background) or fill in as they generate.
  */
 export async function prefetchBookAudio(slug: string): Promise<void> {
-  if (!navigator.onLine) return;
+  if (sweptAudio.has(slug) || !navigator.onLine) return;
+  sweptAudio.add(slug);
   inFlight++;
   setPrefetching(inFlight);
   try {
@@ -107,7 +112,8 @@ export async function prefetchBookAudio(slug: string): Promise<void> {
       }
     }
   } catch {
-    // offline / transient
+    // offline / transient — let a later open retry the sweep.
+    sweptAudio.delete(slug);
   } finally {
     inFlight = Math.max(0, inFlight - 1);
     setPrefetching(inFlight);

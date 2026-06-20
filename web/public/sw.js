@@ -3,7 +3,7 @@
 // Hand-rolled (no Workbox). Bump VERSION to invalidate the shell/runtime/api
 // caches on the next visit; the immutable content-addressed BLOB cache is
 // version-INDEPENDENT (it survives deploys — its keys are content hashes).
-const VERSION = "lv-v204";
+const VERSION = "lv-v205";
 const SHELL_CACHE = `${VERSION}-shell`;
 const RUNTIME_CACHE = `${VERSION}-runtime`;
 const API_CACHE = `${VERSION}-api`;
@@ -66,12 +66,11 @@ self.addEventListener("fetch", (event) => {
       return;
     }
     // Audio (mp3): a normal PLAY streams Range from the network (fast first
-    // play). It's only cached when the page explicitly PREFETCHES it (the
-    // "save offline" toggle adds `?prefetch=1`) — then later plays + offline are
-    // served Range-from-cache. So we never silently download GBs nor slow the
-    // first play.
+    // play) AND caches the full body in the background, so everything you listen
+    // to becomes offline-available automatically — no per-book toggle. An
+    // explicit `?prefetch=1` (warming an opened book) downloads + caches up front.
     if (url.pathname === "/api/audio") {
-      event.respondWith(audioHandler(req, url));
+      event.respondWith(audioHandler(event, url));
       return;
     }
     // /api/version stays network-first un-cached fallthrough below (deploy probe).
@@ -114,10 +113,13 @@ async function staleWhileRevalidate(req, cacheName) {
 
 // Audio: cache hit → Range-from-cache; explicit prefetch (`?prefetch=1`) →
 // download the full body + cache it (keyed WITHOUT the prefetch param, so a
-// later play hits it); otherwise (a normal play, not cached) → stream Range from
-// the network. The audio element's 206 Range responses are uncacheable, which is
-// why the prefetch path fetches the full 200 instead.
-async function audioHandler(req, url) {
+// later play hits it); a normal play → stream Range from the network NOW and
+// cache the full body in the BACKGROUND (so the next play + offline are served
+// from cache — all listened audio becomes offline-available with no toggle). The
+// audio element's 206 Range responses are uncacheable, which is why both caching
+// paths fetch the full 200 instead.
+async function audioHandler(event, url) {
+  const req = event.request;
   const cache = await caches.open(AUDIO_CACHE);
   const isPrefetch = url.searchParams.has("prefetch");
   const keyUrl = new URL(url.href);
@@ -136,7 +138,21 @@ async function audioHandler(req, url) {
       return new Response("offline", { status: 504 });
     }
   }
-  return fetch(req); // normal play, not cached → stream from network
+
+  // Normal play: warm the cache in the background (once) so the next play +
+  // offline hit it, without slowing this first play (which streams Range below).
+  event.waitUntil(
+    (async () => {
+      try {
+        if (await cache.match(key)) return; // a concurrent play already cached it
+        const full = await fetch(key.url); // no Range ⇒ full 200
+        if (full && full.status === 200) await cache.put(key, full.clone());
+      } catch {
+        // best-effort; the next play retries
+      }
+    })(),
+  );
+  return fetch(req); // stream this play from the network meanwhile
 }
 
 // Cache-the-full-body, serve-Range media handler (immutable /api/blob). Fetch the
