@@ -1571,8 +1571,12 @@ export function App(): React.JSX.Element {
               zIndex: (t) => t.zIndex.appBar,
               pointerEvents: "none",
               bgcolor: (t) => alpha(t.palette.background.default, 0.5),
-              backdropFilter: "blur(24px) saturate(180%)",
-              WebkitBackdropFilter: "blur(24px) saturate(180%)",
+              // No saturate() here: over the sepia/warm page the 1.8× boost
+              // amplified the low-saturation content peeking through into a
+              // visible cool/green cast that didn't match the flat page. Plain
+              // blur keeps the frost without tinting. (lv-v203)
+              backdropFilter: "blur(24px)",
+              WebkitBackdropFilter: "blur(24px)",
             }}
           />
         )}
