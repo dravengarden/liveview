@@ -546,6 +546,17 @@ export function App(): React.JSX.Element {
     null;
   const bookLangs = activeRendition?.langs ?? [];
 
+  // Is the shared <PlaybackBar> transport currently mounted over the reader? It
+  // is on the audio rendition page (AudiobookPlayer always shows it) AND while
+  // text read-aloud narrates THIS chapter (MarkdownViewer mounts it then). When
+  // it is, the transport draws ONE frosted slab spanning itself + the bottom nav
+  // bar, so the nav bar must render bare (barTransparent) to avoid a second,
+  // mismatched frosted layer.
+  const transportShown = (activeRendition?.kind === "audio" &&
+    currentPath != null) ||
+    (nowPlaying?.rendition === "text" &&
+      nowPlaying.chapterPath === currentPath);
+
   // The rendition a book opens in: its declared default, resolved to the
   // matching RenditionInfo (falling back to the first).
   const defaultRendition = useCallback(
@@ -1639,6 +1650,10 @@ export function App(): React.JSX.Element {
               // frosted desktop bar would also float over the sidebar. The
               // reader scroller pads itself by --shell-bar-h (index.css).
               barFrosted={navbarAtBottom}
+              // While the transport is mounted it owns a single frosted slab
+              // behind both itself and this bar, so the bar renders bare (one pane
+              // of glass, no seam). Otherwise the bar keeps its own frost.
+              barTransparent={navbarAtBottom && transportShown}
               title={
                 <Box
                   role="button"

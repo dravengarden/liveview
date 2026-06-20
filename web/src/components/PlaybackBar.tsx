@@ -226,34 +226,55 @@ export function PlaybackBar(
   );
 
   return (
-    <Box
-      ref={transportRef}
-      sx={{
-        position: "absolute",
-        left: 0,
-        right: 0,
-        bottom: "var(--shell-bar-h, 0px)",
-        borderTop: 1,
-        borderColor: "divider",
-        // Same milky glass recipe as the NavShell bar below so they read as one slab.
-        bgcolor: (t) =>
-          alpha(
-            t.palette.background.default,
-            t.palette.mode === "dark" ? 0.72 : 0.76,
-          ),
-        backdropFilter: "blur(30px) saturate(200%)",
-        WebkitBackdropFilter: "blur(30px) saturate(200%)",
-        pl: "max(env(safe-area-inset-left, 0px), 12px)",
-        pr: "max(env(safe-area-inset-right, 0px), 12px)",
-        // SYMMETRIC top/bottom so the controls sit vertically centred.
-        pt: SLAB_PAD_Y,
-        pb: navbarAtBottom
-          ? SLAB_PAD_Y
-          : `max(calc(env(safe-area-inset-bottom, 0px) - 8px), ${
-            SLAB_PAD_Y * 8
-          }px)`,
-      }}
-    >
+    <>
+      {/* ONE frosted slab spanning this transport AND the bottom nav bar right
+          below it. The bar renders bare (NavShell `barTransparent`) over the
+          slab's bottom `--shell-bar-h`, so a SINGLE backdrop-filter backs both —
+          one continuous pane of glass. Two separate frosted layers never match
+          (they sample different page content), which was the seam. Height tracks
+          the measured transport (`--lv-transport-h`) + the bar (`--shell-bar-h`;
+          0 on desktop, where the bar is a top sibling and this is just the
+          transport's own glass). */}
+      <Box
+        aria-hidden
+        sx={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          height: "calc(var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
+          borderTop: 1,
+          borderColor: "divider",
+          bgcolor: (t) =>
+            alpha(
+              t.palette.background.default,
+              t.palette.mode === "dark" ? 0.72 : 0.76,
+            ),
+          backdropFilter: "blur(30px) saturate(200%)",
+          WebkitBackdropFilter: "blur(30px) saturate(200%)",
+          pointerEvents: "none",
+        }}
+      />
+      <Box
+        ref={transportRef}
+        sx={{
+          position: "absolute",
+          left: 0,
+          right: 0,
+          bottom: "var(--shell-bar-h, 0px)",
+          // No glass of its own — the slab above provides it, so the transport
+          // and the nav bar read as ONE pane with no seam.
+          pl: "max(env(safe-area-inset-left, 0px), 12px)",
+          pr: "max(env(safe-area-inset-right, 0px), 12px)",
+          // SYMMETRIC top/bottom so the controls sit vertically centred.
+          pt: SLAB_PAD_Y,
+          pb: navbarAtBottom
+            ? SLAB_PAD_Y
+            : `max(calc(env(safe-area-inset-bottom, 0px) - 8px), ${
+              SLAB_PAD_Y * 8
+            }px)`,
+        }}
+      >
       {oneRow
         ? (
           <Box
@@ -303,6 +324,7 @@ export function PlaybackBar(
             </Box>
           </>
         )}
-    </Box>
+      </Box>
+    </>
   );
 }
