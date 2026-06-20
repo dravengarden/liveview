@@ -7,7 +7,7 @@ import {
   Typography,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
-import { GraphicEq } from "@mui/icons-material";
+import { ExpandLess, GraphicEq } from "@mui/icons-material";
 import { DetentSheet } from "../_shell";
 import {
   type BookAudioStatus,
@@ -63,12 +63,24 @@ export function SyncIndicator(): React.JSX.Element | null {
     return () => window.clearInterval(id);
   }, [active]);
 
-  // The dominant line for the pill + the sheet peek.
+  // Aggregate MULTIPLE concurrent tasks into one summary: the bar is a summary,
+  // the sheet is the per-task breakdown. `pct` is the overall audio progress.
   const g = status.global;
-  const headline = status.prefetching > 0
+  const activeBooks = status.books.filter((b) => b.pending > 0).length;
+  const pct = g.total > 0 ? Math.round((g.done / g.total) * 100) : null;
+  // The bar's short label (it also carries the count + a progress filament).
+  const barLabel = g.pending > 0
+    ? (activeBooks > 1 ? t("sync.generatingN", { n: activeBooks }) : t("sync.generating"))
+    : status.prefetching > 0
     ? t("sync.prefetching")
+    : t("sync.upToDate");
+  // The sheet's peek line — a fuller sentence.
+  const headline = status.prefetching > 0 && g.pending > 0
+    ? t("sync.busy")
     : g.pending > 0
     ? t("sync.generatingAudio", { done: g.done, total: g.total })
+    : status.prefetching > 0
+    ? t("sync.prefetching")
     : t("sync.upToDate");
 
   if (!active && !open) return null;
@@ -81,39 +93,87 @@ export function SyncIndicator(): React.JSX.Element | null {
           tabIndex={0}
           aria-label={t("sync.title")}
           onClick={() => setOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") setOpen(true);
+          }}
           sx={{
+            // A floating activity BAR above the bottom nav bar / shelf toolbar
+            // (max() of whichever owns that edge), centred with side gutters so it
+            // reads as a bar, not a chip. Content scrolls under it (high
+            // transparency + blur), so it never disturbs reading.
             position: "fixed",
             left: "50%",
             transform: "translateX(-50%)",
+            width: "min(94vw, 560px)",
             bottom:
-              "calc(12px + env(safe-area-inset-bottom, 0px) + var(--shell-bar-h, 0px))",
+              "calc(8px + env(safe-area-inset-bottom, 0px) + max(var(--shell-bar-h, 0px), var(--lv-toolbar-h, 0px)))",
             zIndex: (th) => th.zIndex.appBar + 1,
-            display: "flex",
-            alignItems: "center",
-            gap: 0.75,
-            pl: 1,
-            pr: 1.5,
-            py: 0.5,
-            borderRadius: 999,
             cursor: "pointer",
-            maxWidth: "min(86vw, 360px)",
+            borderRadius: 2.5,
+            overflow: "hidden", // clip the progress filament to the rounded corners
             color: "text.secondary",
+            // Very translucent floating glass — high transparency, blurred.
             bgcolor: (th) =>
               alpha(
                 th.palette.background.paper,
-                th.palette.mode === "dark" ? 0.72 : 0.82,
+                th.palette.mode === "dark" ? 0.5 : 0.6,
               ),
-            backdropFilter: "blur(16px) saturate(180%)",
-            WebkitBackdropFilter: "blur(16px) saturate(180%)",
+            backdropFilter: "blur(18px) saturate(180%)",
+            WebkitBackdropFilter: "blur(18px) saturate(180%)",
             border: 1,
             borderColor: "divider",
-            boxShadow: 3,
+            boxShadow: 4,
+            "@media (hover: hover)": {
+              transition: "background-color .15s",
+              "&:hover": {
+                bgcolor: (th) =>
+                  alpha(
+                    th.palette.background.paper,
+                    th.palette.mode === "dark" ? 0.62 : 0.72,
+                  ),
+              },
+            },
           }}
         >
-          <CircularProgress size={14} thickness={5} />
-          <Typography variant="caption" noWrap sx={{ fontWeight: 600 }}>
-            {headline}
-          </Typography>
+          <Box
+            sx={{ display: "flex", alignItems: "center", gap: 1, px: 1.25, py: 0.75 }}
+          >
+            <CircularProgress
+              size={15}
+              thickness={5}
+              {...(pct != null
+                ? { variant: "determinate", value: pct }
+                : {})}
+            />
+            <Typography
+              variant="caption"
+              noWrap
+              sx={{ flex: 1, fontWeight: 600, color: "text.primary" }}
+            >
+              {barLabel}
+            </Typography>
+            {pct != null && (
+              <Typography
+                variant="caption"
+                sx={{ fontVariantNumeric: "tabular-nums", flexShrink: 0 }}
+              >
+                {g.done}/{g.total}
+              </Typography>
+            )}
+            <ExpandLess sx={{ fontSize: 18, flexShrink: 0, opacity: 0.7 }} />
+          </Box>
+          {/* Aggregate progress filament along the bar's bottom edge. */}
+          {pct != null && (
+            <Box
+              sx={{
+                height: 2,
+                width: `${pct}%`,
+                bgcolor: "primary.main",
+                opacity: 0.85,
+                transition: "width .3s ease",
+              }}
+            />
+          )}
         </Box>
       )}
 
