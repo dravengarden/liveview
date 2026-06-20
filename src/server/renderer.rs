@@ -53,6 +53,17 @@ pub fn render_file(source: &str, file_type: &FileType) -> String {
 }
 
 /// Render markdown source to HTML.
+///
+/// `render.sourcepos` is enabled so every block element carries
+/// `data-sourcepos="startline:col-endline:col"` — the STABLE anchor the
+/// read-along highlight maps each spoken unit to (`Unit::line`), instead of the
+/// client counting `body.children` (which desyncs when one source block renders
+/// to ≠ 1 top-level element, e.g. a multi-part inline `<svg>`). Anchoring by id
+/// is position-independent: a block with no wrapper (raw HTML) simply has no
+/// anchor and is skipped, without shifting any other block. See
+/// `docs/design/read-aloud-narration.md`.
 pub fn render_markdown(source: &str) -> String {
-    markdown_to_html(source, &markdown_options())
+    let mut options = markdown_options();
+    options.render.sourcepos = true;
+    markdown_to_html(source, &options)
 }

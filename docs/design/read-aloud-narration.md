@@ -178,7 +178,74 @@ you the exact remaining token spend before you spend it.
    `sync --render-version <bump>` invalidates stale audio → worker re-bakes with
    narration. Cost is bounded by the deduped, incremental plan.
 
-## 9. Open choices
+## 9. Robust highlight anchoring (the in-place reader)
+
+The in-place read-along must light the currently-spoken sentence / block IN the
+real rendered markdown (code, diagrams, tables all in place). The old link was
+**fragile**: the client numbered `body.children` itself (`data-blk = i`) and
+assumed *one source block = one top-level DOM element*. A source block that
+renders to ≠ 1 element (a multi-part inline `<svg>`, an HTML comment, …) shifts
+the count → every block after it highlights the wrong element. One bad block
+cascades.
+
+Fix — **the renderer is the anchor authority**, not the client:
+
+- `render_markdown` sets `render.sourcepos`, so comrak stamps each block element
+  with `data-sourcepos="<line>:<col>-…"` (its source span).
+- `spoken_units` records each unit's top-level block source line as `Unit.line`
+  (read from the same AST). Renderer HTML and unit list both derive their line
+  from comrak → identical by construction.
+- The client finds a unit's element by `[data-sourcepos^="<line>:"]` — **by id,
+  not by counting**. This is *position-independent*: a block with no wrapper
+  (raw HTML / svg passthrough has no element to stamp) simply has no anchor and
+  is skipped, **without shifting any other block**. The cascade is gone.
+
+This is the EPUB Media-Overlays model (audio ↔ display by stable id). Two steps:
+
+1. **server emits `data-sourcepos` + `Unit.line`; client prefers it, falls back
+   to counting when `line`/anchor is absent** (old server / unwrapped block). ←
+   removes the cascade with a backward-compatible change.
+2. **(target) the renderer wraps each prose sentence in `<span data-sourcepos>`**
+   too, so the client is purely id-driven and drops the char-offset locating
+   heuristic entirely — unifying the in-place reader with the audiobook view's
+   already-id-based (`n=i`) highlight.
+
+## 10. Migration — pilot one book, then scale
+
+The pieces are independent and ship incrementally; nothing is a flag-day.
+
+**Prerequisites (code, global once shipped, each backward-compatible):**
+- ✅ content-addressed narration store + liveview LLM removal (§3–6).
+- ✅ renderer `data-sourcepos` + `Unit.line` (§9 step 1, server side).
+- ⬜ client anchors by `data-sourcepos` (§9 step 1, client side) — verify in a
+  real browser.
+- ⬜ pg `narration` table + sync ingestion (§4) — so narration reaches the synth
+  (the server can't read the sidecar; sync ingests it).
+- ⬜ the skill (`narrate-plan` → generate → sidecar).
+
+**Pilot — ONE book (validates the whole chain before any scale):**
+1. Pick it: `narrate-audit` ranks books by narration richness (diagram+table+
+   math count); intersect with a book actually read.
+2. `narrate-plan <book> --lang <l>` → the skill fills
+   `books/<slug>/.narration/<l>.json` (deduped, incremental, prose-free).
+3. Sync that book → narration ingested into pg → text-audio baked WITH narration
+   (edge-tts only; no model in the deploy path).
+4. Read it: verify highlight is exact (sourcepos), narration quality + length,
+   audio↔text sync.
+5. Tune `speakable` recipes / the skill prompt → regenerate (cheap — only the
+   book's unique, changed resources) → re-sync.
+
+**Scale (only after the pilot reads well):**
+6. `narrate-plan` per book → skill fills each sidecar (batched; dedup + increment
+   keep the token spend bounded by genuinely-new resources).
+7. `sync --render-version <bump>` → re-render (sourcepos) + re-bake audio corpus-
+   wide; the always-on pregen worker backfills, on-demand covers the tail.
+
+**Safety:** a book with no sidecar just has silent non-prose (today's behavior),
+so the pilot can't hurt other books; the anchoring change degrades gracefully;
+everything is content-addressed + incremental, so re-runs cost ∝ change.
+
+## 11. Open choices
 
 - **Dedup scope**: per-book sidecar (simple, review-local) is the authoring
   surface; the pg table is already global, giving cross-book serve-time dedup. A

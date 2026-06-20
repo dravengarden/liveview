@@ -138,6 +138,10 @@ export interface Unit {
   idx: number;
   kind: UnitKind;
   blk: number;
+  /** 1-based source line of the unit's top-level block — the stable highlight
+   *  anchor, matching the `data-sourcepos="<line>:…"` the server emits on that
+   *  block. Preferred over `blk` (which relies on counting `body.children`). */
+  line: number;
   text: string;
 }
 

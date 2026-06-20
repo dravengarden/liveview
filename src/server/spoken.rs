@@ -251,6 +251,11 @@ pub struct Unit {
     pub idx: usize,
     pub kind: UnitKind,
     pub blk: usize,
+    /// 1-based source line of the unit's top-level block — the STABLE highlight
+    /// anchor. Matches the `data-sourcepos="<line>:…"` the renderer emits on that
+    /// block (`render.sourcepos`), so the client finds the element by id, not by
+    /// counting `body.children`. All units in one block share its line (like `blk`).
+    pub line: usize,
     pub text: String,
     /// Raw source of a non-prose block — the input for spoken narration:
     /// code/math literal, image alt-or-URL, the table's linearized cells, the
@@ -355,28 +360,29 @@ fn table_source<'a>(table: &'a AstNode<'a>) -> String {
     rows.join(" || ")
 }
 
-/// Emit the unit(s) for one block at top-level ordinal `blk`, recursing into
-/// containers (lists/quotes) so nested paragraphs share the container's anchor.
-/// Tuple: (kind, blk, spoken text, narration source, resource info).
-fn emit_block<'a>(
-    node: &'a AstNode<'a>,
-    blk: usize,
-    out: &mut Vec<(UnitKind, usize, String, String, String)>,
-) {
+/// A unit before its chapter-wide `idx` is assigned (set in `spoken_units`).
+fn mk(kind: UnitKind, blk: usize, line: usize, text: String, src: String, info: String) -> Unit {
+    Unit { idx: 0, kind, blk, line, text, src, info }
+}
+
+/// Emit the unit(s) for one block at top-level ordinal `blk` (source `line`),
+/// recursing into containers (lists/quotes) so nested paragraphs share the
+/// container's anchor + line.
+fn emit_block<'a>(node: &'a AstNode<'a>, blk: usize, line: usize, out: &mut Vec<Unit>) {
     match &node.data.borrow().value {
         NodeValue::CodeBlock(nc) => {
             // Keep the fence language (first info-string token) so the registry
             // can route ```mermaid to the diagram narrator, not generic code.
             let lang = nc.info.split_whitespace().next().unwrap_or("").to_string();
-            out.push((UnitKind::Code, blk, String::new(), nc.literal.clone(), lang));
+            out.push(mk(UnitKind::Code, blk, line, String::new(), nc.literal.clone(), lang));
         }
         NodeValue::Table(_) => {
-            out.push((UnitKind::Table, blk, String::new(), table_source(node), String::new()));
+            out.push(mk(UnitKind::Table, blk, line, String::new(), table_source(node), String::new()));
         }
         NodeValue::HtmlBlock(nh) => {
             // Carry the raw HTML so the registry can describe an inline <svg>
             // diagram (else it stays a silent step-over, as before).
-            out.push((UnitKind::Html, blk, String::new(), nh.literal.clone(), String::new()));
+            out.push(mk(UnitKind::Html, blk, line, String::new(), nh.literal.clone(), String::new()));
         }
         // Structural / non-spoken — no unit, but the block ordinal still advances.
         NodeValue::ThematicBreak | NodeValue::FootnoteDefinition(_) | NodeValue::FrontMatter(_) => {}
@@ -384,17 +390,17 @@ fn emit_block<'a>(
             let prose = leaf_prose(node);
             if prose.trim().is_empty() {
                 if let Some((kind, src, info)) = non_prose_block(node) {
-                    out.push((kind, blk, String::new(), src, info));
+                    out.push(mk(kind, blk, line, String::new(), src, info));
                 }
             } else {
                 let mut sentences = Vec::new();
                 segment_block(&prose, &mut sentences);
                 for s in sentences {
-                    out.push((UnitKind::Prose, blk, s, String::new(), String::new()));
+                    out.push(mk(UnitKind::Prose, blk, line, s, String::new(), String::new()));
                 }
             }
         }
-        // Containers: recurse, keeping the same top-level block anchor.
+        // Containers: recurse, keeping the same top-level block anchor + line.
         NodeValue::BlockQuote
         | NodeValue::MultilineBlockQuote(_)
         | NodeValue::List(_)
@@ -405,7 +411,7 @@ fn emit_block<'a>(
         | NodeValue::DescriptionTerm
         | NodeValue::DescriptionDetails => {
             for child in node.children() {
-                emit_block(child, blk, out);
+                emit_block(child, blk, line, out);
             }
         }
         // Anything else: best-effort prose extraction.
@@ -415,7 +421,7 @@ fn emit_block<'a>(
                 let mut sentences = Vec::new();
                 segment_block(&prose, &mut sentences);
                 for s in sentences {
-                    out.push((UnitKind::Prose, blk, s, String::new(), String::new()));
+                    out.push(mk(UnitKind::Prose, blk, line, s, String::new(), String::new()));
                 }
             }
         }
@@ -423,25 +429,20 @@ fn emit_block<'a>(
 }
 
 /// Turn chapter markdown into an ordered list of units (prose sentences + the
-/// non-prose blocks between them), each anchored to its top-level block ordinal.
+/// non-prose blocks between them), each anchored to its top-level block ordinal
+/// + source line (the `data-sourcepos` the renderer emits).
 pub fn spoken_units(markdown: &str) -> Vec<Unit> {
     let arena = Arena::new();
     let root = parse_document(&arena, markdown, &markdown_options());
-    let mut raw: Vec<(UnitKind, usize, String, String, String)> = Vec::new();
+    let mut raw: Vec<Unit> = Vec::new();
     for (blk, node) in root.children().enumerate() {
-        emit_block(node, blk, &mut raw);
+        let line = node.data.borrow().sourcepos.start.line;
+        emit_block(node, blk, line, &mut raw);
     }
-    raw.into_iter()
-        .enumerate()
-        .map(|(idx, (kind, blk, text, src, info))| Unit {
-            idx,
-            kind,
-            blk,
-            text,
-            src,
-            info,
-        })
-        .collect()
+    for (idx, unit) in raw.iter_mut().enumerate() {
+        unit.idx = idx;
+    }
+    raw
 }
 
 #[cfg(test)]
@@ -563,6 +564,14 @@ mod tests {
         assert!(table.src.contains("Ada | dev") && table.src.contains(" || "), "rows lost: {table:?}");
         let html = u.iter().find(|x| x.kind == UnitKind::Html).unwrap();
         assert!(html.src.contains("<svg"), "html literal lost: {html:?}");
+    }
+
+    #[test]
+    fn units_carry_block_source_line_for_anchoring() {
+        // line 1 = paragraph, line 3 = code fence (1-based, matching data-sourcepos).
+        let u = spoken_units("first para.\n\n```rust\nfn x() {}\n```\n");
+        assert_eq!(u.iter().find(|x| x.kind == UnitKind::Prose).unwrap().line, 1);
+        assert_eq!(u.iter().find(|x| x.kind == UnitKind::Code).unwrap().line, 3);
     }
 
     #[test]
