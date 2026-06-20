@@ -17,6 +17,7 @@ pub mod json;
 pub mod markdown;
 pub mod math;
 pub mod mermaid;
+pub mod readaloud;
 pub mod svg;
 pub mod targets;
 pub mod typst;

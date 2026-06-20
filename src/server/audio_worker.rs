@@ -15,7 +15,7 @@
 
 use tokio::sync::broadcast;
 
-use crate::server::{audio, narrate, spoken};
+use crate::server::{audio, speakable, spoken};
 use crate::store::pg::{AudioTask, PgStore};
 use crate::sync::merkle;
 use crate::sync::objstore::ObjStore;
@@ -149,19 +149,17 @@ async fn generate(
         }
         audio::synthesize(tts_cmd, &task.voice, &sentences).await?
     } else {
-        // Text read-aloud: one clip per UNIT of the displayed markdown (prose
-        // verbatim; non-prose narrated, else empty), so marks index = `/api/units`.
+        // Text read-aloud: one clip per UNIT of the displayed markdown, so the
+        // mark index = `/api/units`. Each unit's SPOKEN text is decided by the
+        // speech registry (prose normalized for the ear; tables/diagrams/math/
+        // code narrated per type; unhandled → a silent step-over).
         let units = spoken::spoken_units(&md);
         if units.is_empty() {
             return Ok(false);
         }
         let mut texts: Vec<String> = Vec::with_capacity(units.len());
         for u in &units {
-            if u.kind == spoken::UnitKind::Prose {
-                texts.push(u.text.clone());
-            } else {
-                texts.push(narrate::narrate(u.kind, &u.src, &task.lang).await.unwrap_or_default());
-            }
+            texts.push(speakable::unit_speech(u, &task.lang).await);
         }
         audio::synthesize(tts_cmd, &task.voice, &texts).await?
     };

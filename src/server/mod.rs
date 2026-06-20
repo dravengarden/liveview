@@ -3,6 +3,7 @@ pub mod audio_worker;
 pub mod catalog;
 pub mod narrate;
 pub mod renderer;
+pub mod speakable;
 pub mod spoken;
 pub mod state;
 pub mod tree;

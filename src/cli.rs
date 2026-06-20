@@ -79,6 +79,28 @@ pub enum Command {
     /// drains (sync enqueues; the worker synthesizes). Prints per-book progress
     /// by default; `--retry` re-queues failed tasks.
     Tasks(TasksArgs),
+
+    /// Evaluate read-aloud playability: a dry-run of the speech registry over the
+    /// corpus reporting, per non-prose resource (table / diagram / formula / code
+    /// / figure) and per read-hostile inline span (URL / address / phone), what
+    /// it will be SPOKEN as — and which resources are still SILENT and need an
+    /// author fix (e.g. an image with no alt text). Offline, no model calls, no
+    /// synth; shares the exact decision the runtime synth uses.
+    NarrateAudit(NarrateAuditArgs),
+}
+
+/// Args for `liveview narrate-audit`. Paths default to `.` (recurse for
+/// `*.md` / `*.markdown`); a file argument is evaluated as-is.
+#[derive(Args, Debug, Clone)]
+pub struct NarrateAuditArgs {
+    /// Files or directories to evaluate. Directories recurse for markdown.
+    #[arg(default_value = ".")]
+    pub paths: Vec<PathBuf>,
+
+    /// Output format: `human` (grouped, file:blk) or `json` (a serde array of
+    /// Diagnostic, for tooling / agents).
+    #[arg(long, value_enum, default_value = "human")]
+    pub format: OutputFormat,
 }
 
 /// Args for `liveview tasks`.

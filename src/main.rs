@@ -161,6 +161,12 @@ fn main() {
         std::process::exit(run_targets(&args));
     }
 
+    // `liveview narrate-audit` — offline read-aloud playability dry-run (no model
+    // calls, no synth), so it runs before the tokio runtime like `check`.
+    if let Some(Command::NarrateAudit(args)) = cli.command.clone() {
+        std::process::exit(check::readaloud::run(&args.paths, args.format));
+    }
+
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     match cli.command.clone() {
@@ -175,6 +181,9 @@ fn main() {
         // runtime is built — they never reach this match.
         Some(Command::Check(_)) => unreachable!("check handled before the tokio runtime"),
         Some(Command::Targets(_)) => unreachable!("targets handled before the tokio runtime"),
+        Some(Command::NarrateAudit(_)) => {
+            unreachable!("narrate-audit handled before the tokio runtime")
+        }
         // `liveview preview` — serve ONE local corpus from the filesystem (no
         // pg/rustfs, no sync), rendering on demand. For local QA / chart-review.
         Some(Command::Preview(args)) => {
@@ -1698,21 +1707,14 @@ async fn ensure_text_audio(
         return Err("no speakable content".to_string());
     }
     // One clip per unit (empty-text units → a silent dwell in `assemble`), so the
-    // mark index equals the unit index the highlight anchors on. Prose is spoken
-    // verbatim; a non-prose block (code/math/image) is optionally narrated by the
-    // LLM CLI (P4) — on failure/disabled it stays empty → a brief silent
-    // step-over. Runs once per chapter (the whole result is cached on the row).
+    // mark index equals the unit index the highlight anchors on. The speech
+    // registry decides each unit's spoken text: prose is normalized for the ear
+    // (URLs/addresses/phone numbers → a short stand-in), tables / diagrams /
+    // formulas / code are narrated per type, and anything unhandled stays a brief
+    // silent step-over. Runs once per chapter (the whole result is cached).
     let mut texts: Vec<String> = Vec::with_capacity(units.len());
     for u in &units {
-        if u.kind == server::spoken::UnitKind::Prose {
-            texts.push(u.text.clone());
-        } else {
-            texts.push(
-                server::narrate::narrate(u.kind, &u.src, &served)
-                    .await
-                    .unwrap_or_default(),
-            );
-        }
+        texts.push(server::speakable::unit_speech(u, &served).await);
     }
     let voice = {
         let cat = state.catalog.read().await;
