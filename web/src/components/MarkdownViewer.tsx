@@ -76,6 +76,16 @@ function isDarkScheme(): boolean {
   return document.documentElement.dataset["colorScheme"] === "dark";
 }
 
+/** Copy the read-along block anchors (`data-blk` numbered by the highlight, and
+ *  `data-sourcepos` stamped by the server) from one element to its replacement,
+ *  so a re-rendered diagram block stays findable by the in-place highlight. */
+function carryReadAnchors(from: HTMLElement, to: HTMLElement): void {
+  for (const attr of ["data-blk", "data-sourcepos"]) {
+    const v = from.getAttribute(attr);
+    if (v !== null) to.setAttribute(attr, v);
+  }
+}
+
 function mermaidConfig(isDark: boolean): Record<string, unknown> {
   return {
     theme: isDark ? "dark" : "default",
@@ -265,6 +275,12 @@ export function MarkdownViewer({
         block.dataset["mermaid"] = "true";
         const holder = document.createElement("div");
         holder.className = "lv-diagram-loading";
+        // Carry the read-along anchors forward. The block is a top-level child of
+        // .markdown-body, so the read-aloud highlight numbers it (data-blk) and
+        // the server may stamp it (data-sourcepos); replacing the element drops
+        // those, and the highlight then can't find the chart to focus it. Copy
+        // them onto every replacement so the final .mermaid div stays anchorable.
+        carryReadAnchors(block, holder);
         block.parentElement?.replaceChild(holder, block);
         pending.push({ holder, code });
       });
@@ -281,6 +297,7 @@ export function MarkdownViewer({
               // diagram in the other mode (mermaid replaces textContent with the
               // SVG, losing the source otherwise).
               div.dataset["mermaidSrc"] = code;
+              carryReadAnchors(holder, div); // keep the chart anchorable (see above)
               holder.replaceWith(div);
             });
             // Re-wire the lightbox gallery once the SVGs exist (run() is async).
@@ -345,6 +362,7 @@ export function MarkdownViewer({
                   displayMode: true,
                   throwOnError: false,
                 });
+                carryReadAnchors(pre, div); // keep the math block anchorable
                 pre.replaceWith(div);
               } catch {
                 // Keep original content on error
