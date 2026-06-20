@@ -35,14 +35,14 @@ export interface ReadAlongFollow {
 // active, so normal reading is completely unaffected.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const HL_DONE = "lv-read-done"; // every already-read sentence (the progress trail)
 const HL_SENTENCE = "lv-reading"; // whole current sentence (focus)
 const HL_ACTIVE = "lv-reading-active"; // read-so-far wipe within the current sentence
 
 interface HighlightLike {
   add(range: Range): void;
-  // Paint order: higher wins. done(0) < sentence(1) < active(2), so the strong
-  // wipe sits on top of the sentence tint, both above the soft read trail.
+  // Paint order: higher wins. sentence(1) < active(2), so the strong read-so-far
+  // wipe sits on top of the current-sentence tint. (No past-sentence trail — only
+  // the line being spoken is ever lit.)
   priority?: number;
 }
 /** The CSS Custom Highlight API, typed minimally + feature-detected (so we never
@@ -318,17 +318,14 @@ export function useInPlaceHighlight(
     return () => window.clearInterval(id);
   }, [active, playing]);
 
-  // Trail + focus. Rebuilt only when the CURRENT sentence changes (NOT every
-  // audio tick). Reading leaves a progress trail: every already-read sentence
-  // keeps a soft tint, the current sentence a medium tint; the per-tick wipe
+  // Focus on the CURRENT sentence only — no past-sentence trail. Rebuilt only
+  // when the current sentence changes (NOT every audio tick); the per-tick wipe
   // (effect below) layers the strong read-so-far cue on top.
   //
   // Why clear ALL then repaint: iOS WebKit's CSS-Highlight invalidation is
   // unreliable — replacing a moving highlight left stale paint of already-passed
-  // sentences as "ghosts" (the patchy trail the user saw). Clearing the whole
-  // registry on each sentence change forces a clean repaint; the read trail is
-  // then rebuilt deterministically (and only grows forward), so what shows always
-  // matches the real read position — no ghosts, no gaps on bold lead-ins.
+  // sentences as "ghosts". Clearing the whole registry on each sentence change
+  // forces a clean repaint, so only the line being spoken is ever lit.
   useEffect(() => {
     const api = highlightApi();
     const body = scrollerRef.current?.querySelector<HTMLElement>(
@@ -338,22 +335,13 @@ export function useInPlaceHighlight(
       api?.clearAll();
       return undefined;
     }
-    // Frozen during a user scroll, same as the wipe — so the trail doesn't keep
-    // advancing sentence-to-sentence (its clearAll would also blink the wipe off)
-    // while you scroll. The whole highlight holds still, then snaps to live on
-    // settle (scrollSettle). The cleanup below must NOT clear while suspended, or
-    // a sentence change mid-scroll would blank everything.
+    // Frozen during a user scroll, same as the wipe — so the highlight doesn't
+    // jump sentence-to-sentence (its clearAll would also blink the wipe off)
+    // while you scroll. It holds still, then snaps to live on settle
+    // (scrollSettle). The cleanup below must NOT clear while suspended, or a
+    // sentence change mid-scroll would blank everything.
     if (scrollSuspendRef.current) return undefined;
     const located = ensureLocated(body);
-
-    // The read trail: every sentence before the current one, soft tint.
-    const done = api.make();
-    done.priority = 0;
-    for (let i = 0; i < currentIdx; i++) {
-      const loc = located.get(i);
-      const r = loc && rangeOf(loc, 0, 1);
-      if (r) done.add(r);
-    }
 
     // The current sentence (full extent), medium tint — the focus. Non-prose
     // blocks (image / code / table / math) outline the whole block instead.
@@ -374,7 +362,6 @@ export function useInPlaceHighlight(
     }
 
     api.clearAll();
-    api.set(HL_DONE, done);
     api.set(HL_SENTENCE, sentence);
 
     // Remember the spoken line (for the jump button) and sticky-follow it on
