@@ -180,6 +180,37 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                         format!("upsert edition {}/{r_kind}/{}: {e}", book.slug, ed.lang)
                     })?;
 
+                // Ingest this edition's read-aloud narration sidecar
+                // (`<book_root>/.narration/<lang>.json`, a skill's output) into the
+                // content-addressed `narration` table, so the text synth resolves
+                // each non-prose resource's spoken text by key — no model in the
+                // deploy path. Only the TEXT rendition has read-aloud narration;
+                // idempotent (ON CONFLICT), so re-syncs are cheap no-ops.
+                if r_kind == "text" {
+                    if let Some(book_root) = ed.source.parent() {
+                        match crate::server::narration::Sidecar::load(book_root, &ed.lang) {
+                            Ok(sc) => {
+                                for (key, e) in &sc.entries {
+                                    store
+                                        .upsert_narration(key, &e.kind, &ed.lang, &e.text)
+                                        .await
+                                        .map_err(|err| {
+                                            format!(
+                                                "upsert narration {}/{}: {err}",
+                                                book.slug, ed.lang
+                                            )
+                                        })?;
+                                }
+                            }
+                            Err(e) => tracing::warn!(
+                                "narration sidecar {}/{}: {e}",
+                                book.slug,
+                                ed.lang
+                            ),
+                        }
+                    }
+                }
+
                 // Files included by this edition's globsets, relative to source.
                 let mut files: Vec<(String, PathBuf)> = Vec::new();
                 walk(&ed.source, &ed.source, ed, &mut files)?;

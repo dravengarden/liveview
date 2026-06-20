@@ -153,13 +153,16 @@ async fn generate(
         // mark index = `/api/units`. Each unit's SPOKEN text is decided by the
         // speech registry (prose normalized for the ear; tables/diagrams/math/
         // code resolved from PRE-GENERATED narration; unhandled / not-yet-narrated
-        // → a silent step-over). No model call. TODO(narration-pg): load the
-        // book's narration store from pg; until then non-prose is silent.
+        // → a silent step-over). No model call — the narration was made offline by
+        // a skill and ingested into pg by `sync`; we just resolve it by key.
         let units = spoken::spoken_units(&md);
         if units.is_empty() {
             return Ok(false);
         }
-        let store = narration::NarrationStore::empty();
+        let keys = speakable::narration_keys(&units, &task.lang);
+        let store = narration::NarrationStore::from_pairs(
+            pg.load_narration(&keys).await.map_err(|e| e.to_string())?,
+        );
         let texts: Vec<String> = units
             .iter()
             .map(|u| speakable::unit_speech(u, &task.lang, &store))

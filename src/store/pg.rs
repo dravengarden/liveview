@@ -502,6 +502,47 @@ impl PgStore {
         .map(|_| ())
     }
 
+    /// Upsert one content-addressed narration entry (idempotent — re-syncing the
+    /// same sidecar is a no-op; a regenerated text overwrites). Called by `sync`.
+    pub async fn upsert_narration(
+        &self,
+        key: &str,
+        kind: &str,
+        lang: &str,
+        text: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO narration (key, kind, lang, text)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (key) DO UPDATE SET
+                 kind = EXCLUDED.kind, lang = EXCLUDED.lang, text = EXCLUDED.text",
+        )
+        .bind(key)
+        .bind(kind)
+        .bind(lang)
+        .bind(text)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+    }
+
+    /// Resolve `key → text` for the narration keys present. Missing keys are
+    /// simply absent (a silent step-over). One indexed `= ANY` query.
+    pub async fn load_narration(
+        &self,
+        keys: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, sqlx::Error> {
+        if keys.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let rows: Vec<(String, String)> =
+            sqlx::query_as("SELECT key, text FROM narration WHERE key = ANY($1)")
+                .bind(keys)
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows.into_iter().collect())
+    }
+
     pub async fn get_asset(&self, content_hash: &str) -> Result<Option<AssetRow>, sqlx::Error> {
         sqlx::query_as::<_, AssetRow>(
             "SELECT content_hash, mime, size FROM assets WHERE content_hash = $1",

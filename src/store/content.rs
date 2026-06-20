@@ -71,6 +71,16 @@ pub trait ContentStore: Send + Sync {
     async fn upsert_asset(&self, content_hash: &str, mime: &str, size: i64)
         -> Result<(), String>;
 
+    /// Resolve the pre-generated spoken text for a set of narration `keys`
+    /// (content-addressed; see `server::narration`). Returns `key → text` for the
+    /// keys present; missing keys are simply absent (a silent step-over). Used by
+    /// the text read-aloud synth so it never calls a model. Backends with no
+    /// narration table (the filesystem preview) return an empty map.
+    async fn load_narration(
+        &self,
+        keys: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, String>;
+
     /// The pre-built sidebar forest JSON for a rendition (`"[]"` when absent).
     async fn get_site_tree(&self, rendition: &str) -> Result<Option<String>, String>;
 
@@ -161,6 +171,14 @@ impl ContentStore for PgStore {
         size: i64,
     ) -> Result<(), String> {
         PgStore::upsert_asset(self, content_hash, mime, size)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    async fn load_narration(
+        &self,
+        keys: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, String> {
+        PgStore::load_narration(self, keys)
             .await
             .map_err(|e| e.to_string())
     }

@@ -229,6 +229,14 @@ impl ContentStore for FsStore {
         // Metadata already rides with the bytes in the blob map (put_if_absent).
         Ok(())
     }
+    async fn load_narration(
+        &self,
+        _keys: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, String> {
+        // The filesystem preview has no narration table — non-prose stays a
+        // silent step-over (preview is for render/chart QA, not listening).
+        Ok(std::collections::HashMap::new())
+    }
 
     async fn get_site_tree(&self, rendition: &str) -> Result<Option<String>, String> {
         Ok(self.trees.get(rendition).cloned())

@@ -1718,11 +1718,13 @@ async fn ensure_text_audio(
     // mark index equals the unit index the highlight anchors on. The speech
     // registry decides each unit's spoken text: prose is normalized for the ear
     // (URLs/addresses/phone numbers → a short stand-in), tables / diagrams /
-    // formulas / code are resolved from PRE-GENERATED narration, and anything
-    // unhandled / not-yet-narrated stays a brief silent step-over. No model call.
-    // TODO(narration-pg): load this book's narration store from pg; until then
-    // non-prose is silent. Runs once per chapter (the whole result is cached).
-    let store = server::narration::NarrationStore::empty();
+    // formulas / code are resolved from PRE-GENERATED narration (made offline by
+    // a skill, ingested into pg by `sync`), and anything unhandled / not-yet-
+    // narrated stays a brief silent step-over. No model call. Runs once per
+    // chapter (the whole result is cached).
+    let keys = server::speakable::narration_keys(&units, &served);
+    let store =
+        server::narration::NarrationStore::from_pairs(state.store.load_narration(&keys).await?);
     let texts: Vec<String> = units
         .iter()
         .map(|u| server::speakable::unit_speech(u, &served, &store))

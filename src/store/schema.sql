@@ -162,3 +162,18 @@ CREATE TABLE IF NOT EXISTS settings (
     value      TEXT NOT NULL,
     updated_at BIGINT NOT NULL
 );
+
+-- ── Read-aloud narration (content-addressed, skill-generated) ────────────────
+
+-- Spoken text for a non-prose resource (diagram / table / formula / code),
+-- keyed by CONTENT, not position: key = blake3(lang · kind · normalized-source).
+-- Populated by `liveview sync` from each book's reviewable sidecar
+-- (books/<slug>/.narration/<lang>.json), which a skill generates. The text synth
+-- resolves a unit's spoken text by this key; the server never calls a model.
+-- Global table ⇒ identical resources across books dedup to one row.
+CREATE TABLE IF NOT EXISTS narration (
+    key   TEXT PRIMARY KEY,   -- 32-hex blake3
+    kind  TEXT NOT NULL,      -- diagram | table | math | code
+    lang  TEXT NOT NULL,
+    text  TEXT NOT NULL
+);

@@ -102,6 +102,19 @@ pub fn unit_speech(unit: &Unit, lang: &str, store: &NarrationStore) -> String {
     }
 }
 
+/// The narration keys a chapter's non-prose units resolve against — so the synth
+/// can pre-load the whole chapter's narration in one store query, not one per
+/// unit. (May contain duplicates; the store query dedups.)
+pub fn narration_keys(units: &[Unit], lang: &str) -> Vec<String> {
+    units
+        .iter()
+        .filter_map(|u| match plan(u, lang) {
+            Speech::Narrated { key, .. } => Some(key),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Build a `Narrated` plan: the content key + a short source preview.
 fn narrated(rule: &'static str, kind: &'static str, src: &str, lang: &str) -> Speech {
     let trimmed = src.trim();
