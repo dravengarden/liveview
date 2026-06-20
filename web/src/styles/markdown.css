@@ -1413,3 +1413,18 @@
 :root[data-color-scheme="dark"] ::highlight(lv-reading-active) {
   background-color: rgba(255, 200, 80, 0.38);
 }
+
+/* Paused read-along anchor. A CSS Custom Highlight (above) is purged by iOS
+   WebKit once the page goes idle, so the PAUSED "you are here" line kept
+   vanishing despite repaint hacks. This is a REAL DOM background on the current
+   block — exactly why the audiobook reader's paused line is rock-solid (iOS
+   never purges element backgrounds). useInPlaceHighlight toggles this class on
+   the current block ONLY while paused; the precise per-word wipe (the CSS
+   highlights above) still drives the PLAYING state. Tint matches lv-reading. */
+.markdown-body .lv-reading-paused {
+  background-color: rgba(240, 168, 40, 0.2);
+  border-radius: 4px;
+}
+:root[data-color-scheme="dark"] .markdown-body .lv-reading-paused {
+  background-color: rgba(255, 200, 80, 0.18);
+}

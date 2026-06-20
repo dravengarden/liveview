@@ -218,8 +218,8 @@ export function useInPlaceHighlight(
   const [pausedBeat, setPausedBeat] = useState(0);
   // The spoken line's live range, so the jump button can re-centre on it.
   const curRangeRef = useRef<Range | null>(null);
-  // The block element currently carrying the paused-repaint filter (see the focus
-  // effect), so we can clear it when the line moves or playback resumes.
+  // The block element currently carrying the paused DOM-background tint (see the
+  // focus effect), so we can clear it when the line moves or playback resumes.
   const litBlockRef = useRef<HTMLElement | null>(null);
   // Per-chapter located map (unit idx → block slice), computed ONCE per units
   // array (it's positional, so it's stable for the rendered chapter) and reused
@@ -348,9 +348,9 @@ export function useInPlaceHighlight(
     );
     if (!active || !api || !body) {
       api?.clearAll();
-      // Read-aloud closed (or no body): drop the paused-repaint filter too.
+      // Read-aloud closed (or no body): drop the paused DOM tint too.
       if (litBlockRef.current) {
-        litBlockRef.current.style.filter = "";
+        litBlockRef.current.classList.remove("lv-reading-paused");
         litBlockRef.current = null;
       }
       return undefined;
@@ -400,27 +400,27 @@ export function useInPlaceHighlight(
     api.set(HL_GHOSTBUST, ghostbust);
     api.set(HL_SENTENCE, sentence);
 
-    // PAUSED-PAINT FIX. iOS WebKit does NOT repaint a CSS Custom Highlight from a
-    // registry change while the page is idle — so while PLAYING the per-audio-tick
-    // wipe forces paints and the line shows, but once PAUSED the re-asserted line
-    // (set above + via the pausedBeat heartbeat) never actually paints and the
-    // highlight "vanishes". Force a real CONTENT repaint of the current block by
-    // toggling an imperceptible `filter` on it each heartbeat: filter
-    // re-rasterizes the element's subtree (text + its ::highlight overlay),
-    // whereas opacity/transform only re-composite the stale cached layer. Audio
-    // playing ⇒ no filter (the wipe already paints); clear the previous block's
-    // filter whenever the line moves or playback resumes.
+    // PAUSED-PAINT FIX. iOS WebKit purges the CSS Custom Highlight overlay once
+    // the page goes idle, so while PLAYING the per-audio-tick wipe keeps forcing
+    // paints and the line shows, but once PAUSED the re-asserted highlight never
+    // actually paints and "vanishes". Repaint hacks (an invisible highlight, a
+    // toggled `filter`) didn't hold on every device — and a `filter` on the block
+    // can itself drop the ::highlight from the rasterized layer. The audiobook
+    // reader's paused line is rock-solid because it's a REAL DOM background on
+    // the element, which iOS never purges. Mirror that: while paused, tint the
+    // current BLOCK with a real background class as the reliable "you are here"
+    // anchor. Playing ⇒ no DOM tint (the precise CSS wipe paints it); clear the
+    // previous block's tint whenever the line moves or playback resumes.
     const prevLit = litBlockRef.current;
-    if (prevLit && prevLit !== blockEl) prevLit.style.filter = "";
-    if (blockEl) {
-      if (!playing) {
-        // Alternate filter/none each beat so every heartbeat is a real change.
-        blockEl.style.filter = pausedBeat % 2 === 0 ? "opacity(0.999)" : "none";
-        litBlockRef.current = blockEl;
-      } else {
-        blockEl.style.filter = "";
-        litBlockRef.current = null;
-      }
+    if (prevLit && prevLit !== blockEl) {
+      prevLit.classList.remove("lv-reading-paused");
+    }
+    if (blockEl && !playing) {
+      blockEl.classList.add("lv-reading-paused");
+      litBlockRef.current = blockEl;
+    } else if (blockEl) {
+      blockEl.classList.remove("lv-reading-paused");
+      litBlockRef.current = null;
     }
 
     // Remember the spoken line so the jump button + the auto-follow effect can
