@@ -384,7 +384,13 @@ export function useInPlaceHighlight(
     sentence.priority = 1;
     if (curRange) {
       sentence.add(curRange);
-    } else if (unit && blockEl && unit.kind !== "prose") {
+    } else if (blockEl) {
+      // No precise range — either a non-prose block (image/code/table/math block)
+      // OR a prose sentence we couldn't locate char-for-char (inline KaTeX math
+      // renders as spans with no matching text node, so locateText fails on that
+      // sentence). Either way, fall back to highlighting the WHOLE block so the
+      // line is still lit instead of vanishing — better a slightly-wider cue than
+      // none on a formula line.
       const block = document.createRange();
       block.selectNodeContents(blockEl);
       sentence.add(block);
