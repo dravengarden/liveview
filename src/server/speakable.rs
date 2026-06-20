@@ -2,17 +2,17 @@
 //! actually spoken, optimized for the "watch + listen" reader (lossy is fine —
 //! the listener also sees the page).
 //!
-//! This is the extension point. Every non-prose resource that "can't just be
-//! read aloud" — a mermaid/SVG diagram, a table, a formula, a code block, a
-//! figure — is routed here to a *handler* that knows how to phrase it for the
-//! ear: a deterministic rewrite, an authored description, or a per-kind LLM
-//! prompt. Adding a new resource type is one arm in [`plan`] + (if it needs the
-//! model) one [`Recipe`]. The list of handled types is meant to grow.
+//! Two tiers (see `docs/design/read-aloud-narration.md`):
+//!   • **Deterministic** — prose verbatim with read-hostile inline spans (URLs,
+//!     addresses, phone numbers) normalized, and an image's `alt` spoken as-is.
+//!     Computed here, no model, zero tokens.
+//!   • **Narrated** — a diagram / table / formula / code block is resolved to
+//!     PRE-GENERATED text by a content-addressed key (a skill produces it
+//!     offline; see [`crate::server::narration`]). liveview NEVER calls a model.
 //!
-//! Two callers share ONE decision function, [`plan`], so they can never drift:
-//!   • runtime synth ([`unit_speech`]) — the text fed to edge-tts, and
-//!   • the offline evaluator (`liveview narrate-audit`) — a dry-run report of
-//!     what each resource will become / which are still silent.
+//! This is the extension point: a new resource type is one arm in [`plan`].
+//! [`plan`] is pure (no IO, no store) so the offline evaluator + `narrate-plan`
+//! can compute the same keys the runtime resolves — they can never drift.
 //!
 //! Sync + highlight are unaffected: `plan` only decides a unit's *spoken* text;
 //! the unit's `idx`/`blk`/display `text` (what the in-place highlight anchors
@@ -23,11 +23,9 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::server::narrate;
+use crate::server::narration::{self, NarrationStore};
 use crate::server::spoken::{Unit, UnitKind};
 
-/// Don't ship an enormous block to the model — the gist is in the head.
-const MAX_SRC_CHARS: usize = 4000;
 /// An image's `alt` shorter than this is too thin to stand in for the figure
 /// when listening; the evaluator flags it so the author writes a fuller one
 /// (the "moderate, not too short" target). Advisory only — the runtime still
@@ -37,15 +35,18 @@ pub const MIN_ALT_CHARS: usize = 16;
 /// The spoken-text decision for one unit. Carries a stable `rule` id (namespaced
 /// `speak/…`, for the evaluator + tooling) in every arm.
 pub enum Speech {
-    /// Final text known WITHOUT the model: inline-normalized prose, an authored
-    /// image description, or a deterministic rewrite. Spoken verbatim.
+    /// Final text known WITHOUT a model: inline-normalized prose or an authored
+    /// image `alt`. Spoken verbatim.
     Ready { rule: &'static str, text: String },
-    /// Needs the LLM: a finished prompt to run. On any failure the caller falls
-    /// back to a silent step-over (`source` is a short preview for the report).
-    Llm {
+    /// A non-prose resource whose spoken text is PRE-GENERATED, resolved by
+    /// `key` against the narration store. `kind` is the narration recipe (also
+    /// in the key); `src` is a short preview for `narrate-plan` / the report.
+    /// Absent from the store ⇒ a silent step-over until the skill narrates it.
+    Narrated {
         rule: &'static str,
-        prompt: String,
-        source: String,
+        kind: &'static str,
+        key: String,
+        src: String,
     },
     /// Nothing to say — a brief silent step-over (decorative / unhandled / a
     /// resource we can't describe, e.g. an image with no alt text). The
@@ -53,9 +54,9 @@ pub enum Speech {
     Silent { rule: &'static str },
 }
 
-/// Decide a unit's spoken text. Pure + cheap (no IO): builds the prompt but does
-/// not run it, so the offline evaluator can call it on a whole corpus. The
-/// single source of truth for "what becomes of each resource".
+/// Decide a unit's spoken text. Pure + cheap (no IO, no store): computes the
+/// content key for narrated kinds but does not resolve it, so the offline
+/// evaluator + `narrate-plan` compute the SAME keys the runtime resolves.
 pub fn plan(unit: &Unit, lang: &str) -> Speech {
     match unit.kind {
         // Prose is spoken verbatim, with read-hostile spans (URLs, emails,
@@ -66,47 +67,58 @@ pub fn plan(unit: &Unit, lang: &str) -> Speech {
             let text = if text.trim().is_empty() { unit.text.clone() } else { text };
             Speech::Ready { rule: "speak/prose", text }
         }
-        UnitKind::Image => image_plan(unit, lang),
-        UnitKind::Math => llm(Recipe::MATH, &unit.src, lang),
+        UnitKind::Image => image_plan(unit),
+        UnitKind::Math => narrated("speak/math", narration::KIND_MATH, &unit.src, lang),
         UnitKind::Table => {
             if unit.src.trim().is_empty() {
                 Speech::Silent { rule: "speak/table-empty" }
             } else {
-                llm(Recipe::TABLE, &unit.src, lang)
+                narrated("speak/table", narration::KIND_TABLE, &unit.src, lang)
             }
         }
         UnitKind::Code => {
-            // ```mermaid is a relationship/flow diagram, not code — describe what
-            // it shows, never read node ids and arrows.
+            // ```mermaid is a relationship/flow diagram, not code — narrate what
+            // it shows, never the node ids and arrows.
             if unit.info.eq_ignore_ascii_case("mermaid") {
-                llm(Recipe::DIAGRAM, &unit.src, lang)
+                narrated("speak/diagram", narration::KIND_DIAGRAM, &unit.src, lang)
             } else if unit.src.trim().is_empty() {
                 Speech::Silent { rule: "speak/code-empty" }
             } else {
-                llm(Recipe::CODE, &unit.src, lang)
+                narrated("speak/code", narration::KIND_CODE, &unit.src, lang)
             }
         }
         UnitKind::Html => html_plan(unit, lang),
     }
 }
 
-/// The text spoken for `unit` (runtime synth path). Runs the LLM for `Llm`
-/// plans; any narration failure degrades to a silent step-over (empty string),
-/// exactly as before — narration is additive, never blocking.
-pub async fn unit_speech(unit: &Unit, lang: &str) -> String {
+/// The text spoken for `unit` (runtime synth path). Deterministic plans return
+/// their text; a narrated plan resolves its key against the pre-generated store,
+/// falling back to a silent step-over when not yet narrated. No model, no IO.
+pub fn unit_speech(unit: &Unit, lang: &str, store: &NarrationStore) -> String {
     match plan(unit, lang) {
         Speech::Ready { text, .. } => text,
-        Speech::Llm { prompt, .. } => narrate::run(&prompt).await.unwrap_or_default(),
+        Speech::Narrated { key, .. } => store.get(&key).unwrap_or_default().to_string(),
         Speech::Silent { .. } => String::new(),
     }
 }
 
-/// An image speaks its `alt` text when the author wrote one — that's the
-/// generation-time hook for "give this figure a moderate spoken description"
-/// (reviewable, versioned, no model call). With no alt there's nothing to say:
+/// Build a `Narrated` plan: the content key + a short source preview.
+fn narrated(rule: &'static str, kind: &'static str, src: &str, lang: &str) -> Speech {
+    let trimmed = src.trim();
+    Speech::Narrated {
+        rule,
+        kind,
+        key: narration::key(lang, kind, trimmed),
+        src: trimmed.chars().take(160).collect(),
+    }
+}
+
+/// An image speaks its `alt` text when the author wrote one — the generation-time
+/// hook for "give this figure a moderate spoken description" (reviewable,
+/// versioned, no model, no narration entry). With no alt there's nothing to say:
 /// we can't read a binary/SVG file, so it's a flagged silent step-over (the
 /// evaluator tells the author to add alt text).
-fn image_plan(unit: &Unit, _lang: &str) -> Speech {
+fn image_plan(unit: &Unit) -> Speech {
     let has_alt = !unit.src.trim().is_empty() && unit.src != unit.info;
     if has_alt {
         Speech::Ready { rule: "speak/image-alt", text: unit.src.clone() }
@@ -116,85 +128,18 @@ fn image_plan(unit: &Unit, _lang: &str) -> Speech {
 }
 
 /// Route embedded HTML by what it actually is:
-///   • `<svg>` — a hand-drawn diagram; hand the source to the diagram narrator.
+///   • `<svg>` — a hand-drawn diagram; narrate it like a diagram.
 ///   • `<table>` — a raw-HTML table (not GFM); narrate it like any table.
 /// Anything else (disclosure `<details>`, layout `<div>`, …) is scaffolding — a
 /// flagged silent step-over rather than a risk of reading markup aloud. New tags
 /// graft on as one more arm here.
 fn html_plan(unit: &Unit, lang: &str) -> Speech {
     if unit.src.contains("<svg") {
-        llm(Recipe::DIAGRAM, &unit.src, lang)
+        narrated("speak/diagram", narration::KIND_DIAGRAM, &unit.src, lang)
     } else if unit.src.contains("<table") {
-        llm(Recipe::TABLE, &unit.src, lang)
+        narrated("speak/table", narration::KIND_TABLE, &unit.src, lang)
     } else {
         Speech::Silent { rule: "speak/html" }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Per-kind LLM recipes — WHAT to say for each resource. Each pairs a stable rule
-// id, the noun the prompt uses, and type-specific phrasing guidance (incl. a
-// length target: moderate, never one-word). Add a kind = add a Recipe const.
-// ─────────────────────────────────────────────────────────────────────────────
-
-struct Recipe {
-    rule: &'static str,
-    word: &'static str,
-    guidance: &'static str,
-}
-
-impl Recipe {
-    const DIAGRAM: Recipe = Recipe {
-        rule: "speak/diagram",
-        word: "relationship diagram",
-        guidance: "Describe the key relationship(s) or flow this diagram shows in 1 to 3 \
-                   natural spoken sentences — the structure and direction, e.g. \"a private \
-                   key derives a public key, which hashes to the address\". Never read node \
-                   ids, arrows, or syntax literally.",
-    };
-    const TABLE: Recipe = Recipe {
-        rule: "speak/table",
-        word: "table",
-        guidance: "If the table carries real information, turn it into a natural spoken \
-                   enumeration (e.g. \"there are two account types: an EOA, controlled by a \
-                   private key with no code; and a contract account, controlled by its \
-                   bytecode\"). If it is just a reference grid, state its one-sentence \
-                   takeaway. 2 to 4 sentences. Never read it cell by cell and never say the \
-                   words \"column\" or \"row\".",
-    };
-    const MATH: Recipe = Recipe {
-        rule: "speak/math",
-        word: "formula",
-        guidance: "Speak this formula the way a person reads it aloud (10^18 → \"ten to the \
-                   eighteenth\", E=mc^2 → \"E equals m c squared\"), or state what it \
-                   expresses. One short sentence. Never read LaTeX, backslashes, or dollar \
-                   signs.",
-    };
-    const CODE: Recipe = Recipe {
-        rule: "speak/code",
-        word: "code block",
-        guidance: "In one short spoken sentence, say what this code does or shows — its \
-                   purpose or result, not a literal read-out. Never read the code aloud.",
-    };
-}
-
-/// Build an `Llm` plan from a recipe + the resource source.
-fn llm(recipe: Recipe, src: &str, lang: &str) -> Speech {
-    let trimmed = src.trim();
-    let input: String = trimmed.chars().take(MAX_SRC_CHARS).collect();
-    let prompt = format!(
-        "You are narrating a document aloud for a listener who is ALSO looking at the page, \
-         so a lossy gist is fine and better than reading symbols. Reply in the same language \
-         as the document (language code: {lang}). Output ONLY the spoken text — no preamble, \
-         no quotes, no markdown.\n\n{guidance}\n\n{word} content:\n{input}",
-        lang = lang,
-        guidance = recipe.guidance,
-        word = recipe.word,
-    );
-    Speech::Llm {
-        rule: recipe.rule,
-        prompt,
-        source: trimmed.chars().take(120).collect(),
     }
 }
 
@@ -279,7 +224,9 @@ mod tests {
 
     fn rule_of(s: &Speech) -> &'static str {
         match s {
-            Speech::Ready { rule, .. } | Speech::Llm { rule, .. } | Speech::Silent { rule } => rule,
+            Speech::Ready { rule, .. }
+            | Speech::Narrated { rule, .. }
+            | Speech::Silent { rule } => rule,
         }
     }
 
@@ -287,12 +234,14 @@ mod tests {
     fn mermaid_routes_to_diagram_not_code() {
         let u = unit("```mermaid\ngraph TD; A-->B;\n```\n", UnitKind::Code);
         match plan(&u, "en") {
-            Speech::Llm { rule, prompt, .. } => {
+            Speech::Narrated { rule, kind, key, src } => {
                 assert_eq!(rule, "speak/diagram");
-                assert!(prompt.contains("relationship diagram"));
-                assert!(prompt.contains("A-->B"), "source not in prompt");
+                assert_eq!(kind, narration::KIND_DIAGRAM);
+                assert!(src.contains("A-->B"), "source preview lost");
+                // Key is stable + matches narration::key for the same inputs.
+                assert_eq!(key, narration::key("en", narration::KIND_DIAGRAM, "graph TD; A-->B;"));
             }
-            other => panic!("expected Llm diagram, got {}", rule_of(&other)),
+            other => panic!("expected Narrated diagram, got {}", rule_of(&other)),
         }
     }
 
@@ -306,12 +255,23 @@ mod tests {
     fn table_routes_to_table_with_source() {
         let u = unit("| A | B |\n|---|---|\n| 1 | 2 |\n", UnitKind::Table);
         match plan(&u, "zh") {
-            Speech::Llm { rule, prompt, .. } => {
+            Speech::Narrated { rule, kind, src, .. } => {
                 assert_eq!(rule, "speak/table");
-                assert!(prompt.contains("columns: A | B"));
+                assert_eq!(kind, narration::KIND_TABLE);
+                assert!(src.contains("columns: A | B"), "table source preview lost");
             }
-            other => panic!("expected Llm table, got {}", rule_of(&other)),
+            other => panic!("expected Narrated table, got {}", rule_of(&other)),
         }
+    }
+
+    #[test]
+    fn unit_speech_resolves_from_store_else_silent() {
+        let u = unit("```mermaid\ngraph TD; A-->B;\n```\n", UnitKind::Code);
+        let k = narration::key("en", narration::KIND_DIAGRAM, "graph TD; A-->B;");
+        let store = NarrationStore::from_pairs([(k, "A points to B.".to_string())]);
+        assert_eq!(unit_speech(&u, "en", &store), "A points to B.");
+        // Not narrated yet → silent step-over (empty), never a model call.
+        assert_eq!(unit_speech(&u, "en", &NarrationStore::empty()), "");
     }
 
     #[test]

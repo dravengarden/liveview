@@ -1,7 +1,7 @@
 pub mod audio;
 pub mod audio_worker;
 pub mod catalog;
-pub mod narrate;
+pub mod narration;
 pub mod renderer;
 pub mod speakable;
 pub mod spoken;

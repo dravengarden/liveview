@@ -167,6 +167,11 @@ fn main() {
         std::process::exit(check::readaloud::run(&args.paths, args.format));
     }
 
+    // `liveview narrate-plan` — offline; emit the skill's to-generate narration list.
+    if let Some(Command::NarratePlan(args)) = cli.command.clone() {
+        std::process::exit(check::readaloud::plan_run(&args.paths, &args.lang, args.format));
+    }
+
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
 
     match cli.command.clone() {
@@ -183,6 +188,9 @@ fn main() {
         Some(Command::Targets(_)) => unreachable!("targets handled before the tokio runtime"),
         Some(Command::NarrateAudit(_)) => {
             unreachable!("narrate-audit handled before the tokio runtime")
+        }
+        Some(Command::NarratePlan(_)) => {
+            unreachable!("narrate-plan handled before the tokio runtime")
         }
         // `liveview preview` — serve ONE local corpus from the filesystem (no
         // pg/rustfs, no sync), rendering on demand. For local QA / chart-review.
@@ -1710,12 +1718,15 @@ async fn ensure_text_audio(
     // mark index equals the unit index the highlight anchors on. The speech
     // registry decides each unit's spoken text: prose is normalized for the ear
     // (URLs/addresses/phone numbers → a short stand-in), tables / diagrams /
-    // formulas / code are narrated per type, and anything unhandled stays a brief
-    // silent step-over. Runs once per chapter (the whole result is cached).
-    let mut texts: Vec<String> = Vec::with_capacity(units.len());
-    for u in &units {
-        texts.push(server::speakable::unit_speech(u, &served).await);
-    }
+    // formulas / code are resolved from PRE-GENERATED narration, and anything
+    // unhandled / not-yet-narrated stays a brief silent step-over. No model call.
+    // TODO(narration-pg): load this book's narration store from pg; until then
+    // non-prose is silent. Runs once per chapter (the whole result is cached).
+    let store = server::narration::NarrationStore::empty();
+    let texts: Vec<String> = units
+        .iter()
+        .map(|u| server::speakable::unit_speech(u, &served, &store))
+        .collect();
     let voice = {
         let cat = state.catalog.read().await;
         cat.book(&row.book_slug)

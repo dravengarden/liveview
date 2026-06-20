@@ -83,10 +83,34 @@ pub enum Command {
     /// Evaluate read-aloud playability: a dry-run of the speech registry over the
     /// corpus reporting, per non-prose resource (table / diagram / formula / code
     /// / figure) and per read-hostile inline span (URL / address / phone), what
-    /// it will be SPOKEN as — and which resources are still SILENT and need an
-    /// author fix (e.g. an image with no alt text). Offline, no model calls, no
-    /// synth; shares the exact decision the runtime synth uses.
+    /// it will be SPOKEN as — narrated (stored) vs needs-narration vs SILENT.
+    /// Offline, no model calls, no synth; shares the exact decision the runtime
+    /// synth uses, and reads the book's `.narration/<lang>.json` sidecar.
     NarrateAudit(NarrateAuditArgs),
+
+    /// Emit the to-generate narration work for a book + language: the unique
+    /// non-prose resources NOT already in `.narration/<lang>.json`, deduped, as
+    /// `{key, kind, lang, src}`. The SKILL's input — it fills each key's spoken
+    /// text back into the sidecar. Prose never appears (zero tokens); re-running
+    /// after the skill fills the sidecar yields an empty plan.
+    NarratePlan(NarratePlanArgs),
+}
+
+/// Args for `liveview narrate-plan`. Point it at a book root (or its `<lang>/`
+/// dir); `--lang` selects the language edition + sidecar.
+#[derive(Args, Debug, Clone)]
+pub struct NarratePlanArgs {
+    /// Book root or directory to plan. Recurses for markdown.
+    #[arg(default_value = ".")]
+    pub paths: Vec<PathBuf>,
+
+    /// Language edition to plan narration for (sidecar `.narration/<lang>.json`).
+    #[arg(long, default_value = "zh")]
+    pub lang: String,
+
+    /// Output: `json` (array of {key,kind,lang,src} for the skill) or `human`.
+    #[arg(long, value_enum, default_value = "json")]
+    pub format: OutputFormat,
 }
 
 /// Args for `liveview narrate-audit`. Paths default to `.` (recurse for
