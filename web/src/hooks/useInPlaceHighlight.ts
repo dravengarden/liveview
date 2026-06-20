@@ -35,14 +35,20 @@ export interface ReadAlongFollow {
 // active, so normal reading is completely unaffected.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// An INVISIBLE repaint-forcer over already-read sentences (NOT a visible trail).
+// See the focus effect: iOS WebKit doesn't repaint a region when its highlight is
+// REMOVED (so clearAll leaves a ghost of the previous sentence's wipe), but it
+// does when a highlight is ADDED. Painting this near-zero-alpha layer over the
+// vacated sentences forces them to repaint ghost-free, while showing nothing.
+const HL_GHOSTBUST = "lv-read-done"; // invisible; only forces a repaint
 const HL_SENTENCE = "lv-reading"; // whole current sentence (focus)
 const HL_ACTIVE = "lv-reading-active"; // read-so-far wipe within the current sentence
 
 interface HighlightLike {
   add(range: Range): void;
-  // Paint order: higher wins. sentence(1) < active(2), so the strong read-so-far
-  // wipe sits on top of the current-sentence tint. (No past-sentence trail — only
-  // the line being spoken is ever lit.)
+  // Paint order: higher wins. ghostbust(0) < sentence(1) < active(2). The first
+  // is invisible (alpha ~0.01), present only to force WebKit to repaint vacated
+  // regions; the visible cue is the current sentence + its read-so-far wipe.
   priority?: number;
 }
 /** The CSS Custom Highlight API, typed minimally + feature-detected (so we never
@@ -322,14 +328,17 @@ export function useInPlaceHighlight(
     return () => window.clearInterval(id);
   }, [active, playing]);
 
-  // Focus on the CURRENT sentence only — no past-sentence trail. Rebuilt only
-  // when the current sentence changes (NOT every audio tick); the per-tick wipe
-  // (effect below) layers the strong read-so-far cue on top.
+  // Focus on the CURRENT sentence only — no VISIBLE trail. Rebuilt only when the
+  // current sentence changes (NOT every audio tick); the per-tick wipe (effect
+  // below) layers the strong read-so-far cue on top.
   //
-  // Why clear ALL then repaint: iOS WebKit's CSS-Highlight invalidation is
-  // unreliable — replacing a moving highlight left stale paint of already-passed
-  // sentences as "ghosts". Clearing the whole registry on each sentence change
-  // forces a clean repaint, so only the line being spoken is ever lit.
+  // Ghost-busting: iOS WebKit doesn't repaint a region when a highlight is merely
+  // REMOVED — clearAll() leaves stale "ghost" paint of the previous sentence's
+  // wipe (the bug the user hit after the visible trail was dropped). But WebKit
+  // DOES repaint a region when a highlight is ADDED. So we paint an INVISIBLE
+  // (alpha ~0.01) highlight over every already-read sentence: it forces those
+  // vacated regions to repaint ghost-free while showing nothing. Only the current
+  // sentence + its wipe are ever visible.
   useEffect(() => {
     const api = highlightApi();
     const body = scrollerRef.current?.querySelector<HTMLElement>(
@@ -346,6 +355,15 @@ export function useInPlaceHighlight(
     // sentence change mid-scroll would blank everything.
     if (scrollSuspendRef.current) return undefined;
     const located = ensureLocated(body);
+
+    // Invisible repaint-forcer over the already-read sentences (see header).
+    const ghostbust = api.make();
+    ghostbust.priority = 0;
+    for (let i = 0; i < currentIdx; i++) {
+      const loc = located.get(i);
+      const r = loc && rangeOf(loc, 0, 1);
+      if (r) ghostbust.add(r);
+    }
 
     // The current sentence (full extent), medium tint — the focus. Non-prose
     // blocks (image / code / table / math) outline the whole block instead.
@@ -366,6 +384,7 @@ export function useInPlaceHighlight(
     }
 
     api.clearAll();
+    api.set(HL_GHOSTBUST, ghostbust);
     api.set(HL_SENTENCE, sentence);
 
     // Remember the spoken line (for the jump button) and sticky-follow it on
