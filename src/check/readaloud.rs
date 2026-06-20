@@ -108,7 +108,14 @@ pub fn plan_run(paths: &[PathBuf], lang: &str, format: OutputFormat) -> i32 {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut stores: std::collections::HashMap<String, NarrationStore> =
         std::collections::HashMap::new();
+    let lang_seg = format!("/{lang}/");
     for (rel, source) in &files {
+        // Plan ONE language edition: a resource is keyed by lang, so only this
+        // lang's chapters belong in this plan (the book dir also holds other
+        // langs + the audio rendition). Match the conventional `<lang>/` segment.
+        if !rel.contains(&lang_seg) {
+            continue;
+        }
         let store = stores
             .entry(book_root_of(rel))
             .or_insert_with(|| load_store(rel, lang));
