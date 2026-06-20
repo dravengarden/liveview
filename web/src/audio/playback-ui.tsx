@@ -15,7 +15,21 @@ import { Bedtime } from "@mui/icons-material";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
 
-export const RATES = [0.75, 1, 1.25, 1.5, 2, 2.25, 2.5, 2.75, 3];
+export const RATES = [
+  0.75,
+  1,
+  1.25,
+  1.5,
+  1.75,
+  2,
+  2.25,
+  2.5,
+  2.75,
+  3,
+  3.25,
+  3.5,
+  3.75,
+];
 /** Sleep-timer options in minutes (0 = off). Capped at 90. */
 export const SLEEP_MINUTES = [15, 30, 45, 60, 90];
 
