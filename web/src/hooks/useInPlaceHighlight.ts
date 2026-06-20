@@ -170,6 +170,28 @@ function fitScroll(scroller: HTMLElement, el: HTMLElement): void {
   scroller.scrollBy({ top: delta, behavior: "smooth" });
 }
 
+// The smallest element to anchor the PAUSED prose tint on — the list item /
+// paragraph / cell that CONTAINS the current sentence, NOT the top-level block.
+// A top-level block can be a whole <ul> (many bullets) or <blockquote>; tinting
+// it ballooned a one-sentence pause to the entire list. Climbing to the nearest
+// LI/P/cell keeps the paused anchor at the sentence's container. Falls back to
+// the block when the sentence isn't located.
+const ANCHOR_TAGS = ["LI", "P", "BLOCKQUOTE", "TD", "TH", "DD", "DT", "FIGCAPTION"];
+function pausedAnchorEl(
+  curRange: Range | null,
+  blockEl: HTMLElement,
+): HTMLElement {
+  if (!curRange) return blockEl;
+  const n = curRange.commonAncestorContainer;
+  let el: HTMLElement | null = n.nodeType === 1
+    ? (n as HTMLElement)
+    : n.parentElement;
+  while (el && el !== blockEl && !ANCHOR_TAGS.includes(el.tagName)) {
+    el = el.parentElement;
+  }
+  return el ?? blockEl;
+}
+
 /** Locate EVERY prose unit in the chapter, keyed by unit idx → its block slice.
  *
  *  The fix for repeated text: a unit used to be located independently via
@@ -488,20 +510,22 @@ export function useInPlaceHighlight(
     //     PLAYING and PAUSED alike (no per-word cue exists for a summary).
     //   • PROSE, paused → the background "you are here" anchor (the CSS wipe is
     //     purged when idle); PROSE, playing → none (the precise wipe paints it).
+    // Clear the previous marker wherever it sat (a non-prose BLOCK, or a paused
+    // prose sentence-ANCHOR), then mark the current target.
     const prevLit = litBlockRef.current;
-    if (prevLit && prevLit !== blockEl) {
+    if (prevLit) {
       prevLit.classList.remove("lv-reading-paused", ...READING_BLOCK_CLASSES);
     }
     litBlockRef.current = null;
-    if (blockEl) {
-      blockEl.classList.remove("lv-reading-paused", ...READING_BLOCK_CLASSES);
-      if (isNonProse) {
-        blockEl.classList.add(blockReadingClass(blockEl));
-        litBlockRef.current = blockEl;
-      } else if (!playing) {
-        blockEl.classList.add("lv-reading-paused");
-        litBlockRef.current = blockEl;
-      }
+    if (blockEl && isNonProse) {
+      blockEl.classList.add(blockReadingClass(blockEl));
+      litBlockRef.current = blockEl;
+    } else if (blockEl && !playing) {
+      // Anchor the paused tint on the sentence's CONTAINER (li / p / cell), not
+      // the top-level block — else a sentence pause balloons to a whole <ul>.
+      const anchor = pausedAnchorEl(curRange, blockEl);
+      anchor.classList.add("lv-reading-paused");
+      litBlockRef.current = anchor;
     }
 
     // Remember the spoken line so the jump button + the auto-follow effect can
