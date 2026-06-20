@@ -1946,10 +1946,14 @@ export function Landing({
             ...(navbarAtBottom
               ? {
                 // Bottom tier: bar at the foot; the shelf reaches the top so it
-                // still clears the notch itself.
-                pt: "calc(env(safe-area-inset-top, 0px) + 16px)",
+                // still clears the notch itself — plus the sync strip's height
+                // (--lv-syncbar-h, 0 unless generating) so the top card row
+                // starts below the strip instead of under it.
+                pt:
+                  "calc(env(safe-area-inset-top, 0px) + var(--lv-syncbar-h, 0px) + 16px)",
                 pb: "calc(32px + var(--lv-toolbar-h, 0px))",
-                scrollPaddingTop: "calc(env(safe-area-inset-top, 0px) + 16px)",
+                scrollPaddingTop:
+                  "calc(env(safe-area-inset-top, 0px) + var(--lv-syncbar-h, 0px) + 16px)",
                 scrollPaddingBottom: "var(--lv-toolbar-h, 0px)",
               }
               : {

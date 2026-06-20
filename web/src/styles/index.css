@@ -66,7 +66,10 @@ textarea,
     content: "";
     display: block;
     flex: none;
-    height: env(safe-area-inset-top, 0px);
+    /* Clear the status-bar notch AND the sync strip when it's up (SyncIndicator
+       publishes --lv-syncbar-h while generating), so the first line starts below
+       the strip instead of under it — yet still scrolls up beneath its frost. */
+    height: calc(env(safe-area-inset-top, 0px) + var(--lv-syncbar-h, 0px));
   }
 
   /* Frosted-overlay bottom bar: the NavShell bar is now an iOS-style frosted

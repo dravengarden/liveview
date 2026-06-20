@@ -64,6 +64,25 @@ export function SyncIndicator(): React.JSX.Element | null {
     return () => window.clearInterval(id);
   }, [generating, open]);
 
+  // Reserve the strip's height so content starts BELOW it (a chapter title / the
+  // top card row is never occluded) yet still scrolls UNDER its frosted fill —
+  // the scrollers add --lv-syncbar-h to their top edge (reader `::before` in
+  // index.css; the shelf's pt in Landing), mirroring how --shell-bar-h /
+  // --lv-toolbar-h reserve the bottom bars. Mobile only: there the strip sits
+  // over CONTENT; on desktop it rides over the NavShell bar (chrome that owns
+  // its own space), so leave that tier alone. 28px = the 26px row + 2px filament.
+  useEffect(() => {
+    const el = document.documentElement;
+    if (generating && !open && navbarAtBottom) {
+      el.style.setProperty("--lv-syncbar-h", "28px");
+    } else {
+      el.style.removeProperty("--lv-syncbar-h");
+    }
+    return () => {
+      el.style.removeProperty("--lv-syncbar-h");
+    };
+  }, [generating, open, navbarAtBottom]);
+
   if (!generating && !open) return null;
 
   return (
@@ -91,9 +110,15 @@ export function SyncIndicator(): React.JSX.Element | null {
             cursor: "pointer",
             overflow: "hidden", // clip the progress filament to the edges
             color: "text.secondary",
-            bgcolor: (th) => alpha(th.palette.background.default, 0.82),
-            backdropFilter: "blur(12px)",
-            WebkitBackdropFilter: "blur(12px)",
+            // Strong frost so content scrolling UNDER the strip is cleanly
+            // obscured, not bled-through to collide with the label. On mobile the
+            // strip overlays the reading content (its space is reserved above),
+            // so it must read as solid chrome — near-opaque + a heavy blur. On
+            // desktop it rides over the NavShell bar, so keep the lighter touch.
+            bgcolor: (th) =>
+              alpha(th.palette.background.default, navbarAtBottom ? 0.96 : 0.82),
+            backdropFilter: navbarAtBottom ? "blur(20px)" : "blur(12px)",
+            WebkitBackdropFilter: navbarAtBottom ? "blur(20px)" : "blur(12px)",
             borderBottom: 1,
             borderColor: "divider",
             "@media (hover: hover)": {
