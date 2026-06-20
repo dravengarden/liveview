@@ -118,6 +118,22 @@ function normalizeBlock(
   return { norm, map };
 }
 
+/** The rendered block element for a unit, found by the SERVER-emitted
+ *  `data-sourcepos="<line>:…"` anchor (robust — by id, not by counting
+ *  `body.children`, which desyncs when one source block renders to ≠ 1 top-level
+ *  element). Falls back to the client-numbered `data-blk` so an older server
+ *  (no sourcepos) still highlights. Null when neither anchor is present. */
+function blockElForUnit(
+  body: HTMLElement,
+  unit: Unit | undefined,
+): HTMLElement | null {
+  if (!unit) return null;
+  return (
+    body.querySelector<HTMLElement>(`[data-sourcepos^="${unit.line}:"]`) ??
+    body.querySelector<HTMLElement>(`[data-blk="${unit.blk}"]`)
+  );
+}
+
 /** Locate EVERY prose unit in the chapter, keyed by unit idx → its block slice.
  *
  *  The fix for repeated text: a unit used to be located independently via
@@ -129,7 +145,8 @@ function normalizeBlock(
  *  AFTER the previous one ended (`indexOf(needle, cursor)`). Position, not just
  *  content, disambiguates — deterministic and correct regardless of repeats.
  *
- *  Blocks must already be numbered with `data-blk`. */
+ *  Blocks are found by the server-emitted `data-sourcepos` anchor (see
+ *  {@link blockElForUnit}). */
 function locateChapter(
   body: HTMLElement,
   units: Unit[],
@@ -142,8 +159,8 @@ function locateChapter(
     if (arr) arr.push(u);
     else byBlk.set(u.blk, [u]);
   }
-  for (const [blk, blkUnits] of byBlk) {
-    const blockEl = body.querySelector<HTMLElement>(`[data-blk="${blk}"]`);
+  for (const [, blkUnits] of byBlk) {
+    const blockEl = blockElForUnit(body, blkUnits[0]);
     if (!blockEl) continue;
     const { norm, map } = normalizeBlock(blockEl);
     let cursor = 0;
@@ -375,9 +392,7 @@ export function useInPlaceHighlight(
     // The current sentence (full extent), medium tint — the focus. Non-prose
     // blocks (image / code / table / math) outline the whole block instead.
     const unit = units[currentIdx];
-    const blockEl = unit
-      ? body.querySelector<HTMLElement>(`[data-blk="${unit.blk}"]`)
-      : null;
+    const blockEl = blockElForUnit(body, unit);
     const curLoc = located.get(currentIdx);
     const curRange = curLoc ? rangeOf(curLoc, 0, 1) : null;
     const sentence = api.make();
