@@ -373,14 +373,9 @@ export function useInPlaceHighlight(
   // Bumped when a user scroll settles, to re-run the wipe once and snap the
   // highlight back to the live playback position after the freeze.
   const [scrollSettle, setScrollSettle] = useState(0);
-  // Heartbeat that re-asserts the highlight WHILE PAUSED. iOS WebKit purges the
-  // CSS Custom Highlight overlay once the page goes idle, and when paused there's
-  // no repaint trigger (currentTime is frozen) to restore it — so the "you are
-  // here" line vanishes a beat after you pause. (While PLAYING the per-tick wipe
-  // repaints constantly, hiding the purge.) Re-painting on this tick keeps the
-  // current line lit until you resume or exit read-aloud. Effect set up below
-  // (needs `active`, defined later).
-  const [pausedBeat, setPausedBeat] = useState(0);
+  // (No paused heartbeat: the paused cue is always a DOM span/class now, which
+  // iOS never purges — so nothing needs periodic re-asserting. The old 300ms
+  // heartbeat forced a repaint thrice a second and made the line flicker.)
   // The spoken line's live range, so the jump button can re-centre on it.
   const curRangeRef = useRef<Range | null>(null);
   // The block element currently carrying the paused DOM-background tint (see the
@@ -484,19 +479,6 @@ export function useInPlaceHighlight(
     };
   }, [active, scrollerRef]);
 
-  // Paused-highlight heartbeat (see pausedBeat). Only runs while read-aloud is
-  // loaded AND paused — when playing, the wipe's own per-tick repaint covers it,
-  // and when inactive there's nothing to keep lit. The audiobook reader's paused
-  // line never blinks (it's a plain DOM background, which iOS never purges); this
-  // CSS-Highlight line relies on this beat to re-assert after an idle purge, so
-  // keep it brisk (300ms) — the worst-case vanish window is then sub-frame-ish to
-  // the eye, matching audiobook's rock-solid paused highlight. The clear+set is
-  // one synchronous flush, so re-asserting often never itself flickers.
-  useEffect(() => {
-    if (!active || playing) return undefined;
-    const id = window.setInterval(() => setPausedBeat((b) => b + 1), 300);
-    return () => window.clearInterval(id);
-  }, [active, playing]);
 
   // Focus on the CURRENT sentence only — no VISIBLE trail. Rebuilt only when the
   // current sentence changes (NOT every audio tick); the per-tick wipe (effect
@@ -641,7 +623,6 @@ export function useInPlaceHighlight(
     scrollerRef,
     ensureLocated,
     scrollSettle,
-    pausedBeat, // re-assert the highlight after an iOS purge while paused
   ]);
 
   // Auto-follow: centre the spoken line whenever following, on sentence CHANGE —
@@ -731,7 +712,6 @@ export function useInPlaceHighlight(
     scrollerRef,
     ensureLocated,
     scrollSettle, // re-run once a user scroll settles → snap the wipe back to live
-    pausedBeat, // re-assert the paused line after an iOS highlight purge
   ]);
 
   // Tap / long-press to seek.
