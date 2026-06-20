@@ -266,6 +266,7 @@ async fn run_sync(args: cli::SyncArgs) -> Result<(), String> {
         tts_voice: args.tts_voice,
         text_audio: args.pregen_text_audio,
         render_version: args.render_version,
+        repair: args.repair,
     };
     let report = sync::run::run(&resolved, &cfg).await?;
     tracing::info!(

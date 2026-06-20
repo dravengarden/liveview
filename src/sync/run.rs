@@ -38,6 +38,10 @@ pub struct SyncCfg {
     pub text_audio: bool,
     /// Bumped when the renderer changes, to force a full re-render.
     pub render_version: i32,
+    /// Self-heal mode: plan against an empty deployed DAG and re-apply any leaf
+    /// whose content row is missing, even if its Merkle node says "applied".
+    /// Recovers a chapters↔merkle desync a normal sync can't. See `SyncArgs`.
+    pub repair: bool,
 }
 
 #[derive(Debug, Default)]
@@ -277,7 +281,16 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
 
     // ── Load the last-deployed DAG and diff. ────────────────────────────────
     let stored = load_stored(&store).await?;
-    let plan = plan(&new, &stored);
+    // Repair plans against an EMPTY deployed DAG so every leaf becomes a
+    // candidate (the per-leaf gate in `apply_plan` then re-applies only the ones
+    // whose content row is actually missing). The book-timestamp stamping below
+    // still diffs against the REAL `stored`, so a repair doesn't bump every
+    // book's `updated_at`.
+    let plan = if cfg.repair {
+        plan(&new, &Dag::default())
+    } else {
+        plan(&new, &stored)
+    };
 
     // ── Stamp book deploy-times. created_at on a book's first appearance;
     // updated_at on each sync where its subtree hash differs from the last
@@ -410,18 +423,32 @@ async fn apply_plan(
         // edge-tts audio especially). This makes the sync resumable per-leaf
         // instead of all-or-nothing.
         let node_hash = crate::sync::merkle::leaf_hash(leaf);
+        let a = applies
+            .get(&leaf.path)
+            .ok_or_else(|| format!("internal: no apply for {}", leaf.path))?;
         if store
             .get_merkle_node(&node_hash)
             .await
             .map_err(|e| e.to_string())?
             .is_some()
         {
-            report.skipped += 1;
-            continue;
+            // Node present ⇒ a prior run applied this leaf. Normally that's
+            // enough to skip. In `--repair`, trust the node ONLY if the content
+            // row still exists: a chapters↔merkle desync (row lost, node kept)
+            // would otherwise stay invisible forever (the book renders empty).
+            // Every leaf — text, audio, binary — upserts a chapters row (see
+            // `apply_leaf`), so one existence check covers all kinds.
+            let present = !cfg.repair
+                || store
+                    .get_chapter(&a.book_slug, &a.rendition, &a.lang, &a.rel_path)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .is_some();
+            if present {
+                report.skipped += 1;
+                continue;
+            }
         }
-        let a = applies
-            .get(&leaf.path)
-            .ok_or_else(|| format!("internal: no apply for {}", leaf.path))?;
         apply_leaf(a, store, obj, cfg).await?;
         // Audio chapters (audiobook OR text read-aloud pre-gen) land their row
         // here but commit their Merkle node only after the slow audio pass
@@ -690,6 +717,7 @@ mod tests {
             tts_voice: "zh-CN-XiaoxiaoNeural".to_string(),
             text_audio: false,
             render_version: 1,
+            repair: false,
         })
     }
 

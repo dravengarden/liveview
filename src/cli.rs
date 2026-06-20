@@ -223,4 +223,17 @@ pub struct SyncArgs {
     /// Bump to force a full re-render (renderer upgrade).
     #[arg(long, default_value_t = 1)]
     pub render_version: i32,
+
+    /// Self-heal a chapters↔merkle desync. A normal sync trusts the Merkle
+    /// cache: a leaf whose `merkle_nodes` row exists is assumed applied and
+    /// skipped. If a book's `chapters` rows were lost while its Merkle nodes
+    /// survived (e.g. a partial store wipe), the content can NEVER come back —
+    /// both the subtree-hash prune and the per-leaf skip say "done", so the book
+    /// renders empty forever. `--repair` plans against an empty deployed DAG
+    /// (every leaf becomes a candidate) and re-applies ONLY the leaves whose
+    /// content row is actually missing; unchanged, present content is still
+    /// skipped, so it's cheap and safe to run anytime. (Audio is not
+    /// regenerated — a restored audio chapter's mp3 is rebuilt on first play.)
+    #[arg(long, default_value_t = false)]
+    pub repair: bool,
 }
