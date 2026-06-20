@@ -271,6 +271,59 @@ function locateChapter(
   return out;
 }
 
+/** Wrap a sentence Range in per-text-node `<span class>` so the PAUSED cue is
+ *  EXACTLY the sentence — a paragraph / blockquote / list-item holds many
+ *  sentences, so a block-level background tints them all. A DOM span (unlike a
+ *  CSS Custom Highlight) is NOT purged by iOS when idle, so the paused line holds.
+ *  Per-text-node so it spans inline `<strong>`/`<code>`; each piece-range lives
+ *  inside ONE text node, where `surroundContents` always succeeds. Returns the
+ *  spans for {@link unwrapSpans}. */
+function wrapSpans(range: Range, cls: string): HTMLElement[] {
+  const root = range.commonAncestorContainer;
+  const host = root.nodeType === 1 ? (root as Element) : root.parentElement;
+  if (!host) return [];
+  const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+  const texts: Text[] = [];
+  let n = walker.nextNode();
+  while (n) {
+    if (range.intersectsNode(n)) texts.push(n as Text);
+    n = walker.nextNode();
+  }
+  const spans: HTMLElement[] = [];
+  for (const tn of texts) {
+    const s = tn === range.startContainer ? range.startOffset : 0;
+    const e = tn === range.endContainer ? range.endOffset : tn.length;
+    if (e <= s) continue;
+    const r = document.createRange();
+    r.setStart(tn, s);
+    r.setEnd(tn, e);
+    const span = document.createElement("span");
+    span.className = cls;
+    try {
+      r.surroundContents(span); // single-text-node range → always valid
+      spans.push(span);
+    } catch {
+      // skip a piece we can't wrap; the rest still mark the sentence
+    }
+  }
+  return spans;
+}
+
+/** Undo {@link wrapSpans}: lift each span's children back out and remove it,
+ *  then normalize so the split text nodes merge — the block returns to the exact
+ *  DOM the locator measured (callers then recompute the located map). */
+function unwrapSpans(spans: HTMLElement[]): void {
+  const parents = new Set<Node>();
+  for (const span of spans) {
+    const parent = span.parentNode;
+    if (!parent) continue;
+    while (span.firstChild) parent.insertBefore(span.firstChild, span);
+    parent.removeChild(span);
+    parents.add(parent);
+  }
+  for (const p of parents) p.normalize();
+}
+
 /** A Range over chars [fromFrac, toFrac] of a located unit (fractions 0..1). */
 function rangeOf(loc: Located, fromFrac: number, toFrac: number): Range | null {
   const a = loc.at + Math.floor(fromFrac * loc.len);
@@ -333,6 +386,9 @@ export function useInPlaceHighlight(
   // The block element currently carrying the paused DOM-background tint (see the
   // focus effect), so we can clear it when the line moves or playback resumes.
   const litBlockRef = useRef<HTMLElement | null>(null);
+  // The per-text-node spans wrapping the PAUSED prose sentence (exact, iOS-purge-
+  // proof), with the unit idx they're for, so we unwrap on resume / line change.
+  const pausedRef = useRef<{ idx: number; spans: HTMLElement[] } | null>(null);
   // Per-chapter located map (unit idx → block slice), computed ONCE per units
   // array (it's positional, so it's stable for the rendered chapter) and reused
   // by the trail + wipe effects. Keyed by the `units` identity it was built for.
@@ -458,6 +514,22 @@ export function useInPlaceHighlight(
     const body = scrollerRef.current?.querySelector<HTMLElement>(
       ".markdown-body",
     );
+    // The paused sentence is shown as DOM spans (iOS doesn't purge those), so the
+    // heartbeat needn't repaint — and tearing them down + re-wrapping every beat
+    // would flicker. While still paused on the same line, hold them and bail.
+    if (
+      active && api && body && pausedRef.current && !playing &&
+      pausedRef.current.idx === currentIdx && !scrollSuspendRef.current
+    ) {
+      return undefined;
+    }
+    // State changed (resumed / moved / inactive): remove the paused spans and
+    // invalidate the located map — wrapping had split this block's text nodes.
+    if (pausedRef.current) {
+      unwrapSpans(pausedRef.current.spans);
+      pausedRef.current = null;
+      locatedForRef.current = null;
+    }
     if (!active || !api || !body) {
       api?.clearAll();
       // Read-aloud closed (or no body): drop the block marker classes too.
@@ -497,11 +569,15 @@ export function useInPlaceHighlight(
     const isNonProse = !!unit && unit.kind !== "prose";
     const curLoc = located.get(currentIdx);
     const curRange = curLoc ? rangeOf(curLoc, 0, 1) : null;
+    // Paused located prose is shown by wrapping the sentence in DOM spans (below),
+    // not a CSS Highlight (purged when idle) — so DON'T also add the CSS sentence
+    // tint here (the wrap mutates the DOM the range points at anyway).
+    const willWrapPaused = !playing && !isNonProse && !!curRange;
     const sentence = api.make();
     sentence.priority = 1;
-    if (curRange) {
+    if (curRange && !willWrapPaused) {
       sentence.add(curRange);
-    } else if (blockEl && !isNonProse) {
+    } else if (blockEl && !isNonProse && !curRange) {
       // Unlocatable PROSE only (e.g. inline KaTeX renders as spans with no
       // matching text node) — fall back to the whole-block range so the line is
       // still lit. Non-prose is handled by the marker class below, not here.
@@ -531,9 +607,16 @@ export function useInPlaceHighlight(
     if (blockEl && isNonProse) {
       blockEl.classList.add(blockReadingClass(blockEl));
       litBlockRef.current = blockEl;
+    } else if (willWrapPaused && curRange) {
+      // Paused located prose → wrap EXACTLY the sentence in spans (iOS-purge-proof,
+      // and precise even inside a multi-sentence paragraph / blockquote / list).
+      pausedRef.current = {
+        idx: currentIdx,
+        spans: wrapSpans(curRange, "lv-reading-paused"),
+      };
     } else if (blockEl && !playing) {
-      // Anchor the paused tint on the sentence's CONTAINER (li / p / cell), not
-      // the top-level block — else a sentence pause balloons to a whole <ul>.
+      // Paused but unlocatable (no sentence range) → fall back to the smallest
+      // container background (li / p / cell), never the whole top-level block.
       const anchor = pausedAnchorEl(curRange, blockEl);
       anchor.classList.add("lv-reading-paused");
       litBlockRef.current = anchor;
@@ -599,6 +682,13 @@ export function useInPlaceHighlight(
       ".markdown-body",
     );
     if (!active || !api || !body) return undefined;
+    // Paused sentence is shown as DOM spans, which split this block's text nodes —
+    // the located map is stale, so don't compute a wipe range against it. (The
+    // spans ARE the paused cue; the wipe is the PLAYING progress.)
+    if (pausedRef.current) {
+      api.remove(HL_ACTIVE);
+      return undefined;
+    }
     // Frozen while the user is scrolling: skip the repaint so iOS's rubber-band
     // isn't cancelled (the last-painted wipe simply stays). The scrollSettle bump
     // re-runs this the moment the scroll stops, snapping the wipe to live.
