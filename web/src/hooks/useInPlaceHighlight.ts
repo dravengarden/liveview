@@ -310,11 +310,15 @@ export function useInPlaceHighlight(
 
   // Paused-highlight heartbeat (see pausedBeat). Only runs while read-aloud is
   // loaded AND paused — when playing, the wipe's own per-tick repaint covers it,
-  // and when inactive there's nothing to keep lit. ~600ms is frequent enough that
-  // a purged line returns almost immediately, cheap enough to be invisible.
+  // and when inactive there's nothing to keep lit. The audiobook reader's paused
+  // line never blinks (it's a plain DOM background, which iOS never purges); this
+  // CSS-Highlight line relies on this beat to re-assert after an idle purge, so
+  // keep it brisk (300ms) — the worst-case vanish window is then sub-frame-ish to
+  // the eye, matching audiobook's rock-solid paused highlight. The clear+set is
+  // one synchronous flush, so re-asserting often never itself flickers.
   useEffect(() => {
     if (!active || playing) return undefined;
-    const id = window.setInterval(() => setPausedBeat((b) => b + 1), 600);
+    const id = window.setInterval(() => setPausedBeat((b) => b + 1), 300);
     return () => window.clearInterval(id);
   }, [active, playing]);
 

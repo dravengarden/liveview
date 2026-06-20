@@ -851,14 +851,16 @@ export function MarkdownViewer({
           )}
         </Box>
         {
-          /* Back-to-top — absolute within this relative wrapper. The bottom nav bar
-          is now a frosted OVERLAY over this area (not a flex sibling below it),
-          so lift the FAB by the bar's height (--shell-bar-h; 0 on the solid /
-          desktop path) to keep it clear of the bar + the reading-progress bar. */
+          /* Back-to-top — absolute within this relative wrapper. Lift it above
+          BOTH frosted overlays this area scrolls under: the read-aloud transport
+          (--lv-transport-h; 0 unless read-aloud is on this chapter) and the nav
+          bar below it (--shell-bar-h; 0 on the solid/desktop path). Same lift the
+          audiobook reader (AudiobookPlayer) uses, so the FAB sits identically in
+          both playback modes. */
         }
         <ScrollToTopButton
           targetRef={containerRef}
-          bottomLift="var(--shell-bar-h, 0px)"
+          bottomLift="calc(var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))"
         />
         {
           /* "Back to narration" pill — appears ONLY while read-aloud is on this
