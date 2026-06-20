@@ -9,6 +9,12 @@ export interface UseProgress {
   /** Fetch a book's saved positions into the cache; returns the most-recently
    *  read entry (for "resume last chapter"), or null. */
   loadBook: (slug: string) => Promise<ProgressEntry | null>;
+  /** Fetch ALL of a book's saved positions (newest first) into the cache, for
+   *  rendition-aware resume: text + audio chapters share one per-book progress
+   *  table, so resuming a rendition must pick the newest row whose path is in
+   *  THAT rendition's spine — not the globally-newest (which may be the other
+   *  rendition). Seeds the scroll cache too. */
+  loadBookRows: (slug: string) => Promise<ProgressEntry[]>;
   /** Fetch the latest-read chapter of every book (newest first), for the
    *  landing "continue reading" indicators. Also seeds the scroll cache. */
   loadRecent: () => Promise<ProgressEntry[]>;
@@ -48,17 +54,30 @@ export function useProgress(): UseProgress {
     return store;
   }, []);
 
-  const loadBook = useCallback(async (slug: string): Promise<ProgressEntry | null> => {
-    try {
-      const res = await fetch(`/api/progress?book=${encodeURIComponent(slug)}`);
-      if (!res.ok) return null;
-      const rows = (await res.json()) as ProgressEntry[];
-      for (const r of rows) ratios.current.set(r.path, r.scroll);
-      return rows[0] ?? null; // backend orders newest-first
-    } catch {
-      return null;
-    }
-  }, []);
+  const loadBookRows = useCallback(
+    async (slug: string): Promise<ProgressEntry[]> => {
+      try {
+        const res = await fetch(
+          `/api/progress?book=${encodeURIComponent(slug)}`,
+        );
+        if (!res.ok) return [];
+        const rows = (await res.json()) as ProgressEntry[];
+        for (const r of rows) ratios.current.set(r.path, r.scroll);
+        return rows; // backend orders newest-first
+      } catch {
+        return [];
+      }
+    },
+    [],
+  );
+
+  const loadBook = useCallback(
+    async (slug: string): Promise<ProgressEntry | null> => {
+      const rows = await loadBookRows(slug);
+      return rows[0] ?? null;
+    },
+    [loadBookRows],
+  );
 
   const loadRecent = useCallback(async (): Promise<ProgressEntry[]> => {
     try {
@@ -92,5 +111,5 @@ export function useProgress(): UseProgress {
     return () => window.removeEventListener("pagehide", onPageHide);
   }, []);
 
-  return { loadBook, loadRecent, savedScroll, save };
+  return { loadBook, loadBookRows, loadRecent, savedScroll, save };
 }

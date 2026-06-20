@@ -276,7 +276,7 @@ export function App(): React.JSX.Element {
   // arrive as the default text spine) must not clobber a non-text spine.
   const renditionRef = useRef<string>("text");
 
-  const { loadBook, loadRecent, savedScroll, save: saveProgress } =
+  const { loadBook, loadBookRows, loadRecent, savedScroll, save: saveProgress } =
     useProgress();
   // Latest-read chapter per book (newest first), for the landing "continue
   // reading" indicators. Refetched whenever the bookshelf is shown so it
@@ -863,11 +863,17 @@ export function App(): React.JSX.Element {
     async (slug: string, spine: TreeNode[]): Promise<string | null> => {
       const root = spine.find((n) => n.path === slug);
       const scope = root ? [root] : spine;
-      const last = await loadBook(slug);
-      const resume = last && hasFilePath(scope, last.path) ? last.path : null;
+      // Resume the newest read chapter THAT EXISTS IN THIS rendition's spine —
+      // NOT the globally-newest row. Text + audio share one per-book progress
+      // table with distinct chapter paths, so after listening, the newest row is
+      // an audio chapter the text spine can't resolve; picking rows[0] then reset
+      // the reader to the README and threw away the text reading position. Scan
+      // newest-first for the first row whose path is in scope instead.
+      const rows = await loadBookRows(slug);
+      const resume = rows.find((r) => hasFilePath(scope, r.path))?.path ?? null;
       return resume ?? findReadme(scope) ?? findFirstFile(scope);
     },
-    [loadBook],
+    [loadBookRows],
   );
 
   // Open a book's AUDIO rendition INLINE (a normal NavShell page with the audio
@@ -895,10 +901,12 @@ export function App(): React.JSX.Element {
             ? chapterPath
             : null;
           if (!target) {
-            const last = await loadBook(slug);
-            target =
-              (last && hasFilePath(scope, last.path) ? last.path : null) ??
-                findFirstFile(scope);
+            // Resume the newest AUDIO chapter (the newest row whose path is in
+            // the audio spine) — not the globally-newest row, which may be a
+            // text chapter after reading. Symmetric with entryChapter.
+            const rows = await loadBookRows(slug);
+            target = rows.find((r) => hasFilePath(scope, r.path))?.path ??
+              findFirstFile(scope);
           }
           if (!target) {
             setNotice(t("audiobook.empty"));
@@ -916,7 +924,7 @@ export function App(): React.JSX.Element {
         }
       })();
     },
-    [books, bookPrefs, loadBook, pickInitialLang, openFile, t],
+    [books, bookPrefs, loadBookRows, pickInitialLang, openFile, t],
   );
 
   // Enter a book from the landing page in a specific rendition (the bookshelf
