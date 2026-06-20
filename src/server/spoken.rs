@@ -252,11 +252,19 @@ pub struct Unit {
     pub kind: UnitKind,
     pub blk: usize,
     pub text: String,
-    /// Raw source of a non-prose block (code/math literal, image alt or URL) —
-    /// the input for an optional spoken narration. Empty for prose / table / html.
-    /// Server-internal: never sent to the client.
+    /// Raw source of a non-prose block — the input for spoken narration:
+    /// code/math literal, image alt-or-URL, the table's linearized cells, the
+    /// raw HTML literal. Empty for prose. Server-internal: never sent to the
+    /// client (it's the narration input, not display text).
     #[serde(skip)]
     pub src: String,
+    /// Resource discriminator the speech registry routes on, beyond the coarse
+    /// `kind`: a code block's fence language (`mermaid`, `julia`, …), or an
+    /// image's URL (for an `.svg` figure). Empty when `kind` alone suffices.
+    /// Server-internal. Lets one `UnitKind::Code` split into mermaid-diagram vs
+    /// real-code narration without a new highlight class (see `speakable`).
+    #[serde(skip)]
+    pub info: String,
 }
 
 /// Collect inline prose from `node`'s children into soft-wrap fragments,
@@ -288,9 +296,11 @@ fn leaf_prose<'a>(node: &'a AstNode<'a>) -> String {
 }
 
 /// If a leaf block carries an image or display-math but no prose, return its
-/// kind + source (image alt-or-URL, math literal) — the input for narration.
-/// Such a paragraph renders as a figure / formula, so it's an Image / Math unit.
-fn non_prose_block<'a>(node: &'a AstNode<'a>) -> Option<(UnitKind, String)> {
+/// kind + source + info — the input for narration. Such a paragraph renders as a
+/// figure / formula, so it's an Image / Math unit. `info` carries the image URL
+/// (so the speech registry can spot an `.svg` figure and describe its relations
+/// rather than read alt text), empty for math.
+fn non_prose_block<'a>(node: &'a AstNode<'a>) -> Option<(UnitKind, String, String)> {
     for d in node.descendants() {
         match &d.data.borrow().value {
             NodeValue::Image(link) => {
@@ -301,42 +311,80 @@ fn non_prose_block<'a>(node: &'a AstNode<'a>) -> Option<(UnitKind, String)> {
                 frags.push(cur);
                 let alt = join_wrapped(&frags);
                 let src = if alt.trim().is_empty() { link.url.clone() } else { alt };
-                return Some((UnitKind::Image, src));
+                return Some((UnitKind::Image, src, link.url.clone()));
             }
-            NodeValue::Math(m) => return Some((UnitKind::Math, m.literal.clone())),
+            NodeValue::Math(m) => return Some((UnitKind::Math, m.literal.clone(), String::new())),
             _ => {}
         }
     }
     None
 }
 
+/// Linearize a GFM table into one narration-input string: header cells, then
+/// each data row, cells joined by `" | "` and rows by `" || "`, the header row
+/// tagged so the speech registry can phrase it as "columns A, B, C; row 1 …".
+/// (A screen reader reads cell-by-cell with header context; for read-along we
+/// hand the whole grid to the narrator, which turns it into a spoken enumeration
+/// or a one-line takeaway — see `speakable`.) Empty if the table has no cells.
+fn table_source<'a>(table: &'a AstNode<'a>) -> String {
+    let mut rows: Vec<String> = Vec::new();
+    for row in table.children() {
+        let is_header = matches!(row.data.borrow().value, NodeValue::TableRow(true));
+        let mut cells: Vec<String> = Vec::new();
+        for cell in row.children() {
+            if matches!(cell.data.borrow().value, NodeValue::TableCell) {
+                cells.push(leaf_prose(cell).trim().to_string());
+            }
+        }
+        if cells.iter().all(String::is_empty) {
+            continue;
+        }
+        let joined = cells.join(" | ");
+        rows.push(if is_header {
+            format!("columns: {joined}")
+        } else {
+            joined
+        });
+    }
+    rows.join(" || ")
+}
+
 /// Emit the unit(s) for one block at top-level ordinal `blk`, recursing into
 /// containers (lists/quotes) so nested paragraphs share the container's anchor.
-/// Tuple: (kind, blk, spoken text, narration source).
+/// Tuple: (kind, blk, spoken text, narration source, resource info).
 fn emit_block<'a>(
     node: &'a AstNode<'a>,
     blk: usize,
-    out: &mut Vec<(UnitKind, usize, String, String)>,
+    out: &mut Vec<(UnitKind, usize, String, String, String)>,
 ) {
     match &node.data.borrow().value {
         NodeValue::CodeBlock(nc) => {
-            out.push((UnitKind::Code, blk, String::new(), nc.literal.clone()));
+            // Keep the fence language (first info-string token) so the registry
+            // can route ```mermaid to the diagram narrator, not generic code.
+            let lang = nc.info.split_whitespace().next().unwrap_or("").to_string();
+            out.push((UnitKind::Code, blk, String::new(), nc.literal.clone(), lang));
         }
-        NodeValue::Table(_) => out.push((UnitKind::Table, blk, String::new(), String::new())),
-        NodeValue::HtmlBlock(_) => out.push((UnitKind::Html, blk, String::new(), String::new())),
+        NodeValue::Table(_) => {
+            out.push((UnitKind::Table, blk, String::new(), table_source(node), String::new()));
+        }
+        NodeValue::HtmlBlock(nh) => {
+            // Carry the raw HTML so the registry can describe an inline <svg>
+            // diagram (else it stays a silent step-over, as before).
+            out.push((UnitKind::Html, blk, String::new(), nh.literal.clone(), String::new()));
+        }
         // Structural / non-spoken — no unit, but the block ordinal still advances.
         NodeValue::ThematicBreak | NodeValue::FootnoteDefinition(_) | NodeValue::FrontMatter(_) => {}
         NodeValue::Paragraph | NodeValue::Heading(_) => {
             let prose = leaf_prose(node);
             if prose.trim().is_empty() {
-                if let Some((kind, src)) = non_prose_block(node) {
-                    out.push((kind, blk, String::new(), src));
+                if let Some((kind, src, info)) = non_prose_block(node) {
+                    out.push((kind, blk, String::new(), src, info));
                 }
             } else {
                 let mut sentences = Vec::new();
                 segment_block(&prose, &mut sentences);
                 for s in sentences {
-                    out.push((UnitKind::Prose, blk, s, String::new()));
+                    out.push((UnitKind::Prose, blk, s, String::new(), String::new()));
                 }
             }
         }
@@ -361,7 +409,7 @@ fn emit_block<'a>(
                 let mut sentences = Vec::new();
                 segment_block(&prose, &mut sentences);
                 for s in sentences {
-                    out.push((UnitKind::Prose, blk, s, String::new()));
+                    out.push((UnitKind::Prose, blk, s, String::new(), String::new()));
                 }
             }
         }
@@ -373,18 +421,19 @@ fn emit_block<'a>(
 pub fn spoken_units(markdown: &str) -> Vec<Unit> {
     let arena = Arena::new();
     let root = parse_document(&arena, markdown, &markdown_options());
-    let mut raw: Vec<(UnitKind, usize, String, String)> = Vec::new();
+    let mut raw: Vec<(UnitKind, usize, String, String, String)> = Vec::new();
     for (blk, node) in root.children().enumerate() {
         emit_block(node, blk, &mut raw);
     }
     raw.into_iter()
         .enumerate()
-        .map(|(idx, (kind, blk, text, src))| Unit {
+        .map(|(idx, (kind, blk, text, src, info))| Unit {
             idx,
             kind,
             blk,
             text,
             src,
+            info,
         })
         .collect()
 }
@@ -492,6 +541,30 @@ mod tests {
         assert_eq!(prose[1].blk, 0); // same paragraph → same anchor
         assert_eq!(prose[2].blk, 1); // next paragraph → next anchor
         assert!(u.iter().enumerate().all(|(i, x)| x.idx == i));
+    }
+
+    #[test]
+    fn units_capture_table_html_and_code_lang_source() {
+        let md = "```mermaid\ngraph TD; A-->B;\n```\n\n\
+                  | Name | Role |\n|---|---|\n| Ada | dev |\n| Bo | ops |\n\n\
+                  <svg><circle/></svg>\n";
+        let u = spoken_units(md);
+        let code = u.iter().find(|x| x.kind == UnitKind::Code).unwrap();
+        assert_eq!(code.info, "mermaid", "fence lang lost: {code:?}");
+        assert!(code.src.contains("A-->B"), "code literal lost: {code:?}");
+        let table = u.iter().find(|x| x.kind == UnitKind::Table).unwrap();
+        assert!(table.src.contains("columns: Name | Role"), "header lost: {table:?}");
+        assert!(table.src.contains("Ada | dev") && table.src.contains(" || "), "rows lost: {table:?}");
+        let html = u.iter().find(|x| x.kind == UnitKind::Html).unwrap();
+        assert!(html.src.contains("<svg"), "html literal lost: {html:?}");
+    }
+
+    #[test]
+    fn units_carry_image_url_in_info() {
+        let u = spoken_units("![a diagram of the flow](pipeline.svg)\n");
+        let img = u.iter().find(|x| x.kind == UnitKind::Image).unwrap();
+        assert_eq!(img.src, "a diagram of the flow");
+        assert_eq!(img.info, "pipeline.svg", "image url not in info: {img:?}");
     }
 
     #[test]

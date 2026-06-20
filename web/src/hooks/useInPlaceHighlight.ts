@@ -173,20 +173,19 @@ function rangeOf(loc: Located, fromFrac: number, toFrac: number): Range | null {
   return range;
 }
 
-/** Sticky follow: keep `range` in a comfortable upper-middle band of `scroller`,
- *  gently scrolling only when it drifts out — so the spoken line stays put without
- *  a jerk on every sentence. Uses scrollBy (not scrollIntoView) so it never fires
- *  the manual-scroll cancel that wheel/touch do. */
+/** Sticky follow: CENTRE the spoken line in `scroller` — identical to the
+ *  audiobook reader's `scrollIntoView({block:"center"})`, so the two playback
+ *  modes follow the narration the same way (the line stays comfortably centred
+ *  instead of drifting to a band edge and off-screen when paused). Uses scrollBy
+ *  (not scrollIntoView) so it never fires the manual-scroll cancel that
+ *  wheel/touch do — a programmatic scroll must not turn follow off. */
 function followScroll(scroller: HTMLElement, range: Range): void {
   const rr = range.getBoundingClientRect();
   const sr = scroller.getBoundingClientRect();
-  const top = sr.top + sr.height * 0.2;
-  const bottom = sr.top + sr.height * 0.62;
-  if (rr.top < top || rr.top > bottom) {
-    scroller.scrollBy({
-      top: rr.top - (sr.top + sr.height * 0.32),
-      behavior: "smooth",
-    });
+  const delta = (rr.top + rr.height / 2) - (sr.top + sr.height / 2);
+  // A 1px deadzone avoids a pointless smooth-scroll when it's already centred.
+  if (Math.abs(delta) > 1) {
+    scroller.scrollBy({ top: delta, behavior: "smooth" });
   }
 }
 
@@ -387,14 +386,10 @@ export function useInPlaceHighlight(
     api.set(HL_GHOSTBUST, ghostbust);
     api.set(HL_SENTENCE, sentence);
 
-    // Remember the spoken line (for the jump button) and sticky-follow it on
-    // sentence change — only while playing AND following, so a reader who scrolled
-    // away to re-read is left alone.
+    // Remember the spoken line so the jump button + the auto-follow effect can
+    // re-centre it. (The actual scrolling lives in the dedicated follow effect
+    // below, so it fires on sentence CHANGE only — not on every repaint tick.)
     if (curRange) curRangeRef.current = curRange;
-    const scroller = scrollerRef.current;
-    if (playing && following && scroller && curRange) {
-      followScroll(scroller, curRange);
-    }
     // Conditional: a re-run mid-scroll (suspended) must keep the frozen paint, not
     // clear it. When the scroll settles the effect re-runs with suspend already
     // off, so this clears normally and the body repaints to the live position.
@@ -410,8 +405,23 @@ export function useInPlaceHighlight(
     scrollerRef,
     ensureLocated,
     scrollSettle,
-    pausedBeat, // re-assert the trail after an iOS purge while paused
+    pausedBeat, // re-assert the highlight after an iOS purge while paused
   ]);
+
+  // Auto-follow: centre the spoken line whenever following, on sentence CHANGE —
+  // exactly the audiobook reader's follow (which has no `playing` gate). currentIdx
+  // is stable while paused, so this simply doesn't fire then; it re-centres when
+  // playback advances or when the follow button flips `following` back on. A real
+  // user scroll already set `following=false`, so a reader who wandered is left
+  // alone until they tap follow.
+  useEffect(() => {
+    if (!active || !following) return undefined;
+    const scroller = scrollerRef.current;
+    if (scroller && curRangeRef.current) {
+      followScroll(scroller, curRangeRef.current);
+    }
+    return undefined;
+  }, [active, following, currentIdx, scrollSettle, scrollerRef]);
 
   // The read-so-far wipe WITHIN the current sentence — strongest tint, the
   // precise position. Updates every audio tick: within a sentence it only GROWS
