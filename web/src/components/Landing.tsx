@@ -1686,9 +1686,18 @@ export function Landing({
             : { top: 0 }),
           zIndex: 6,
           borderColor: "divider",
-          bgcolor: (t) => alpha(t.palette.background.default, 0.78),
-          backdropFilter: "blur(24px) saturate(180%)",
-          WebkitBackdropFilter: "blur(24px) saturate(180%)",
+          // Near-opaque, unified with every other chrome bar (reader transport /
+          // nav / sync strip): cards scrolling under this toolbar must NOT bleed
+          // through and clash with the search field + controls. saturate() dropped
+          // for the same reason (it tinted the flat page peeking through; pointless
+          // at this opacity). Heavy blur still softens the sliver past the edge.
+          bgcolor: (t) =>
+            alpha(
+              t.palette.background.default,
+              t.palette.mode === "dark" ? 0.94 : 0.96,
+            ),
+          backdropFilter: "blur(24px)",
+          WebkitBackdropFilter: "blur(24px)",
           ...(navbarAtBottom
             ? {
               // A hard, edge-to-edge 1px rule looks like a stray line when the
