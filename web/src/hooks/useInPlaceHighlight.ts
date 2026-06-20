@@ -134,6 +134,42 @@ function blockElForUnit(
   );
 }
 
+// All "this non-prose block is being narrated" marker classes — a STABLE DOM
+// style (iOS WebKit never purges element styles, unlike a CSS Custom Highlight),
+// so the cue holds while PAUSED too. Removed together when the line moves.
+const READING_BLOCK_CLASSES = [
+  "lv-reading-table",
+  "lv-reading-chart",
+  "lv-reading-block",
+];
+
+/** Which marker a non-prose block gets, by what it actually renders as:
+ *  a TABLE reuses the text-tint style (cells lit); a chart (mermaid/SVG) gets a
+ *  designed "being read" focus box; anything else (code, image) a plain box. */
+function blockReadingClass(el: HTMLElement): string {
+  if (el.tagName === "TABLE" || el.querySelector("table")) return "lv-reading-table";
+  if (
+    el.tagName === "SVG" ||
+    el.classList.contains("mermaid") ||
+    el.querySelector("svg, .mermaid")
+  ) return "lv-reading-chart";
+  return "lv-reading-block";
+}
+
+/** Scroll a non-prose block into MAXIMUM view (tables/charts are tall and the
+ *  line-band follow truncates them): centre it if it fits, else pin its top near
+ *  the top so as much as possible shows. scrollBy (not scrollIntoView) so it
+ *  never fires the manual-scroll cancel wheel/touch do. */
+function fitScroll(scroller: HTMLElement, el: HTMLElement): void {
+  const er = el.getBoundingClientRect();
+  const sr = scroller.getBoundingClientRect();
+  const fits = er.height <= sr.height * 0.9;
+  const delta = fits
+    ? (er.top + er.height / 2) - (sr.top + sr.height / 2) // centre
+    : er.top - (sr.top + sr.height * 0.1); // taller than view → top-align
+  scroller.scrollBy({ top: delta, behavior: "smooth" });
+}
+
 /** Locate EVERY prose unit in the chapter, keyed by unit idx → its block slice.
  *
  *  The fix for repeated text: a unit used to be located independently via
@@ -365,9 +401,12 @@ export function useInPlaceHighlight(
     );
     if (!active || !api || !body) {
       api?.clearAll();
-      // Read-aloud closed (or no body): drop the paused DOM tint too.
+      // Read-aloud closed (or no body): drop the block marker classes too.
       if (litBlockRef.current) {
-        litBlockRef.current.classList.remove("lv-reading-paused");
+        litBlockRef.current.classList.remove(
+          "lv-reading-paused",
+          ...READING_BLOCK_CLASSES,
+        );
         litBlockRef.current = null;
       }
       return undefined;
@@ -389,23 +428,24 @@ export function useInPlaceHighlight(
       if (r) ghostbust.add(r);
     }
 
-    // The current sentence (full extent), medium tint — the focus. Non-prose
-    // blocks (image / code / table / math) outline the whole block instead.
+    // The current line. PROSE → a precise CSS-Highlight tint over the sentence
+    // (+ the per-word wipe below). NON-PROSE (table / chart / code / image) has
+    // no per-word mapping — its narration is a summary — so it gets a STABLE DOM
+    // MARKER CLASS on the whole block instead (handled after, so it survives the
+    // iOS highlight purge and shows while paused).
     const unit = units[currentIdx];
     const blockEl = blockElForUnit(body, unit);
+    const isNonProse = !!unit && unit.kind !== "prose";
     const curLoc = located.get(currentIdx);
     const curRange = curLoc ? rangeOf(curLoc, 0, 1) : null;
     const sentence = api.make();
     sentence.priority = 1;
     if (curRange) {
       sentence.add(curRange);
-    } else if (blockEl) {
-      // No precise range — either a non-prose block (image/code/table/math block)
-      // OR a prose sentence we couldn't locate char-for-char (inline KaTeX math
-      // renders as spans with no matching text node, so locateText fails on that
-      // sentence). Either way, fall back to highlighting the WHOLE block so the
-      // line is still lit instead of vanishing — better a slightly-wider cue than
-      // none on a formula line.
+    } else if (blockEl && !isNonProse) {
+      // Unlocatable PROSE only (e.g. inline KaTeX renders as spans with no
+      // matching text node) — fall back to the whole-block range so the line is
+      // still lit. Non-prose is handled by the marker class below, not here.
       const block = document.createRange();
       block.selectNodeContents(blockEl);
       sentence.add(block);
@@ -415,27 +455,27 @@ export function useInPlaceHighlight(
     api.set(HL_GHOSTBUST, ghostbust);
     api.set(HL_SENTENCE, sentence);
 
-    // PAUSED-PAINT FIX. iOS WebKit purges the CSS Custom Highlight overlay once
-    // the page goes idle, so while PLAYING the per-audio-tick wipe keeps forcing
-    // paints and the line shows, but once PAUSED the re-asserted highlight never
-    // actually paints and "vanishes". Repaint hacks (an invisible highlight, a
-    // toggled `filter`) didn't hold on every device — and a `filter` on the block
-    // can itself drop the ::highlight from the rasterized layer. The audiobook
-    // reader's paused line is rock-solid because it's a REAL DOM background on
-    // the element, which iOS never purges. Mirror that: while paused, tint the
-    // current BLOCK with a real background class as the reliable "you are here"
-    // anchor. Playing ⇒ no DOM tint (the precise CSS wipe paints it); clear the
-    // previous block's tint whenever the line moves or playback resumes.
+    // Block markers (a REAL DOM class — iOS WebKit never purges element styles,
+    // unlike the CSS Custom Highlight, so this holds while PAUSED too). Always
+    // clear the previous block first, then mark the current one:
+    //   • NON-PROSE → its type marker (table cells lit / chart focus-box), shown
+    //     PLAYING and PAUSED alike (no per-word cue exists for a summary).
+    //   • PROSE, paused → the background "you are here" anchor (the CSS wipe is
+    //     purged when idle); PROSE, playing → none (the precise wipe paints it).
     const prevLit = litBlockRef.current;
     if (prevLit && prevLit !== blockEl) {
-      prevLit.classList.remove("lv-reading-paused");
+      prevLit.classList.remove("lv-reading-paused", ...READING_BLOCK_CLASSES);
     }
-    if (blockEl && !playing) {
-      blockEl.classList.add("lv-reading-paused");
-      litBlockRef.current = blockEl;
-    } else if (blockEl) {
-      blockEl.classList.remove("lv-reading-paused");
-      litBlockRef.current = null;
+    litBlockRef.current = null;
+    if (blockEl) {
+      blockEl.classList.remove("lv-reading-paused", ...READING_BLOCK_CLASSES);
+      if (isNonProse) {
+        blockEl.classList.add(blockReadingClass(blockEl));
+        litBlockRef.current = blockEl;
+      } else if (!playing) {
+        blockEl.classList.add("lv-reading-paused");
+        litBlockRef.current = blockEl;
+      }
     }
 
     // Remember the spoken line so the jump button + the auto-follow effect can
@@ -469,11 +509,23 @@ export function useInPlaceHighlight(
   useEffect(() => {
     if (!active || !following) return undefined;
     const scroller = scrollerRef.current;
-    if (scroller && curRangeRef.current) {
+    if (!scroller) return undefined;
+    // A non-prose block (table / chart) is tall — centre/fit the whole block so
+    // it isn't truncated, instead of centring a (stale) sentence range.
+    const unit = units[currentIdx];
+    const body = scroller.querySelector<HTMLElement>(".markdown-body");
+    if (unit && unit.kind !== "prose" && body) {
+      const el = blockElForUnit(body, unit);
+      if (el) {
+        fitScroll(scroller, el);
+        return undefined;
+      }
+    }
+    if (curRangeRef.current) {
       followScroll(scroller, curRangeRef.current);
     }
     return undefined;
-  }, [active, following, currentIdx, scrollSettle, scrollerRef]);
+  }, [active, following, currentIdx, scrollSettle, scrollerRef, units]);
 
   // The read-so-far wipe WITHIN the current sentence — strongest tint, the
   // precise position. Updates every audio tick: within a sentence it only GROWS
