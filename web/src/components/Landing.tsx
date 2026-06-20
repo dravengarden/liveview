@@ -5,6 +5,7 @@ import {
   CardActionArea,
   Checkbox,
   Chip,
+  CircularProgress,
   Collapse,
   FormControl,
   IconButton,
@@ -1079,38 +1080,6 @@ const ShelfCard = memo(function ShelfCard({
         },
       }}
     >
-      {/* Subtle "audio generating" micro-badge — top-right, pointer-transparent,
-          low-weight. Text reading is unaffected; this just informs. */}
-      {generating && (
-        <Box
-          aria-label={t("sync.generating")}
-          sx={{
-            position: "absolute",
-            top: 6,
-            right: 6,
-            zIndex: 2,
-            display: "flex",
-            alignItems: "center",
-            gap: 0.5,
-            px: 0.75,
-            py: 0.25,
-            borderRadius: 999,
-            pointerEvents: "none",
-            color: "common.white",
-            bgcolor: (th) => alpha(th.palette.common.black, 0.45),
-            backdropFilter: "blur(6px)",
-            WebkitBackdropFilter: "blur(6px)",
-          }}
-        >
-          <AudiobookIcon sx={{ fontSize: rem(13) }} />
-          <Typography
-            variant="caption"
-            sx={{ fontSize: rem(10), lineHeight: 1, fontWeight: 600 }}
-          >
-            {t("sync.generating")}
-          </Typography>
-        </Box>
-      )}
       <CardActionArea onClick={() => onOpen(b.slug)}>
         {
           /* Cover: the book's own image when it has one, else a
@@ -1343,6 +1312,27 @@ const ShelfCard = memo(function ShelfCard({
                   variant="outlined"
                 />
               ))}
+            </Box>
+          )}
+          {/* Audio still generating — an inline, in-flow status line (NOT a
+              floating badge that overlapped the rendition button). Sits in the
+              card's footer whitespace; a small spinner reads "in progress". */}
+          {generating && (
+            <Box
+              sx={{ display: "flex", alignItems: "center", gap: 0.75, mt: 1 }}
+            >
+              <CircularProgress
+                size={rem(12)}
+                thickness={5}
+                sx={{ color: "text.secondary" }}
+              />
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ fontSize: rem(11), fontWeight: 500 }}
+              >
+                {t("landing.generatingAudio")}
+              </Typography>
             </Box>
           )}
           {stamps.length > 0 && (
