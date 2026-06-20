@@ -106,6 +106,17 @@ function normalizeBlock(
   let node = walker.nextNode();
   while (node) {
     const tn = node as Text;
+    // SKIP text inside KaTeX-rendered math. The server DROPS inline math from a
+    // unit's text, but the DOM has KaTeX glyph nodes (and a hidden MathML copy) —
+    // so a sentence with math never char-matched, and the indexOf fell onto a
+    // later duplicate or a wrong interpolation (the scroll-to-the-wrong-place
+    // bug). Excluding `.katex` text aligns both streams, so a math sentence
+    // locates EXACTLY. The highlight Range still spans the math visually: a DOM
+    // Range between two kept chars includes everything (incl. KaTeX) in between.
+    if (tn.parentElement?.closest(".katex")) {
+      node = walker.nextNode();
+      continue;
+    }
     const s = tn.data;
     for (let i = 0; i < s.length; i++) {
       const ch = s[i] ?? "";
