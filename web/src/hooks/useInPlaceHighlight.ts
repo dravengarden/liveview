@@ -218,6 +218,9 @@ export function useInPlaceHighlight(
   const [pausedBeat, setPausedBeat] = useState(0);
   // The spoken line's live range, so the jump button can re-centre on it.
   const curRangeRef = useRef<Range | null>(null);
+  // The block element currently carrying the paused-repaint filter (see the focus
+  // effect), so we can clear it when the line moves or playback resumes.
+  const litBlockRef = useRef<HTMLElement | null>(null);
   // Per-chapter located map (unit idx → block slice), computed ONCE per units
   // array (it's positional, so it's stable for the rendered chapter) and reused
   // by the trail + wipe effects. Keyed by the `units` identity it was built for.
@@ -345,6 +348,11 @@ export function useInPlaceHighlight(
     );
     if (!active || !api || !body) {
       api?.clearAll();
+      // Read-aloud closed (or no body): drop the paused-repaint filter too.
+      if (litBlockRef.current) {
+        litBlockRef.current.style.filter = "";
+        litBlockRef.current = null;
+      }
       return undefined;
     }
     // Frozen during a user scroll, same as the wipe — so the highlight doesn't
@@ -385,6 +393,29 @@ export function useInPlaceHighlight(
     api.clearAll();
     api.set(HL_GHOSTBUST, ghostbust);
     api.set(HL_SENTENCE, sentence);
+
+    // PAUSED-PAINT FIX. iOS WebKit does NOT repaint a CSS Custom Highlight from a
+    // registry change while the page is idle — so while PLAYING the per-audio-tick
+    // wipe forces paints and the line shows, but once PAUSED the re-asserted line
+    // (set above + via the pausedBeat heartbeat) never actually paints and the
+    // highlight "vanishes". Force a real CONTENT repaint of the current block by
+    // toggling an imperceptible `filter` on it each heartbeat: filter
+    // re-rasterizes the element's subtree (text + its ::highlight overlay),
+    // whereas opacity/transform only re-composite the stale cached layer. Audio
+    // playing ⇒ no filter (the wipe already paints); clear the previous block's
+    // filter whenever the line moves or playback resumes.
+    const prevLit = litBlockRef.current;
+    if (prevLit && prevLit !== blockEl) prevLit.style.filter = "";
+    if (blockEl) {
+      if (!playing) {
+        // Alternate filter/none each beat so every heartbeat is a real change.
+        blockEl.style.filter = pausedBeat % 2 === 0 ? "opacity(0.999)" : "none";
+        litBlockRef.current = blockEl;
+      } else {
+        blockEl.style.filter = "";
+        litBlockRef.current = null;
+      }
+    }
 
     // Remember the spoken line so the jump button + the auto-follow effect can
     // re-centre it. (The actual scrolling lives in the dedicated follow effect
