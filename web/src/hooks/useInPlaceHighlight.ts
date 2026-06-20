@@ -199,14 +199,40 @@ function locateChapter(
     const blockEl = blockElForUnit(body, blkUnits[0]);
     if (!blockEl) continue;
     const { norm, map } = normalizeBlock(blockEl);
+    // Pass 1: locate what matches exactly, forward cursor. A sentence with inline
+    // math fails here — the server's unit text DROPS the math, but the DOM has
+    // KaTeX-rendered glyphs, so the char streams differ. Record null, DON'T
+    // advance the cursor (the next sentence still starts after this one's slot).
+    const pos: ({ at: number; len: number } | null)[] = [];
     let cursor = 0;
     for (const u of blkUnits) {
       const needle = u.text.replace(/\s+/g, "");
-      if (!needle) continue;
+      if (!needle) { pos.push(null); continue; }
       const at = norm.indexOf(needle, cursor); // forward cursor disambiguates repeats
-      if (at < 0) continue; // markup mismatch — leave this unit unhighlighted
-      out.set(u.idx, { map, at, len: needle.length });
+      if (at < 0) { pos.push(null); continue; }
+      pos.push({ at, len: needle.length });
       cursor = at + needle.length;
+    }
+    // Pass 2: a math-broken sentence gets the GAP between its located neighbours
+    // (end of the previous match → start of the next) — its real slice, math
+    // included — instead of the whole paragraph. This keeps the highlight
+    // SENTENCE-level on math lines instead of ballooning to the block.
+    for (let i = 0; i < blkUnits.length; i++) {
+      const p = pos[i];
+      if (p) { out.set(blkUnits[i]!.idx, { map, at: p.at, len: p.len }); continue; }
+      let prevEnd = 0;
+      for (let j = i - 1; j >= 0; j--) {
+        const q = pos[j];
+        if (q) { prevEnd = q.at + q.len; break; }
+      }
+      let nextStart = norm.length;
+      for (let j = i + 1; j < blkUnits.length; j++) {
+        const q = pos[j];
+        if (q) { nextStart = q.at; break; }
+      }
+      if (nextStart > prevEnd) {
+        out.set(blkUnits[i]!.idx, { map, at: prevEnd, len: nextStart - prevEnd });
+      }
     }
   }
   return out;
