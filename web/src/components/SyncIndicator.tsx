@@ -7,8 +7,9 @@ import {
   Typography,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
-import { ExpandLess, GraphicEq } from "@mui/icons-material";
+import { ExpandMore, GraphicEq } from "@mui/icons-material";
 import { DetentSheet } from "../_shell";
+import { useNavbarAtBottom } from "@/hooks";
 import {
   type BookAudioStatus,
   isSyncActive,
@@ -21,17 +22,24 @@ import type { Book } from "@/types";
 import { useI18n } from "@/i18n";
 
 /**
- * The ambient sync indicator — a low-weight frosted pill that appears ONLY while
- * audio is generating or the SW is prefetching, and quietly disappears when idle.
- * Tapping it opens the Sync sheet (full per-resource breakdown + offline
- * controls). Bottom-centre, lifted above the nav bar, so it never collides with
- * the top status-bar tap-to-top zone. Calm-tech: the user knows, but it weighs
- * almost nothing.
+ * The ambient sync indicator — a flat, full-bleed chrome LINE pinned to the very
+ * top of the viewport (just under the status bar), appearing ONLY while audio is
+ * generating or the SW is prefetching and quietly vanishing when idle. It shares
+ * the visual language of the reader's top reading-progress bar: a thin strip with
+ * a progress filament along its bottom edge. Deliberately NOT a floating card —
+ * no shadow, no rounded corners, no border ring — so it reads as part of the
+ * chrome (a sibling of the nav bar) rather than something hovering over it.
+ * Tapping it opens the Sync sheet (per-resource breakdown + offline controls).
+ * Calm-tech: the user knows, but it weighs almost nothing.
  */
 export function SyncIndicator(): React.JSX.Element | null {
   const { t } = useI18n();
   const status = useSyncStatus();
   const saved = useSavedOffline();
+  // On mobile the nav bar drops to the bottom, leaving the top free for this
+  // strip (under the safe-area status bar). On desktop the NavShell bar owns the
+  // top, so the strip rides at top:0 as a hairline above it.
+  const navbarAtBottom = useNavbarAtBottom();
   const [open, setOpen] = useState(false);
   const [audioBooks, setAudioBooks] = useState<Book[]>([]);
   const active = isSyncActive(status);
@@ -97,79 +105,82 @@ export function SyncIndicator(): React.JSX.Element | null {
             if (e.key === "Enter" || e.key === " ") setOpen(true);
           }}
           sx={{
-            // A floating activity BAR above the bottom nav bar / shelf toolbar
-            // (max() of whichever owns that edge), centred with side gutters so it
-            // reads as a bar, not a chip. Content scrolls under it (high
-            // transparency + blur), so it never disturbs reading.
+            // A flat, full-bleed chrome LINE at the very top — under the status
+            // bar on mobile (nav bar is at the bottom), at top:0 on desktop (it
+            // rides as a hairline; the NavShell top bar sits just below). No
+            // rounding / shadow / ring: it's chrome, not a floating card. Content
+            // scrolls under its faint frosted fill.
             position: "fixed",
-            left: "50%",
-            transform: "translateX(-50%)",
-            width: "min(94vw, 560px)",
-            bottom:
-              "calc(8px + env(safe-area-inset-bottom, 0px) + max(var(--shell-bar-h, 0px), var(--lv-toolbar-h, 0px)))",
-            zIndex: (th) => th.zIndex.appBar + 1,
+            top: navbarAtBottom ? "env(safe-area-inset-top, 0px)" : 0,
+            left: 0,
+            right: 0,
+            zIndex: (th) => th.zIndex.appBar,
             cursor: "pointer",
-            borderRadius: 2.5,
-            overflow: "hidden", // clip the progress filament to the rounded corners
+            overflow: "hidden", // clip the progress filament to the edges
             color: "text.secondary",
-            // Very translucent floating glass — high transparency, blurred.
-            bgcolor: (th) =>
-              alpha(
-                th.palette.background.paper,
-                th.palette.mode === "dark" ? 0.5 : 0.6,
-              ),
-            backdropFilter: "blur(18px) saturate(180%)",
-            WebkitBackdropFilter: "blur(18px) saturate(180%)",
-            border: 1,
+            bgcolor: (th) => alpha(th.palette.background.default, 0.82),
+            backdropFilter: "blur(12px)",
+            WebkitBackdropFilter: "blur(12px)",
+            borderBottom: 1,
             borderColor: "divider",
-            boxShadow: 4,
             "@media (hover: hover)": {
               transition: "background-color .15s",
               "&:hover": {
-                bgcolor: (th) =>
-                  alpha(
-                    th.palette.background.paper,
-                    th.palette.mode === "dark" ? 0.62 : 0.72,
-                  ),
+                bgcolor: (th) => alpha(th.palette.background.default, 0.92),
               },
             },
           }}
         >
           <Box
-            sx={{ display: "flex", alignItems: "center", gap: 1, px: 1.25, py: 0.75 }}
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              gap: 1,
+              px: 1.5,
+              height: 26,
+            }}
           >
             <CircularProgress
-              size={15}
+              size={12}
               thickness={5}
               {...(pct != null
                 ? { variant: "determinate", value: pct }
                 : {})}
             />
             <Typography
-              variant="caption"
               noWrap
-              sx={{ flex: 1, fontWeight: 600, color: "text.primary" }}
+              sx={{
+                flex: 1,
+                fontSize: 12,
+                fontWeight: 500,
+                color: "text.secondary",
+              }}
             >
               {barLabel}
             </Typography>
             {pct != null && (
               <Typography
-                variant="caption"
-                sx={{ fontVariantNumeric: "tabular-nums", flexShrink: 0 }}
+                sx={{
+                  fontSize: 11,
+                  color: "text.disabled",
+                  fontVariantNumeric: "tabular-nums",
+                  flexShrink: 0,
+                }}
               >
                 {g.done}/{g.total}
               </Typography>
             )}
-            <ExpandLess sx={{ fontSize: 18, flexShrink: 0, opacity: 0.7 }} />
+            <ExpandMore sx={{ fontSize: 16, flexShrink: 0, opacity: 0.5 }} />
           </Box>
-          {/* Aggregate progress filament along the bar's bottom edge. */}
+          {/* Aggregate progress filament along the strip's bottom edge — the same
+              cue the reader uses for reading progress, so the two read as kin. */}
           {pct != null && (
             <Box
               sx={{
                 height: 2,
                 width: `${pct}%`,
                 bgcolor: "primary.main",
-                opacity: 0.85,
+                opacity: 0.8,
                 transition: "width .3s ease",
               }}
             />
