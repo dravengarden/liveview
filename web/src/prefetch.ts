@@ -8,6 +8,7 @@
 // is a separate follow-up; this module only warms the cheap text lane.
 
 import { setPrefetching } from "@/syncStore";
+import { nativeAudioAvailable, nativeAudioPrefetch } from "@/native-audio";
 
 /** Books already swept this session (cheap dedup; the SW holds the real cache). */
 const sweptText = new Set<string>();
@@ -103,9 +104,21 @@ export async function prefetchBookAudio(slug: string): Promise<void> {
       await idle();
       if (!navigator.onLine) break;
       try {
-        // `prefetch=1` tells the SW to download the full body + cache it (a normal
-        // play streams Range and isn't cached). marks are small 200s (auto-cached).
-        await fetch(`/api/audio?${q}&prefetch=1`);
+        if (nativeAudioAvailable()) {
+          // Native engine owns the audio cache (the SW one is bypassed under
+          // native): hand the absolute URL + hash to native to download offline.
+          // marks still go through the SW so the read-along works offline too.
+          nativeAudioPrefetch(
+            `${globalThis.location.origin}/api/audio?${q}`,
+            ch.audio.hash,
+          );
+        } else {
+          // `prefetch=1` tells the SW to download the full body + cache it (a
+          // normal play streams Range and isn't cached).
+          await fetch(`/api/audio?${q}&prefetch=1`);
+        }
+        // marks are small 200s (auto-cached by the SW) — needed for the
+        // read-along whichever engine plays the audio.
         await fetch(`/api/marks?${q}`);
       } catch {
         // best-effort

@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import type { Mark, SpokenContent } from "@/types";
+import { audioHash } from "@/audioHash";
 import {
   nativeMediaAvailable,
   nativeMediaClear,
@@ -402,10 +403,16 @@ export function AudioPlayerProvider(
           if (nativeAudioAvailable()) {
             // NATIVE engine: hand it the ABSOLUTE url (the native URLSession can't
             // resolve a relative path) + metadata; it seeks to `position`, then
-            // plays if autoplay. It owns the AVAudioSession + lock-screen tile.
+            // plays if autoplay. It owns the AVAudioSession + lock-screen tile,
+            // and caches the audio (keyed by `hash`) for offline.
             const origin = globalThis.location.origin;
+            // Content hash for the offline cache key (best-effort — native falls
+            // back to URL-keying when absent). May await a small manifest fetch.
+            const hash = await audioHash(np.bookSlug, np.chapterPath, np.lang);
+            if (loadSeq.current !== seq) return;
             nativeAudioLoad({
               url: `${origin}/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`,
+              ...(hash !== undefined ? { hash } : {}),
               position,
               rate: rateRef.current,
               title: np.chapterLabel,

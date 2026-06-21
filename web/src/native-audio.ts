@@ -22,6 +22,9 @@
 export interface NativeAudioTrack {
   /** Absolute media URL (the native URLSession can't resolve a relative path). */
   readonly url: string;
+  /** Content hash (manifest audio_hash) — the offline cache key, so the same
+   *  audio dedups + survives a re-render. Omit/empty ⇒ native keys by the URL. */
+  readonly hash?: string;
   /** Resume position in seconds (0 = from the start). */
   readonly position: number;
   /** Playback rate (1 = normal). */
@@ -55,7 +58,11 @@ type OutMsg =
   | { readonly kind: "pause" }
   | { readonly kind: "stop" }
   | { readonly kind: "seek"; readonly data: { readonly position: number } }
-  | { readonly kind: "rate"; readonly data: { readonly rate: number } };
+  | { readonly kind: "rate"; readonly data: { readonly rate: number } }
+  | {
+    readonly kind: "prefetch";
+    readonly data: { readonly url: string; readonly hash?: string };
+  };
 
 interface WebKitHandler {
   postMessage(message: unknown): void;
@@ -114,6 +121,15 @@ export function nativeAudioSetRate(rate: number): boolean {
 /** Stop + clear (book closed / playback stopped). Releases the session + tile. */
 export function nativeAudioStop(): boolean {
   return send({ kind: "stop" });
+}
+
+/** Download a chapter into the offline cache WITHOUT playing it (save-offline).
+ *  Keyed by `hash` (else the URL). No-op off-shell. */
+export function nativeAudioPrefetch(url: string, hash?: string): boolean {
+  return send({
+    kind: "prefetch",
+    data: hash !== undefined ? { url, hash } : { url },
+  });
 }
 
 /**
