@@ -173,12 +173,14 @@ function blockReadingClass(el: HTMLElement): string {
  *  never fires the manual-scroll cancel wheel/touch do. */
 function fitScroll(scroller: HTMLElement, el: HTMLElement): void {
   const er = el.getBoundingClientRect();
-  const sr = scroller.getBoundingClientRect();
-  const fits = er.height <= sr.height * 0.9;
-  const delta = fits
-    ? (er.top + er.height / 2) - (sr.top + sr.height / 2) // centre
-    : er.top - (sr.top + sr.height * 0.1); // taller than view → top-align
-  scroller.scrollBy({ top: delta, behavior: "smooth" });
+  const elTop = contentTop(scroller, er.top);
+  const fits = er.height <= scroller.clientHeight * 0.9;
+  // Same clamped-absolute approach as followScroll: a block that fits is centred;
+  // one taller than the viewport is top-aligned (a notch below the top edge).
+  const target = fits
+    ? elTop + er.height / 2 - scroller.clientHeight / 2
+    : elTop - scroller.clientHeight * 0.1;
+  scrollTopTo(scroller, target);
 }
 
 // The smallest element to anchor the PAUSED prose tint on — the list item /
@@ -344,14 +346,37 @@ function rangeOf(loc: Located, fromFrac: number, toFrac: number): Range | null {
  *  instead of drifting to a band edge and off-screen when paused). Uses scrollBy
  *  (not scrollIntoView) so it never fires the manual-scroll cancel that
  *  wheel/touch do — a programmatic scroll must not turn follow off. */
+/** Scroll `scroller` so `top..top+height` (content-relative coords) sits where we
+ *  want it, CLAMPED to the scrollable range and issued as an ABSOLUTE scrollTo.
+ *
+ *  Why not `scrollBy(delta)` off live rects (the old way): a relative scroll
+ *  computed from getBoundingClientRect races an in-flight smooth scroll — read
+ *  mid-animation, `delta` is wrong, and consecutive line changes fight each other
+ *  → jitter. And with no clamp, centring a line near the END asks to scroll past
+ *  the content, so the view over-scrolls into blank and RE-tries every line → the
+ *  "growing blank at the bottom". An absolute, clamped target is idempotent
+ *  (re-running with the line already placed is a no-op) and can never reveal blank
+ *  past the last content. */
+function scrollTopTo(scroller: HTMLElement, target: number): void {
+  const max = scroller.scrollHeight - scroller.clientHeight;
+  const clamped = Math.max(0, Math.min(target, max));
+  if (Math.abs(clamped - scroller.scrollTop) > 1) {
+    scroller.scrollTo({ top: clamped, behavior: "smooth" });
+  }
+}
+
+/** Content-relative top of a rect within the scroller (INVARIANT during scroll:
+ *  rect.top and scrollTop both shift while scrolling, but their sum — the offset
+ *  inside the content — is fixed, so this is safe to read even mid-animation). */
+function contentTop(scroller: HTMLElement, top: number): number {
+  return top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+}
+
 function followScroll(scroller: HTMLElement, range: Range): void {
   const rr = range.getBoundingClientRect();
-  const sr = scroller.getBoundingClientRect();
-  const delta = (rr.top + rr.height / 2) - (sr.top + sr.height / 2);
-  // A 1px deadzone avoids a pointless smooth-scroll when it's already centred.
-  if (Math.abs(delta) > 1) {
-    scroller.scrollBy({ top: delta, behavior: "smooth" });
-  }
+  const lineTop = contentTop(scroller, rr.top);
+  // Centre the line.
+  scrollTopTo(scroller, lineTop + rr.height / 2 - scroller.clientHeight / 2);
 }
 
 export function useInPlaceHighlight(

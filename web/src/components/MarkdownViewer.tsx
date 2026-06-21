@@ -680,6 +680,14 @@ export function MarkdownViewer({
   useEffect(() => {
     const el = containerRef.current;
     if (!el || !currentPath) return undefined;
+    // Read-along owns the scroll while it's narrating THIS chapter and following:
+    // don't fight it by restoring a saved mid-chapter ratio. When playback carries
+    // the view into a NEW chapter, the follow centres its first spoken line, which
+    // clamps to the top — so the page lands at the top instead of a stale saved
+    // position. A manual scroll flips following off, after which a normal open
+    // restores again. Read from the render closure (NOT effect deps) so toggling
+    // follow never re-triggers a restore that would yank a reader back.
+    if (follow.active && follow.following) return undefined;
     const ratio = savedScroll?.(currentPath) ?? 0;
     restoringRef.current = true;
     const apply = (): void => {
