@@ -318,6 +318,10 @@ export function AudioPlayerProvider(
   const loadSeq = useRef(0);
   // Chapter path we've already warmed the *next* synth for, so we prefetch once.
   const prefetchedFrom = useRef<string | null>(null);
+  // Throttle the SYNCHRONOUS localStorage resume-seed write (see handlePosition):
+  // it's only a cold-start seed (the debounced posStore is the authority), so a
+  // few seconds stale is harmless — no need to hit disk on every 4 Hz tick.
+  const lastPosWriteRef = useRef(0);
 
   // NATIVE AVPlayer engine (iOS shell only): when present, audio is decoded
   // NATIVELY (NativeAudioController.swift) instead of in the web <audio> — the
@@ -519,11 +523,34 @@ export function AudioPlayerProvider(
   // synth prewarm, sleep-timer countdown). `updatePositionState` stays in the
   // <audio> path only — native owns MPNowPlayingInfoCenter itself.
   const handlePosition = useCallback((pos: number, dur: number) => {
-    setCurrentTime(pos);
-    setCurrentIdx(markIndex(marksRef.current, pos * 1000));
+    // Keep the imperative mirrors fresh even when hidden (cheap, no re-render) so
+    // a lock-screen pause persists the TRUE position and seek math is right the
+    // instant we return to the foreground.
+    currentTimeRef.current = pos;
+    if (dur > 0) durationRef.current = dur;
+    // The 4 Hz cost is the VISIBLE UI: the scrubber re-render + the read-along
+    // highlight wipe recompute. When the page is hidden (app backgrounded /
+    // screen locked) nobody sees it and the lock-screen scrubber is driven
+    // natively — so skip it entirely. THIS is the native-playback heat
+    // regression: pre-native, a locked screen stopped playback so the web went
+    // idle; native keeps playing and kept pumping this whole pipeline in the
+    // background. (foreground is unchanged.)
+    if (!document.hidden) {
+      setCurrentTime(pos);
+      setCurrentIdx(markIndex(marksRef.current, pos * 1000));
+    }
     const np = nowPlayingRef.current;
     if (np && pos > 0) {
-      localStorage.setItem(posKey(np.chapterPath, np.lang), String(pos));
+      // localStorage.setItem is SYNCHRONOUS disk I/O; at 4 Hz, sustained (and,
+      // with the native engine, continuing while backgrounded/locked), it's a
+      // real battery/heat cost. Throttle to ~4 s — the seed only needs to be
+      // roughly current for the next cold start; posStore (debounced) is the
+      // authority. pause/ended persist immediately via their own handlers.
+      const now = Date.now();
+      if (now - lastPosWriteRef.current > 4000) {
+        lastPosWriteRef.current = now;
+        localStorage.setItem(posKey(np.chapterPath, np.lang), String(pos));
+      }
       persistPos(np.chapterPath, pos);
     }
     if (
