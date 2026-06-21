@@ -3,7 +3,7 @@ import { Alert, Box, Skeleton } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { PlaybackBar } from "./PlaybackBar";
 import { ScrollToTopButton } from "./ScrollToTopButton";
-import { useAudioPlayer } from "@/audio/player";
+import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { READING_COLUMN_MAX } from "@/types";
 import { useI18n } from "@/i18n";
 
@@ -35,12 +35,10 @@ export function AudiobookPlayer(
     nowPlaying,
     sentences,
     currentIdx,
-    currentProgress,
     error,
-    currentTime,
-    duration,
     seekToSentence,
   } = useAudioPlayer();
+  const { currentProgress, currentTime, duration } = useAudioTime();
 
   // Mirror playback position into the shared progress store (debounced upstream
   // per path), so the shelf card shows an audio % like the text reader does. The

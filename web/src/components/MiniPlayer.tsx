@@ -14,7 +14,7 @@ import {
   SkipNext,
   SkipPrevious,
 } from "@mui/icons-material";
-import { useAudioPlayer } from "@/audio/player";
+import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
 
 /** Stable hue from a slug → a calm gradient stand-in cover (mirrors the shelf). */
@@ -51,14 +51,13 @@ export function MiniPlayer(
     setExpanded,
     playing,
     loading,
-    currentTime,
-    duration,
     canPrev,
     canNext,
     togglePlay,
     nextChapter,
     prevChapter,
   } = useAudioPlayer();
+  const { currentTime, duration } = useAudioTime();
 
   if (expanded || !nowPlaying || !onPlayingPage) return null;
 

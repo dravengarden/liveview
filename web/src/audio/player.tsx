@@ -76,16 +76,11 @@ export interface AudioPlayer {
   sentences: string[];
   /** Index of the sentence being spoken, or -1. */
   currentIdx: number;
-  /** Read fraction (0–1) WITHIN the current sentence — drives the karaoke
-   *  read-so-far wipe. 0 when nothing is playing. */
-  currentProgress: number;
   playing: boolean;
   /** True while fetching sentences + synthesizing audio (first play is slow). */
   loading: boolean;
   error: string | null;
   rate: number;
-  currentTime: number;
-  duration: number;
   canPrev: boolean;
   canNext: boolean;
   /** Whether the full read-along popup is in focus (expanded) vs collapsed to the
@@ -128,6 +123,20 @@ export interface AudioPlayer {
    *  from ANOTHER device — drives the "已同步…" snackbar. `seq` lets an identical
    *  message re-fire the toast; null until/unless a cross-device sync lands. */
   syncNotice: { message: string; seq: number } | null;
+}
+
+/** The fast-ticking playback clock, deliberately split OUT of `AudioPlayer` into
+ *  its own context. `currentTime` updates ~4×/s during playback; folding it into
+ *  the main context made the WHOLE app tree (every `useAudioPlayer()` consumer)
+ *  re-render on every tick, which showed up as a hitch on play-start and steady
+ *  jank while playing. Only the scrubbers, the mini progress dots and the
+ *  read-along wipe need it — they read it via `useAudioTime()`. */
+export interface AudioTime {
+  currentTime: number;
+  duration: number;
+  /** Read fraction (0–1) WITHIN the current sentence — drives the karaoke
+   *  read-so-far wipe. 0 when nothing is playing. */
+  currentProgress: number;
 }
 
 // Device-local FAST PATH for the resume position + rate. The cross-device
@@ -260,6 +269,7 @@ function markIndex(marks: Mark[], ms: number): number {
 }
 
 const Ctx = createContext<AudioPlayer | null>(null);
+const TimeCtx = createContext<AudioTime | null>(null);
 
 export function AudioPlayerProvider(
   { children }: { children: React.ReactNode },
@@ -1229,13 +1239,10 @@ export function AudioPlayerProvider(
       nowPlaying,
       sentences,
       currentIdx,
-      currentProgress,
       playing,
       loading,
       error,
       rate,
-      currentTime,
-      duration,
       canPrev: queueIndex > 0,
       canNext: queueIndex >= 0 && queueIndex < queue.length - 1,
       expanded,
@@ -1261,13 +1268,10 @@ export function AudioPlayerProvider(
       nowPlaying,
       sentences,
       currentIdx,
-      currentProgress,
       playing,
       loading,
       error,
       rate,
-      currentTime,
-      duration,
       expanded,
       queue,
       queueIndex,
@@ -1288,14 +1292,23 @@ export function AudioPlayerProvider(
     ],
   );
 
+  // The fast-ticking clock lives in its own memo + provider so a `currentTime`
+  // tick re-renders ONLY the `useAudioTime()` consumers, never the `value` tree.
+  const timeValue = useMemo<AudioTime>(
+    () => ({ currentTime, duration, currentProgress }),
+    [currentTime, duration, currentProgress],
+  );
+
   return (
     <Ctx.Provider value={value}>
-      {children}
-      {
-        /* The single, always-mounted narration element — never unmounts, so
-          playback survives every in-app navigation. */
-      }
-      <audio ref={audioRef} preload="metadata" hidden />
+      <TimeCtx.Provider value={timeValue}>
+        {children}
+        {
+          /* The single, always-mounted narration element — never unmounts, so
+            playback survives every in-app navigation. */
+        }
+        <audio ref={audioRef} preload="metadata" hidden />
+      </TimeCtx.Provider>
     </Ctx.Provider>
   );
 }
@@ -1306,6 +1319,18 @@ export function useAudioPlayer(): AudioPlayer {
     throw new Error(
       "useAudioPlayer must be used within an AudioPlayerProvider",
     );
+  }
+  return ctx;
+}
+
+/** The fast-ticking playback clock (`currentTime`/`duration`/`currentProgress`).
+ *  Read it ONLY where you actually render the moving value (scrubbers, progress
+ *  dots, the read-along wipe) — subscribing here re-renders ~4×/s while playing,
+ *  whereas `useAudioPlayer()` stays still through a tick. */
+export function useAudioTime(): AudioTime {
+  const ctx = useContext(TimeCtx);
+  if (!ctx) {
+    throw new Error("useAudioTime must be used within an AudioPlayerProvider");
   }
   return ctx;
 }

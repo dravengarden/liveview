@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { Box, CircularProgress } from "@mui/material";
 import { Headphones as AudiobookIcon } from "@mui/icons-material";
 import { haptic, useAnyDetentSheetOpen } from "../_shell";
-import { useAudioPlayer } from "@/audio/player";
+import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
 
 /** The same slug hue as the shelf/cover, but TRANSLUCENT — a tinted glass version
@@ -110,7 +110,8 @@ export function FloatingBubble({
   onOpenControls: () => void;
 }): React.JSX.Element | null {
   const { t } = useI18n();
-  const { nowPlaying, currentTime, duration } = useAudioPlayer();
+  const { nowPlaying } = useAudioPlayer();
+  const { currentTime, duration } = useAudioTime();
 
   // A DetentSheet (settings / TOC / the PlaybackSheet itself) renders inline, so
   // its z-index is trapped below this root-level fixed puck — it would otherwise

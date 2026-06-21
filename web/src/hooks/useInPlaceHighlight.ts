@@ -6,7 +6,7 @@ import {
   useState,
 } from "react";
 import { haptic } from "../_shell";
-import { useAudioPlayer } from "@/audio/player";
+import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import type { Mark, SpokenUnits, Unit } from "@/types";
 
 /** Follow-mode controls the hook hands back, so the reader can show a
@@ -383,8 +383,8 @@ export function useInPlaceHighlight(
   scrollerRef: RefObject<HTMLElement | null>,
   currentPath: string | null,
 ): ReadAlongFollow {
-  const { nowPlaying, currentIdx, currentTime, playing, seekToSentence } =
-    useAudioPlayer();
+  const { nowPlaying, currentIdx, playing, seekToSentence } = useAudioPlayer();
+  const { currentTime } = useAudioTime();
   const [units, setUnits] = useState<Unit[]>([]);
   const [marks, setMarks] = useState<Mark[]>([]);
   // Sticky follow: auto-scroll keeps the spoken line in view; a manual scroll

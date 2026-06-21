@@ -17,7 +17,7 @@ import {
 } from "@mui/icons-material";
 import { Forward15Icon, Replay15Icon } from "./Skip15Icons";
 import { fmtTime, SleepChip, SpeedChip } from "@/audio/playback-ui";
-import { useAudioPlayer } from "@/audio/player";
+import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
 
 /** Read-along follow control for the host reader (audiobook page OR the in-place
@@ -54,8 +54,6 @@ export function PlaybackBar(
   const {
     playing,
     loading,
-    currentTime,
-    duration,
     canPrev,
     canNext,
     togglePlay,
@@ -64,6 +62,7 @@ export function PlaybackBar(
     nextChapter,
     prevChapter,
   } = useAudioPlayer();
+  const { currentTime, duration } = useAudioTime();
 
   const transportRef = useRef<HTMLDivElement>(null);
   // ONE row (scrubber + controls together) when wide enough, else TWO rows.

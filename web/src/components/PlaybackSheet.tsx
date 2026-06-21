@@ -18,7 +18,7 @@ import { Forward15Icon, Replay15Icon } from "./Skip15Icons";
 import { CoverTile } from "./CoverTile";
 import { BottomSheet } from "../_shell";
 import { SleepChip, SpeedChip, fmtTime } from "@/audio/playback-ui";
-import { useAudioPlayer } from "@/audio/player";
+import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
 
 // The ONE portable playback panel. Whatever is playing — read-aloud of a text
@@ -46,8 +46,6 @@ export function PlaybackSheet({
     nowPlaying,
     playing,
     loading,
-    currentTime,
-    duration,
     canPrev,
     canNext,
     togglePlay,
@@ -57,6 +55,7 @@ export function PlaybackSheet({
     nextChapter,
     stop,
   } = useAudioPlayer();
+  const { currentTime, duration } = useAudioTime();
   // Stop drops the now-playing + resume position, so it asks first (a stray tap
   // mid-listen shouldn't wipe progress). Inline two-step, no nested sheet.
   const [confirmStop, setConfirmStop] = useState(false);
