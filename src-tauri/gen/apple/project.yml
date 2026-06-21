@@ -72,6 +72,13 @@ targets:
         # target was ObjC-only before; without an explicit version Xcode errors on
         # the first .swift. swift-5.0 libs are already on LIBRARY_SEARCH_PATHS above.
         SWIFT_VERSION: "5.0"
+        # Signing: xcodegen regenerates the .xcodeproj from THIS file, so a team set
+        # only in Xcode is dropped on regen and the build fails ("requires a
+        # development team"). Pin the Apple Development team + automatic signing here
+        # so every regen stays signable. (Free-tier provisioning still expires
+        # ~weekly → rebuild to re-sign; see README.)
+        DEVELOPMENT_TEAM: 3ND84C46TG
+        CODE_SIGN_STYLE: Automatic
       groups: [app]
     dependencies:
       - framework: libapp.a
