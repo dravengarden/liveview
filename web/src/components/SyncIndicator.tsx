@@ -4,6 +4,7 @@ import { alpha } from "@mui/material/styles";
 import { CloudDownload, ExpandMore, GraphicEq } from "@mui/icons-material";
 import { DetentSheet } from "../_shell";
 import { useNavbarAtBottom } from "@/hooks";
+import { rem } from "@/px";
 import {
   type BookAudioStatus,
   refreshSyncStatus,
@@ -70,7 +71,9 @@ export function SyncIndicator(
   useEffect(() => {
     const el = document.documentElement;
     if (generating && !open && navbarAtBottom) {
-      el.style.setProperty("--lv-syncbar-h", "28px");
+      // rem so the reserved space scales WITH the strip when the global font
+      // size changes (the strip's own text/height are rem too — see below).
+      el.style.setProperty("--lv-syncbar-h", rem(28));
     } else {
       el.style.removeProperty("--lv-syncbar-h");
     }
@@ -150,18 +153,21 @@ export function SyncIndicator(
               alignItems: "center",
               gap: 1,
               px: 1.5,
-              height: 26,
+              // rem (not fixed px) so the whole strip — text AND height — scales
+              // with the app-wide font-size setting, like the rest of the UI.
+              // minHeight (not height) so a larger font can't clip the row.
+              minHeight: rem(26),
             }}
           >
             {/* Leading glyph only — NOT a progress indicator. The single
                 progress cue is the filament along the edge (+ the count); a
                 spinner here duplicated it. */}
-            <GraphicEq sx={{ fontSize: 14, flexShrink: 0, opacity: 0.7 }} />
+            <GraphicEq sx={{ fontSize: rem(14), flexShrink: 0, opacity: 0.7 }} />
             <Typography
               noWrap
               sx={{
                 flex: 1,
-                fontSize: 12,
+                fontSize: rem(12),
                 fontWeight: 500,
                 color: "text.secondary",
               }}
@@ -171,7 +177,7 @@ export function SyncIndicator(
             {pct != null && (
               <Typography
                 sx={{
-                  fontSize: 11,
+                  fontSize: rem(11),
                   color: "text.disabled",
                   fontVariantNumeric: "tabular-nums",
                   flexShrink: 0,
@@ -180,7 +186,7 @@ export function SyncIndicator(
                 {g.done}/{g.total}
               </Typography>
             )}
-            <ExpandMore sx={{ fontSize: 16, flexShrink: 0, opacity: 0.5 }} />
+            <ExpandMore sx={{ fontSize: rem(16), flexShrink: 0, opacity: 0.5 }} />
           </Box>
           {/* Aggregate progress filament along the strip's bottom edge — the same
               cue the reader uses for reading progress, so the two read as kin. */}
