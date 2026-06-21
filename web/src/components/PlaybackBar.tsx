@@ -276,10 +276,16 @@ export function PlaybackBar(
           // and the nav bar read as ONE pane with no seam.
           pl: "max(env(safe-area-inset-left, 0px), 12px)",
           pr: "max(env(safe-area-inset-right, 0px), 12px)",
-          // SYMMETRIC top/bottom so the controls sit vertically centred.
+          // pt gives the controls breathing room below the slab's top edge. pb:
+          // when the nav bar sits DIRECTLY below in the same slab (navbarAtBottom)
+          // the two read as one panel, so drop the transport's bottom pad to 0 —
+          // the controls keep their own breathing from the row's minHeight, and
+          // the nav bar (its top pad already 0) hugs right under them instead of
+          // leaving a seam-like gap. With no nav bar below (desktop) keep the
+          // home-indicator-aware bottom pad.
           pt: SLAB_PAD_Y,
           pb: navbarAtBottom
-            ? SLAB_PAD_Y
+            ? 0
             : `max(calc(env(safe-area-inset-bottom, 0px) - 8px), ${
               SLAB_PAD_Y * 8
             }px)`,
