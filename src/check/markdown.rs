@@ -13,6 +13,11 @@
 //! - `md/stray-emphasis` (Warning): a literal `**` that survived into inline
 //!   text — a bold marker comrak could not pair (the bold broke across a block
 //!   boundary, or was left unclosed), so the reader shows `**` instead of bold.
+//! - `md/raw-math-delim` (Warning): a raw `\(…\)` / `\[…\]` math delimiter in
+//!   prose. liveview renders only `$…$` / `$$…$$`; comrak treats `\(` as a
+//!   backslash-escape of `(` and drops it, so the reader sees literal `(\hat f)`
+//!   instead of math. Found by scanning raw source (the parsed `Text` no longer
+//!   has the backslash), excluding `Code`/`CodeBlock`/`Math` spans.
 //!
 //! ## What comrak 0.36 actually does (verified empirically, drives the design)
 //!
@@ -76,6 +81,13 @@ static REF_LINK_RE: LazyLock<Regex> =
 static REF_DEF_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^[ \t]{0,3}\[([^\]^]+)\]:[ \t]").unwrap());
 
+// A `\(…\)` / `\[…\]` LaTeX/MathJax math-delimiter PAIR on a single line. Real
+// math-delimiter misuse is always *paired*; a lone `\[` is a bracket-escape that
+// renders fine (e.g. `\[2ⁱ, 2ⁱ⁺¹)`), not a bug. Lazy `.*?` keeps the pair
+// minimal and `.` excludes newlines, so a pair can't span unrelated blocks.
+static RAW_MATH_INLINE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\\(.*?\\\)").unwrap());
+static RAW_MATH_DISPLAY_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\\[.*?\\\]").unwrap());
+
 impl Validator for MarkdownValidator {
     fn check(&self, file: &CheckFile, ctx: &CheckCtx) -> Vec<Diagnostic> {
         let arena = Arena::new();
@@ -87,6 +99,7 @@ impl Validator for MarkdownValidator {
         self.check_broken_ref_links(file, root, &mut diags);
         self.check_assets(file, ctx, root, &mut diags);
         self.check_stray_emphasis(file, root, &mut diags);
+        self.check_raw_math_delim(file, root, &mut diags);
 
         // Stable, location-ordered output regardless of which sub-check found
         // a diagnostic first.
@@ -354,6 +367,107 @@ impl MarkdownValidator {
             }
         }
     }
+
+    /// `md/raw-math-delim` (Warning).
+    ///
+    /// liveview's renderer enables only comrak's `$…$` / `$$…$$` / ` ```math `
+    /// math (`math_dollars` + `math_code`). The MathJax/LaTeX delimiters `\(…\)`
+    /// and `\[…\]` have NO comrak option, so they are never parsed as math.
+    /// Worse: `(`, `)`, `[`, `]` are ASCII punctuation, so comrak treats `\(` as
+    /// a *backslash escape* and silently drops the backslash — the reader sees a
+    /// literal `(` (e.g. `\(\hat f\)` ships as `(\hat f)`). `math/parse-error`
+    /// can't catch this: the text never becomes a `Math` node.
+    ///
+    /// Detection therefore can't read the parsed `Text` (the backslash is
+    /// already gone there) — we scan the RAW source for `\(…\)` / `\[…\]`
+    /// *pairs* and skip any whose opener is inside a `Code`/`CodeBlock`/`Math`
+    /// node (those keep the backslash verbatim and aren't prose). Verified
+    /// empirically on comrak 0.36: a prose `\(` parses to `Text("(")`, but
+    /// `` `\(x\)` `` parses to `Code("\\(x\\)")` and `$…$` to `Math(...)`.
+    ///
+    /// Two precision guards, learned from a corpus sweep that surfaced both
+    /// classes of false positive:
+    /// - **Require a pair.** A lone `\[` is a *bracket-escape* (`\[2ⁱ, 2ⁱ⁺¹)`
+    ///   renders fine as `[2ⁱ…`), not a math delimiter — only `\[…\]` / `\(…\)`
+    ///   pairs are flagged.
+    /// - **Skip an escaped opener.** `\\[2ex]` (LaTeX line-spacing inside math)
+    ///   is a literal backslash then `[`, not a delimiter; an opener preceded by
+    ///   `\` is ignored.
+    ///
+    /// Both diagnostics of a pair are reported (opener + closer), so `/fix-book`
+    /// sees each token to convert. Warn-only.
+    fn check_raw_math_delim<'a>(
+        &self,
+        file: &CheckFile,
+        root: &'a AstNode<'a>,
+        diags: &mut Vec<Diagnostic>,
+    ) {
+        // Spans where a literal backslash-bracket is legitimate: code keeps it
+        // verbatim, math owns it. Anything outside these is prose, where comrak
+        // ate the backslash and shipped a broken literal to the reader.
+        let mut protected: Vec<Sourcepos> = Vec::new();
+        for node in root.descendants() {
+            let data = node.data.borrow();
+            if matches!(
+                &data.value,
+                NodeValue::Code(_) | NodeValue::CodeBlock(_) | NodeValue::Math(_)
+            ) {
+                protected.push(data.sourcepos);
+            }
+        }
+        // comrak sourcepos columns count raw-source positions the same way
+        // `byte_to_line_col` does (1-based, escapes included), so the `(line,
+        // col)` of a delimiter is directly comparable to a node's span.
+        let inside_protected = |line: u32, col: u32| -> bool {
+            protected.iter().any(|sp| {
+                let start = (sp.start.line as u32, sp.start.column as u32);
+                let end = (sp.end.line as u32, sp.end.column as u32);
+                (line, col) >= start && (line, col) <= end
+            })
+        };
+
+        let bytes = file.source.as_bytes();
+        for (re, open, close) in [
+            (&*RAW_MATH_INLINE_RE, "\\(", "\\)"),
+            (&*RAW_MATH_DISPLAY_RE, "\\[", "\\]"),
+        ] {
+            for m in re.find_iter(&file.source) {
+                let open_off = m.start();
+                // `\\(` / `\\[`: the opening `\` is itself escaped → a literal
+                // backslash + bracket (e.g. LaTeX `\\[2ex]`), not a delimiter.
+                if open_off > 0 && bytes[open_off - 1] == b'\\' {
+                    continue;
+                }
+                let (oline, ocol) = byte_to_line_col(&file.source, open_off);
+                if inside_protected(oline, ocol) {
+                    continue;
+                }
+                let close_off = m.end() - 2; // the 2-byte `\)` / `\]`.
+                let (cline, ccol) = byte_to_line_col(&file.source, close_off);
+                for (line, col, snippet) in [(oline, ocol, open), (cline, ccol, close)] {
+                    diags.push(Diagnostic {
+                        file: file.rel.clone(),
+                        line,
+                        col,
+                        end_line: line,
+                        end_col: col + 1, // spans the `\` and the bracket.
+                        severity: Severity::Warning,
+                        source: "markdown",
+                        rule: "md/raw-math-delim".to_string(),
+                        message:
+                            "raw LaTeX math delimiter does not render — `\\(…\\)` / `\\[…\\]` is not math here"
+                                .to_string(),
+                        hint: Some(
+                            "liveview renders `$…$` (inline) and `$$…$$` (display) only; convert the \
+                             delimiters — `\\(…\\)` / `\\[…\\]` ship as literal text"
+                                .to_string(),
+                        ),
+                        snippet: Some(snippet.to_string()),
+                    });
+                }
+            }
+        }
+    }
 }
 
 /// Is `url` a relative local path we should resolve on disk? Excludes URL
@@ -613,5 +727,58 @@ mod tests {
     fn emphasis_in_code_block_ignored() {
         let d = check("```python\nx = 2 ** 8\n```\n");
         assert!(d.is_empty(), "code-block `**` leaked: {:?}", rules(&d));
+    }
+
+    // --- md/raw-math-delim ---------------------------------------------------
+    // `\(`,`\)`,`\[`,`\]` are NOT liveview math; comrak eats the backslash so
+    // the reader sees literal `(\hat f)`. Detection scans raw source (the
+    // parsed Text has already lost the backslash), skipping code/math spans.
+
+    #[test]
+    fn raw_math_delim_flagged() {
+        // Inline `\(…\)` (two tokens) + display `\[…\]` (two tokens) in prose.
+        let d = check("Pick \\(\\hat f\\).\n\nThen \\[ E = mc^2 \\] holds.\n");
+        let r = rules(&d);
+        assert_eq!(
+            r,
+            [
+                "md/raw-math-delim",
+                "md/raw-math-delim",
+                "md/raw-math-delim",
+                "md/raw-math-delim"
+            ],
+            "got {r:?}"
+        );
+        assert!(d.iter().all(|x| x.severity == Severity::Warning));
+        // First hit is the `\(` — the 6th char on line 1 (`Pick ` = 5 chars).
+        assert_eq!((d[0].line, d[0].col), (1, 6));
+        assert_eq!(d[0].snippet.as_deref(), Some("\\("));
+    }
+
+    #[test]
+    fn valid_math_and_code_not_flagged() {
+        // Real `$…$` / `$$…$$` / ```math``` math, plus `\(`/`\[` inside inline
+        // code and a fenced code block — none of these is a prose delimiter.
+        let src = "Inline $\\hat f$ and display $$E = mc^2$$ work.\n\n\
+                   ```math\n\\hat f\n```\n\n\
+                   Code `\\(not math\\)` stays.\n\n\
+                   ```rust\nlet x = arr\\[0\\];\n```\n";
+        let d = check(src);
+        let raw: Vec<_> = d.iter().filter(|x| x.rule == "md/raw-math-delim").collect();
+        assert!(raw.is_empty(), "false positives: {raw:?}");
+    }
+
+    #[test]
+    fn bracket_escape_and_double_backslash_not_flagged() {
+        // Two real corpus false positives this rule must NOT flag:
+        // - a lone `\[` escaping a literal `[` in prose (no closing `\]`);
+        // - `\\[2ex]` (LaTeX line-spacing) where the `[` is in a `\\` pair.
+        let src = "distance falls in \\[2ⁱ, 2ⁱ⁺¹)). Near buckets...\n\n\
+                   $$g, & \\|g\\|\\le c\\\\[1ex]$$\n";
+        let raw: Vec<_> = check(src)
+            .into_iter()
+            .filter(|x| x.rule == "md/raw-math-delim")
+            .collect();
+        assert!(raw.is_empty(), "false positives: {raw:?}");
     }
 }
