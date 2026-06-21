@@ -1686,18 +1686,17 @@ export function Landing({
             : { top: 0 }),
           zIndex: 6,
           borderColor: "divider",
-          // Near-opaque, unified with every other chrome bar (reader transport /
-          // nav / sync strip): cards scrolling under this toolbar must NOT bleed
-          // through and clash with the search field + controls. saturate() dropped
-          // for the same reason (it tinted the flat page peeking through; pointless
-          // at this opacity). Heavy blur still softens the sliver past the edge.
+          // Near-opaque, unified with every other chrome bar: cards scrolling
+          // under this toolbar must NOT bleed through and clash with the search
+          // field + controls. NO backdrop-filter: a blur here re-rasterizes the
+          // cards scrolling under it every frame for a result that's invisible at
+          // this opacity = scroll jank for nothing. The opaque tint alone hides
+          // them.
           bgcolor: (t) =>
             alpha(
               t.palette.background.default,
               t.palette.mode === "dark" ? 0.94 : 0.96,
             ),
-          backdropFilter: "blur(24px)",
-          WebkitBackdropFilter: "blur(24px)",
           ...(navbarAtBottom
             ? {
               // A hard, edge-to-edge 1px rule looks like a stray line when the

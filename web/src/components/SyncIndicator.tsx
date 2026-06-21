@@ -117,8 +117,14 @@ export function SyncIndicator(): React.JSX.Element | null {
             // desktop it rides over the NavShell bar, so keep the lighter touch.
             bgcolor: (th) =>
               alpha(th.palette.background.default, navbarAtBottom ? 0.96 : 0.82),
-            backdropFilter: navbarAtBottom ? "blur(20px)" : "blur(12px)",
-            WebkitBackdropFilter: navbarAtBottom ? "blur(20px)" : "blur(12px)",
+            // Mobile: near-opaque (0.96) over the scrolling reader → NO blur
+            // (it would re-rasterize the moving content every frame for an
+            // invisible result = scroll jank). Desktop: translucent (0.82) over
+            // the NavShell bar, not the scroller, so keep its glass blur.
+            ...(navbarAtBottom ? {} : {
+              backdropFilter: "blur(12px)",
+              WebkitBackdropFilter: "blur(12px)",
+            }),
             borderBottom: 1,
             borderColor: "divider",
             "@media (hover: hover)": {

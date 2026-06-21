@@ -69,8 +69,11 @@ export function ScrollToTopButton(
               t.palette.background.paper,
               t.palette.mode === "dark" ? 0.5 : 0.62,
             ),
-          backdropFilter: "blur(16px) saturate(180%)",
-          WebkitBackdropFilter: "blur(16px) saturate(180%)",
+          // Drop saturate(): floats over the scrolling reader, so the filter
+          // re-rasterizes the moving text every frame — saturate adds per-frame
+          // cost (and warm-page tint, lv-v203) for little gain. Keep blur.
+          backdropFilter: "blur(16px)",
+          WebkitBackdropFilter: "blur(16px)",
           border: 1,
           borderColor: "divider",
           boxShadow: 2,

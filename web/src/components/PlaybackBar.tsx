@@ -245,21 +245,18 @@ export function PlaybackBar(
           height: "calc(var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
           borderTop: 1,
           borderColor: "divider",
-          // Near-opaque, matching the top chrome (SyncIndicator / status-bar
-          // frost): the controls sit on the page, so the reading text must NOT
-          // bleed through and clash with them. The old 0.72/0.76 let it show
-          // through on the warm page. Drop saturate() too — same reason as the
-          // top strip (lv-v203): the 2× boost amplified the low-saturation page
-          // peeking through into a tint that didn't match the flat page; at this
-          // opacity it bought nothing anyway. A heavy blur still softens the
-          // sliver that scrolls past the border edge.
+          // Near-opaque, matching the top chrome: the controls sit on the page,
+          // so the reading text must NOT bleed through and clash with them.
+          // NO backdrop-filter: a blur on this full-width slab is a scroll-perf
+          // trap — as the reader scrolls under it, the blur re-rasterizes the
+          // moving content every frame, and at ~0.95 opacity the blurred result
+          // is invisible anyway (the tint covers it), so it just dropped frames
+          // for nothing. The opaque tint alone hides the page.
           bgcolor: (t) =>
             alpha(
               t.palette.background.default,
               t.palette.mode === "dark" ? 0.94 : 0.96,
             ),
-          backdropFilter: "blur(24px)",
-          WebkitBackdropFilter: "blur(24px)",
           pointerEvents: "none",
         }}
       />

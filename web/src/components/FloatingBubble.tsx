@@ -345,8 +345,12 @@ export function FloatingBubble({
           // Frosted puck: a translucent tint over a backdrop blur, so the page
           // shows through it as glass. A cover image (below) overlays opaque.
           background: coverGlass(slug),
-          backdropFilter: "blur(16px) saturate(180%)",
-          WebkitBackdropFilter: "blur(16px) saturate(180%)",
+          // Drop saturate(): this puck floats over the scrolling reader, so its
+          // filter re-rasterizes the moving text every frame — saturate adds
+          // per-frame cost (and tints the warm page, lv-v203) for little gain.
+          // Keep blur for the glass look.
+          backdropFilter: "blur(16px)",
+          WebkitBackdropFilter: "blur(16px)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
