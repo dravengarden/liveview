@@ -84,25 +84,38 @@ function carryReadAnchors(from: HTMLElement, to: HTMLElement): void {
   }
 }
 
+/** Prose base font px — the app-wide font-size setting's default (scale 1). The
+ *  diagram font scale is measured relative to this. */
+const BASE_FONT_PX = 16;
+
 /** The reader's live root font size in px (== the prose base; the app-wide
- *  font-size setting is applied as the root <html> font-size). Mermaid bakes its
- *  text size into the SVG geometry at render time, so we feed THIS as the diagram
- *  fontSize and re-render when it changes — that way a diagram narrower than the
- *  column grows its text WITH the prose (a wider-than-column diagram still
- *  normalizes to the column via useMaxWidth, so it's neutral there, never worse).
- *  Pure client-side re-measure — no tokens, no model. */
+ *  font-size setting is applied as the root <html> font-size). */
 function rootFontPx(): number {
   const v = parseFloat(getComputedStyle(document.documentElement).fontSize);
-  return Number.isFinite(v) && v > 0 ? v : 16;
+  return Number.isFinite(v) && v > 0 ? v : BASE_FONT_PX;
 }
 
-function mermaidConfig(isDark: boolean, fontPx: number): Record<string, unknown> {
+/** How much bigger the reading font is than the default — the factor the diagram
+ *  (and so its text) scales by, so a chart tracks the font-size setting like the
+ *  prose does. Applied as a CSS var on the rendered SVG width, NOT baked into
+ *  mermaid: mermaid normalizes any baked size back out (it sizes the diagram so
+ *  its smallest label is a fixed ~9px on screen — see the sizing pass below — and
+ *  a bigger baked font just grows the geometry that pass then shrinks back), so
+ *  baking is a no-op. Scaling the FINAL width is what actually enlarges it. */
+function chartScale(): number {
+  return rootFontPx() / BASE_FONT_PX;
+}
+
+function mermaidConfig(isDark: boolean): Record<string, unknown> {
   return {
     theme: isDark ? "dark" : "default",
     startOnLoad: false,
     fontFamily: MERMAID_FONT_FAMILY,
-    // Track the app-wide font-size setting (default 16 == scale 1).
-    fontSize: fontPx,
+    // A CONSTANT base size: the font-size setting is applied by scaling the
+    // rendered SVG width (--lv-chart-scale), not by re-baking mermaid (which
+    // normalizes a baked size back out — see chartScale). Constant base ⇒ the
+    // scale stays linear and font changes need no mermaid re-layout.
+    fontSize: BASE_FONT_PX,
     // htmlLabels (foreignObject + browser CSS) is what makes labels AUTO-WRAP —
     // incl. CJK, which has no spaces and so can't wrap via the SVG-tspan path.
     // It's the v11 flowchart default, but set explicitly + globally (the
@@ -308,7 +321,7 @@ export function MarkdownViewer({
         void ensureScript("/mermaid.min.js")
           .then(() => {
             if (!window.mermaid) return;
-            window.mermaid.initialize(mermaidConfig(isDarkScheme(), rootFontPx()));
+            window.mermaid.initialize(mermaidConfig(isDarkScheme()));
             pending.forEach(({ holder, code }) => {
               const div = document.createElement("div");
               div.className = "mermaid";
@@ -400,27 +413,37 @@ export function MarkdownViewer({
     processContent();
   }, [html, processContent]);
 
-  // Re-render mermaid diagrams when the app theme's light/dark MODE flips, so
-  // each redraws in mermaid's native theme for the new mode (not a CSS-invert
-  // approximation). Watches documentElement's `data-color-scheme` (set by
-  // useTheme); a light↔light switch (classic↔sepia) leaves it unchanged → no
-  // re-render. Each diagram redraws from its stashed `data-mermaid-src`. Book
-  // SVGs can't re-render, so they keep the invert filter (markdown.css).
-  // Also re-render when the app-wide FONT SIZE changes (mermaid bakes text size
-  // into the SVG, so it must re-measure to track the setting — see rootFontPx).
-  // The font size is set on the root's `style`, which ALSO carries unrelated CSS
-  // vars (--shell-bar-h, --lv-syncbar-h, …) that churn often — so guard on the
-  // resolved px actually changing, making those churns a cheap no-op.
+  // Two reactions to root-level changes, both watching documentElement:
+  //
+  //  • THEME light/dark MODE flip → re-render each diagram in mermaid's native
+  //    theme for the new mode (not a CSS-invert approximation). A light↔light
+  //    switch (classic↔sepia) leaves `data-color-scheme` unchanged → no
+  //    re-render. Redraws from the stashed `data-mermaid-src`. Book SVGs can't
+  //    re-render, so they keep the invert filter (markdown.css).
+  //  • FONT-SIZE change → just update the `--lv-chart-scale` var; the sizing
+  //    pass below renders each SVG width as `rendered * var(--lv-chart-scale)`,
+  //    so the diagram (text included) grows with the reading font WITHOUT a
+  //    mermaid re-layout. Cheap — no re-measure, no re-render.
+  //
+  // The root's `style` also carries unrelated CSS vars (--shell-bar-h, … ) that
+  // churn often, so guard on the resolved scheme/px actually changing.
   useEffect(() => {
     const root = document.documentElement;
     let lastScheme = root.dataset["colorScheme"];
     let lastFontPx = rootFontPx();
+    root.style.setProperty("--lv-chart-scale", String(chartScale()));
     const obs = new MutationObserver(() => {
       const scheme = root.dataset["colorScheme"];
       const fontPx = rootFontPx();
       if (scheme === lastScheme && fontPx === lastFontPx) return;
+      // Font change: rescale via the CSS var (re-setting it re-enters this
+      // observer, but then nothing has changed → the guard above bails).
+      if (fontPx !== lastFontPx) {
+        lastFontPx = fontPx;
+        root.style.setProperty("--lv-chart-scale", String(chartScale()));
+      }
+      if (scheme === lastScheme) return;
       lastScheme = scheme;
-      lastFontPx = fontPx;
       const container = containerRef.current;
       if (!container || !window.mermaid) return;
       const divs = container.querySelectorAll<HTMLElement>(
@@ -431,7 +454,7 @@ export function MarkdownViewer({
         div.textContent = div.dataset["mermaidSrc"] ?? "";
         div.removeAttribute("data-processed");
       });
-      window.mermaid.initialize(mermaidConfig(isDarkScheme(), rootFontPx()));
+      window.mermaid.initialize(mermaidConfig(isDarkScheme()));
       void window.mermaid.run({ nodes: divs }).then(() => {
         setDiagramTick((tk) => tk + 1);
       });
@@ -536,6 +559,11 @@ export function MarkdownViewer({
         clone.setAttribute("width", String(Math.round(w)));
         clone.setAttribute("height", String(Math.round(h)));
         clone.style.maxWidth = "none";
+        // Drop the in-page inline sizing (a `calc(... * var(--lv-chart-scale))`
+        // width): the snapshot is an isolated <img> document with no :root to
+        // resolve that var, so let the pinned viewBox px attributes govern.
+        clone.style.width = "";
+        clone.style.height = "";
       }
       // Fixed-colour figures (book SVGs) get a white backing — the lightbox
       // inverts it to a dark plate in dark mode. A mermaid SVG is theme-native
@@ -618,7 +646,13 @@ export function MarkdownViewer({
           w.appendChild(el);
           wrap = w;
         }
-        svg.style.width = `${rendered}px`;
+        // `rendered` is the base (font-default) width that keeps the smallest
+        // label ≈9px. Scale it by the live font factor so a larger reading font
+        // enlarges the whole diagram — overflowing into the .lv-diagram-scroll
+        // wrapper's horizontal scroll — instead of being normalized back. The
+        // var updates on a font change with no re-render (see the observer).
+        svg.style.width =
+          `calc(${rendered}px * var(--lv-chart-scale, 1))`;
         svg.style.maxWidth = "none";
         svg.style.height = "auto";
       }
