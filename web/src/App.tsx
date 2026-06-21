@@ -47,6 +47,8 @@ import { useI18n } from "@/i18n";
 import { prefetchBookAudio, prefetchBookText } from "@/prefetch";
 import { loadAllServerSettings, putServerSetting } from "@/syncBackends";
 import { type Track, useAudioPlayer } from "@/audio/player";
+import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
+import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { useAutoUpdate } from "@/hooks/useAutoUpdate";
 import { applyUpdate, useConnectionBanner } from "@/connectionStore";
 import { NavShell } from "./_shell";
@@ -392,6 +394,9 @@ export function App(): React.JSX.Element {
     nowPlaying,
     stop: stopPlayback,
   } = useAudioPlayer();
+  // Desktop keyboard shortcuts (Space/←/→/⌘±arrows/</>) + the `?` cheat-sheet.
+  // Desktop-only (gated inside the hook); a no-op on touch.
+  const { helpOpen, closeHelp } = useKeyboardShortcuts();
   // Mirror of `nowPlaying` for the view→engine effect's guard. That effect must
   // react ONLY to view-led navigation (currentPath), never to engine-led chapter
   // changes — reading nowPlaying through a ref keeps it out of the dep array so
@@ -1771,6 +1776,10 @@ export function App(): React.JSX.Element {
       {/* Ambient background-work indicator (audio generation + offline prefetch)
           → the Sync sheet. Low-weight; only shows while something is in flight. */}
       <SyncIndicator bookSlug={activeSlug} />
+      {/* Desktop keyboard-shortcut cheat-sheet (opened with `?`). The Dialog
+          renders nothing while closed; on touch it never opens (the `?` handler
+          is desktop-gated). */}
+      <ShortcutsDialog open={helpOpen} onClose={closeHelp} />
       <PlaybackSheet
         open={playbackSheetOpen}
         onClose={() => setPlaybackSheetOpen(false)}
