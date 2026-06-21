@@ -84,11 +84,25 @@ function carryReadAnchors(from: HTMLElement, to: HTMLElement): void {
   }
 }
 
-function mermaidConfig(isDark: boolean): Record<string, unknown> {
+/** The reader's live root font size in px (== the prose base; the app-wide
+ *  font-size setting is applied as the root <html> font-size). Mermaid bakes its
+ *  text size into the SVG geometry at render time, so we feed THIS as the diagram
+ *  fontSize and re-render when it changes — that way a diagram narrower than the
+ *  column grows its text WITH the prose (a wider-than-column diagram still
+ *  normalizes to the column via useMaxWidth, so it's neutral there, never worse).
+ *  Pure client-side re-measure — no tokens, no model. */
+function rootFontPx(): number {
+  const v = parseFloat(getComputedStyle(document.documentElement).fontSize);
+  return Number.isFinite(v) && v > 0 ? v : 16;
+}
+
+function mermaidConfig(isDark: boolean, fontPx: number): Record<string, unknown> {
   return {
     theme: isDark ? "dark" : "default",
     startOnLoad: false,
     fontFamily: MERMAID_FONT_FAMILY,
+    // Track the app-wide font-size setting (default 16 == scale 1).
+    fontSize: fontPx,
     markdownAutoWrap: true,
     flowchart: {
       useMaxWidth: true,
@@ -285,7 +299,7 @@ export function MarkdownViewer({
         void ensureScript("/mermaid.min.js")
           .then(() => {
             if (!window.mermaid) return;
-            window.mermaid.initialize(mermaidConfig(isDarkScheme()));
+            window.mermaid.initialize(mermaidConfig(isDarkScheme(), rootFontPx()));
             pending.forEach(({ holder, code }) => {
               const div = document.createElement("div");
               div.className = "mermaid";
@@ -383,13 +397,21 @@ export function MarkdownViewer({
   // useTheme); a light↔light switch (classic↔sepia) leaves it unchanged → no
   // re-render. Each diagram redraws from its stashed `data-mermaid-src`. Book
   // SVGs can't re-render, so they keep the invert filter (markdown.css).
+  // Also re-render when the app-wide FONT SIZE changes (mermaid bakes text size
+  // into the SVG, so it must re-measure to track the setting — see rootFontPx).
+  // The font size is set on the root's `style`, which ALSO carries unrelated CSS
+  // vars (--shell-bar-h, --lv-syncbar-h, …) that churn often — so guard on the
+  // resolved px actually changing, making those churns a cheap no-op.
   useEffect(() => {
     const root = document.documentElement;
     let lastScheme = root.dataset["colorScheme"];
+    let lastFontPx = rootFontPx();
     const obs = new MutationObserver(() => {
       const scheme = root.dataset["colorScheme"];
-      if (scheme === lastScheme) return;
+      const fontPx = rootFontPx();
+      if (scheme === lastScheme && fontPx === lastFontPx) return;
       lastScheme = scheme;
+      lastFontPx = fontPx;
       const container = containerRef.current;
       if (!container || !window.mermaid) return;
       const divs = container.querySelectorAll<HTMLElement>(
@@ -400,14 +422,14 @@ export function MarkdownViewer({
         div.textContent = div.dataset["mermaidSrc"] ?? "";
         div.removeAttribute("data-processed");
       });
-      window.mermaid.initialize(mermaidConfig(isDarkScheme()));
+      window.mermaid.initialize(mermaidConfig(isDarkScheme(), rootFontPx()));
       void window.mermaid.run({ nodes: divs }).then(() => {
         setDiagramTick((tk) => tk + 1);
       });
     });
     obs.observe(root, {
       attributes: true,
-      attributeFilter: ["data-color-scheme"],
+      attributeFilter: ["data-color-scheme", "style"],
     });
     return () => obs.disconnect();
   }, []);
