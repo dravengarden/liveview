@@ -51,7 +51,6 @@ export function ScrollToTopButton(
       <Fab
         size="small"
         aria-label={t("app.scrollTop")}
-        title={t("app.scrollTop")}
         onClick={toTop}
         sx={{
           position: "absolute",

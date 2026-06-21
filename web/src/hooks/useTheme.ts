@@ -20,6 +20,13 @@ function systemPrefersDark(): boolean {
   return window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
+// A device whose primary input can't hover (phone/tablet). Read ONCE at module
+// load — a device's pointer capability doesn't change at runtime, and we don't
+// want this to churn the memoized theme. See TOUCH_NO_HOVER usage below.
+const TOUCH_NO_HOVER = typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(hover: none)").matches;
+
 /** Resolve the (variant, mode) pair to one of the 4 flat themes. */
 function resolveTheme(
   variant: ThemeVariant,
@@ -289,19 +296,29 @@ export function useTheme(): UseThemeResult {
             },
           },
         },
-        // A tooltip is a POINTER-HOVER affordance, not a touch one. MUI also
-        // shows it on a touch long-press (enterTouchDelay) and keeps it up for
-        // leaveTouchDelay (~1.5s) — so tapping a control that ALSO opens a sheet
-        // (e.g. the nav ≡ "Menu") flashed the tooltip on top of the sheet it had
-        // just opened: the tooltip portals at zIndex.tooltip = 1500, above the
-        // modal band = 1300. That's not a z-index to chase per-button — the fix
-        // is to stop touch from triggering tooltips at all. Disable ONLY the
-        // touch listener (theme-wide, so every Tooltip in the app inherits it):
-        // mouse hover still shows them on desktop, keyboard focus-visible still
-        // shows them for a11y, and touch shows nothing — no tooltip can ever
-        // float over a sheet/dialog again. Root cause, one place. (ui.md §7)
+        // A tooltip is a POINTER-HOVER affordance — it has NO place on a touch
+        // device, which can't hover. The bug it caused: tapping a control that
+        // also opens a sheet (the nav ≡ "Menu", the settings gear) flashed its
+        // tooltip ON TOP of the sheet it had just opened (tooltips portal at
+        // zIndex.tooltip = 1500, above the modal band = 1300). disableTouchListener
+        // alone was NOT enough — it only stops the long-press trigger; a plain
+        // tap still focuses the button, and MUI's FOCUS listener then opens the
+        // tooltip. The only root fix is to disable EVERY tooltip trigger on a
+        // device that can't hover: on `(hover: none)` we turn off hover, focus
+        // AND touch, so no tooltip can ever appear from any touch interaction —
+        // the whole class of "tooltip floats over the sheet it opened" is gone,
+        // in one place. A fine-pointer device (desktop mouse + keyboard) keeps
+        // the full behaviour: hover shows tooltips, focus-visible shows them for
+        // a11y. (Not a z-index/portal problem — MUI already portals; the fix is
+        // to stop the OPEN, not chase the stacking. ui.md §7)
         MuiTooltip: {
-          defaultProps: { disableTouchListener: true },
+          defaultProps: TOUCH_NO_HOVER
+            ? {
+              disableHoverListener: true,
+              disableFocusListener: true,
+              disableTouchListener: true,
+            }
+            : {},
         },
         // Touch ergonomics (ui.md §7): on a coarse pointer no interactive control
         // drops below the ~40px tap-target floor, even when size="small" is asked

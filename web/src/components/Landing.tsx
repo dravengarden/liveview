@@ -1288,7 +1288,6 @@ const ShelfCard = memo(function ShelfCard({
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
               }}
-              title={resume.chapterLabel}
             >
               {t("landing.continue", {
                 chapter: resume.chapterLabel,
@@ -1796,7 +1795,6 @@ export function Landing({
                     value={kinds}
                     onChange={onKindsChange}
                     aria-label={t("landing.filter")}
-                    title={t("landing.filter")}
                     input={
                       <OutlinedInput
                         startAdornment={
@@ -1860,7 +1858,6 @@ export function Landing({
             {books.length > 0 && (
               <IconButton
                 aria-label={t("history.title")}
-                title={t("history.title")}
                 aria-pressed={view === "history"}
                 onClick={() =>
                   setView((v) => (v === "history" ? "library" : "history"))}
