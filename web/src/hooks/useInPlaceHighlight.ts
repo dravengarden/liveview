@@ -415,23 +415,42 @@ export function useInPlaceHighlight(
       return undefined;
     }
     let cancelled = false;
+    let timer: number | undefined;
+    let attempts = 0;
     const q = `path=${encodeURIComponent(nowPlaying.chapterPath)}&lang=${
       encodeURIComponent(nowPlaying.lang)
     }&rendition=text`;
-    fetch(`/api/units?${q}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: SpokenUnits | null) => {
-        if (!cancelled && d) setUnits(d.units);
-      })
-      .catch(() => {});
-    fetch(`/api/marks?${q}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d: Mark[] | null) => {
-        if (!cancelled && d) setMarks(d);
-      })
-      .catch(() => {});
+    // RETRY-WHILE-EMPTY: the units/marks are produced by audio generation, so a
+    // chapter opened/played WHILE it's still being generated (or right as it
+    // finishes) returns 404 / empty here. The engine refetches marks on play,
+    // but this hook fired once on activation and used to give up — so the
+    // "you are here" highlight stayed blank until you reopened the chapter ("刚
+    // 生成完没高亮"). Re-poll until the units land (bounded), then stop.
+    const load = (): void => {
+      void Promise.all([
+        fetch(`/api/units?${q}`).then((r) => (r.ok ? r.json() : null)).catch(
+          () => null,
+        ),
+        fetch(`/api/marks?${q}`).then((r) => (r.ok ? r.json() : null)).catch(
+          () => null,
+        ),
+      ]).then(([u, m]: [SpokenUnits | null, Mark[] | null]) => {
+        if (cancelled) return;
+        const gotUnits = !!u && u.units.length > 0;
+        if (gotUnits) setUnits(u.units);
+        if (m && m.length > 0) setMarks(m);
+        // Units drive the locate; if they're not ready yet, the content is
+        // still generating — try again shortly, up to ~30s.
+        if (!gotUnits && attempts < 15) {
+          attempts += 1;
+          timer = window.setTimeout(load, 2000);
+        }
+      });
+    };
+    load();
     return () => {
       cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
     };
   }, [active, nowPlaying?.chapterPath, nowPlaying?.lang]);
 
