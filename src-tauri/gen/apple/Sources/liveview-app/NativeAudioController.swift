@@ -55,6 +55,16 @@ import WebKit
   private var sessionActive = false
   private var commandsWired = false
 
+  // Background throttle. When the app is backgrounded the web UI is hidden and
+  // the lock-screen scrubber is driven by MPNowPlayingInfoCenter (iOS
+  // extrapolates between pushes), so the 4 Hz `time` emit to the web is wasted
+  // work that keeps the WebContent process busy in the user's pocket — the
+  // native-playback heat regression. Drop the web emit to ~1 Hz there. (The web
+  // ALSO skips its re-render when document.hidden; this cuts the bridge IPC at
+  // the source so even that cheap path runs 4× less.)
+  private var backgrounded = false
+  private var lastBgEmitSec = -1
+
   // Deferred resume seek (applied once the item is readyToPlay, not before — a
   // pre-ready seek to a far offset can stall) + self-heal state (origin URL +
   // cache key of the current track, so a failed CACHED file can be dropped and
@@ -214,9 +224,14 @@ import WebKit
       [weak self] time in
       guard let self else { return }
       let pos = time.seconds
-      if pos.isFinite {
-        self.emit("{type:'time',position:\(pos),duration:\(self.duration)}")
+      guard pos.isFinite else { return }
+      // Backgrounded → emit at most ~1 Hz to the web (see `backgrounded`).
+      if self.backgrounded {
+        let sec = Int(pos)
+        if sec == self.lastBgEmitSec { return }
+        self.lastBgEmitSec = sec
       }
+      self.emit("{type:'time',position:\(pos),duration:\(self.duration)}")
     }
   }
 
@@ -345,6 +360,18 @@ import WebKit
                    name: AVAudioSession.routeChangeNotification, object: nil)
     nc.addObserver(self, selector: #selector(interrupted(_:)),
                    name: AVAudioSession.interruptionNotification, object: nil)
+    // App lifecycle drives the background emit-throttle (see `backgrounded`).
+    nc.addObserver(self, selector: #selector(appDidBackground),
+                   name: UIApplication.didEnterBackgroundNotification, object: nil)
+    nc.addObserver(self, selector: #selector(appWillForeground),
+                   name: UIApplication.willEnterForegroundNotification, object: nil)
+  }
+
+  @objc private func appDidBackground() { backgrounded = true }
+
+  @objc private func appWillForeground() {
+    backgrounded = false
+    lastBgEmitSec = -1
   }
 
   @objc private func routeChanged(_ note: Notification) {
