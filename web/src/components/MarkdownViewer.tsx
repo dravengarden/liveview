@@ -103,9 +103,18 @@ function mermaidConfig(isDark: boolean, fontPx: number): Record<string, unknown>
     fontFamily: MERMAID_FONT_FAMILY,
     // Track the app-wide font-size setting (default 16 == scale 1).
     fontSize: fontPx,
+    // htmlLabels (foreignObject + browser CSS) is what makes labels AUTO-WRAP —
+    // incl. CJK, which has no spaces and so can't wrap via the SVG-tspan path.
+    // It's the v11 flowchart default, but set explicitly + globally (the
+    // flowchart-level flag is deprecated since 11.12.3) so authors can write
+    // plain labels and rely on wrappingWidth instead of hand-inserting <br/>.
+    htmlLabels: true,
     markdownAutoWrap: true,
     flowchart: {
       useMaxWidth: true,
+      // The wrap width (px) for auto-wrapped labels. 220 fills the ~358px mobile
+      // column without pushing multi-node (LR) rows past it. Verified headless:
+      // a plain CJK label wraps to fill this, fewer/​fuller lines than hand-broken.
       wrappingWidth: 220,
       nodeSpacing: 55,
       rankSpacing: 60,
