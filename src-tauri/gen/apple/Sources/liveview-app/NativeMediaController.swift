@@ -99,13 +99,13 @@ import WebKit
     // not a native AVPlayer. Without it iOS treats the Now Playing info as stale
     // and tears the lock-screen card down a short while after you pause; `.paused`
     // keeps the card alive (frozen at the elapsed time) until you resume or stop.
+    //
+    // We deliberately do NOT touch AVAudioSession here. Activating it from native
+    // (even just to keep the paused card alive) BREAKS the web `<audio>.play()` —
+    // WebKit must own session activation on the play gesture, and a native
+    // setActive races/clobbers that so the play button does nothing. The web /
+    // WebKit owns the session; this controller only mirrors metadata + state.
     center.playbackState = playing ? .playing : .paused
-    // Hold the shared audio session ACTIVE so the app stays the Now Playing app
-    // across a pause — otherwise WebKit lets the session go idle when the <audio>
-    // pauses/backgrounds and iOS reclaims it (and the card). Activated lazily here
-    // (only once a track exists, so merely READING never ducks other apps);
-    // released in clear() when playback stops.
-    setSessionActive(true)
   }
 
   private func clear() {
@@ -114,19 +114,6 @@ import WebKit
     let center = MPNowPlayingInfoCenter.default()
     center.nowPlayingInfo = nil
     center.playbackState = .stopped
-    setSessionActive(false)
-  }
-
-  /// Activate / deactivate the app's shared audio session. Keeping it active
-  /// across pause is what keeps the lock-screen Now Playing card alive; releasing
-  /// it on stop hands audio focus back (and lets other apps resume).
-  private func setSessionActive(_ active: Bool) {
-    do {
-      try AVAudioSession.sharedInstance().setActive(
-        active, options: active ? [] : .notifyOthersOnDeactivation)
-    } catch {
-      NSLog("[native-media] AVAudioSession setActive(\(active)) failed: \(error)")
-    }
   }
 
   private func loadArtwork(_ urlString: String?) {
