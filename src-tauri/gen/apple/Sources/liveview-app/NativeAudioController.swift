@@ -26,10 +26,12 @@
 // MPNowPlayingInfoCenter, applied DIRECTLY to the AVPlayer (play/pause/seek/skip)
 // and echoed to the web so its UI + read-along stay in sync.
 //
-// M2 (caching/offline) will swap the plain AVPlayerItem(url:) for an
-// AVURLAsset on a custom "lvcache://" scheme backed by an
-// AVAssetResourceLoaderDelegate writing a content-addressed disk cache — see the
-// `load` note. M1 streams the http(s) URL directly.
+// Offline cache (M2): download-aside, content-addressed. A cached chapter plays
+// from the LOCAL file (offline + instant); an uncached one streams the origin AND
+// downloads it in the background so the next play is local. Keyed by the web's
+// content hash (dedup + survive re-render) when supplied, else the URL. Chosen
+// over a single-pass AVAssetResourceLoaderDelegate for robustness (no Range
+// bookkeeping); on the tailnet the first-play double-fetch is negligible.
 //
 // Concurrency: classic main-thread MediaPlayer/AVFoundation. Script messages and
 // remote-command callbacks arrive on the main thread.
@@ -52,6 +54,16 @@ import WebKit
   private var duration: Double = 0
   private var sessionActive = false
   private var commandsWired = false
+
+  // Offline cache (content-addressed when the web supplies the hash).
+  private var inFlight: Set<String> = []
+  private let cacheCapBytes: Int64 = 1_500_000_000 // ~1.5 GB, LRU-evicted
+  private lazy var cacheDir: URL = {
+    let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    let dir = base.appendingPathComponent("lv-audio", isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+  }()
 
   private var timeObserver: Any?
   private var statusObs: NSKeyValueObservation?
@@ -92,6 +104,10 @@ import WebKit
     case "seek": if let p = d?["position"] as? Double { seek(p) }
     case "rate": if let r = d?["rate"] as? Double { setRate(r) }
     case "stop": stop()
+    case "prefetch":
+      if let s = d?["url"] as? String, let u = URL(string: s) {
+        downloadToCache(u, cacheKey(forURL: u, hash: d?["hash"] as? String))
+      }
     default: break
     }
   }
@@ -101,11 +117,20 @@ import WebKit
     let position = d["position"] as? Double ?? 0
     rate = d["rate"] as? Double ?? 1
     duration = 0
+    let key = cacheKey(forURL: url, hash: d["hash"] as? String)
 
     teardownItem()
-    // M2: AVURLAsset(url: lvcache://<host>/<hash>) + resourceLoader delegate to
-    // stream-and-cache to a content-addressed disk store; M1 streams directly.
-    let item = AVPlayerItem(url: url)
+    // OFFLINE CACHE: if this chapter's audio is already fully cached on disk
+    // (keyed by its content hash when the web supplies one, else the URL), play
+    // the LOCAL file — fully offline + instant. Otherwise stream the origin AND
+    // download it in the background so the NEXT play (and offline) is local.
+    let item: AVPlayerItem
+    if let cached = cachedFileURL(key) {
+      item = AVPlayerItem(url: cached)
+    } else {
+      item = AVPlayerItem(url: url)
+      downloadToCache(url, key)
+    }
     observeItem(item)
     player.replaceCurrentItem(with: item)
     if position > 0 {
@@ -340,6 +365,78 @@ import WebKit
                 cc.skipForwardCommand, cc.skipBackwardCommand,
                 cc.changePlaybackPositionCommand] {
       cmd.isEnabled = true
+    }
+  }
+
+  // MARK: Offline cache (content-addressed, LRU)
+
+  /// The cache filename for a track: the web-supplied content hash (so the same
+  /// audio dedups + survives a re-render → new hash → new file) when present, else
+  /// a stable digest of the origin URL. Sanitized to a safe filename.
+  private func cacheKey(forURL url: URL, hash: String?) -> String {
+    if let hash, !hash.isEmpty {
+      return hash.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+    }
+    // No hash → key by the URL. Hash it to a fixed-length filename.
+    return "u" + String(UInt(bitPattern: url.absoluteString.hashValue))
+  }
+
+  /// The local file for a fully-cached key, or nil. Touches it so the LRU keeps
+  /// recently-played audio.
+  private func cachedFileURL(_ key: String) -> URL? {
+    let f = cacheDir.appendingPathComponent(key)
+    guard FileManager.default.fileExists(atPath: f.path) else { return nil }
+    try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: f.path)
+    return f
+  }
+
+  /// Download `url` into the cache as `key`, once. Skips if already cached or in
+  /// flight. Used as a side-effect of streaming a not-yet-cached chapter AND by an
+  /// explicit prefetch (save-offline). Atomic publish (.part → rename) so a crash
+  /// never leaves a truncated file masquerading as complete.
+  private func downloadToCache(_ url: URL, _ key: String) {
+    let dest = cacheDir.appendingPathComponent(key)
+    if FileManager.default.fileExists(atPath: dest.path) || inFlight.contains(key) { return }
+    inFlight.insert(key)
+    URLSession.shared.downloadTask(with: url) { [weak self] tmp, resp, _ in
+      guard let self else { return }
+      defer { DispatchQueue.main.async { self.inFlight.remove(key) } }
+      guard let tmp, let code = (resp as? HTTPURLResponse)?.statusCode, code == 200 else { return }
+      let fm = FileManager.default
+      let part = dest.appendingPathExtension("part")
+      try? fm.removeItem(at: part)
+      try? fm.removeItem(at: dest)
+      do {
+        try fm.moveItem(at: tmp, to: part)
+        try fm.moveItem(at: part, to: dest)
+      } catch {
+        try? fm.removeItem(at: part)
+        return
+      }
+      DispatchQueue.main.async { self.enforceCacheCap() }
+    }.resume()
+  }
+
+  /// LRU eviction: while the cache exceeds the cap, delete the least-recently-used
+  /// (oldest modification date) complete files. `.part` files are left alone.
+  private func enforceCacheCap() {
+    let fm = FileManager.default
+    guard let files = try? fm.contentsOfDirectory(
+      at: cacheDir, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
+    ) else { return }
+    var entries: [(url: URL, date: Date, size: Int64)] = []
+    var total: Int64 = 0
+    for f in files where f.pathExtension != "part" {
+      let v = try? f.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+      let size = Int64(v?.fileSize ?? 0)
+      entries.append((f, v?.contentModificationDate ?? .distantPast, size))
+      total += size
+    }
+    guard total > cacheCapBytes else { return }
+    for e in entries.sorted(by: { $0.date < $1.date }) { // oldest first
+      if total <= cacheCapBytes { break }
+      try? fm.removeItem(at: e.url)
+      total -= e.size
     }
   }
 
