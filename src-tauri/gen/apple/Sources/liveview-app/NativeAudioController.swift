@@ -55,6 +55,15 @@ import WebKit
   private var sessionActive = false
   private var commandsWired = false
 
+  // Deferred resume seek (applied once the item is readyToPlay, not before — a
+  // pre-ready seek to a far offset can stall) + self-heal state (origin URL +
+  // cache key of the current track, so a failed CACHED file can be dropped and
+  // re-streamed from the origin).
+  private var pendingSeek: Double = 0
+  private var currentOriginURL: URL?
+  private var currentCacheKey: String?
+  private var playingFromCache = false
+
   // Offline cache (content-addressed when the web supplies the hash).
   private var inFlight: Set<String> = []
   private let cacheCapBytes: Int64 = 1_500_000_000 // ~1.5 GB, LRU-evicted
@@ -87,9 +96,11 @@ import WebKit
   private init(webView: WKWebView) {
     self.webView = webView
     super.init()
-    // REQUIRED for precise control + the M2 resource loader: with auto-wait on,
-    // AVPlayer second-guesses our explicit play()/rate and stalls unexpectedly.
-    player.automaticallyWaitsToMinimizeStalling = false
+    // Keep auto-wait ON (the default): when streaming, AVPlayer buffers enough
+    // before it starts. With it OFF + a resume seek to a far (unbuffered) offset
+    // and playImmediately, playback stalls forever at 0:00 — the "this chapter
+    // won't play" bug on a chapter resumed near its end.
+    player.automaticallyWaitsToMinimizeStalling = true
   }
 
   // MARK: web → native
@@ -118,6 +129,9 @@ import WebKit
     rate = d["rate"] as? Double ?? 1
     duration = 0
     let key = cacheKey(forURL: url, hash: d["hash"] as? String)
+    currentOriginURL = url
+    currentCacheKey = key
+    pendingSeek = position
 
     teardownItem()
     // OFFLINE CACHE: if this chapter's audio is already fully cached on disk
@@ -127,15 +141,16 @@ import WebKit
     let item: AVPlayerItem
     if let cached = cachedFileURL(key) {
       item = AVPlayerItem(url: cached)
+      playingFromCache = true
     } else {
       item = AVPlayerItem(url: url)
+      playingFromCache = false
       downloadToCache(url, key)
     }
     observeItem(item)
     player.replaceCurrentItem(with: item)
-    if position > 0 {
-      player.seek(to: CMTime(seconds: position, preferredTimescale: 1000))
-    }
+    // The resume seek is DEFERRED to readyToPlay (observeItem) — seeking to a far
+    // offset before the item is ready stalls.
 
     nowPlayingInfo = [:]
     nowPlayingInfo[MPMediaItemPropertyTitle] = d["title"] as? String ?? ""
@@ -148,7 +163,10 @@ import WebKit
 
   private func play() {
     activateSession()
-    player.playImmediately(atRate: Float(rate)) // applies rate AND starts
+    // Setting rate (not playImmediately) so automaticallyWaitsToMinimizeStalling
+    // applies — AVPlayer buffers enough before starting instead of stalling on a
+    // not-yet-ready stream. rate also carries the chosen speed (2x etc.).
+    player.rate = Float(rate)
     pushNowPlaying(playing: true, position: currentPosition())
     emit("{type:'playing'}")
   }
@@ -207,6 +225,12 @@ import WebKit
       guard let self else { return }
       switch it.status {
       case .readyToPlay:
+        // Apply the DEFERRED resume seek now that the item can handle it.
+        if self.pendingSeek > 0 {
+          let target = self.pendingSeek
+          self.pendingSeek = 0
+          self.player.seek(to: CMTime(seconds: target, preferredTimescale: 1000))
+        }
         let d = it.duration.seconds
         if d.isFinite, d > 0 {
           self.duration = d
@@ -216,7 +240,22 @@ import WebKit
         }
         self.emit("{type:'canplay'}")
       case .failed:
-        self.emit("{type:'error',message:'item failed'}")
+        // SELF-HEAL: a failed CACHED file is likely corrupt — drop it and
+        // re-stream from the origin (once). A failed STREAM surfaces as an error.
+        if self.playingFromCache, let key = self.currentCacheKey,
+           let origin = self.currentOriginURL {
+          self.playingFromCache = false
+          try? FileManager.default.removeItem(at: self.cacheDir.appendingPathComponent(key))
+          let wasPlaying = self.isPlaying()
+          self.teardownItem() // drop this (now-stale) item's observers
+          let fresh = AVPlayerItem(url: origin)
+          self.observeItem(fresh)
+          self.player.replaceCurrentItem(with: fresh)
+          self.downloadToCache(origin, key)
+          if wasPlaying { self.play() }
+        } else {
+          self.emit("{type:'error',message:'item failed'}")
+        }
       default:
         break
       }
