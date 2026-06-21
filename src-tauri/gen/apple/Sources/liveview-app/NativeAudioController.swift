@@ -377,8 +377,17 @@ import WebKit
     if let hash, !hash.isEmpty {
       return hash.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
     }
-    // No hash → key by the URL. Hash it to a fixed-length filename.
-    return "u" + String(UInt(bitPattern: url.absoluteString.hashValue))
+    // No hash → key by the URL via a DETERMINISTIC digest. NOT Swift's
+    // `hashValue`, which is randomized per process launch and so would miss the
+    // cache on the next app start.
+    return "u" + stableDigest(url.absoluteString)
+  }
+
+  /// FNV-1a 64-bit — a stable, fast digest for a cache filename.
+  private func stableDigest(_ s: String) -> String {
+    var h: UInt64 = 14695981039346656037
+    for b in s.utf8 { h = (h ^ UInt64(b)) &* 1099511628211 }
+    return String(h, radix: 16)
   }
 
   /// The local file for a fully-cached key, or nil. Touches it so the LRU keeps
