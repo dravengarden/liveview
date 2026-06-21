@@ -24,9 +24,22 @@ import { useI18n } from "@/i18n";
  * automatic — reading and listened audio are cached as you go, no per-book
  * toggle — so the sheet is purely a status view. Calm-tech: the user knows, but
  * it weighs almost nothing.
+ *
+ * SCOPE (the important bit): a progress bar's fill must map to a goal the USER
+ * owns. The global queue ("739 chapters across the whole library") is the
+ * SYSTEM's goal, not the reader's — showing it as a near-full percentage right
+ * above the playback scrubber was misleading (your just-opened book can be 0%
+ * done while the global bar reads 99%) and competed visually with the scrubber.
+ * So in the reader the strip is SCOPED to the book you're in: it tracks only
+ * that book's narration toward 100% (a goal you actually own) and goes silent
+ * the moment that book is done — even while other books keep generating in the
+ * background. The global, all-books breakdown still lives in the expandable
+ * sheet. On the shelf (no current book) there's no single goal to fill toward,
+ * so the strip shows an AMBIENT, indeterminate "generating…" cue — no count,
+ * no percentage.
  */
 export function SyncIndicator(
-  { inReader = false }: { inReader?: boolean },
+  { bookSlug = null }: { bookSlug?: string | null },
 ): React.JSX.Element | null {
   const { t } = useI18n();
   const status = useSyncStatus();
@@ -39,17 +52,33 @@ export function SyncIndicator(
   // The strip surfaces only GENUINE background work — audio GENERATION. Routine
   // offline prefetch (warming text/audio as you browse) is instant-ish and stays
   // SILENT: it never pops the top strip. So "nothing needs sync" ⇒ no strip.
+  const inReader = bookSlug != null;
   const g = status.global;
+  // Per-book rows for the sheet (the global breakdown lives there, not on the
+  // collapsed strip).
   const generatingBooks = status.books.filter(
     (b) => b.pending > 0 || b.failed > 0,
   );
-  const activeCount = status.books.filter((b) => b.pending > 0).length;
-  const generating = g.pending > 0;
-  const pct = g.total > 0 ? Math.round((g.done / g.total) * 100) : null;
-  // The strip's short label (it also carries the count + a progress filament).
-  const barLabel = activeCount > 1
-    ? t("sync.generatingN", { n: activeCount })
-    : t("sync.generating");
+  // The book you're currently in — the only one the collapsed strip tracks while
+  // reading. `scoped` is set only while THAT book still has work; once it's done
+  // the strip falls silent (your goal is met) regardless of other books.
+  const currentBook = bookSlug
+    ? status.books.find((b) => b.slug === bookSlug) ?? null
+    : null;
+  const scoped = inReader
+    ? (currentBook && currentBook.pending > 0 ? currentBook : null)
+    : null;
+  // Visibility: in the reader gate on the CURRENT book's work; on the shelf, on
+  // any global work (ambient cue). `pct` is determinate only when scoped to a
+  // book — the shelf cue is indeterminate (no goal to fill toward).
+  const generating = inReader ? scoped != null : g.pending > 0;
+  const pct = scoped && scoped.total > 0
+    ? Math.round((scoped.done / scoped.total) * 100)
+    : null;
+  // Reader: "this book's audio" (the count rides alongside). Shelf: ambient.
+  const barLabel = inReader
+    ? t("sync.generatingBook")
+    : t("sync.generatingAmbient");
 
   // Initial fetch, then poll while work is in flight (progress ticks) or while
   // the sheet is open (so a prefetch row updates live).
@@ -174,7 +203,9 @@ export function SyncIndicator(
             >
               {barLabel}
             </Typography>
-            {pct != null && (
+            {/* Count = THIS book's chapters (reader scope) — never the global
+                739. The shelf's ambient cue carries no count. */}
+            {scoped && (
               <Typography
                 sx={{
                   fontSize: rem(11),
@@ -183,24 +214,40 @@ export function SyncIndicator(
                   flexShrink: 0,
                 }}
               >
-                {g.done}/{g.total}
+                {scoped.done}/{scoped.total}
               </Typography>
             )}
             <ExpandMore sx={{ fontSize: rem(16), flexShrink: 0, opacity: 0.5 }} />
           </Box>
-          {/* Aggregate progress filament along the strip's bottom edge — the same
-              cue the reader uses for reading progress, so the two read as kin. */}
-          {pct != null && (
-            <Box
-              sx={{
-                height: 2,
-                width: `${pct}%`,
-                bgcolor: "primary.main",
-                opacity: 0.8,
-                transition: "width .3s ease",
-              }}
-            />
-          )}
+          {/* Progress filament along the strip's bottom edge — same cue as the
+              reader's reading-progress bar, so the two read as kin. Reader:
+              DETERMINATE, filling toward this book's 100% (a goal you own).
+              Shelf: INDETERMINATE shimmer — work is happening but there's no
+              single goal to fill toward, so no false percentage. */}
+          {scoped
+            ? (
+              <Box
+                sx={{
+                  height: 2,
+                  width: `${pct}%`,
+                  bgcolor: "primary.main",
+                  opacity: 0.8,
+                  transition: "width .3s ease",
+                }}
+              />
+            )
+            : (
+              <LinearProgress
+                sx={{
+                  height: 2,
+                  backgroundColor: "transparent",
+                  "& .MuiLinearProgress-bar": {
+                    backgroundColor: "primary.main",
+                    opacity: 0.8,
+                  },
+                }}
+              />
+            )}
         </Box>
       )}
 

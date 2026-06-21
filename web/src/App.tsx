@@ -1770,7 +1770,7 @@ export function App(): React.JSX.Element {
       />
       {/* Ambient background-work indicator (audio generation + offline prefetch)
           → the Sync sheet. Low-weight; only shows while something is in flight. */}
-      <SyncIndicator inReader={activeSlug !== null} />
+      <SyncIndicator bookSlug={activeSlug} />
       <PlaybackSheet
         open={playbackSheetOpen}
         onClose={() => setPlaybackSheetOpen(false)}
