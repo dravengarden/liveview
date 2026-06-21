@@ -101,14 +101,18 @@ static id lv_wk_init(id self, SEL _cmd, CGRect frame, id configuration) {
         if (navCls && [navCls respondsToSelector:installSel]) {
             ((void (*)(id, SEL, id))objc_msgSend)(navCls, installSel, wv);
         }
-        // Native media-control bridge (shared-utils native-media): owns
-        // MPRemoteCommandCenter + MPNowPlayingInfoCenter + AVAudioSession route/
-        // interruption handling, bridged to the web <audio> — reliable AirPods /
-        // lock-screen / CarPlay where the WKWebView MediaSession is not. Same
-        // dynamic, header-free install as the nav controller above.
-        Class mediaCls = NSClassFromString(@"NativeMediaController");
-        if (mediaCls && [mediaCls respondsToSelector:installSel]) {
-            ((void (*)(id, SEL, id))objc_msgSend)(mediaCls, installSel, wv);
+        // Native AUDIO engine (shared-utils native-media → NativeAudioController):
+        // decodes the audiobook in a native AVPlayer + owns the AVAudioSession +
+        // MPRemoteCommandCenter + MPNowPlayingInfoCenter, with the web as a thin
+        // remote. The web <audio> CANNOT hold the session / resume after a long
+        // background-locked pause (WebKit limitation, bugs.webkit.org #198277), so
+        // moving decoding native is the only reliable lock-screen/background fix.
+        // SUPERSEDES the older NativeMediaController web-<audio> bridge — installing
+        // both would double-wire MPRemoteCommandCenter, so only this one is wired.
+        // Same dynamic, header-free install as the nav controller above.
+        Class audioCls = NSClassFromString(@"NativeAudioController");
+        if (audioCls && [audioCls respondsToSelector:installSel]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(audioCls, installSel, wv);
         }
     }
     return wv;
