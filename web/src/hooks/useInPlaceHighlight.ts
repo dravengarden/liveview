@@ -608,13 +608,35 @@ export function useInPlaceHighlight(
     if (blockEl && isNonProse) {
       blockEl.classList.add(blockReadingClass(blockEl));
       litBlockRef.current = blockEl;
-    } else if (willWrapPaused && curRange) {
-      // Paused located prose → wrap EXACTLY the sentence in spans (iOS-purge-proof,
-      // and precise even inside a multi-sentence paragraph / blockquote / list).
-      pausedRef.current = {
-        idx: currentIdx,
-        spans: wrapSpans(curRange, "lv-reading-paused"),
-      };
+    } else if (willWrapPaused && curRange && curLoc) {
+      // Paused located prose → wrap the sentence in DOM spans (iOS-purge-proof,
+      // precise even inside a multi-sentence paragraph / blockquote / list).
+      // SPLIT at the FROZEN playback position so the read-so-far words keep the
+      // stronger tint (matching the PLAYING wipe) instead of the whole line going
+      // uniform — paused should read as a frozen frame of playing. `currentTime`
+      // is frozen in this branch (it only runs while !playing), so it's not an
+      // effect dep (adding it would re-wrap every tick during playback).
+      const mk = marks[currentIdx];
+      const ms = mk ? mk.end_ms - mk.start_ms : 0;
+      const frac = mk && ms > 0
+        ? Math.min(1, Math.max(0, (currentTime * 1000 - mk.start_ms) / ms))
+        : 1;
+      let spans: HTMLElement[];
+      if (frac >= 1) {
+        spans = wrapSpans(curRange, "lv-reading-paused-active");
+      } else if (frac <= 0) {
+        spans = wrapSpans(curRange, "lv-reading-paused");
+      } else {
+        // Wrap the LATER part FIRST: wrapSpans splits text nodes (surroundContents),
+        // so wrapping [frac,1] first leaves [0,frac]'s node refs intact.
+        const unread = rangeOf(curLoc, frac, 1);
+        const read = rangeOf(curLoc, 0, frac);
+        spans = [
+          ...(unread ? wrapSpans(unread, "lv-reading-paused") : []),
+          ...(read ? wrapSpans(read, "lv-reading-paused-active") : []),
+        ];
+      }
+      pausedRef.current = { idx: currentIdx, spans };
     } else if (blockEl && !playing) {
       // Paused but unlocatable (no sentence range) → fall back to the smallest
       // container background (li / p / cell), never the whole top-level block.
@@ -636,6 +658,7 @@ export function useInPlaceHighlight(
   }, [
     active,
     units,
+    marks,
     currentIdx,
     playing,
     following,

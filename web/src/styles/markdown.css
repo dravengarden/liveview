@@ -1428,6 +1428,16 @@
 :root[data-color-scheme="dark"] .markdown-body .lv-reading-paused {
   background-color: rgba(255, 200, 80, 0.18);
 }
+/* Read-so-far portion of the PAUSED line: the stronger tint, so a paused line
+   reads as a frozen frame of playing (already-spoken words stay extra-lit)
+   rather than going uniform. Matches the PLAYING wipe (lv-reading-active); no
+   radius so it sits flush against the unread remainder (.lv-reading-paused). */
+.markdown-body .lv-reading-paused-active {
+  background-color: rgba(240, 168, 40, 0.42);
+}
+:root[data-color-scheme="dark"] .markdown-body .lv-reading-paused-active {
+  background-color: rgba(255, 200, 80, 0.38);
+}
 
 /* Non-prose "this block is being narrated" markers — REAL DOM styles (iOS never
    purges them, so they hold while paused), set by useInPlaceHighlight whenever a
