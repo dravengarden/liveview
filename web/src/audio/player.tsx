@@ -15,6 +15,16 @@ import {
   nativeMediaSetState,
   onNativeMediaCommand,
 } from "@/native-media";
+import {
+  nativeAudioAvailable,
+  nativeAudioLoad,
+  nativeAudioPause,
+  nativeAudioPlay,
+  nativeAudioSeek,
+  nativeAudioSetRate,
+  nativeAudioStop,
+  onNativeAudioEvent,
+} from "@/native-audio";
 import { useI18n } from "@/i18n";
 import { loadServerSetting } from "@/syncBackends";
 import {
@@ -298,6 +308,20 @@ export function AudioPlayerProvider(
   // Chapter path we've already warmed the *next* synth for, so we prefetch once.
   const prefetchedFrom = useRef<string | null>(null);
 
+  // NATIVE AVPlayer engine (iOS shell only): when present, audio is decoded
+  // NATIVELY (NativeAudioController.swift) instead of in the web <audio> — the
+  // <audio> can't hold the session / resume after a long background-locked pause
+  // (WebKit limitation). Off-shell this is false and the <audio> path below runs
+  // unchanged. These refs let the (empty-dep) control callbacks read live
+  // position/duration/playing without a stale closure (the native time events
+  // feed the same state setters the <audio> listeners do).
+  const currentTimeRef = useRef(0);
+  const durationRef = useRef(0);
+  const playingRef = useRef(false);
+  currentTimeRef.current = currentTime;
+  durationRef.current = duration;
+  playingRef.current = playing;
+
   rateRef.current = rate;
 
   const persistSession = useCallback(
@@ -357,33 +381,48 @@ export function AudioPlayerProvider(
           if (loadSeq.current !== seq) return;
           marksRef.current = mdata;
 
-          if (audio) {
-            // The book's last chapter gets a spoken "全书完" tail baked into its
-            // audio server-side (so it plays on the lock screen, unlike a
-            // client-side cue). `q` is the full book spine, so the last index is
-            // genuinely the end of the book. Only the audio src carries the
-            // flag — spoken/marks stay clean, so the read-along isn't affected.
-            const isBookEnd = qi === q.length - 1;
+          // The book's last chapter gets a spoken "全书完" tail baked into its
+          // audio server-side (so it plays on the lock screen, unlike a
+          // client-side cue). `q` is the full book spine, so the last index is
+          // genuinely the end of the book. Only the audio src carries the flag —
+          // spoken/marks stay clean, so the read-along isn't affected.
+          const isBookEnd = qi === q.length - 1;
+          const saved = Number(
+            localStorage.getItem(posKey(np.chapterPath, np.lang)) ?? "",
+          );
+          const position = Number.isFinite(saved) && saved > 0 ? saved : 0;
+          // Restore the VISUAL position (scrubber + spoken-sentence index) up
+          // front, so a PAUSED resume shows the read-along where you left off
+          // instead of a blank page until the first tick — for BOTH engines.
+          if (position > 0) {
+            setCurrentTime(position);
+            setCurrentIdx(markIndex(marksRef.current, position * 1000));
+          }
+
+          if (nativeAudioAvailable()) {
+            // NATIVE engine: hand it the ABSOLUTE url (the native URLSession can't
+            // resolve a relative path) + metadata; it seeks to `position`, then
+            // plays if autoplay. It owns the AVAudioSession + lock-screen tile.
+            const origin = globalThis.location.origin;
+            nativeAudioLoad({
+              url: `${origin}/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`,
+              position,
+              rate: rateRef.current,
+              title: np.chapterLabel,
+              artist: np.bookLabel,
+              album: np.bookLabel,
+              artworkUrl:
+                `${origin}/api/artwork?book=${encodeURIComponent(np.bookSlug)}`,
+            });
+            if (autoplay) nativeAudioPlay();
+          } else if (audio) {
             audio.src = `/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`;
             // load() resets playbackRate from defaultPlaybackRate — set both so
             // the chosen rate survives (also re-applied on loadedmetadata).
             audio.defaultPlaybackRate = rateRef.current;
             audio.playbackRate = rateRef.current;
             audio.load();
-            const saved = Number(
-              localStorage.getItem(posKey(np.chapterPath, np.lang)) ?? "",
-            );
-            if (Number.isFinite(saved) && saved > 0) {
-              audio.currentTime = saved;
-              // Restore the VISUAL position too — the scrubber time and the
-              // spoken-sentence index — so a PAUSED resume (e.g. after a page
-              // reload, where the session is restored paused) shows the read-along
-              // highlight at where you left off, instead of a blank page until the
-              // first timeupdate. The highlight then sits on the resume line (the
-              // paused-fill makes it clearly visible).
-              setCurrentTime(saved);
-              setCurrentIdx(markIndex(marksRef.current, saved * 1000));
-            }
+            if (position > 0) audio.currentTime = position;
             if (autoplay) {
               playAudio(
                 audio,
@@ -451,72 +490,92 @@ export function AudioPlayerProvider(
     sleepRemainingStore.set(minutes * 60);
   }, []);
 
+  // Pause whichever engine owns playback (native AVPlayer or the web <audio>).
+  const pauseEngine = useCallback(() => {
+    if (nativeAudioAvailable()) nativeAudioPause();
+    else audioRef.current?.pause();
+  }, []);
+
+  // The per-tick playback bookkeeping, factored so BOTH the <audio> `timeupdate`
+  // handler and the native engine's `time` events drive the SAME state +
+  // side-effects (read-along position, cross-device resume persist, next-chapter
+  // synth prewarm, sleep-timer countdown). `updatePositionState` stays in the
+  // <audio> path only — native owns MPNowPlayingInfoCenter itself.
+  const handlePosition = useCallback((pos: number, dur: number) => {
+    setCurrentTime(pos);
+    setCurrentIdx(markIndex(marksRef.current, pos * 1000));
+    const np = nowPlayingRef.current;
+    if (np && pos > 0) {
+      localStorage.setItem(posKey(np.chapterPath, np.lang), String(pos));
+      persistPos(np.chapterPath, pos);
+    }
+    if (
+      np &&
+      dur > 0 &&
+      dur - pos < PREFETCH_LEAD_S &&
+      queueIndexRef.current < queueRef.current.length - 1 &&
+      prefetchedFrom.current !== np.chapterPath
+    ) {
+      prefetchedFrom.current = np.chapterPath;
+      const next = queueRef.current[queueIndexRef.current + 1];
+      if (next) {
+        void fetch(`/api/marks?${query(next.path, np.lang, np.rendition)}`)
+          .catch(() => {});
+      }
+    }
+    if (sleepRemainingRef.current > 0) {
+      const now = Date.now();
+      if (lastSleepTickRef.current === 0) {
+        lastSleepTickRef.current = now;
+      } else {
+        const dt = (now - lastSleepTickRef.current) / 1000;
+        lastSleepTickRef.current = now;
+        const remaining = sleepRemainingRef.current - dt;
+        if (remaining <= 0) {
+          sleepRemainingRef.current = 0;
+          lastSleepTickRef.current = 0;
+          setSleepRemainingMin(0);
+          setSleepMinutes(0);
+          pauseEngine();
+          sleepRemainingStore.set(0);
+          sleepMinutesStore.set(0);
+        } else {
+          sleepRemainingRef.current = remaining;
+          const mins = Math.ceil(remaining / 60);
+          setSleepRemainingMin((prev) => (prev === mins ? prev : mins));
+          sleepRemainingStore.set(Math.round(remaining));
+        }
+      }
+    }
+  }, [persistPos, pauseEngine]);
+
+  // Chapter finished: clear the saved position and roll into the next chapter (or
+  // stop at the book's end). Shared by the <audio> `ended` event + the native
+  // engine's `ended` event.
+  const handleEnded = useCallback(() => {
+    const np = nowPlayingRef.current;
+    if (np) {
+      localStorage.removeItem(posKey(np.chapterPath, np.lang));
+      persistPos(np.chapterPath, 0);
+      void posStore.flush();
+    }
+    if (queueIndexRef.current < queueRef.current.length - 1) {
+      goTo(queueIndexRef.current + 1, true);
+    } else {
+      setPlaying(false);
+      setCurrentIdx(-1);
+    }
+  }, [goTo, persistPos]);
+
   // Attach the element's listeners ONCE. They read refs so they never go stale.
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return undefined;
 
     const onTime = (): void => {
-      setCurrentTime(audio.currentTime);
+      handlePosition(audio.currentTime, audio.duration);
+      // <audio> path only: native owns MPNowPlayingInfoCenter itself.
       updatePositionState(audio);
-      setCurrentIdx(markIndex(marksRef.current, audio.currentTime * 1000));
-      const np = nowPlayingRef.current;
-      if (np && audio.currentTime > 0) {
-        localStorage.setItem(
-          posKey(np.chapterPath, np.lang),
-          String(audio.currentTime),
-        );
-        // Cross-device resume: write the position to its mirrored store every
-        // tick; the store throttles the server save to ~once/5s (push.throttleMs).
-        // The localStorage above stays per-tick for instant local resume.
-        persistPos(np.chapterPath, audio.currentTime);
-      }
-      // Warm the next chapter's synth shortly before this one ends.
-      if (
-        np &&
-        audio.duration > 0 &&
-        audio.duration - audio.currentTime < PREFETCH_LEAD_S &&
-        queueIndexRef.current < queueRef.current.length - 1 &&
-        prefetchedFrom.current !== np.chapterPath
-      ) {
-        prefetchedFrom.current = np.chapterPath;
-        const next = queueRef.current[queueIndexRef.current + 1];
-        if (next) {
-          void fetch(`/api/marks?${query(next.path, np.lang, np.rendition)}`)
-            .catch(() => {});
-        }
-      }
-      // Sleep-timer countdown. timeupdate fires only while playing, so pausing
-      // naturally freezes the countdown — we just track real elapsed time
-      // between ticks (reseeding after a pause/arm so the gap isn't charged).
-      if (sleepRemainingRef.current > 0) {
-        const now = Date.now();
-        if (lastSleepTickRef.current === 0) {
-          lastSleepTickRef.current = now; // first tick after arm/resume: reseed, no decrement
-        } else {
-          const dt = (now - lastSleepTickRef.current) / 1000;
-          lastSleepTickRef.current = now;
-          const remaining = sleepRemainingRef.current - dt;
-          if (remaining <= 0) {
-            sleepRemainingRef.current = 0;
-            lastSleepTickRef.current = 0;
-            setSleepRemainingMin(0);
-            setSleepMinutes(0);
-            audio.pause();
-            sleepRemainingStore.set(0);
-            sleepMinutesStore.set(0);
-          } else {
-            sleepRemainingRef.current = remaining;
-            const mins = Math.ceil(remaining / 60);
-            // Only re-render when the displayed minute actually changes (the
-            // handler fires ~4×/s).
-            setSleepRemainingMin((prev) => (prev === mins ? prev : mins));
-            // Write the remaining seconds every tick; the store throttles the
-            // server save to ~once/5s (push.throttleMs).
-            sleepRemainingStore.set(Math.round(remaining));
-          }
-        }
-      }
     };
     const onMeta = (): void => {
       setDuration(audio.duration);
@@ -547,21 +606,7 @@ export function AudioPlayerProvider(
       }
     };
     const onEnded = (): void => {
-      const np = nowPlayingRef.current;
-      if (np) localStorage.removeItem(posKey(np.chapterPath, np.lang));
-      // Chapter finished: clear the saved position so a resume starts the next
-      // chapter cleanly rather than at the previous chapter's end.
-      if (np) {
-        persistPos(np.chapterPath, 0);
-        void posStore.flush();
-      }
-      // Book-level continuous playback: roll into the next chapter, else stop.
-      if (queueIndexRef.current < queueRef.current.length - 1) {
-        goTo(queueIndexRef.current + 1, true);
-      } else {
-        setPlaying(false);
-        setCurrentIdx(-1);
-      }
+      handleEnded();
     };
 
     // The play/pause button must ALWAYS match the element. The `play`/`pause`
@@ -601,7 +646,60 @@ export function AudioPlayerProvider(
       audio.removeEventListener("ended", onEnded);
       for (const ev of SYNC_EVENTS) audio.removeEventListener(ev, syncPlaying);
     };
-  }, [goTo]);
+  }, [handlePosition, handleEnded]);
+
+  // Native engine events → the SAME state the <audio> listeners drive, so the
+  // read-along + UI track native playback identically. Only wired on the iOS
+  // shell (off-shell onNativeAudioEvent never fires). next/prev are lock-screen
+  // track buttons the native side can't service (the queue lives here).
+  useEffect(() => {
+    if (!nativeAudioAvailable()) return undefined;
+    return onNativeAudioEvent((ev) => {
+      switch (ev.type) {
+        case "time":
+          handlePosition(ev.position, ev.duration);
+          break;
+        case "durationchange":
+          setDuration(ev.duration);
+          break;
+        case "playing":
+          setPlaying(true);
+          setLoading(false);
+          break;
+        case "paused": {
+          setPlaying(false);
+          const np = nowPlayingRef.current;
+          if (np && currentTimeRef.current > 0) {
+            persistPos(np.chapterPath, currentTimeRef.current);
+            void posStore.flush();
+          }
+          lastSleepTickRef.current = 0;
+          if (sleepRemainingRef.current > 0) {
+            sleepRemainingStore.set(Math.round(sleepRemainingRef.current));
+            void sleepRemainingStore.flush();
+          }
+          break;
+        }
+        case "ended":
+          handleEnded();
+          break;
+        case "canplay":
+          setLoading(false);
+          break;
+        case "waiting":
+          break;
+        case "next":
+          nextChapter();
+          break;
+        case "prev":
+          prevChapter();
+          break;
+        case "error":
+          setError(ev.message);
+          break;
+      }
+    });
+  }, [handlePosition, handleEnded, persistPos, nextChapter, prevChapter]);
 
   // Keep the play/pause button honest under an audio-session INTERRUPTION (a
   // phone call, Siri, another media app taking over). iOS pauses the <audio>
@@ -610,6 +708,9 @@ export function AudioPlayerProvider(
   // Poll the element's real `paused` while we believe we're playing and sync —
   // cheap (one bool read/sec), and the interval stops itself the moment it does.
   useEffect(() => {
+    // Native engine: the <audio> is always paused (it's not the source), so this
+    // poll would wrongly flip `playing` off. Native pushes play/pause events.
+    if (nativeAudioAvailable()) return undefined;
     if (!playing) return undefined;
     const id = window.setInterval(() => {
       if (audioRef.current?.paused) setPlaying(false);
@@ -785,10 +886,9 @@ export function AudioPlayerProvider(
   // OS / lock-screen / headphone controls. Metadata follows the chapter; the
   // handlers are wired once.
   useEffect(() => {
-    // Native iOS shell: the native media bridge OWNS the OS controls (see the
-    // onNativeMediaCommand effect below) — don't ALSO wire web MediaSession, they'd
-    // fight over the same MPRemoteCommandCenter commands.
-    if (nativeMediaAvailable()) return;
+    // Native iOS shell: the native media/audio bridge OWNS the OS controls — don't
+    // ALSO wire web MediaSession, they'd fight over the same MPRemoteCommandCenter.
+    if (nativeMediaAvailable() || nativeAudioAvailable()) return;
     if (!("mediaSession" in navigator)) return;
     const ms = navigator.mediaSession;
     ms.setActionHandler("play", () => {
@@ -823,7 +923,7 @@ export function AudioPlayerProvider(
   }, [nextChapter, prevChapter]);
 
   useEffect(() => {
-    if (nativeMediaAvailable()) return; // native owns MPNowPlayingInfoCenter
+    if (nativeMediaAvailable() || nativeAudioAvailable()) return; // native owns MPNowPlayingInfoCenter
     if (!("mediaSession" in navigator)) return;
     if (!nowPlaying) {
       navigator.mediaSession.metadata = null;
@@ -849,7 +949,7 @@ export function AudioPlayerProvider(
   }, [nowPlaying]);
 
   useEffect(() => {
-    if (nativeMediaAvailable()) return; // native owns playbackState via setState
+    if (nativeMediaAvailable() || nativeAudioAvailable()) return; // native owns playbackState via setState
     if (!("mediaSession" in navigator)) return;
     navigator.mediaSession.playbackState = playing
       ? "playing"
@@ -867,6 +967,10 @@ export function AudioPlayerProvider(
   useEffect(() => {
     const onVisible = (): void => {
       if (document.visibilityState !== "visible") return;
+      // Native engine: it kept decoding in the background and pushes `time`
+      // events the moment the page resumes, so there's nothing stale to re-sync —
+      // and the <audio> is empty (reading it would wrongly zero the position).
+      if (nativeAudioAvailable()) return;
       const a = audioRef.current;
       if (!a) return;
       updatePositionState(a);
@@ -914,6 +1018,11 @@ export function AudioPlayerProvider(
   );
 
   const togglePlay = useCallback(() => {
+    if (nativeAudioAvailable()) {
+      if (playingRef.current) nativeAudioPause();
+      else nativeAudioPlay();
+      return;
+    }
     const a = audioRef.current;
     if (!a) return;
     if (a.paused) {
@@ -922,10 +1031,28 @@ export function AudioPlayerProvider(
   }, []);
 
   const seek = useCallback((sec: number) => {
+    if (nativeAudioAvailable()) {
+      nativeAudioSeek(sec);
+      // Snap the visual position immediately; the native `time` event follows.
+      setCurrentTime(sec);
+      setCurrentIdx(markIndex(marksRef.current, sec * 1000));
+      return;
+    }
     const a = audioRef.current;
     if (a) a.currentTime = sec;
   }, []);
   const skip = useCallback((delta: number) => {
+    if (nativeAudioAvailable()) {
+      const dur = durationRef.current;
+      const t = Math.min(
+        dur || currentTimeRef.current + delta,
+        Math.max(0, currentTimeRef.current + delta),
+      );
+      nativeAudioSeek(t);
+      setCurrentTime(t);
+      setCurrentIdx(markIndex(marksRef.current, t * 1000));
+      return;
+    }
     const a = audioRef.current;
     if (a) {
       a.currentTime = Math.min(
@@ -935,9 +1062,15 @@ export function AudioPlayerProvider(
     }
   }, []);
   const seekToSentence = useCallback((idx: number) => {
-    const a = audioRef.current;
     const m = marksRef.current[idx];
-    if (!a || !m) return;
+    if (!m) return;
+    if (nativeAudioAvailable()) {
+      nativeAudioSeek(m.start_ms / 1000);
+      nativeAudioPlay();
+      return;
+    }
+    const a = audioRef.current;
+    if (!a) return;
     a.currentTime = m.start_ms / 1000;
     playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
@@ -948,6 +1081,10 @@ export function AudioPlayerProvider(
     // the mirrored store owns the cross-device server write (immediate push).
     localStorage.setItem(RATE_KEY, String(r));
     rateStore.set(r);
+    if (nativeAudioAvailable()) {
+      nativeAudioSetRate(r);
+      return;
+    }
     const a = audioRef.current;
     if (a) {
       a.playbackRate = r;
@@ -1036,6 +1173,7 @@ export function AudioPlayerProvider(
   }, [playing, rate, nowPlaying]);
 
   const stop = useCallback(() => {
+    if (nativeAudioAvailable()) nativeAudioStop();
     const a = audioRef.current;
     if (a) {
       a.pause();
