@@ -390,8 +390,15 @@ impl PgStore {
                  html = EXCLUDED.html,
                  markdown = EXCLUDED.markdown,
                  asset_hash = EXCLUDED.asset_hash,
-                 audio_hash = EXCLUDED.audio_hash,
-                 marks_hash = EXCLUDED.marks_hash,
+                 -- Preserve existing audio when a re-render carries none (the
+                 -- apply pass always sets these NULL; the audio worker fills them
+                 -- later). COALESCE keeps the prior mp3/marks so a re-render — esp.
+                 -- a content change that DIDN'T touch the spoken prose (e.g. only a
+                 -- mermaid label) — doesn't blank read-aloud until a needless
+                 -- re-synth. A genuinely changed audio leaf is re-enqueued and the
+                 -- worker overwrites these.
+                 audio_hash = COALESCE(EXCLUDED.audio_hash, chapters.audio_hash),
+                 marks_hash = COALESCE(EXCLUDED.marks_hash, chapters.marks_hash),
                  content_hash = EXCLUDED.content_hash,
                  render_version = EXCLUDED.render_version",
         )

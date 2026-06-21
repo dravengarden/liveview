@@ -282,4 +282,13 @@ pub struct SyncArgs {
     /// regenerated — a restored audio chapter's mp3 is rebuilt on first play.)
     #[arg(long, default_value_t = false)]
     pub repair: bool,
+
+    /// Re-render content (markdown → HTML) WITHOUT touching audio: skip the
+    /// text/audio TTS enqueue and preserve each chapter's existing mp3 + marks.
+    /// Use after a change that didn't alter the spoken prose — e.g. a mermaid
+    /// label tweak — where a full re-synth of every touched chapter would be
+    /// hours of wasted edge-tts for identical audio. The diagrams/HTML update;
+    /// read-aloud keeps playing its existing audio.
+    #[arg(long, default_value_t = false)]
+    pub no_audio: bool,
 }

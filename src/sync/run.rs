@@ -42,6 +42,12 @@ pub struct SyncCfg {
     /// whose content row is missing, even if its Merkle node says "applied".
     /// Recovers a chapters↔merkle desync a normal sync can't. See `SyncArgs`.
     pub repair: bool,
+    /// Re-render content (HTML rows) but DON'T (re)generate audio: skip the
+    /// audio enqueue and keep each chapter's existing mp3/marks (via upsert
+    /// COALESCE), marking changed leaves done immediately. For a change that
+    /// didn't touch the spoken prose (e.g. a mermaid label) so a full re-synth
+    /// would be pure waste. See `SyncArgs`.
+    pub no_audio: bool,
 }
 
 #[derive(Debug, Default)]
@@ -366,7 +372,11 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
     // background (so this oneshot returns in seconds and never blocks the deploy;
     // the on-demand HTTP fallback still covers a chapter requested before its
     // task runs). `cfg.text_audio` still gates whether text read-aloud is queued.
-    enqueue_audio(&plan, &applies, &store, &mut report).await?;
+    // --no-audio skips this entirely: existing mp3/marks are preserved (upsert
+    // COALESCE) and the leaves were already committed in apply_plan.
+    if !cfg.no_audio {
+        enqueue_audio(&plan, &applies, &store, &mut report).await?;
+    }
 
     // Persist the TREE Merkle nodes. Leaf nodes are committed per-leaf as their
     // content lands (audio leaves only after their mp3), so an interrupted run
@@ -485,8 +495,11 @@ async fn apply_plan(
         // here but commit their Merkle node only after the slow audio pass
         // generates the mp3 — so an interrupted run re-generates the audio rather
         // than treating it as done. Leaves with no audio are fully applied →
-        // commit now (content first, node = marker).
-        if a.voice.is_none() && a.text_voice.is_none() {
+        // commit now (content first, node = marker). Under --no-audio we never
+        // run that audio pass (existing mp3/marks are kept via upsert COALESCE),
+        // so an audio leaf IS fully applied here too → commit it now, else it'd
+        // re-render on every subsequent sync.
+        if cfg.no_audio || (a.voice.is_none() && a.text_voice.is_none()) {
             commit_leaf(store, leaf, &node_hash).await?;
             report.put += 1;
         }
@@ -749,6 +762,7 @@ mod tests {
             text_audio: false,
             render_version: 1,
             repair: false,
+            no_audio: false,
         })
     }
 
