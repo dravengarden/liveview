@@ -1,9 +1,4 @@
-import {
-  Box,
-  CircularProgress,
-  LinearProgress,
-  Typography,
-} from "@mui/material";
+import { Box, LinearProgress, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import { CloudDownload, ExpandMore, GraphicEq } from "@mui/icons-material";
@@ -29,7 +24,9 @@ import { useI18n } from "@/i18n";
  * toggle — so the sheet is purely a status view. Calm-tech: the user knows, but
  * it weighs almost nothing.
  */
-export function SyncIndicator(): React.JSX.Element | null {
+export function SyncIndicator(
+  { inReader = false }: { inReader?: boolean },
+): React.JSX.Element | null {
   const { t } = useI18n();
   const status = useSyncStatus();
   // On mobile the nav bar drops to the bottom, leaving the top free for this
@@ -64,13 +61,12 @@ export function SyncIndicator(): React.JSX.Element | null {
     return () => window.clearInterval(id);
   }, [generating, open]);
 
-  // Reserve the strip's height so content starts BELOW it (a chapter title / the
-  // top card row is never occluded) yet still scrolls UNDER its frosted fill —
-  // the scrollers add --lv-syncbar-h to their top edge (reader `::before` in
-  // index.css; the shelf's pt in Landing), mirroring how --shell-bar-h /
-  // --lv-toolbar-h reserve the bottom bars. Mobile only: there the strip sits
-  // over CONTENT; on desktop it rides over the NavShell bar (chrome that owns
-  // its own space), so leave that tier alone. 28px = the 26px row + 2px filament.
+  // Reserve the strip's height so content clears it yet still scrolls UNDER it.
+  // The strip sits at the BOTTOM in the reader (foot padding: MarkdownViewer /
+  // AudiobookPlayer pb add --lv-syncbar-h) and at the TOP on the shelf (head
+  // padding: Landing's pt). Mobile only: there the strip overlays content; on
+  // desktop it rides over the NavShell bar, which owns its own space, so leave
+  // that tier alone. 28px = the 26px row + 2px filament.
   useEffect(() => {
     const el = document.documentElement;
     if (generating && !open && navbarAtBottom) {
@@ -97,15 +93,29 @@ export function SyncIndicator(): React.JSX.Element | null {
             if (e.key === "Enter" || e.key === " ") setOpen(true);
           }}
           sx={{
-            // A flat, full-bleed chrome LINE at the very top — under the status
-            // bar on mobile (nav bar is at the bottom), at top:0 on desktop (it
-            // rides as a hairline; the NavShell top bar sits just below). No
-            // rounding / shadow / ring: it's chrome, not a floating card. Content
-            // scrolls under its faint frosted fill.
+            // A flat, full-bleed chrome LINE — no rounding / shadow / ring: it's
+            // chrome, not a floating card; content scrolls under it.
+            //   • Reader (mobile): pinned to the BOTTOM, ABOVE the nav bar and
+            //     the transport (when read-aloud/audio is up) — the topmost
+            //     segment of the ONE frosted bottom slab (nav + transport share
+            //     a backplate; this continues it). Offsets by their mirrored
+            //     heights (--shell-bar-h + --lv-transport-h on documentElement).
+            //   • Shelf / desktop: no bottom nav bar to sit above, so it stays a
+            //     top strip (under the status bar on mobile; a hairline above the
+            //     NavShell top bar on desktop).
             position: "fixed",
-            top: navbarAtBottom ? "env(safe-area-inset-top, 0px)" : 0,
             left: 0,
             right: 0,
+            ...(navbarAtBottom && inReader
+              ? {
+                bottom:
+                  "calc(var(--shell-bar-h, 0px) + var(--lv-transport-h, 0px))",
+                borderTop: 1,
+              }
+              : {
+                top: navbarAtBottom ? "env(safe-area-inset-top, 0px)" : 0,
+                borderBottom: 1,
+              }),
             zIndex: (th) => th.zIndex.appBar,
             cursor: "pointer",
             overflow: "hidden", // clip the progress filament to the edges
@@ -125,7 +135,6 @@ export function SyncIndicator(): React.JSX.Element | null {
               backdropFilter: "blur(12px)",
               WebkitBackdropFilter: "blur(12px)",
             }),
-            borderBottom: 1,
             borderColor: "divider",
             "@media (hover: hover)": {
               transition: "background-color .15s",
@@ -144,13 +153,10 @@ export function SyncIndicator(): React.JSX.Element | null {
               height: 26,
             }}
           >
-            <CircularProgress
-              size={12}
-              thickness={5}
-              {...(pct != null
-                ? { variant: "determinate", value: pct }
-                : {})}
-            />
+            {/* Leading glyph only — NOT a progress indicator. The single
+                progress cue is the filament along the edge (+ the count); a
+                spinner here duplicated it. */}
+            <GraphicEq sx={{ fontSize: 14, flexShrink: 0, opacity: 0.7 }} />
             <Typography
               noWrap
               sx={{

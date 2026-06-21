@@ -132,7 +132,7 @@ export function AudiobookPlayer(
           // the NavShell frosted bar below it (--shell-bar-h). Both are 0 before
           // measured / on the solid (desktop) path, leaving the base py:4.
           pb:
-            "calc(32px + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
+            "calc(32px + var(--lv-syncbar-h, 0px) + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
           // Keep follow-mode centring (block:"center") and a sentence tap from
           // parking the spoken line UNDER the transport when it's near the end.
           scrollPaddingBottom:

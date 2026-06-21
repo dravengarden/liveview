@@ -76,7 +76,11 @@ export function PlaybackBar(
     if (!el || !host) return;
     const ONE_ROW_MIN = 600; // px of bar width that comfortably fits one row
     const publish = (): void => {
-      host.style.setProperty("--lv-transport-h", `${el.offsetHeight}px`);
+      const h = `${el.offsetHeight}px`;
+      host.style.setProperty("--lv-transport-h", h);
+      // Mirror onto the document root so a fixed overlay outside the reader (the
+      // SyncIndicator strip, which sits ABOVE the transport) can offset by it.
+      document.documentElement.style.setProperty("--lv-transport-h", h);
       setOneRow(el.clientWidth >= ONE_ROW_MIN);
     };
     publish();
@@ -88,6 +92,7 @@ export function PlaybackBar(
       // text reader mounts/unmounts the bar as read-aloud starts/stops — the
       // audiobook page keeps it mounted, so this only bites the in-place case).
       host.style.removeProperty("--lv-transport-h");
+      document.documentElement.style.removeProperty("--lv-transport-h");
     };
   }, []);
 

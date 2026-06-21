@@ -821,7 +821,7 @@ export function MarkdownViewer({
             // still scrolls UNDER them. Restore-by-ratio is unaffected (it reads
             // scrollHeight after this padding is in).
             pb: {
-              xs: "calc(16px + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
+              xs: "calc(16px + var(--lv-syncbar-h, 0px) + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
               md: "calc(32px + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
             },
             // Keep the spoken-line auto-centre (read-aloud follow) from parking the

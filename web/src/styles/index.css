@@ -66,10 +66,11 @@ textarea,
     content: "";
     display: block;
     flex: none;
-    /* Clear the status-bar notch AND the sync strip when it's up (SyncIndicator
-       publishes --lv-syncbar-h while generating), so the first line starts below
-       the strip instead of under it — yet still scrolls up beneath its frost. */
-    height: calc(env(safe-area-inset-top, 0px) + var(--lv-syncbar-h, 0px));
+    /* Clear the status-bar notch. (The sync strip used to ride the top here and
+       added --lv-syncbar-h; it now sits at the BOTTOM of the reader, above the
+       nav bar, so the foot padding reserves it instead — see MarkdownViewer /
+       AudiobookPlayer pb.) */
+    height: env(safe-area-inset-top, 0px);
   }
 
   /* Frosted-overlay bottom bar: the NavShell bar is now an iOS-style frosted
