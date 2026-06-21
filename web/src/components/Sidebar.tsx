@@ -427,7 +427,21 @@ export function Sidebar({
         </Box>
       )}
 
-      <Box ref={listContainerRef} sx={{ flex: 1, overflow: "auto" }}>
+      <Box
+        ref={listContainerRef}
+        sx={{
+          flex: 1,
+          overflow: "auto",
+          // iOS rubber-band + async momentum. This inner list is the REAL
+          // scroller (in the mobile DetentSheet the sheet body fits the Sidebar
+          // exactly, so its own bounce never fires — the overscroll has to live
+          // here). It's nested under the sheet root's transform, which would
+          // demote it off the compositor; give it its own layer + touch momentum,
+          // mirroring the sheet body's treatment. No-op on desktop/non-touch.
+          WebkitOverflowScrolling: "touch",
+          transform: "translateZ(0)",
+        }}
+      >
         <List dense disablePadding>
           {tree.map((node) => (
             <TreeItem
