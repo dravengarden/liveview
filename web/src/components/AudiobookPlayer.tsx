@@ -70,6 +70,21 @@ export function AudiobookPlayer(
     if (following) scrollCurrentIntoView();
   }, [currentIdx, following, scrollCurrentIntoView]);
 
+  // RETURN FROM BACKGROUND. iOS suspends the page's JS while backgrounded, so the
+  // audio advances but the follow-scroll doesn't run — on return the spoken line
+  // has drifted off-screen. Re-centre it on foreground, but only if `following`
+  // is on (a deliberate scroll-away is respected; the sentence highlight here is
+  // a real DOM style, so unlike the text reader it doesn't need a repaint).
+  useEffect(() => {
+    const onVisible = (): void => {
+      if (document.visibilityState === "visible" && following) {
+        scrollCurrentIntoView();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [following, scrollCurrentIntoView]);
+
   // Cancel follow only on a real user scroll gesture — wheel or touch-drag — so
   // programmatic auto-scroll never switches it off the instant it engages.
   const cancelFollow = useCallback(() => {

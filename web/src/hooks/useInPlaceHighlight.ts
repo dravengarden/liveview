@@ -518,6 +518,39 @@ export function useInPlaceHighlight(
     if (scroller) scroller.scrollTop = 0;
   }, [active, nowPlaying?.chapterPath, scrollerRef]);
 
+  // RETURN FROM BACKGROUND. While the app is backgrounded iOS suspends the page's
+  // JS, so the audio keeps advancing but the follow-scroll doesn't run AND iOS
+  // WebKit PURGES the CSS Custom Highlight — so on return the spoken line can be
+  // off-screen and/or its highlight gone ("后台回来高亮行不在屏上 / 丢高亮").
+  // Bumping scrollSettle re-runs the focus (REPAINT — unconditional, fixes the
+  // purge), wipe, and follow effects; the follow re-centres only when `following`
+  // is on, so a deliberate scroll-away is respected (you're not yanked back just
+  // for glancing at another app). The audio position itself is re-synced
+  // separately in the engine's own visibilitychange handler (player.tsx).
+  useEffect(() => {
+    if (!active) return undefined;
+    const onVisible = (): void => {
+      if (document.visibilityState !== "visible") return;
+      setScrollSettle((s) => s + 1);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [active]);
+
+  // ENTER the now-playing chapter (active false→true: you navigated to the page
+  // that's currently narrating). You came here to see where it is, so re-enable
+  // follow and re-centre on the spoken line — even if you'd scrolled away in a
+  // different chapter (that `following=false` shouldn't carry into a fresh entry).
+  const prevActiveRef = useRef(false);
+  useEffect(() => {
+    const was = prevActiveRef.current;
+    prevActiveRef.current = active;
+    if (active && !was) {
+      setFollowing(true);
+      setScrollSettle((s) => s + 1);
+    }
+  }, [active]);
+
   // A manual scroll (wheel / touch drag) means the reader took over — stop
   // auto-following so we don't yank them back, AND open the wipe-suspend window so
   // the boundary rubber-band survives (see scrollSuspendRef). Programmatic
