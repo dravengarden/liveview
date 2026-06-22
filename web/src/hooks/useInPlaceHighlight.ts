@@ -409,6 +409,16 @@ export function useInPlaceHighlight(
   // The per-text-node spans wrapping the PAUSED prose sentence (exact, iOS-purge-
   // proof), with the unit idx they're for, so we unwrap on resume / line change.
   const pausedRef = useRef<{ idx: number; spans: HTMLElement[] } | null>(null);
+  // The (idx, block) of the PREVIOUS spoken sentence, so when the line advances we
+  // can force a real repaint of the just-vacated block. The 0.01-alpha ghostbust
+  // highlight is supposed to do this, but some iOS WebKit builds optimize an
+  // (near-)invisible highlight away → the removed wipe leaves a stale underline-
+  // ghost on already-read lines ("前面高亮的变成下划线没消失"). An opacity nudge
+  // (below) guarantees the recomposite, theme-agnostic and imperceptible.
+  const prevSpokenRef = useRef<{ idx: number; block: HTMLElement | null }>({
+    idx: -1,
+    block: null,
+  });
   // Per-chapter located map (unit idx → block slice), computed ONCE per units
   // array (it's positional, so it's stable for the rendered chapter) and reused
   // by the trail + wipe effects. Keyed by the `units` identity it was built for.
@@ -669,6 +679,27 @@ export function useInPlaceHighlight(
       anchor.classList.add("lv-reading-paused");
       litBlockRef.current = anchor;
     }
+
+    // GHOST-BUST (the real one): when the line ADVANCES, force a true repaint of
+    // the just-vacated block. The clearAll above removed the previous sentence's
+    // wipe, but iOS WebKit doesn't always repaint a region on highlight REMOVE,
+    // and the invisible 0.01-alpha re-add gets optimized away on some builds — so
+    // the old wipe lingers as an underline-ghost. An opacity nudge (0.999 → "")
+    // for one frame guarantees the element recomposites WITHOUT the removed
+    // highlight; theme-agnostic, no colour-matching, imperceptible. Only on a
+    // genuine sentence change, never per-tick, and never mid-scroll (frozen).
+    const prev = prevSpokenRef.current;
+    if (
+      prev.idx !== currentIdx && prev.block && prev.block.isConnected &&
+      !scrollSuspendRef.current
+    ) {
+      const el = prev.block;
+      el.style.opacity = "0.999";
+      requestAnimationFrame(() => {
+        el.style.opacity = "";
+      });
+    }
+    prevSpokenRef.current = { idx: currentIdx, block: blockEl };
 
     // Remember the spoken line so the jump button + the auto-follow effect can
     // re-centre it. (The actual scrolling lives in the dedicated follow effect
