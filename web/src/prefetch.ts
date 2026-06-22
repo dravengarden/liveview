@@ -26,6 +26,29 @@ export function isEagerShell(): boolean {
   return "__TAURI_INTERNALS__" in globalThis;
 }
 
+let sweptTrees = false;
+
+/**
+ * Warm the sidebar SPINES into the SW cache — `/api/tree?rendition=text|audio`
+ * (each returns the whole forest for that rendition, ALL books, so this is just
+ * two cheap fetches). CRITICAL for offline: opening a book first fetches its
+ * rendition spine; without the spine cached, a tap on a shelf card while offline
+ * couldn't enter the book at all. Run on every load (lazy + eager), once per
+ * session; the SW (lv-content, persistent) holds it across deploys.
+ */
+export async function prefetchTrees(): Promise<void> {
+  if (sweptTrees || !navigator.onLine) return;
+  sweptTrees = true;
+  try {
+    await Promise.all([
+      fetch("/api/tree?rendition=text").catch(() => undefined),
+      fetch("/api/tree?rendition=audio").catch(() => undefined),
+    ]);
+  } catch {
+    sweptTrees = false; // let a later load retry
+  }
+}
+
 /**
  * EAGER full-corpus prefetch: warm EVERY book's text (+ audio) into the SW
  * caches, so the native app is fully offline. Reuses the per-book sweeps (idle-
@@ -82,11 +105,15 @@ export async function prefetchBookText(slug: string): Promise<void> {
       if (rendition !== "text") continue; // Lane A = text only
       await idle();
       if (!navigator.onLine) break;
+      const q = `path=${encodeURIComponent(`${slug}/${rel}`)}` +
+        `&lang=${encodeURIComponent(lang)}&rendition=text`;
       try {
-        await fetch(
-          `/api/file?path=${encodeURIComponent(`${slug}/${rel}`)}` +
-            `&lang=${encodeURIComponent(lang)}&rendition=text`,
-        );
+        // The rendered page PLUS the read-along pieces (units + spoken), so an
+        // offline open can also read-aloud — all land in the persistent
+        // lv-content cache. Best-effort; a failed one is just skipped.
+        await fetch(`/api/file?${q}`);
+        await fetch(`/api/units?${q}`).catch(() => undefined);
+        await fetch(`/api/spoken?${q}`).catch(() => undefined);
       } catch {
         // best-effort
       }

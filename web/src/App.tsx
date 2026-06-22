@@ -45,7 +45,12 @@ import {
   useWebSocket,
 } from "@/hooks";
 import { useI18n } from "@/i18n";
-import { prefetchAllBooks, prefetchBookAudio, prefetchBookText } from "@/prefetch";
+import {
+  prefetchAllBooks,
+  prefetchBookAudio,
+  prefetchBookText,
+  prefetchTrees,
+} from "@/prefetch";
 import { loadAllServerSettings, putServerSetting } from "@/syncBackends";
 import { type Track, useAudioPlayer } from "@/audio/player";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -592,6 +597,10 @@ export function App(): React.JSX.Element {
         const res = await fetch("/api/books");
         const list = (await res.json()) as Book[];
         setBooks(list);
+        // Warm the sidebar spines (both renditions) so a shelf card can be OPENED
+        // offline — entering a book fetches its spine first; uncached, the tap
+        // would do nothing. Cheap (2 fetches), runs on every load (lazy + eager).
+        void prefetchTrees();
         // EAGER (native shell): pre-load the WHOLE library into the offline
         // caches so every book reads + plays with no network — the native app's
         // "almost no loading" promise. No-op on web/PWA (lazy = warm-on-open).
@@ -923,7 +932,10 @@ export function App(): React.JSX.Element {
             : pickInitialLang(r);
           void openFile(target, audioLang, "audio", replace);
         } catch (e) {
+          // Offline + the audio spine isn't cached: surface it instead of a dead
+          // tap. (prefetchTrees warms both spines, so this is the rare fallback.)
           console.error("Failed to open audiobook:", e);
+          setNotice(t("audiobook.empty"));
         }
       })();
     },
@@ -982,7 +994,11 @@ export function App(): React.JSX.Element {
             void openFile(entry, initialLang, r.kind, replace);
           }
         } catch (e) {
+          // Offline + the spine isn't cached (or a transient error): DON'T leave
+          // the tap dead. Enter the book anyway at its README so the reader shows
+          // cached content or the calm offline placeholder — never nothing.
           console.error("Failed to enter book:", e);
+          void openFile(`${slug}/README.md`, initialLang, r.kind, replace);
         }
       })();
     },
