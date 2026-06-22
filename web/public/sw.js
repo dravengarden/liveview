@@ -26,6 +26,33 @@ const AUDIO_CACHE = `${VERSION}-audio`;
 // Content-addressed immutable blobs (/api/blob/<hash>) — NOT version-prefixed,
 // so the offline library survives deploys (an immutable hash never goes stale).
 const BLOB_CACHE = "lv-blobs";
+// Reader CONTENT (text html, spoken, units, marks, tree, books, raw/cover/artwork,
+// manifest) — PERSISTENT (NOT version-prefixed), so what you've read stays
+// offline-available ACROSS deploys. Served network-first: fresh when online
+// (an author iterating still sees edits immediately), last-good cache when
+// offline or right after a deploy. This is the fix for "部署后离线文本失效":
+// content used to land in the version-prefixed API_CACHE, which `activate` wipes
+// on every deploy. Mutable per-request STATE (progress/settings/tasks/version)
+// stays in API_CACHE — it SHOULD reset on deploy and is re-pulled live.
+const CONTENT_CACHE = "lv-content";
+
+// Path → which cache. Content endpoints are offline-critical + deploy-stable;
+// everything else under /api stays in the version-scoped API_CACHE.
+const CONTENT_API = [
+  "/api/file",
+  "/api/spoken",
+  "/api/units",
+  "/api/marks",
+  "/api/tree",
+  "/api/books",
+  "/api/raw",
+  "/api/cover",
+  "/api/artwork",
+  "/api/manifest",
+];
+function isContentApi(pathname) {
+  return CONTENT_API.some((p) => pathname === p || pathname.startsWith(p + "/"));
+}
 
 // The app shell: the static entry points PLUS the build-stamped hashed chunks
 // index.html boots from — precached as one atomic unit so the offline / network-
@@ -50,8 +77,12 @@ self.addEventListener("activate", (event) => {
       .then((keys) =>
         Promise.all(
           keys
-            // Keep this VERSION's caches AND the persistent blob cache; drop the rest.
-            .filter((k) => !k.startsWith(VERSION) && k !== BLOB_CACHE)
+            // Keep this VERSION's caches AND the persistent content-addressed
+            // (blob) + reader-content caches; drop the rest. The persistent caches
+            // are what make the offline library survive a deploy.
+            .filter((k) =>
+              !k.startsWith(VERSION) && k !== BLOB_CACHE && k !== CONTENT_CACHE
+            )
             .map((k) => caches.delete(k)),
         )
       )
@@ -91,9 +122,12 @@ self.addEventListener("fetch", (event) => {
       event.respondWith(audioHandler(event, url));
       return;
     }
-    // /api/version stays network-first un-cached fallthrough below (deploy probe).
     if (url.pathname.startsWith("/api/")) {
-      event.respondWith(networkFirst(req, API_CACHE));
+      // Reader content → PERSISTENT cache (offline + deploy-stable). Mutable
+      // state (progress/settings/tasks/version) → version-scoped API_CACHE.
+      event.respondWith(
+        networkFirst(req, isContentApi(url.pathname) ? CONTENT_CACHE : API_CACHE),
+      );
       return;
     }
   }
