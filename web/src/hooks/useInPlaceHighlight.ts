@@ -518,20 +518,30 @@ export function useInPlaceHighlight(
     if (scroller) scroller.scrollTop = 0;
   }, [active, nowPlaying?.chapterPath, scrollerRef]);
 
-  // RETURN FROM BACKGROUND. While the app is backgrounded iOS suspends the page's
-  // JS, so the audio keeps advancing but the follow-scroll doesn't run AND iOS
-  // WebKit PURGES the CSS Custom Highlight — so on return the spoken line can be
-  // off-screen and/or its highlight gone ("后台回来高亮行不在屏上 / 丢高亮").
-  // Bumping scrollSettle re-runs the focus (REPAINT — unconditional, fixes the
-  // purge), wipe, and follow effects; the follow re-centres only when `following`
-  // is on, so a deliberate scroll-away is respected (you're not yanked back just
-  // for glancing at another app). The audio position itself is re-synced
-  // separately in the engine's own visibilitychange handler (player.tsx).
+  // RETURN FROM BACKGROUND = a RE-ENTRY: re-orient to the spoken line, always.
+  // Backgrounding suspends the page JS, so on return three things were wrong:
+  //   1. iOS WebKit PURGES the CSS Custom Highlight while hidden → the line's
+  //      highlight is gone.
+  //   2. `scrollSuspendRef` could be stuck `true` — its 200ms disarm setTimeout
+  //      (armed by a scroll gesture before backgrounding) was suspended too, so
+  //      the focus / wipe / follow effects all early-return and NOTHING repaints
+  //      or scrolls. Clear it on return.
+  //   3. the page sits wherever it was (often the top), with the live line off-
+  //      screen below.
+  // A background round-trip is NOT an in-app scroll-away, so we re-centre
+  // UNCONDITIONALLY (force `following` back on) — you left and came back to see
+  // where it's reading. Deferred one frame: iOS fires visibilitychange before
+  // layout settles, and the engine re-syncs currentIdx on the SAME event (see
+  // player.tsx), so we wait a frame to recenter against a laid-out page at the
+  // CURRENT line. The scrollSettle bump re-runs focus (REPAINT, fixes the purge)
+  // + follow (the scroll).
   useEffect(() => {
     if (!active) return undefined;
     const onVisible = (): void => {
       if (document.visibilityState !== "visible") return;
-      setScrollSettle((s) => s + 1);
+      scrollSuspendRef.current = false;
+      setFollowing(true);
+      requestAnimationFrame(() => setScrollSettle((s) => s + 1));
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
@@ -546,8 +556,11 @@ export function useInPlaceHighlight(
     const was = prevActiveRef.current;
     prevActiveRef.current = active;
     if (active && !was) {
+      scrollSuspendRef.current = false;
       setFollowing(true);
-      setScrollSettle((s) => s + 1);
+      // Defer one frame: a fresh mount / chapter swap hasn't laid out yet, so a
+      // synchronous recenter would target an unmeasured page.
+      requestAnimationFrame(() => setScrollSettle((s) => s + 1));
     }
   }, [active]);
 

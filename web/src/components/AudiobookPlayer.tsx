@@ -70,20 +70,30 @@ export function AudiobookPlayer(
     if (following) scrollCurrentIntoView();
   }, [currentIdx, following, scrollCurrentIntoView]);
 
-  // RETURN FROM BACKGROUND. iOS suspends the page's JS while backgrounded, so the
-  // audio advances but the follow-scroll doesn't run — on return the spoken line
-  // has drifted off-screen. Re-centre it on foreground, but only if `following`
-  // is on (a deliberate scroll-away is respected; the sentence highlight here is
-  // a real DOM style, so unlike the text reader it doesn't need a repaint).
+  // RETURN FROM BACKGROUND = a re-entry: re-centre on the spoken line, ALWAYS.
+  // iOS suspends the page JS while backgrounded, so the follow-scroll never ran
+  // and the line drifted off-screen (the engine re-syncs the audio position on
+  // the same event — player.tsx). A background round-trip is not an in-app
+  // scroll-away, so force `following` back on and re-centre. Read the LIVE index
+  // through a ref (a stale closure would target the pre-background sentence) and
+  // defer one frame so currentIdx has re-synced and the page is laid out.
+  const currentIdxRef = useRef(currentIdx);
+  currentIdxRef.current = currentIdx;
   useEffect(() => {
     const onVisible = (): void => {
-      if (document.visibilityState === "visible" && following) {
-        scrollCurrentIntoView();
-      }
+      if (document.visibilityState !== "visible") return;
+      setFollowing(true);
+      requestAnimationFrame(() => {
+        const container = scrollRef.current;
+        const idx = currentIdxRef.current;
+        if (!container || idx < 0) return;
+        container.querySelector<HTMLElement>(`[data-sent="${idx}"]`)
+          ?.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
-  }, [following, scrollCurrentIntoView]);
+  }, []);
 
   // Cancel follow only on a real user scroll gesture — wheel or touch-drag — so
   // programmatic auto-scroll never switches it off the instant it engages.
