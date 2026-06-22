@@ -15,6 +15,14 @@ export type { Banner, BannerKind };
 
 export const connectionStore = createConnectionStore({
   versionUrl: "/api/version",
+  // Offline-first reconnect policy (design §6): be CONSERVATIVE about surfacing
+  // an outage — a few dropped frames recover silently — and never hammer the
+  // server on a long outage. Show the offline state only after ~4 consecutive
+  // failed (re)connect cycles; cap the exponential backoff at 60s (retries stay
+  // unbounded). Because the reader is fully usable offline, an outage only needs
+  // a calm warning, not an alarm.
+  reconnectBannerThreshold: 4,
+  reconnectBackoffMaxMs: 60_000,
 });
 
 // Bound re-exports — same named bindings the rest of liveview imports today, so
