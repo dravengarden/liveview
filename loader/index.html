@@ -182,6 +182,10 @@
     <script>
       const APP_NAME = "LiveView";
       const REMOTE = "https://liveview.hawk.thundersparrow.top";
+      // Set once we've successfully handed off to the remote app — proof its
+      // service worker now holds the full app cache, so later launches can hand
+      // off even when the probe fails (offline / host unreachable).
+      const HANDED_OFF_KEY = "lv-handed-off";
 
       const body = document.body;
       const hint = document.getElementById("hint");
@@ -217,20 +221,33 @@
 
         if (await probe()) {
           // Reachable → hand off to the real app. A full navigation (not a fetch)
-          // so the WKWebView becomes the remote origin, exactly as before.
+          // so the WKWebView becomes the remote origin, exactly as before. Mark
+          // that we've successfully handed off at least once: from now on the
+          // remote origin's service worker has the whole app cached.
+          try {
+            localStorage.setItem(HANDED_OFF_KEY, "1");
+          } catch {
+            /* storage unavailable — degrade to the probe-only path */
+          }
           location.replace(REMOTE);
           return;
         }
 
-        // OFFLINE (airplane mode / no network) is NOT the same as Local-Network-
-        // denied: the cached app is still reachable through the remote-origin
-        // service worker, so hand off ANYWAY and let the SW serve it offline —
-        // otherwise a cold launch with no network dead-ends on the error card even
-        // though everything's cached. (Permission-denied is ONLINE but blocked, so
-        // it falls through to retry + the settings card.) If nothing was ever
-        // cached the remote nav just shows the SW's offline shell — still better
-        // than a stuck loader.
-        if (!navigator.onLine) {
+        // Probe FAILED. If we've EVER successfully loaded the app before, the
+        // remote-origin service worker has the entire app cached, so hand off
+        // ANYWAY — it serves from local cache with NO network, regardless of
+        // whether we're offline OR the tailnet host is simply unreachable.
+        // (navigator.onLine is unreliable here: WiFi can report "online" while
+        // hawk is unreachable, which left the loader stuck on "connecting…".)
+        // Only a FIRST-EVER launch with nothing cached falls through to retry +
+        // the Local-Network settings card.
+        let handedOff = false;
+        try {
+          handedOff = localStorage.getItem(HANDED_OFF_KEY) === "1";
+        } catch {
+          /* ignore */
+        }
+        if (handedOff) {
           location.replace(REMOTE);
           return;
         }
