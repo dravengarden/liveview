@@ -15,6 +15,32 @@ const sweptText = new Set<string>();
 const sweptAudio = new Set<string>();
 let inFlight = 0;
 
+/**
+ * EAGER mode — the native shell (iOS/Mac Tauri). There it pre-loads the WHOLE
+ * library so every book reads + plays offline with no per-book "open it first",
+ * vs LAZY (web/PWA) which warms only the opened book on demand. Detected by the
+ * Tauri IPC global (same key haptics.ts uses); the remote-loaded web page still
+ * carries it inside the WKWebView. Lazy = false ⇒ no full-corpus sweep.
+ */
+export function isEagerShell(): boolean {
+  return "__TAURI_INTERNALS__" in globalThis;
+}
+
+/**
+ * EAGER full-corpus prefetch: warm EVERY book's text (+ audio) into the SW
+ * caches, so the native app is fully offline. Reuses the per-book sweeps (idle-
+ * scheduled, online-gated, session-deduped), just across all slugs. Sequential
+ * so it stays a low-priority trickle, not a thundering herd. No-op on lazy.
+ */
+export async function prefetchAllBooks(slugs: readonly string[]): Promise<void> {
+  if (!isEagerShell()) return;
+  for (const slug of slugs) {
+    if (!navigator.onLine) break;
+    await prefetchBookText(slug);
+    await prefetchBookAudio(slug);
+  }
+}
+
 const idle = (): Promise<void> =>
   new Promise((resolve) => {
     const ric = (globalThis as { requestIdleCallback?: (cb: () => void) => void })

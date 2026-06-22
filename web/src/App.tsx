@@ -44,7 +44,7 @@ import {
   useWebSocket,
 } from "@/hooks";
 import { useI18n } from "@/i18n";
-import { prefetchBookAudio, prefetchBookText } from "@/prefetch";
+import { prefetchAllBooks, prefetchBookAudio, prefetchBookText } from "@/prefetch";
 import { loadAllServerSettings, putServerSetting } from "@/syncBackends";
 import { type Track, useAudioPlayer } from "@/audio/player";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -584,7 +584,14 @@ export function App(): React.JSX.Element {
     void (async () => {
       try {
         const res = await fetch("/api/books");
-        setBooks((await res.json()) as Book[]);
+        const list = (await res.json()) as Book[];
+        setBooks(list);
+        // EAGER (native shell): pre-load the WHOLE library into the offline
+        // caches so every book reads + plays with no network — the native app's
+        // "almost no loading" promise. No-op on web/PWA (lazy = warm-on-open).
+        // Idle-scheduled + session-deduped inside prefetch, so it's a background
+        // trickle that never blocks the shelf.
+        void prefetchAllBooks(list.map((b) => b.slug));
       } catch (e) {
         console.error("Failed to fetch books:", e);
       }
