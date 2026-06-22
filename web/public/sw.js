@@ -49,6 +49,12 @@ const CONTENT_API = [
   "/api/cover",
   "/api/artwork",
   "/api/manifest",
+  // Reading progress (shelf % + per-book resume). Mutable, so network-first =
+  // fresh online; but persisting it means the shelf %/resume survive OFFLINE and
+  // across deploys (last-good) instead of resetting. Covers /api/progress AND
+  // /api/progress/recent (prefix match). Writes (PUT) still go straight to the
+  // server when online; the active session is also mirrored to IndexedDB.
+  "/api/progress",
 ];
 function isContentApi(pathname) {
   return CONTENT_API.some((p) => pathname === p || pathname.startsWith(p + "/"));
