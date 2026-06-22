@@ -11,6 +11,7 @@ import { flushSync } from "react-dom";
 import {
   Alert,
   Box,
+  Button,
   CssBaseline,
   IconButton,
   Snackbar,
@@ -255,6 +256,11 @@ export function App(): React.JSX.Element {
   );
   const [currentFileType, setCurrentFileType] = useState<FileType>("markdown");
   const [currentContent, setCurrentContent] = useState<string | null>(null);
+  // A chapter fetch that failed instead of silently leaving the old page up:
+  // "offline" (no cache for an unvisited page while disconnected) vs "failed"
+  // (a server/transport error online). Drives a calm placeholder so offline
+  // never reads as a blank/stale reader. Cleared on a successful load.
+  const [fileError, setFileError] = useState<"offline" | "failed" | null>(null);
   // The browse plane's reading mode. Audio is no longer a browse view (it's the
   // floating popup), so in practice this stays "text" — it still drives which
   // rendition's spine + language list the reading chrome shows, and is threaded
@@ -718,6 +724,7 @@ export function App(): React.JSX.Element {
     async (path: string, reqLang: string, reqRendition: string) => {
       setCurrentPath(path);
       currentPathRef.current = path;
+      setFileError(null);
       try {
         const res = await fetch(
           `/api/file?path=${encodeURIComponent(path)}&lang=${
@@ -726,6 +733,10 @@ export function App(): React.JSX.Element {
         );
         if (!res.ok) {
           console.error("Failed to fetch file:", path, res.status);
+          // Don't leave the previous chapter silently up — surface it. Offline +
+          // uncached is the common cause on a lazy (web) install; otherwise a
+          // genuine load failure.
+          setFileError(navigator.onLine ? "failed" : "offline");
           return;
         }
         const data = (await res.json()) as FileContent;
@@ -762,6 +773,7 @@ export function App(): React.JSX.Element {
         }
       } catch (e) {
         console.error("Failed to fetch file:", e);
+        setFileError(navigator.onLine ? "failed" : "offline");
       }
     },
     [],
@@ -1728,6 +1740,40 @@ export function App(): React.JSX.Element {
                     onSaveScroll={saveProgress}
                     footer={chapterPager}
                   />
+                )
+                : fileError
+                ? (
+                  // Don't show a blank/stale reader when a chapter couldn't load.
+                  // Offline + uncached (lazy/web) is calm guidance; a genuine
+                  // failure offers a retry. (Native eager pre-caches everything,
+                  // so it effectively never lands here.)
+                  <Box
+                    sx={{
+                      flex: 1,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 1.5,
+                      px: 4,
+                      textAlign: "center",
+                      color: "text.secondary",
+                    }}
+                  >
+                    <Typography variant="body1">
+                      {fileError === "offline"
+                        ? t("content.offline")
+                        : t("content.loadFailed")}
+                    </Typography>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      onClick={() =>
+                        void loadFile(currentPath ?? "", lang, rendition)}
+                    >
+                      {t("content.retry")}
+                    </Button>
+                  </Box>
                 )
                 : (
                   <ContentViewer
