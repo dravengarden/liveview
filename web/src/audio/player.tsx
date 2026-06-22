@@ -437,7 +437,20 @@ export function AudioPlayerProvider(
             });
             if (autoplay) nativeAudioPlay();
           } else if (audio) {
-            audio.src = `/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`;
+            // Audiobook: prefer the immutable content-addressed blob so playback is
+            // served from the persistent lv-blobs cache — offline-stable ACROSS
+            // deploys, and a re-render (new hash) never serves stale bytes. Falls
+            // back to /api/audio for: not-yet-baked chapters (on-demand synth), the
+            // bookend chapter (the server bakes the "全书完" tail into THAT
+            // response, which a raw blob lacks), and text read-aloud (rendition=
+            // text, synth-on-demand — audioHash only maps the audio rendition).
+            const ah = np.rendition === "audio" && !isBookEnd
+              ? await audioHash(np.bookSlug, np.chapterPath, np.lang)
+              : undefined;
+            if (loadSeq.current !== seq) return;
+            audio.src = ah
+              ? `/api/blob/${ah}`
+              : `/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`;
             // load() resets playbackRate from defaultPlaybackRate — set both so
             // the chosen rate survives (also re-applied on loadedmetadata).
             audio.defaultPlaybackRate = rateRef.current;

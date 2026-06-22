@@ -113,9 +113,11 @@ export async function prefetchBookAudio(slug: string): Promise<void> {
             ch.audio.hash,
           );
         } else {
-          // `prefetch=1` tells the SW to download the full body + cache it (a
-          // normal play streams Range and isn't cached).
-          await fetch(`/api/audio?${q}&prefetch=1`);
+          // Immutable content-addressed blob → the SW caches it in the PERSISTENT
+          // lv-blobs cache (offline-stable across deploys; Range-from-cache on
+          // play). Replaces `/api/audio?prefetch=1` (which landed in the
+          // version-wiped AUDIO_CACHE and was lost on every deploy).
+          await fetch(`/api/blob/${ch.audio.hash}`);
         }
         // marks are small 200s (auto-cached by the SW) — needed for the
         // read-along whichever engine plays the audio.
