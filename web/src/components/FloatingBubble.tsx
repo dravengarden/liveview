@@ -14,9 +14,13 @@ function coverGlass(slug: string): string {
   let h = 0;
   for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) | 0;
   const hue = Math.abs(h) % 360;
-  return `linear-gradient(135deg, hsl(${hue} 52% 52% / 0.55), hsl(${
+  // NEAR-OPAQUE (was 0.55/0.45 translucent + a backdrop blur to read as glass).
+  // The puck floats over the reader's scroller, and a `backdrop-filter: blur()`
+  // re-rasterizes the moving content under it EVERY frame — a scroll-perf killer
+  // on iPad (see the puck sx). An opaque tint needs no blur to stay legible.
+  return `linear-gradient(135deg, hsl(${hue} 52% 52% / 0.98), hsl(${
     (hue + 38) % 360
-  } 48% 42% / 0.45))`;
+  } 48% 42% / 0.96))`;
 }
 
 const SIZE = 56; // bubble diameter (px)
@@ -343,15 +347,13 @@ export function FloatingBubble({
           inset: 5,
           borderRadius: "50%",
           overflow: "hidden",
-          // Frosted puck: a translucent tint over a backdrop blur, so the page
-          // shows through it as glass. A cover image (below) overlays opaque.
+          // Near-opaque tint (coverGlass), NO backdrop-filter. A cover image
+          // (below) overlays opaque when present. The puck floats over the
+          // reader's scroller, so a `backdrop-filter: blur()` re-rasterized the
+          // moving content under it every frame — janking the scroll on iPad,
+          // where the puck sits in the empty side margin. Dropped for perf; the
+          // opaque tint keeps it legible without the blur.
           background: coverGlass(slug),
-          // Drop saturate(): this puck floats over the scrolling reader, so its
-          // filter re-rasterizes the moving text every frame — saturate adds
-          // per-frame cost (and tints the warm page, lv-v203) for little gain.
-          // Keep blur for the glass look.
-          backdropFilter: "blur(16px)",
-          WebkitBackdropFilter: "blur(16px)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",

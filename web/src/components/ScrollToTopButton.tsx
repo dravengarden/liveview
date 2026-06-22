@@ -58,21 +58,18 @@ export function ScrollToTopButton(
           bottom:
             `calc(16px + env(safe-area-inset-bottom, 0px) + ${bottomLift})`,
           zIndex: 3,
-          // Frosted glass, like the floating now-playing bubble: a theme-adaptive
-          // translucent tint over a backdrop blur, so the page shows through it as
-          // glass. A hairline divider edge keeps the disc legible over busy text;
-          // a muted glyph reads on any theme.
+          // NO backdrop-filter. This disc floats over the reader's scroller, and a
+          // `backdrop-filter: blur()` re-rasterizes the moving content under it
+          // EVERY frame — on iPad landscape it sits in the empty side margin, so
+          // dragging there janked the whole scroll (root cause of "在这个区域上下
+          // 滑动会卡"). Same call already made for the bottom bars. Use a NEAR-OPAQUE
+          // solid tint instead: legible over busy text without the per-frame blur.
           color: "text.secondary",
           bgcolor: (t) =>
             alpha(
               t.palette.background.paper,
-              t.palette.mode === "dark" ? 0.5 : 0.62,
+              t.palette.mode === "dark" ? 0.88 : 0.94,
             ),
-          // Drop saturate(): floats over the scrolling reader, so the filter
-          // re-rasterizes the moving text every frame — saturate adds per-frame
-          // cost (and warm-page tint, lv-v203) for little gain. Keep blur.
-          backdropFilter: "blur(16px)",
-          WebkitBackdropFilter: "blur(16px)",
           border: 1,
           borderColor: "divider",
           boxShadow: 2,
@@ -80,7 +77,7 @@ export function ScrollToTopButton(
             bgcolor: (t) =>
               alpha(
                 t.palette.background.paper,
-                t.palette.mode === "dark" ? 0.65 : 0.78,
+                t.palette.mode === "dark" ? 0.95 : 0.99,
               ),
           },
         }}
