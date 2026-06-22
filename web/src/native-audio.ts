@@ -90,10 +90,32 @@ function send(message: OutMsg): boolean {
   }
 }
 
-/** True only inside the native iOS shell that carries the AVPlayer engine. When
- *  false, the caller must use the web `<audio>` element instead. */
+/** Opt-in gate for the NATIVE AVPlayer engine. The shell registers the
+ *  `lvNativeAudio` handler even while the Swift `NativeAudioController` is still
+ *  WIP, so handler presence alone is NOT proof the engine actually decodes audio
+ *  and reports `time`/`durationchange` back. Routing playback to a half-built
+ *  engine silently kills it: duration stuck at 0:00, the play button does
+ *  nothing (the web `<audio>` is intentionally idle because "native owns it").
+ *  So until the native side proves it's ready, the engine is OFF by default and
+ *  the app uses the proven web `<audio>` path. Opt in to test the native engine
+ *  by setting `globalThis.__lvNativeAudio = true` from the shell once verified,
+ *  or `localStorage["lv-native-audio"] = "1"` by hand. */
+function nativeAudioEnabled(): boolean {
+  try {
+    if ((globalThis as { __lvNativeAudio?: boolean }).__lvNativeAudio === true) {
+      return true;
+    }
+    return globalThis.localStorage?.getItem("lv-native-audio") === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** True only inside the native iOS shell that carries the AVPlayer engine AND
+ *  when that engine is opt-in enabled (see `nativeAudioEnabled`). When false,
+ *  the caller must use the web `<audio>` element instead. */
 export function nativeAudioAvailable(): boolean {
-  return handler() !== null;
+  return nativeAudioEnabled() && handler() !== null;
 }
 
 /** Load (replace) the current track. Pass the resume position + rate so native
