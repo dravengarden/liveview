@@ -494,6 +494,30 @@ export function useInPlaceHighlight(
     setFollowing(true);
   }, [nowPlaying?.chapterPath]);
 
+  // On an ADVANCE to another chapter (auto-advance at end-of-chapter, or next/prev),
+  // snap to the TOP and drop the stale spoken range, so the new page starts at its
+  // BEGINNING. Two things otherwise strand it mid-page with the spoken line off-
+  // screen until the new units load: (1) the scroller is REUSED across chapters,
+  // so it keeps the previous chapter's offset; (2) `curRangeRef` still holds the
+  // PREVIOUS chapter's range, so the follow effect would scroll to a stale line.
+  // The follow effect then refines to the exact line once units locate — for an
+  // advance that's sentence 0 ≈ the top, so no visible jump. Guarded to fire ONLY
+  // on a real chapter CHANGE while already active — NOT on first activation of
+  // read-aloud on the current page (that must start where you are, not jump up).
+  const prevChapRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!active || !nowPlaying) {
+      prevChapRef.current = null;
+      return;
+    }
+    const prev = prevChapRef.current;
+    prevChapRef.current = nowPlaying.chapterPath;
+    if (prev === null || prev === nowPlaying.chapterPath) return;
+    curRangeRef.current = null;
+    const scroller = scrollerRef.current;
+    if (scroller) scroller.scrollTop = 0;
+  }, [active, nowPlaying?.chapterPath, scrollerRef]);
+
   // A manual scroll (wheel / touch drag) means the reader took over — stop
   // auto-following so we don't yank them back, AND open the wipe-suspend window so
   // the boundary rubber-band survives (see scrollSuspendRef). Programmatic
