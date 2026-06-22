@@ -222,6 +222,19 @@
           return;
         }
 
+        // OFFLINE (airplane mode / no network) is NOT the same as Local-Network-
+        // denied: the cached app is still reachable through the remote-origin
+        // service worker, so hand off ANYWAY and let the SW serve it offline —
+        // otherwise a cold launch with no network dead-ends on the error card even
+        // though everything's cached. (Permission-denied is ONLINE but blocked, so
+        // it falls through to retry + the settings card.) If nothing was ever
+        // cached the remote nav just shows the SW's offline shell — still better
+        // than a stuck loader.
+        if (!navigator.onLine) {
+          location.replace(REMOTE);
+          return;
+        }
+
         attempt += 1;
         probing = false;
         if (attempt < 4) {
