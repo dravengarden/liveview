@@ -1536,16 +1536,22 @@ export function Landing({
     const regionEl = shelfRegionRef.current;
     if (!toolbarEl || !regionEl) return;
     const publish = (): void => {
-      regionEl.style.setProperty(
-        "--lv-toolbar-h",
-        `${toolbarEl.offsetHeight}px`,
-      );
+      const h = `${toolbarEl.offsetHeight}px`;
+      regionEl.style.setProperty("--lv-toolbar-h", h);
+      // ALSO publish on documentElement: the ambient sync strip is a root-level
+      // fixed element (outside this region), and on the shelf it sits just ABOVE
+      // this toolbar — sharing the one frosted bottom backplate, like the reader.
+      // It can only offset by the toolbar height if the var is visible at the
+      // root. (The region copy stays for the scroller + ScrollToTop, which live
+      // inside the region.)
+      document.documentElement.style.setProperty("--lv-toolbar-h", h);
     };
     publish();
     const ro = new ResizeObserver(publish);
     ro.observe(toolbarEl);
     return () => {
       ro.disconnect();
+      document.documentElement.style.removeProperty("--lv-toolbar-h");
     };
   }, []);
 
@@ -1951,15 +1957,16 @@ export function Landing({
             ...(navbarAtBottom
               ? {
                 // Bottom tier: bar at the foot; the shelf reaches the top so it
-                // still clears the notch itself — plus the sync strip's height
-                // (--lv-syncbar-h, 0 unless generating) so the top card row
-                // starts below the strip instead of under it.
-                pt:
-                  "calc(env(safe-area-inset-top, 0px) + var(--lv-syncbar-h, 0px) + 16px)",
-                pb: "calc(32px + var(--lv-toolbar-h, 0px))",
-                scrollPaddingTop:
-                  "calc(env(safe-area-inset-top, 0px) + var(--lv-syncbar-h, 0px) + 16px)",
-                scrollPaddingBottom: "var(--lv-toolbar-h, 0px)",
+                // still clears the notch itself. The ambient sync strip now sits
+                // at the BOTTOM too — above the toolbar, one frosted backplate —
+                // so its height (--lv-syncbar-h, 0 unless generating) is reserved
+                // at the FOOT (on top of the toolbar), not the head.
+                pt: "calc(env(safe-area-inset-top, 0px) + 16px)",
+                pb:
+                  "calc(32px + var(--lv-toolbar-h, 0px) + var(--lv-syncbar-h, 0px))",
+                scrollPaddingTop: "calc(env(safe-area-inset-top, 0px) + 16px)",
+                scrollPaddingBottom:
+                  "calc(var(--lv-toolbar-h, 0px) + var(--lv-syncbar-h, 0px))",
               }
               : {
                 // Top tier: bar at the head; pad the top by its height plus the

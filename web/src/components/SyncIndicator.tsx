@@ -13,11 +13,14 @@ import {
 import { useI18n } from "@/i18n";
 
 /**
- * The ambient sync indicator — a flat, full-bleed chrome LINE pinned to the very
- * top of the viewport (just under the status bar), appearing ONLY while audio is
- * generating or the SW is prefetching and quietly vanishing when idle. It shares
- * the visual language of the reader's top reading-progress bar: a thin strip with
- * a progress filament along its bottom edge. Deliberately NOT a floating card —
+ * The ambient sync indicator — a flat, full-bleed chrome LINE that appears ONLY
+ * while audio is generating or the SW is prefetching and quietly vanishes when
+ * idle. On mobile it's the topmost segment of the ONE frosted BOTTOM slab — above
+ * the nav bar + transport in the reader, above the bookshelf toolbar on the shelf
+ * — so the whole bottom chrome reads as one backplate. On desktop it rides at the
+ * top, a hairline above the NavShell bar. It shares the visual language of the
+ * reader's reading-progress bar: a thin strip with a progress filament along its
+ * edge. Deliberately NOT a floating card —
  * no shadow, no rounded corners, no border ring — so it reads as part of the
  * chrome (a sibling of the nav bar) rather than something hovering over it.
  * Tapping it opens the Sync sheet (per-task progress breakdown). Offline is
@@ -43,8 +46,8 @@ export function SyncIndicator(
 ): React.JSX.Element | null {
   const { t } = useI18n();
   const status = useSyncStatus();
-  // On mobile the nav bar drops to the bottom, leaving the top free for this
-  // strip (under the safe-area status bar). On desktop the NavShell bar owns the
+  // On mobile the nav/toolbar sits at the bottom, so the strip joins it there as
+  // the top of the one frosted bottom slab. On desktop the NavShell bar owns the
   // top, so the strip rides at top:0 as a hairline above it.
   const navbarAtBottom = useNavbarAtBottom();
   const [open, setOpen] = useState(false);
@@ -92,9 +95,9 @@ export function SyncIndicator(
   }, [generating, open]);
 
   // Reserve the strip's height so content clears it yet still scrolls UNDER it.
-  // The strip sits at the BOTTOM in the reader (foot padding: MarkdownViewer /
-  // AudiobookPlayer pb add --lv-syncbar-h) and at the TOP on the shelf (head
-  // padding: Landing's pt). Mobile only: there the strip overlays content; on
+  // Mobile: the strip sits at the BOTTOM in BOTH the reader (foot padding:
+  // MarkdownViewer / AudiobookPlayer pb add --lv-syncbar-h) and the shelf (foot
+  // padding: Landing's pb). Mobile only: there the strip overlays content; on
   // desktop it rides over the NavShell bar, which owns its own space, so leave
   // that tier alone. 28px = the 26px row + 2px filament.
   useEffect(() => {
@@ -138,14 +141,23 @@ export function SyncIndicator(
             position: "fixed",
             left: 0,
             right: 0,
-            ...(navbarAtBottom && inReader
+            ...(navbarAtBottom
               ? {
-                bottom:
-                  "calc(var(--shell-bar-h, 0px) + var(--lv-transport-h, 0px))",
+                // Mobile: the topmost segment of the ONE frosted bottom slab.
+                //   • Reader → above the nav bar + transport (their mirrored
+                //     heights on documentElement).
+                //   • Shelf → above the bookshelf toolbar (--lv-toolbar-h, also
+                //     mirrored to documentElement by Landing).
+                // Either way it continues the bottom backplate (border on top).
+                bottom: inReader
+                  ? "calc(var(--shell-bar-h, 0px) + var(--lv-transport-h, 0px))"
+                  : "var(--lv-toolbar-h, 0px)",
                 borderTop: 1,
               }
               : {
-                top: navbarAtBottom ? "env(safe-area-inset-top, 0px)" : 0,
+                // Desktop: the NavShell bar owns the top, so ride at top:0 as a
+                // hairline above it.
+                top: 0,
                 borderBottom: 1,
               }),
             zIndex: (th) => th.zIndex.appBar,
