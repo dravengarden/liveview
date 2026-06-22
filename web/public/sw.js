@@ -108,9 +108,24 @@ self.addEventListener("fetch", (event) => {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return;
 
-  // SPA navigations: network-first, fall back to the cached shell offline.
+  // SPA navigations: serve the cached shell INSTANTLY, revalidate in the
+  // background. A network-FIRST navigate HANGS on iOS WKWebView when offline
+  // (offline fetch() doesn't fail fast there like Chromium), so the app would
+  // sit blank/"connecting". Cache-first boots the shell with zero network.
   if (req.mode === "navigate") {
-    event.respondWith(fetch(req).catch(() => caches.match("/index.html")));
+    event.respondWith(
+      caches.match("/index.html").then((cached) => {
+        const net = fetch(req)
+          .then((res) => {
+            if (res && res.status === 200) {
+              caches.open(SHELL_CACHE).then((c) => c.put("/index.html", res.clone()));
+            }
+            return res;
+          })
+          .catch(() => cached);
+        return cached || net;
+      }),
+    );
     return;
   }
 
@@ -129,10 +144,16 @@ self.addEventListener("fetch", (event) => {
       return;
     }
     if (url.pathname.startsWith("/api/")) {
-      // Reader content → PERSISTENT cache (offline + deploy-stable). Mutable
-      // state (progress/settings/tasks/version) → version-scoped API_CACHE.
+      // Reader CONTENT → CACHE-FIRST + background revalidate, from the PERSISTENT
+      // cache. Serving the cache with NO network wait is essential on iOS
+      // WKWebView, where an offline fetch() HANGS for tens of seconds instead of
+      // failing fast like Chromium — a network-first content fetch made a card tap
+      // / chapter open appear DEAD offline (the real root cause). Mutable state
+      // (progress/settings/tasks/version) stays network-first in API_CACHE.
       event.respondWith(
-        networkFirst(req, isContentApi(url.pathname) ? CONTENT_CACHE : API_CACHE),
+        isContentApi(url.pathname)
+          ? cacheFirstRevalidate(req, CONTENT_CACHE)
+          : networkFirst(req, API_CACHE),
       );
       return;
     }
@@ -152,6 +173,42 @@ async function networkFirst(req, cacheName) {
     const cached = await cache.match(req);
     if (cached) return cached;
     throw err;
+  }
+}
+
+// CACHE-FIRST + background revalidate, for reader content. A cache HIT returns
+// INSTANTLY (no network await) — critical on iOS WKWebView, whose offline
+// fetch() hangs for tens of seconds rather than failing fast, which made a
+// network-first content fetch (a card tap → /api/tree, a chapter open →
+// /api/file) appear dead offline. On a MISS we must hit the network, but with a
+// short timeout so offline-uncached rejects FAST (the app shows its offline
+// placeholder) instead of hanging.
+async function cacheFirstRevalidate(req, cacheName) {
+  const cache = await caches.open(cacheName);
+  const cached = await cache.match(req);
+  if (cached) {
+    // Fire-and-forget refresh; never blocks the response, never throws.
+    fetch(req)
+      .then((res) => {
+        if (res && res.status === 200) cache.put(req, res.clone());
+      })
+      .catch(() => {});
+    return cached;
+  }
+  // Not cached → go to network, but cap the wait so an offline miss fails fast.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 5000);
+  try {
+    const res = await fetch(req, { signal: ctrl.signal });
+    if (res && res.status === 200) cache.put(req, res.clone());
+    return res;
+  } catch {
+    return new Response("offline", {
+      status: 504,
+      headers: { "Content-Type": "text/plain" },
+    });
+  } finally {
+    clearTimeout(timer);
   }
 }
 
