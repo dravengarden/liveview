@@ -182,10 +182,6 @@
     <script>
       const APP_NAME = "LiveView";
       const REMOTE = "https://liveview.hawk.thundersparrow.top";
-      // Set once we've successfully handed off to the remote app — proof its
-      // service worker now holds the full app cache, so later launches can hand
-      // off even when the probe fails (offline / host unreachable).
-      const HANDED_OFF_KEY = "lv-handed-off";
 
       const body = document.body;
       const hint = document.getElementById("hint");
@@ -211,6 +207,31 @@
           .finally(() => clearTimeout(t));
       }
 
+      // Is the app already CACHED (installed offline)? Ask the remote ORIGIN's
+      // service worker by loading one of its precached assets (/favicon.svg) as an
+      // image: the SW serves it from cache with ZERO network, so the image loads
+      // even when offline / hawk is unreachable / Local-Network is off. It only
+      // FAILS on a first-ever launch that has nothing cached. This replaces a
+      // localStorage "handed-off" flag, which iOS WKWebView does NOT persist for
+      // the loader's custom-scheme origin (the reason a cold offline launch stuck
+      // on "connecting…"). No query string — the bare path must hit the precache.
+      function cachedAppAvailable() {
+        return new Promise((resolve) => {
+          const img = new Image();
+          let done = false;
+          const finish = (ok) => {
+            if (done) return;
+            done = true;
+            clearTimeout(to);
+            resolve(ok);
+          };
+          const to = setTimeout(() => finish(false), 2500);
+          img.onload = () => finish(true);
+          img.onerror = () => finish(false);
+          img.src = REMOTE + "/favicon.svg";
+        });
+      }
+
       async function connect() {
         if (probing) return;
         probing = true;
@@ -221,33 +242,17 @@
 
         if (await probe()) {
           // Reachable → hand off to the real app. A full navigation (not a fetch)
-          // so the WKWebView becomes the remote origin, exactly as before. Mark
-          // that we've successfully handed off at least once: from now on the
-          // remote origin's service worker has the whole app cached.
-          try {
-            localStorage.setItem(HANDED_OFF_KEY, "1");
-          } catch {
-            /* storage unavailable — degrade to the probe-only path */
-          }
+          // so the WKWebView becomes the remote origin, exactly as before.
           location.replace(REMOTE);
           return;
         }
 
-        // Probe FAILED. If we've EVER successfully loaded the app before, the
-        // remote-origin service worker has the entire app cached, so hand off
-        // ANYWAY — it serves from local cache with NO network, regardless of
-        // whether we're offline OR the tailnet host is simply unreachable.
-        // (navigator.onLine is unreliable here: WiFi can report "online" while
-        // hawk is unreachable, which left the loader stuck on "connecting…".)
-        // Only a FIRST-EVER launch with nothing cached falls through to retry +
-        // the Local-Network settings card.
-        let handedOff = false;
-        try {
-          handedOff = localStorage.getItem(HANDED_OFF_KEY) === "1";
-        } catch {
-          /* ignore */
-        }
-        if (handedOff) {
+        // Probe FAILED (offline / host unreachable / Local-Network off). If the
+        // app is already CACHED, the remote-origin service worker serves it with
+        // no network — hand off ANYWAY. This is what makes a cold OFFLINE launch
+        // work instead of dead-ending on "connecting…". Only a first-ever launch
+        // with nothing cached falls through to retry + the settings card.
+        if (await cachedAppAvailable()) {
           location.replace(REMOTE);
           return;
         }
