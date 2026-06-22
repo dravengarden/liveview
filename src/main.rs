@@ -649,6 +649,10 @@ async fn api_manifest_book(
         .map(|c| {
             serde_json::json!({
                 "id": format!("{}/{}/{}", c.rendition, c.lang, c.rel_path),
+                // TEXT content-addressing: the source hash (+ file type) so the
+                // client caches /api/file by hash and refetches only on change.
+                "content_hash": c.content_hash,
+                "file_type": c.file_type,
                 "audio": {
                     "status": c.status,
                     "hash": c.audio_hash,

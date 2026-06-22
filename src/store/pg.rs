@@ -124,6 +124,14 @@ pub struct ManifestChapter {
     pub rendition: String,
     pub lang: String,
     pub rel_path: String,
+    /// blake3 of the chapter's source (the Merkle leaf identity, salted by
+    /// render-version). The client content-addresses TEXT by this: cache the
+    /// /api/file response keyed by content_hash, refetch only when it changes —
+    /// the text equivalent of the audio/asset blob hashes.
+    pub content_hash: String,
+    /// 'markdown'|'image'|'pdf'|'html'|'data'|… — lets the client know how to
+    /// fetch/render the leaf without a second round-trip.
+    pub file_type: String,
     pub audio_hash: Option<String>,
     pub marks_hash: Option<String>,
     pub audio_size: Option<i64>,
@@ -877,6 +885,7 @@ impl PgStore {
     pub async fn manifest_chapters(&self, slug: &str) -> Result<Vec<ManifestChapter>, sqlx::Error> {
         sqlx::query_as::<_, ManifestChapter>(
             "SELECT c.rendition, c.lang, c.rel_path,
+                    c.content_hash, c.file_type,
                     c.audio_hash, c.marks_hash, aa.size AS audio_size,
                     c.asset_hash, ab.size AS asset_size, t.status
              FROM chapters c
