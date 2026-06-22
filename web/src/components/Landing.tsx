@@ -29,13 +29,11 @@ import {
   Headphones as AudiobookIcon,
   History as HistoryIcon,
   MenuBook as BookIcon,
-  Refresh as RefreshIcon,
   Search as SearchIcon,
 } from "@mui/icons-material";
 import {
   memo,
   type ReactNode,
-  type RefObject,
   useEffect,
   useMemo,
   useRef,
@@ -69,10 +67,6 @@ interface LandingProps {
   /** On the mobile tier with the "bottom" navbar preference, the bookshelf bar
    *  drops below the shelf (mobile-browser style), matching the in-book bar. */
   navbarAtBottom: boolean;
-  /** Pull-to-refresh handler: re-fetch books + progress. Resolves when done (the
-   *  spinner spins until then). The shelf re-sorts itself, so order stays in
-   *  sync with Settings → Sort. */
-  onRefresh?: () => Promise<void>;
 }
 
 /** The shelf splits into three mutually-exclusive kinds, each with its own card
@@ -731,108 +725,9 @@ function HistoryView(
   );
 }
 
-// ── Pull-to-refresh ─────────────────────────────────────────────────────────
-
-/**
- * Touch pull-to-refresh for the shelf scroller. When the scroller is at the top
- * and the user drags DOWN, an indicator (driven imperatively via `barRef`, so the
- * gesture never re-renders the shelf) fades in and follows the pull; releasing
- * past the threshold runs `onRefresh` while a spinner spins. Listeners are
- * passive (we don't fight the native rubber-band — it IS the pull feedback), so
- * it composes with the bounce instead of replacing it. Touch-only, so desktop
- * (which gets live WS updates) is unaffected.
- */
-function usePullToRefresh(
-  scrollerRef: RefObject<HTMLElement | null>,
-  onRefresh: (() => Promise<void>) | undefined,
-): { refreshing: boolean; barRef: RefObject<HTMLDivElement | null> } {
-  const [refreshing, setRefreshing] = useState(false);
-  const barRef = useRef<HTMLDivElement | null>(null);
-  const gesture = useRef({ active: false, startY: 0, dist: 0 });
-  const busy = useRef(false);
-
-  useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el || !onRefresh) return undefined;
-    const THRESHOLD = 72; // px pulled to arm a refresh
-    const MAX = 120; // px the indicator travels at most
-    const place = (opacity: number, y: number): void => {
-      const bar = barRef.current;
-      if (!bar) return;
-      bar.style.opacity = String(opacity);
-      bar.style.transform = `translateX(-50%) translateY(${y}px)`;
-    };
-    const settle = (): void => {
-      const bar = barRef.current;
-      if (!bar) return;
-      bar.style.transition = "opacity .25s ease, transform .25s ease";
-      place(0, 0);
-      window.setTimeout(() => {
-        if (barRef.current) barRef.current.style.transition = "";
-      }, 260);
-    };
-    const onStart = (e: TouchEvent): void => {
-      if (busy.current) return;
-      gesture.current = {
-        active: el.scrollTop <= 0,
-        startY: e.touches[0]?.clientY ?? 0,
-        dist: 0,
-      };
-    };
-    const onMove = (e: TouchEvent): void => {
-      const g = gesture.current;
-      if (!g.active || busy.current) return;
-      if (el.scrollTop > 0) {
-        g.active = false;
-        place(0, 0);
-        return;
-      }
-      const dy = (e.touches[0]?.clientY ?? 0) - g.startY;
-      if (dy <= 0) {
-        g.dist = 0;
-        place(0, 0);
-        return;
-      }
-      g.dist = dy;
-      const bar = barRef.current;
-      if (bar) bar.style.transition = "";
-      place(Math.min(1, dy / THRESHOLD), Math.min(dy, MAX) * 0.5);
-    };
-    const onEnd = (): void => {
-      const g = gesture.current;
-      if (!g.active) return;
-      g.active = false;
-      if (g.dist >= THRESHOLD && !busy.current) {
-        busy.current = true;
-        setRefreshing(true);
-        const bar = barRef.current;
-        if (bar) {
-          bar.style.transition = "transform .2s ease, opacity .2s ease";
-          place(1, 30);
-        }
-        void onRefresh().finally(() => {
-          busy.current = false;
-          setRefreshing(false);
-          settle();
-        });
-      } else {
-        settle();
-      }
-    };
-    el.addEventListener("touchstart", onStart, { passive: true });
-    el.addEventListener("touchmove", onMove, { passive: true });
-    el.addEventListener("touchend", onEnd, { passive: true });
-    el.addEventListener("touchcancel", onEnd, { passive: true });
-    return () => {
-      el.removeEventListener("touchstart", onStart);
-      el.removeEventListener("touchmove", onMove);
-      el.removeEventListener("touchend", onEnd);
-      el.removeEventListener("touchcancel", onEnd);
-    };
-  }, [scrollerRef, onRefresh]);
-
-  return { refreshing, barRef };
-}
+// Pull-to-refresh was removed (offline-first): the shelf is network-first +
+// live-updated over the WS (TreeUpdate) and re-pulls recent progress on open and
+// on book-close, so a manual pull was redundant. See docs/offline-first.md.
 
 /** One collapsible series section: a sticky frosted-glass header (series name +
  *  count + a rotating chevron) over a `Collapse` wrapping that group's masonry.
@@ -1375,7 +1270,6 @@ export function Landing({
   onOpen,
   settingsSlot,
   navbarAtBottom,
-  onRefresh,
 }: LandingProps): React.JSX.Element {
   const { t, lang } = useI18n();
   const sort = useShelfSort();
@@ -1517,10 +1411,6 @@ export function Landing({
   // The shelf scroll container — ref'd for the back-to-top button + the
   // app-level status-bar tap (both scroll it to the top).
   const scrollerRef = useRef<HTMLDivElement>(null);
-
-  // Pull-to-refresh on the shelf scroller (touch). After it runs, the entries
-  // memo re-sorts by `sort`, so the order matches Settings → Sort.
-  const { refreshing, barRef: ptrRef } = usePullToRefresh(scrollerRef, onRefresh);
 
   // Frosted-overlay toolbar: the bookshelf bar is now an iOS-style frosted
   // OVERLAY (like the in-book NavShell bar + the audio transport) that the shelf
@@ -1897,48 +1787,6 @@ export function Landing({
           flexDirection: "column",
         }}
       >
-        {/* Pull-to-refresh indicator: a frosted disc pinned near the shelf's top
-            edge, faded in + translated imperatively during the pull (ptrRef), and
-            spinning while the refresh runs. Below the top chrome on each tier. */}
-        <Box
-          ref={ptrRef}
-          aria-hidden
-          sx={{
-            position: "absolute",
-            top: navbarAtBottom
-              ? "calc(env(safe-area-inset-top, 0px) + 12px)"
-              : "calc(var(--lv-toolbar-h, 0px) + 12px)",
-            left: "50%",
-            transform: "translateX(-50%)",
-            opacity: 0,
-            zIndex: 5,
-            width: 38,
-            height: 38,
-            borderRadius: "50%",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "text.secondary",
-            bgcolor: (t) =>
-              alpha(
-                t.palette.background.paper,
-                t.palette.mode === "dark" ? 0.6 : 0.72,
-              ),
-            backdropFilter: "blur(16px) saturate(180%)",
-            WebkitBackdropFilter: "blur(16px) saturate(180%)",
-            border: 1,
-            borderColor: "divider",
-            boxShadow: 2,
-            pointerEvents: "none",
-          }}
-        >
-          <RefreshIcon
-            sx={{
-              fontSize: rem(20),
-              animation: refreshing ? "lv-spin 0.8s linear infinite" : "none",
-            }}
-          />
-        </Box>
         <Box
           ref={scrollerRef}
           data-lv-scroller="shelf"
