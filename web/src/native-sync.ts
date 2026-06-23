@@ -33,7 +33,7 @@ function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
 /**
  * Drop-in `fetch` for reader content.
  *
- * On the native shell this is the SOLE content path: `lv_resolve` serves it from
+ * On the native shell this is the SOLE content path: `plugin:lvsync|resolve` serves it from
  * the native store (manifest resources content-addressed; everything else —
  * `/api/tree`, `/api/books`, covers — url-keyed network-first), all offline-safe.
  * We deliberately do NOT fall back to a raw `fetch()` here: a WKWebView `fetch()`
@@ -47,7 +47,7 @@ function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
 export async function contentFetch(url: string): Promise<Response> {
   if (nativeSyncAvailable()) {
     try {
-      const buf = await invoke<ArrayBuffer>("lv_resolve", { url });
+      const buf = await invoke<ArrayBuffer>("plugin:lvsync|resolve", { url });
       return new Response(buf, { status: 200 });
     } catch {
       // Native couldn't serve it. ONLINE → fall back to a normal fetch: a
@@ -64,25 +64,25 @@ export async function contentFetch(url: string): Promise<Response> {
 
 /** Byte-weighted offline fraction in [0,1] over the whole corpus (native only). */
 export function nativeOfflineFraction(): Promise<number> {
-  return invoke<number>("lv_offline_fraction");
+  return invoke<number>("plugin:lvsync|offline_fraction");
 }
 
 /** Eager-pull one book's non-audio content into the native store. Bytes cached. */
 export function nativeSyncBook(slug: string): Promise<number> {
-  return invoke<number>("lv_sync_book", { slug });
+  return invoke<number>("plugin:lvsync|sync_book", { slug });
 }
 
 /** Re-pull the manifest from the network; resolves to the new root hash. */
 export function nativeRefresh(): Promise<string> {
-  return invoke<string>("lv_refresh");
+  return invoke<string>("plugin:lvsync|refresh");
 }
 
 /** Current manifest root + resource count (readiness probe). */
 export function nativeStatus(): Promise<[string, number]> {
-  return invoke<[string, number]>("lv_status");
+  return invoke<[string, number]>("plugin:lvsync|status");
 }
 
 /** GC store entries no longer in the manifest. Resolves to the count dropped. */
 export function nativeGc(): Promise<number> {
-  return invoke<number>("lv_gc");
+  return invoke<number>("plugin:lvsync|gc");
 }
