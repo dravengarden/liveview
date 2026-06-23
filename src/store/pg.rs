@@ -929,7 +929,7 @@ impl PgStore {
         sqlx::query_as::<_, DagChapter>(
             "SELECT c.book_slug, c.rendition, c.lang, c.rel_path,
                     c.content_hash, c.file_type,
-                    length(c.html) AS html_bytes,
+                    length(c.html)::bigint AS html_bytes,
                     c.audio_hash, aa.size AS audio_size,
                     c.marks_hash, am.size AS marks_size,
                     c.asset_hash, ab.size AS asset_size
