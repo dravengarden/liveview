@@ -67,13 +67,18 @@ export function OfflineSection(): React.JSX.Element | null {
   );
 
   const tick = useCallback(async () => {
+    let s: CacheStats | null = null;
     try {
-      setStats(await nativeCacheStats());
+      s = await nativeCacheStats();
+      setStats(s);
     } catch {
       /* keep last-known */
     }
     setAudio(await nativeAudioStats());
-    void ensureAutoSync();
+    // Only nudge the downloader when text is actually incomplete — otherwise a
+    // fully-synced library would re-scan every poll for nothing. (Native also
+    // short-circuits stats on an unchanged Merkle root.)
+    if (s && s.cached < s.total) void ensureAutoSync();
   }, []);
 
   useEffect(() => {

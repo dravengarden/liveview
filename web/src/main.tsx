@@ -46,9 +46,28 @@ try {
   // sessionStorage may be unavailable (private mode / sandbox) — non-fatal.
 }
 
-// Register the PWA service worker (production builds only — in dev the Vite
-// server owns the page and a SW would serve stale modules).
-if (import.meta.env.PROD && !BUNDLED && "serviceWorker" in navigator) {
+// The native shell loads the REMOTE app and serves offline content through the
+// native lvSync/audio bridges — a PWA service worker here is not just useless but
+// HARMFUL: it caches an app shell that survives deploys, so the shell keeps
+// running the OLD UI until the SW happens to update. Unregister any SW a previous
+// build left active + drop its caches so the webview always loads fresh.
+const isShell = "__TAURI_INTERNALS__" in globalThis;
+if (isShell) {
+  if ("serviceWorker" in navigator) {
+    void navigator.serviceWorker.getRegistrations().then((regs) => {
+      for (const r of regs) void r.unregister();
+    });
+  }
+  if ("caches" in globalThis) {
+    void caches.keys().then((keys) => {
+      for (const k of keys) void caches.delete(k);
+    });
+  }
+}
+
+// Register the PWA service worker (production browser/PWA only — NOT in the shell
+// per above, and not in dev where Vite owns the page).
+if (import.meta.env.PROD && !BUNDLED && !isShell && "serviceWorker" in navigator) {
   // Auto-reload once when a freshly-deployed SW takes control. The SW already
   // calls skipWaiting()+clients.claim() on a VERSION bump, which fires
   // `controllerchange` — without this listener the page keeps running the old

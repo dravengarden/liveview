@@ -673,6 +673,15 @@ async fn api_manifest_book(
 /// as `{ path, hash, kind, bytes, url }`. `hash` is the content address (cache
 /// key); `url` is where to fetch it; `bytes` drives the byte-weighted offline %.
 /// One round-trip → the client has the full content-addressed index.
+/// `GET /api/root` — just the Merkle deploy root, the CHEAPEST possible "did
+/// anything change?" probe. The offline client compares this against its cached
+/// manifest's root: if equal, the whole tree is unchanged → reuse everything,
+/// skip the full `/api/dag` fetch + the per-resource rescan. One hash, no work.
+async fn api_root(State(state): State<SharedState>) -> impl IntoResponse {
+    let (root, _) = state.store.manifest_books().await.unwrap_or((None, Vec::new()));
+    Json(serde_json::json!({ "root": root })).into_response()
+}
+
 async fn api_dag(State(state): State<SharedState>) -> impl IntoResponse {
     let (root, _) = state.store.manifest_books().await.unwrap_or((None, Vec::new()));
     let chapters = state.store.dag_chapters().await.unwrap_or_default();
@@ -748,6 +757,7 @@ fn build_app(state: SharedState) -> Router {
         .route("/api/blob/{hash}", get(api_blob))
         .route("/api/manifest", get(api_manifest))
         .route("/api/manifest/{slug}", get(api_manifest_book))
+        .route("/api/root", get(api_root))
         .route("/api/dag", get(api_dag))
         // Under /api/ so the service worker treats it network-first (sw.js):
         // a top-level /version would fall into the cache-first bucket and serve
