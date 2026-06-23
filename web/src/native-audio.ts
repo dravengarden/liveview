@@ -57,6 +57,7 @@ type OutMsg =
   | { readonly kind: "play" }
   | { readonly kind: "pause" }
   | { readonly kind: "stop" }
+  | { readonly kind: "state" }
   | { readonly kind: "seek"; readonly data: { readonly position: number } }
   | { readonly kind: "rate"; readonly data: { readonly rate: number } }
   | {
@@ -135,6 +136,13 @@ export function nativeAudioSetRate(rate: number): boolean {
 /** Stop + clear (book closed / playback stopped). Releases the session + tile. */
 export function nativeAudioStop(): boolean {
   return send({ kind: "stop" });
+}
+
+/** Ask the native engine to re-emit its CURRENT state (playing/paused + position
+ *  + duration). The web calls this on mount so a page reload re-syncs to the
+ *  still-running native player instead of showing a stale paused button. */
+export function nativeAudioRequestState(): boolean {
+  return send({ kind: "state" });
 }
 
 /** Download a chapter into the offline cache WITHOUT playing it (save-offline).

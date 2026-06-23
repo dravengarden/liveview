@@ -23,6 +23,7 @@ import {
   nativeAudioLoad,
   nativeAudioPause,
   nativeAudioPlay,
+  nativeAudioRequestState,
   nativeAudioSeek,
   nativeAudioSetRate,
   nativeAudioStop,
@@ -767,6 +768,15 @@ export function AudioPlayerProvider(
       }
     });
   }, [handlePosition, handleEnded, persistPos, nextChapter, prevChapter]);
+
+  // Re-sync to the native player on mount: a page reload wipes the web's in-memory
+  // playing/position, but the native AVPlayer keeps going — without this the button
+  // shows paused while audio is actually playing. Runs after the subscription above
+  // (declaration order) so the replied events are caught.
+  useEffect(() => {
+    if (!nativeAudioAvailable()) return;
+    nativeAudioRequestState();
+  }, []);
 
   // Keep the play/pause button honest under an audio-session INTERRUPTION (a
   // phone call, Siri, another media app taking over). iOS pauses the <audio>
