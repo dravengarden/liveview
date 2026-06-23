@@ -433,7 +433,9 @@ export function AudioPlayerProvider(
             const hash = await audioHash(np.bookSlug, np.chapterPath, np.lang);
             if (loadSeq.current !== seq) return;
             nativeAudioLoad({
-              url: `${origin}/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`,
+              // fmt=c → the compressed (Opus) variant, matching what the offline
+              // download (dag) stores, so streamed + downloaded share one cache key.
+              url: `${origin}/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}&fmt=c`,
               ...(hash !== undefined ? { hash } : {}),
               position,
               rate: rateRef.current,

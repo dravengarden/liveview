@@ -714,9 +714,16 @@ async fn api_dag(State(state): State<SharedState>) -> impl IntoResponse {
             }
         }
         if let Some(h) = &c.audio_hash {
+            // Point downloads at the COMPRESSED variant (/api/audio?…&fmt=c,
+            // transcoded + cached) instead of the raw blob, so the device stores
+            // the small Opus, not the 48k MP3. `hash` stays the SOURCE audio_hash
+            // — the same content-address key the player's stream uses — so a
+            // downloaded file is found on offline playback. `bytes` is the
+            // estimated compressed size (MP3 × ~0.33) for the UI.
             resources.push(serde_json::json!({
                 "path": format!("{doc}#audio"), "hash": h, "kind": "audio",
-                "bytes": c.audio_size.unwrap_or(0), "url": format!("/api/blob/{h}"),
+                "bytes": c.audio_size.unwrap_or(0) * 33 / 100,
+                "url": format!("/api/audio?{q}&fmt=c"),
             }));
         }
         if let Some(h) = &c.marks_hash {
@@ -1316,6 +1323,10 @@ struct FileQuery {
     /// for the LAST chapter in the book's queue (it knows the spine order), so
     /// the server needs no spine knowledge. Ignored by the other handlers.
     tail: Option<String>,
+    /// Audio only: `"c"` asks `/api/audio` for the COMPRESSED variant (on-the-fly
+    /// transcode of the source MP3 to a much smaller codec, cached). Omitted ⇒ the
+    /// original MP3. The client always requests `c` on the native shell.
+    fmt: Option<String>,
 }
 
 /// A resolved request: the concrete rendition + the `(lang, default_lang)` pair
@@ -1555,16 +1566,107 @@ fn parse_range(value: &str, total: u64) -> Option<(u64, u64)> {
     (start <= end && end < total).then_some((start, end))
 }
 
+/// The single compressed-audio variant. On-the-fly transcode of the source MP3,
+/// cached in the obj store under "<cachekey>.<TAG>". Audiobook narration is mono
+/// speech, so a low-bitrate speech codec is near-transparent at a fraction of the
+/// size (~67% smaller at Opus 16k vs the 48k MP3). iOS AVPlayer MUST support the
+/// container — Opus-in-CAF is the default. To change codec/bitrate, edit these
+/// four fields (and, to reclaim space, drop the old "*.TAG" obj keys); nothing is
+/// re-baked — the next request re-transcodes lazily. Guaranteed-playable fallback
+/// if Opus-CAF ever misbehaves: tag "aac24", mime "audio/mp4", ext "m4a",
+/// args ["-c:a","aac","-b:a","24k","-ac","1"].
+struct AudioVariant {
+    tag: &'static str,
+    mime: &'static str,
+    ext: &'static str,
+    args: &'static [&'static str],
+}
+const AUDIO_VARIANT: AudioVariant = AudioVariant {
+    tag: "op16c",
+    mime: "audio/x-caf",
+    ext: "caf",
+    args: &["-c:a", "libopus", "-b:a", "16k", "-ac", "1", "-application", "voip"],
+};
+
+/// Transcode an MP3 (`src`) per `AUDIO_VARIANT`. ffmpeg reads stdin and writes a
+/// temp file (CAF/MP4 muxers need seekable output), which we read back + delete.
+async fn transcode_audio(src: Vec<u8>) -> Result<Vec<u8>, String> {
+    use tokio::io::AsyncWriteExt;
+    let mut tmp = std::env::temp_dir();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    tmp.push(format!("lvtc-{}-{nanos}.{}", std::process::id(), AUDIO_VARIANT.ext));
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.arg("-v").arg("error").arg("-y").arg("-i").arg("pipe:0");
+    for a in AUDIO_VARIANT.args {
+        cmd.arg(a);
+    }
+    cmd.arg(&tmp)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+    let mut child = cmd.spawn().map_err(|e| format!("spawn ffmpeg: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(&src).await.map_err(|e| e.to_string())?;
+        drop(stdin);
+    }
+    let out = child.wait_with_output().await.map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(format!("ffmpeg: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+    let bytes = tokio::fs::read(&tmp).await.map_err(|e| e.to_string());
+    let _ = tokio::fs::remove_file(&tmp).await;
+    bytes
+}
+
+/// Cache-first compressed audio for already-assembled `data`, keyed by `cache_key`
+/// (`<hash>` or `<hash>.tail`). Returns (bytes, mime). On transcode failure it
+/// gracefully serves the original MP3 so playback never hard-fails.
+async fn compressed_audio(
+    state: &SharedState,
+    cache_key: &str,
+    data: Vec<u8>,
+) -> (Vec<u8>, &'static str) {
+    let key = format!("{cache_key}.{}", AUDIO_VARIANT.tag);
+    if let Ok(b) = state.obj.get(&key).await {
+        return (b, AUDIO_VARIANT.mime);
+    }
+    match transcode_audio(data.clone()).await {
+        Ok(b) => {
+            let _ = state.obj.put_if_absent(&key, b.clone(), AUDIO_VARIANT.mime).await;
+            (b, AUDIO_VARIANT.mime)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "audio transcode failed; serving source mp3");
+            (data, "audio/mpeg")
+        }
+    }
+}
+
 /// Serve MP3 `data` with `Content-Length`, `Accept-Ranges` and HTTP Range
 /// support (seeking). Shared by the audiobook and text read-aloud paths.
 fn serve_mp3_range(data: Vec<u8>, headers: &axum::http::HeaderMap) -> axum::response::Response {
+    serve_audio_range(data, headers, "audio/mpeg")
+}
+
+/// Like `serve_mp3_range` but with an explicit content-type (the compressed
+/// variant is Opus-in-CAF / AAC, not MP3). AVPlayer infers the format from this
+/// header when the URL has no extension.
+fn serve_audio_range(
+    data: Vec<u8>,
+    headers: &axum::http::HeaderMap,
+    mime: &'static str,
+) -> axum::response::Response {
     let total = data.len() as u64;
     let range = headers
         .get(header::RANGE)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| parse_range(v, total));
     let builder = Response::builder()
-        .header(header::CONTENT_TYPE, "audio/mpeg")
+        .header(header::CONTENT_TYPE, mime)
         .header(header::ACCEPT_RANGES, "bytes")
         .header(header::CACHE_CONTROL, "public, max-age=3600");
     match range {
@@ -1601,7 +1703,14 @@ async fn api_audio(
     if query.rendition.as_deref() == Some("text") {
         return match ensure_text_audio(&state, &query).await {
             Ok((audio_hash, _)) => match state.obj.get(&audio_hash).await {
-                Ok(data) => serve_mp3_range(data, &headers),
+                Ok(data) => {
+                    if query.fmt.as_deref() == Some("c") {
+                        let (b, mime) = compressed_audio(&state, &audio_hash, data).await;
+                        serve_audio_range(b, &headers, mime)
+                    } else {
+                        serve_mp3_range(data, &headers)
+                    }
+                }
                 Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response(),
             },
             Err(e) => {
@@ -1639,10 +1748,19 @@ async fn api_audio(
     // cleanly (same as `assemble()` joins per-sentence clips). Marks are
     // untouched: the tail sits past the last sentence's end_ms, a silent gap in
     // the read-along. Only the last chapter pays the (tiny) append.
-    if query.tail.as_deref() == Some("bookend") {
+    let is_bookend = query.tail.as_deref() == Some("bookend");
+    if is_bookend {
         if let Some(cue) = book_end_cue(&state, &row).await {
             data.extend_from_slice(&cue);
         }
+    }
+    // Compressed variant (default on the native shell) — transcode + cache, keyed
+    // by the source hash (+ ".tail" when the bookend cue is baked in, which makes
+    // those bytes differ from the plain blob).
+    if query.fmt.as_deref() == Some("c") {
+        let ck = if is_bookend { format!("{hash}.tail") } else { hash.clone() };
+        let (bytes, mime) = compressed_audio(&state, &ck, data).await;
+        return serve_audio_range(bytes, &headers, mime);
     }
     serve_mp3_range(data, &headers)
 }
