@@ -150,19 +150,19 @@ export function nativeAudioPin(items: { url: string; hash: string }[]): boolean 
   return send({ kind: "pin", data: { items } });
 }
 
-/** Unpin keys (sanitized hashes) — they become LRU-evictable again. */
+/** Remove (delete) a book's audio — the only way audio leaves the durable store
+ *  (nothing is auto-evicted). `keys` are the sanitized content hashes. */
 export function nativeAudioUnpin(keys: string[]): boolean {
   return send({ kind: "unpin", data: { keys } });
 }
 
-/** Audio store state for the Downloads UI. `cached`/`pinned` are cache keys
- *  (sanitized content hashes); the caller maps them to books via the manifest. */
+/** Audio store state for the Downloads UI. `cached` is the set of cache keys
+ *  (sanitized content hashes) on disk; the caller maps them to books via the
+ *  manifest. `usedBytes` is total durable audio storage used (no cap — it's data,
+ *  not a cache). */
 export interface AudioStats {
-  cap: number;
-  pinnedBytes: number;
-  autoBytes: number;
+  usedBytes: number;
   cached: string[];
-  pinned: string[];
 }
 
 const audioPending = new Map<string, (json: string) => void>();

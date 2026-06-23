@@ -58,6 +58,10 @@ export function OfflineSection(): React.JSX.Element | null {
   );
   const [auto, setAuto] = useState(offlineAuto());
   const [wifiOnly, setWifiOnly] = useState(offlineWifiOnly());
+  // Books the user tapped to download this session — drives the live % label
+  // (the native store has no "intent" flag; cached fraction alone can't tell a
+  // user-started download from chapters auto-cached by playing).
+  const [downloading, setDownloading] = useState<Set<string>>(new Set());
   const pollRef = useRef<ReturnType<typeof globalThis.setInterval> | undefined>(
     undefined,
   );
@@ -115,7 +119,6 @@ export function OfflineSection(): React.JSX.Element | null {
   const waitingWifi = auto && wifiOnly && stats != null && stats.net !== "wifi";
 
   const cachedSet = new Set(audio?.cached ?? []);
-  const pinnedSet = new Set(audio?.pinned ?? []);
 
   const books = (stats?.books ?? [])
     .map((b) => ({ ...b, label: labels.get(b.slug) ?? b.slug }))
@@ -180,13 +183,12 @@ export function OfflineSection(): React.JSX.Element | null {
         </Typography>
       </Box>
 
-      {/* Audio store overall */}
+      {/* Audio store overall (durable — no cap, kept until you remove a book) */}
       {audio && (
         <Typography variant="caption" color="text.secondary">
-          {zh ? "音频 · 已下载 " : "Audio · downloaded "}
-          {mb(audio.pinnedBytes)}
-          {zh ? " · 自动缓存 " : " · auto-cache "}
-          {mb(audio.autoBytes)} / {mb(audio.cap)}
+          {zh ? "音频 · 已用 " : "Audio · using "}
+          {mb(audio.usedBytes)}
+          {zh ? "(下载或听过的都会保留)" : " (downloaded/played audio is kept)"}
         </Typography>
       )}
 
@@ -206,9 +208,13 @@ export function OfflineSection(): React.JSX.Element | null {
             const av = audioByBook.get(b.slug) ?? [];
             const aTotal = av.length;
             const aDone = av.filter((r) => cachedSet.has(r.hash)).length;
-            const aPinned = aTotal > 0 && av.every((r) => pinnedSet.has(r.hash));
+            const aFull = aTotal > 0 && aDone >= aTotal;
             const aPct = aTotal > 0 ? Math.round((aDone / aTotal) * 100) : 0;
             const aBytes = av.reduce((s, r) => s + r.bytes, 0);
+            const isDownloading = downloading.has(b.slug) && !aFull;
+            // The visible bar tracks audio when it's the active thing (downloading
+            // or fully saved), else the text byte-progress.
+            const showAudioBar = aTotal > 0 && (isDownloading || aFull);
 
             return (
               <Box key={b.slug}>
@@ -222,14 +228,24 @@ export function OfflineSection(): React.JSX.Element | null {
                   {aTotal > 0 && (
                     <AudioAction
                       zh={zh}
-                      pinned={aPinned}
-                      done={aDone}
-                      total={aTotal}
+                      full={aFull}
+                      downloading={isDownloading}
                       pct={aPct}
                       bytes={aBytes}
-                      onDownload={() =>
-                        nativeAudioPin(av.map((r) => ({ url: `${REMOTE}${r.url}`, hash: r.hash })))}
-                      onRemove={() => nativeAudioUnpin(av.map((r) => r.hash))}
+                      onDownload={() => {
+                        setDownloading((s) => new Set(s).add(b.slug));
+                        nativeAudioPin(
+                          av.map((r) => ({ url: `${REMOTE}${r.url}`, hash: r.hash })),
+                        );
+                      }}
+                      onRemove={() => {
+                        setDownloading((s) => {
+                          const n = new Set(s);
+                          n.delete(b.slug);
+                          return n;
+                        });
+                        nativeAudioUnpin(av.map((r) => r.hash));
+                      }}
                     />
                   )}
                   <Typography
@@ -242,9 +258,9 @@ export function OfflineSection(): React.JSX.Element | null {
                 </Stack>
                 <LinearProgress
                   variant="determinate"
-                  value={aPinned ? aPct : bp}
-                  color={aPinned ? (aDone >= aTotal ? "success" : "primary") : textFull ? "success" : "primary"}
-                  sx={{ borderRadius: 1, height: 4, mt: 0.25, opacity: textFull && !aPinned ? 0.5 : 1 }}
+                  value={showAudioBar ? aPct : bp}
+                  color={aFull ? "success" : "primary"}
+                  sx={{ borderRadius: 1, height: 4, mt: 0.25, opacity: textFull && !showAudioBar ? 0.5 : 1 }}
                 />
               </Box>
             );
@@ -257,31 +273,30 @@ export function OfflineSection(): React.JSX.Element | null {
 
 function AudioAction({
   zh,
-  pinned,
-  done,
-  total,
+  full,
+  downloading,
   pct,
   bytes,
   onDownload,
   onRemove,
 }: {
   zh: boolean;
-  pinned: boolean;
-  done: number;
-  total: number;
+  full: boolean;
+  downloading: boolean;
   pct: number;
   bytes: number;
   onDownload: () => void;
   onRemove: () => void;
 }): React.JSX.Element {
-  if (pinned && done >= total) {
+  if (full) {
+    // Fully downloaded → tap to remove (the only way audio leaves the store).
     return (
       <Button size="small" color="success" onClick={onRemove} sx={{ minWidth: 0, px: 1, py: 0 }}>
         {zh ? "🎧 已下载" : "🎧 saved"}
       </Button>
     );
   }
-  if (pinned) {
+  if (downloading) {
     return (
       <Typography variant="caption" color="primary" sx={{ flexShrink: 0 }}>
         {pct}%
@@ -290,7 +305,7 @@ function AudioAction({
   }
   return (
     <Button size="small" onClick={onDownload} sx={{ minWidth: 0, px: 1, py: 0 }}>
-      {zh ? `🎧 ${mb(bytes)}` : `🎧 ${mb(bytes)}`}
+      🎧 {mb(bytes)}
     </Button>
   );
 }
