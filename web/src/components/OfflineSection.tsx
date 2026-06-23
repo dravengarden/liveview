@@ -1,12 +1,12 @@
 import {
   Box,
   Button,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
   DialogContentText,
   DialogTitle,
-  LinearProgress,
   MenuItem,
   Select,
   Stack,
@@ -224,37 +224,69 @@ export function OfflineSection(): React.JSX.Element | null {
         </Stack>
       </Stack>
 
-      {/* One merged bar: solid = downloaded, buffer (animated dots = active
-          loading) = target (text+audio total), track = budget. */}
+      {/* Clean two-tone gauge: a soft tint shows the target (text+audio total),
+          a solid fill shows what's downloaded, on a quiet track. No busy dots —
+          a small spinner is the only motion, and only while actively downloading. */}
       <Box>
-        <Stack direction="row" justifyContent="space-between" alignItems="baseline">
-          <Typography variant="body2">
-            {waitingWifi
-              ? (zh ? "等待 WiFi" : "Waiting for WiFi")
-              : downloadComplete
-              ? (zh ? "已全部下载" : "All downloaded")
-              : downloading
-              ? (zh ? "下载中…" : "Downloading…")
-              : (zh ? "离线内容" : "Offline content")}
+        <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+          <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
+            {downloading && !waitingWifi && (
+              <CircularProgress size={13} thickness={5} sx={{ color: "text.disabled" }} />
+            )}
+            <Typography variant="body2">
+              {waitingWifi
+                ? (zh ? "等待 WiFi" : "Waiting for WiFi")
+                : downloadComplete
+                ? (zh ? "已离线" : "Available offline")
+                : downloading
+                ? (zh ? "下载中" : "Downloading")
+                : (zh ? "离线内容" : "Offline content")}
+            </Typography>
+          </Stack>
+          <Typography variant="body2" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
+            {gb(used)} / {cap} GB
           </Typography>
-          <Typography variant="body2" color="text.secondary">{gb(used)} / {cap} GB</Typography>
         </Stack>
-        <LinearProgress
-          variant={audio == null
-            ? "indeterminate"
-            : (downloading && !waitingWifi ? "buffer" : "determinate")}
-          value={usedPct}
-          valueBuffer={bufferPct}
-          color={waitingWifi ? "warning" : downloadComplete ? "success" : "primary"}
-          sx={{ borderRadius: 1, height: 8, mt: 0.75 }}
-        />
-        <Stack direction="row" justifyContent="space-between" sx={{ mt: 0.5 }}>
-          <Typography variant="caption" color="text.secondary">
+        <Box
+          sx={{
+            position: "relative",
+            height: 6,
+            mt: 1,
+            borderRadius: 3,
+            overflow: "hidden",
+            bgcolor: "action.hover",
+          }}
+        >
+          <Box sx={{
+            position: "absolute",
+            inset: 0,
+            width: `${bufferPct}%`,
+            bgcolor: "primary.main",
+            opacity: 0.22,
+            transition: "width .5s ease",
+          }} />
+          <Box sx={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            bottom: 0,
+            width: `${usedPct}%`,
+            borderRadius: 3,
+            bgcolor: downloadComplete ? "success.main" : waitingWifi ? "warning.main" : "primary.main",
+            transition: "width .5s ease",
+          }} />
+        </Box>
+        <Stack direction="row" justifyContent="space-between" sx={{ mt: 0.75 }} spacing={1}>
+          <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
             {zh ? "文字 " : "Text "}{gb(textUsed)} · {zh ? "音频 " : "Audio "}
-            {gb(audioDoneBytes)} / {gb(audioTotalBytes)} ({audioPct}%)
+            {gb(audioDoneBytes)} / {gb(audioTotalBytes)} · {audioPct}%
           </Typography>
           {downloading && !waitingWifi && speed != null && (
-            <Typography variant="caption" color="primary">
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
+            >
               ↓ {speed >= 1_048_576
                 ? `${(speed / 1_048_576).toFixed(1)} MB/s`
                 : `${Math.max(0, Math.round(speed / 1024))} KB/s`}
