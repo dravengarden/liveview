@@ -952,7 +952,7 @@ export function App(): React.JSX.Element {
       }
       void (async () => {
         try {
-          const res = await contentFetch(`/api/tree?rendition=audio`);
+          const res = await contentFetch(`/api/tree?rendition=audio`, { fresh: true });
           const spine = (await res.json()) as TreeNode[];
           const root = spine.find((n) => n.path === slug);
           const scope = root ? [root] : spine;
@@ -1300,7 +1300,7 @@ export function App(): React.JSX.Element {
       // Nothing to resume (or the saved book is gone): seed the default (text)
       // sidebar spine for the bookshelf.
       try {
-        const res = await contentFetch("/api/tree");
+        const res = await contentFetch("/api/tree", { fresh: true });
         setTree((await res.json()) as TreeNode[]);
       } catch (e) {
         console.error("Failed to fetch tree:", e);
