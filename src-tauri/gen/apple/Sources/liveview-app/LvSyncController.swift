@@ -49,6 +49,15 @@ import WebKit
   // is enough (it's idempotent + skips what's cached).
   private var syncing = false
 
+  // Merkle short-circuit for `stats`. The Downloads UI polls every couple seconds;
+  // re-fetching the full manifest + re-scanning 10k files each time is wasteful
+  // when nothing changed. Cache the computed stats JSON keyed by the server's
+  // Merkle root; a write (store) marks it dirty. Steady state = ONE /api/root hash
+  // compare → cached reply, no manifest fetch, no file scan.
+  private var storeDirty = true
+  private var cachedStatsJSON: String?
+  private var cachedStatsRoot: String?
+
   override init() {
     super.init()
     monitor.pathUpdateHandler = { [weak self] p in self?.currentPath = p }
@@ -106,43 +115,63 @@ import WebKit
     }
   }
 
-  /// Global totals + per-book breakdown + current net type. Uses file-attribute
-  /// existence/size checks (NOT loading each blob) so it stays cheap over 10k+
-  /// resources.
+  /// The server's Merkle deploy root (nil offline / on error). Tiny GET — the
+  /// cheap "did anything change?" probe.
+  private func fetchRoot(_ done: @escaping (String?) -> Void) {
+    fetch("/api/root") { data in
+      done(data.flatMap {
+        (try? JSONSerialization.jsonObject(with: $0) as? [String: Any])?["root"] as? String
+      })
+    }
+  }
+
+  /// Global totals + per-book breakdown + current net type.
+  ///
+  /// Merkle short-circuit: the Downloads UI polls this every ~2s. When the server
+  /// root is unchanged AND nothing was written locally since the last compute, the
+  /// answer is identical — return the cached JSON after a single tiny root fetch,
+  /// skipping the full manifest fetch + the 10k-file rescan entirely. Only a root
+  /// change or a local write (download) forces a recompute.
   private func stats(id: String) {
-    manifest { [weak self] resources in
+    fetchRoot { [weak self] serverRoot in
       guard let self else { return }
-      var cached = 0, cb = 0, tb = 0
-      // slug → (cached, total, cachedBytes, totalBytes)
-      var books: [String: [Int]] = [:]
-      for r in resources {
-        tb += r.bytes
-        var e = books[r.slug] ?? [0, 0, 0, 0]
-        e[1] += 1
-        e[3] += r.bytes
-        // Byte-weighted progress must use the SAME basis (declared `bytes`) for
-        // cached and total, or per-book cb can exceed tb (units/spoken declare 0
-        // bytes; substituting their on-disk size inflated cb past tb → a >100%
-        // value that MUI LinearProgress renders as a SHIFTED/partial bar). Stick
-        // to declared bytes so cb ≤ tb and % ∈ [0,100], consistent with the count.
-        if self.cachedSize(self.cacheKey(r.url)) != nil {
-          cached += 1
-          cb += r.bytes
-          e[0] += 1
-          e[2] += r.bytes
+      if !self.storeDirty, let j = self.cachedStatsJSON, self.cachedStatsRoot == serverRoot {
+        self.reply(id, true, j)
+        return
+      }
+      self.manifest { resources in
+        var cached = 0, cb = 0, tb = 0
+        var books: [String: [Int]] = [:] // slug → [cached, total, cachedBytes, totalBytes]
+        for r in resources {
+          tb += r.bytes
+          var e = books[r.slug] ?? [0, 0, 0, 0]
+          e[1] += 1
+          e[3] += r.bytes
+          // Byte-weighted progress uses declared `bytes` for BOTH cached + total
+          // so cb ≤ tb and % ∈ [0,100] (substituting on-disk size for 0-byte
+          // units/spoken inflated cb>tb → MUI shifted the bar past 100%).
+          if self.cachedSize(self.cacheKey(r.url)) != nil {
+            cached += 1
+            cb += r.bytes
+            e[0] += 1
+            e[2] += r.bytes
+          }
+          books[r.slug] = e
         }
-        books[r.slug] = e
+        let bookArr: [[String: Any]] = books.map { (slug, e) in
+          ["s": slug, "c": e[0], "t": e[1], "cb": e[2], "tb": e[3]]
+        }
+        let obj: [String: Any] = [
+          "net": self.netType(), "cached": cached, "total": resources.count,
+          "cb": cb, "tb": tb, "books": bookArr,
+        ]
+        let json = (try? JSONSerialization.data(withJSONObject: obj))
+          .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        self.cachedStatsJSON = json
+        self.cachedStatsRoot = serverRoot
+        self.storeDirty = false
+        self.reply(id, true, json)
       }
-      let bookArr: [[String: Any]] = books.map { (slug, e) in
-        ["s": slug, "c": e[0], "t": e[1], "cb": e[2], "tb": e[3]]
-      }
-      let obj: [String: Any] = [
-        "net": self.netType(), "cached": cached, "total": resources.count,
-        "cb": cb, "tb": tb, "books": bookArr,
-      ]
-      let json = (try? JSONSerialization.data(withJSONObject: obj))
-        .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-      self.reply(id, true, json)
     }
   }
 
@@ -201,11 +230,23 @@ import WebKit
       }
     }
     let dagFile = contentDir.appendingPathComponent("dag.json")
-    fetch("/api/dag") { [weak self] data in
-      if let data { try? data.write(to: dagFile); done(parse(data)); return }
-      // offline → last-known manifest
-      if let self, let cached = try? Data(contentsOf: dagFile) { done(parse(cached)); return }
-      done([])
+    // Merkle short-circuit: if the server root matches our cached manifest's root,
+    // the tree is unchanged → reuse the cached dag.json, skip the full fetch.
+    fetchRoot { [weak self] serverRoot in
+      guard let self else { done([]); return }
+      if let serverRoot,
+         let cached = try? Data(contentsOf: dagFile),
+         let obj = try? JSONSerialization.jsonObject(with: cached) as? [String: Any],
+         (obj["root"] as? String) == serverRoot {
+        done(parse(cached))
+        return
+      }
+      self.fetch("/api/dag") { data in
+        if let data { try? data.write(to: dagFile); done(parse(data)); return }
+        // offline → last-known manifest
+        if let cached = try? Data(contentsOf: dagFile) { done(parse(cached)); return }
+        done([])
+      }
     }
   }
 
@@ -237,6 +278,7 @@ import WebKit
     try? data.write(to: part, options: .atomic)
     try? FileManager.default.removeItem(at: dest)
     try? FileManager.default.moveItem(at: part, to: dest)
+    storeDirty = true // invalidate the stats short-circuit — disk changed
   }
 
   /// GET `path` (relative → prepend remote; absolute passes through). Returns the
