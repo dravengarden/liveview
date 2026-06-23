@@ -1570,13 +1570,13 @@ fn parse_range(value: &str, total: u64) -> Option<(u64, u64)> {
 /// re-baked — the next request re-transcodes lazily. Guaranteed-playable fallback
 /// if Opus-CAF ever misbehaves: tag "aac24", mime "audio/mp4", ext "m4a",
 /// args ["-c:a","aac","-b:a","24k","-ac","1"].
-struct AudioVariant {
-    tag: &'static str,
-    mime: &'static str,
+pub struct AudioVariant {
+    pub tag: &'static str,
+    pub mime: &'static str,
     ext: &'static str,
     args: &'static [&'static str],
 }
-const AUDIO_VARIANT: AudioVariant = AudioVariant {
+pub const AUDIO_VARIANT: AudioVariant = AudioVariant {
     tag: "op16c",
     mime: "audio/x-caf",
     ext: "caf",
@@ -1585,7 +1585,7 @@ const AUDIO_VARIANT: AudioVariant = AudioVariant {
 
 /// Transcode an MP3 (`src`) per `AUDIO_VARIANT`. ffmpeg reads stdin and writes a
 /// temp file (CAF/MP4 muxers need seekable output), which we read back + delete.
-async fn transcode_audio(src: Vec<u8>) -> Result<Vec<u8>, String> {
+pub async fn transcode_audio(src: Vec<u8>) -> Result<Vec<u8>, String> {
     use tokio::io::AsyncWriteExt;
     let mut tmp = std::env::temp_dir();
     let nanos = std::time::SystemTime::now()
