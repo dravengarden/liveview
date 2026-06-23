@@ -31,34 +31,29 @@ function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
 }
 
 /**
- * Resolve a content URL through the native store → a `Response`, so call sites
- * that already `fetch(url)` can swap to this with no parsing change. Returns
- * `null` when the native layer can't serve it (URL not in the manifest, or the
- * shell isn't present) — the caller then does its normal `fetch`. Throws only on
- * a hard offline+uncached miss, which the caller treats like a failed fetch.
- */
-export async function nativeFetch(url: string): Promise<Response | null> {
-  if (!nativeSyncAvailable()) return null;
-  let known = false;
-  try {
-    known = await invoke<boolean>("lv_knows", { url });
-  } catch {
-    return null;
-  }
-  if (!known) return null;
-  const buf = await invoke<ArrayBuffer>("lv_resolve", { url });
-  return new Response(buf, { status: 200 });
-}
-
-/**
- * Drop-in `fetch` for reader content: native store first (offline-safe on the
- * shell), else a plain network `fetch`. On the PWA/browser this is just `fetch`.
- * A native hard-miss (offline + uncached) falls through to `fetch`, which fails
- * the same way — so the caller's existing offline handling still fires.
+ * Drop-in `fetch` for reader content.
+ *
+ * On the native shell this is the SOLE content path: `lv_resolve` serves it from
+ * the native store (manifest resources content-addressed; everything else —
+ * `/api/tree`, `/api/books`, covers — url-keyed network-first), all offline-safe.
+ * We deliberately do NOT fall back to a raw `fetch()` here: a WKWebView `fetch()`
+ * HANGS offline (it doesn't fail fast like Chromium), which made an offline card
+ * tap → `/api/tree` appear DEAD. On a native miss we return a fast non-ok
+ * Response so the caller shows its offline state instead of hanging.
+ *
+ * Off the shell (PWA/browser) it's a plain `fetch` — the service worker provides
+ * the offline cache there.
  */
 export async function contentFetch(url: string): Promise<Response> {
-  const native = await nativeFetch(url).catch(() => null);
-  return native ?? fetch(url);
+  if (nativeSyncAvailable()) {
+    try {
+      const buf = await invoke<ArrayBuffer>("lv_resolve", { url });
+      return new Response(buf, { status: 200 });
+    } catch {
+      return new Response(null, { status: 504, statusText: "offline" });
+    }
+  }
+  return fetch(url);
 }
 
 /** Byte-weighted offline fraction in [0,1] over the whole corpus (native only). */
