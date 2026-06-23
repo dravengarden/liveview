@@ -30,7 +30,6 @@ targets:
     sources:
       - path: Sources
       - path: Assets.xcassets
-      - path: Externals
       - path: liveview-app_iOS
       - path: assets
         buildPhase: resources
