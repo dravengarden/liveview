@@ -8,7 +8,7 @@
 // is a separate follow-up; this module only warms the cheap text lane.
 
 import { setPrefetching } from "@/syncStore";
-import { nativeAudioAvailable, nativeAudioPrefetch } from "@/native-audio";
+import { nativeAudioAvailable } from "@/native-audio";
 import { contentFetch } from "@/native-sync";
 
 /** Books already swept this session (cheap dedup; the SW holds the real cache). */
@@ -160,23 +160,18 @@ export async function prefetchBookAudio(slug: string): Promise<void> {
       if (!navigator.onLine) break;
       try {
         if (nativeAudioAvailable()) {
-          // Native engine owns the audio cache (the SW one is bypassed under
-          // native): hand the absolute URL + hash to native to download offline.
-          // marks still go through the SW so the read-along works offline too.
-          nativeAudioPrefetch(
-            `${globalThis.location.origin}/api/audio?${q}`,
-            ch.audio.hash,
-          );
+          // Native shell: audio offline is handled EXCLUSIVELY by OfflineSection's
+          // adaptive, COMPRESSED (fmt=c) scheduler. Do NOT prefetch here — the old
+          // path handed the raw `/api/audio` (no fmt=c) = uncompressed MP3 to the
+          // native cache, which bloated the store to ~10GB and ran unscheduled.
+          // (marks come via the read-along hook's contentFetch on native.)
         } else {
-          // Immutable content-addressed blob → the SW caches it in the PERSISTENT
-          // lv-blobs cache (offline-stable across deploys; Range-from-cache on
-          // play). Replaces `/api/audio?prefetch=1` (which landed in the
-          // version-wiped AUDIO_CACHE and was lost on every deploy).
+          // PWA/web: the SW caches the immutable content-addressed blob in the
+          // PERSISTENT lv-blobs cache (offline-stable across deploys).
           await fetch(`/api/blob/${ch.audio.hash}`);
+          // marks (small 200s) — needed for the read-along offline.
+          await fetch(`/api/marks?${q}`);
         }
-        // marks are small 200s (auto-cached by the SW) — needed for the
-        // read-along whichever engine plays the audio.
-        await fetch(`/api/marks?${q}`);
       } catch {
         // best-effort
       }
