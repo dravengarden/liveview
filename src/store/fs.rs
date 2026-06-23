@@ -18,7 +18,7 @@ use crate::server::tree::build_virtual_tree;
 use crate::shared::FileType;
 use crate::store::content::{BlobStore, ContentStore};
 use crate::store::pg::{
-    AssetRow, AudioTaskRollup, BookRow, ChapterRow, EditionRow, ManifestChapter, ProgressEntry,
+    AssetRow, AudioTaskRollup, BookRow, ChapterRow, DagChapter, EditionRow, ManifestChapter, ProgressEntry,
     RenditionRow,
 };
 
@@ -279,6 +279,9 @@ impl ContentStore for FsStore {
     }
     async fn manifest_chapters(&self, _slug: &str) -> Result<Vec<ManifestChapter>, String> {
         Ok(Vec::new())
+    }
+    async fn dag_chapters(&self) -> Result<Vec<DagChapter>, String> {
+        Ok(Vec::new()) // preview has no deploy/manifest
     }
 }
 

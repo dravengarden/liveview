@@ -668,6 +668,64 @@ async fn api_manifest_book(
     Json(serde_json::json!({ "slug": slug, "chapters": arr })).into_response()
 }
 
+/// `GET /api/dag` — the WHOLE-corpus manifest the lv-sync client mirrors: the
+/// deploy root + every resource (text / units / spoken / audio / marks / asset)
+/// as `{ path, hash, kind, bytes, url }`. `hash` is the content address (cache
+/// key); `url` is where to fetch it; `bytes` drives the byte-weighted offline %.
+/// One round-trip → the client has the full content-addressed index.
+async fn api_dag(State(state): State<SharedState>) -> impl IntoResponse {
+    let (root, _) = state.store.manifest_books().await.unwrap_or((None, Vec::new()));
+    let chapters = state.store.dag_chapters().await.unwrap_or_default();
+    let mut resources: Vec<serde_json::Value> = Vec::new();
+    for c in &chapters {
+        let doc = format!("{}/{}/{}/{}", c.book_slug, c.rendition, c.lang, c.rel_path);
+        // Wire path /api/file expects `<slug>/<rel_path>` + lang/rendition query.
+        // Slugs/rel_paths/langs are ASCII filenames, so a raw query is safe here.
+        let q = format!(
+            "path={}/{}&lang={}&rendition={}",
+            c.book_slug, c.rel_path, c.lang, c.rendition
+        );
+        if c.file_type == "markdown" || c.file_type == "html" {
+            resources.push(serde_json::json!({
+                "path": doc, "hash": c.content_hash, "kind": "text",
+                "bytes": c.html_bytes.unwrap_or(0), "url": format!("/api/file?{q}"),
+            }));
+            // Read-along extras exist for the text rendition (derived from the
+            // displayed markdown). Keyed off content_hash so they're stable per
+            // source; they're tiny, so bytes=0 (audio dominates the % anyway).
+            if c.rendition == "text" {
+                resources.push(serde_json::json!({
+                    "path": format!("{doc}#units"), "hash": format!("{}:units", c.content_hash),
+                    "kind": "units", "bytes": 0, "url": format!("/api/units?{q}"),
+                }));
+                resources.push(serde_json::json!({
+                    "path": format!("{doc}#spoken"), "hash": format!("{}:spoken", c.content_hash),
+                    "kind": "spoken", "bytes": 0, "url": format!("/api/spoken?{q}"),
+                }));
+            }
+        }
+        if let Some(h) = &c.audio_hash {
+            resources.push(serde_json::json!({
+                "path": format!("{doc}#audio"), "hash": h, "kind": "audio",
+                "bytes": c.audio_size.unwrap_or(0), "url": format!("/api/blob/{h}"),
+            }));
+        }
+        if let Some(h) = &c.marks_hash {
+            resources.push(serde_json::json!({
+                "path": format!("{doc}#marks"), "hash": h, "kind": "marks",
+                "bytes": c.marks_size.unwrap_or(0), "url": format!("/api/blob/{h}"),
+            }));
+        }
+        if let Some(h) = &c.asset_hash {
+            resources.push(serde_json::json!({
+                "path": format!("{doc}#asset"), "hash": h, "kind": "asset",
+                "bytes": c.asset_size.unwrap_or(0), "url": format!("/api/blob/{h}"),
+            }));
+        }
+    }
+    Json(serde_json::json!({ "root": root, "resources": resources })).into_response()
+}
+
 fn build_app(state: SharedState) -> Router {
     let api_router = Router::new()
         .route("/api/books", get(api_books))
@@ -690,6 +748,7 @@ fn build_app(state: SharedState) -> Router {
         .route("/api/blob/{hash}", get(api_blob))
         .route("/api/manifest", get(api_manifest))
         .route("/api/manifest/{slug}", get(api_manifest_book))
+        .route("/api/dag", get(api_dag))
         // Under /api/ so the service worker treats it network-first (sw.js):
         // a top-level /version would fall into the cache-first bucket and serve
         // a stale build id right after a deploy, defeating the whole check.

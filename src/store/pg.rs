@@ -142,6 +142,27 @@ pub struct ManifestChapter {
     pub status: Option<String>,
 }
 
+/// One chapter's full resource row for `/api/dag` (the WHOLE corpus, every book).
+/// The client (lv-sync) turns each row into content-addressed resources (text /
+/// units / spoken / audio / marks / asset) with byte sizes + fetch URLs.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct DagChapter {
+    pub book_slug: String,
+    pub rendition: String,
+    pub lang: String,
+    pub rel_path: String,
+    pub content_hash: String,
+    pub file_type: String,
+    /// Rendered-HTML byte length (text resources' size; units/spoken are tiny).
+    pub html_bytes: Option<i64>,
+    pub audio_hash: Option<String>,
+    pub audio_size: Option<i64>,
+    pub marks_hash: Option<String>,
+    pub marks_size: Option<i64>,
+    pub asset_hash: Option<String>,
+    pub asset_size: Option<i64>,
+}
+
 /// One document's saved scroll position (0..1 ratio). Wire-compatible with the
 /// old SQLite `ProgressEntry`.
 #[derive(Clone, Debug, Serialize, sqlx::FromRow)]
@@ -898,6 +919,26 @@ impl PgStore {
              ORDER BY c.rendition, c.lang, c.rel_path",
         )
         .bind(slug)
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Every chapter in the corpus (all books) with content/audio/marks/asset
+    /// hashes + sizes — the rows behind `/api/dag`, the client's full manifest.
+    pub async fn dag_chapters(&self) -> Result<Vec<DagChapter>, sqlx::Error> {
+        sqlx::query_as::<_, DagChapter>(
+            "SELECT c.book_slug, c.rendition, c.lang, c.rel_path,
+                    c.content_hash, c.file_type,
+                    length(c.html) AS html_bytes,
+                    c.audio_hash, aa.size AS audio_size,
+                    c.marks_hash, am.size AS marks_size,
+                    c.asset_hash, ab.size AS asset_size
+             FROM chapters c
+             LEFT JOIN assets aa ON aa.content_hash = c.audio_hash
+             LEFT JOIN assets am ON am.content_hash = c.marks_hash
+             LEFT JOIN assets ab ON ab.content_hash = c.asset_hash
+             ORDER BY c.book_slug, c.rendition, c.lang, c.rel_path",
+        )
         .fetch_all(&self.pool)
         .await
     }
