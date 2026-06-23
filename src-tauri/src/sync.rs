@@ -139,17 +139,27 @@ fn norm(url: &str) -> String {
 
 // ── Tauri commands (called from the remote UI over IPC) ──────────────────────
 
-/// Resolve a manifest URL → raw bytes, store-first (offline-safe). Returns the
-/// bytes as a binary IPC response (NOT a JSON number array). Errors `"offline"`
-/// when uncached + unreachable, or `"unknown"` when the URL isn't in the manifest
-/// (the web facade then falls back to a plain fetch).
+/// Resolve a content URL → raw bytes (binary IPC response, NOT a JSON number
+/// array), offline-safe. A MANIFEST resource resolves store-first by content
+/// hash (immutable, instant when cached). Any OTHER content URL — the navigation
+/// metadata the manifest doesn't enumerate (`/api/tree`, `/api/books`, covers) —
+/// goes through the url-keyed network-first cache so it too works offline. This
+/// is the SOLE content path on the shell: the web must NOT fall back to a raw
+/// WKWebView `fetch`, which HANGS offline (the whole bug this fixes). Errors
+/// `"offline"` when uncached + unreachable.
 #[tauri::command]
 pub(crate) async fn lv_resolve(state: State<'_, LvState>, url: String) -> Result<tauri::ipc::Response, String> {
-    let res = state.by_url.read().await.get(&norm(&url)).cloned();
-    let Some(r) = res else {
-        return Err("unknown".into());
-    };
-    let bytes = state.engine.resolve(&r).await.map_err(|e| match e {
+    let n = norm(&url);
+    let res = state.by_url.read().await.get(&n).cloned();
+    let bytes = match res {
+        Some(r) => state.engine.resolve(&r).await,
+        None => {
+            // Non-manifest content (tree/books/cover): cache it keyed by the URL.
+            let key = format!("{}{}", lv_sync::URL_KEY_PREFIX, lv_sync::hash_hex(n.as_bytes()));
+            state.engine.fetch_keyed(&key, &n).await
+        }
+    }
+    .map_err(|e| match e {
         lv_sync::ResolveError::Offline => "offline".to_string(),
         lv_sync::ResolveError::Integrity => "integrity".to_string(),
     })?;
