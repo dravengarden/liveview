@@ -74,12 +74,15 @@ import WebKit
   private var currentCacheKey: String?
   private var playingFromCache = false
 
-  // Offline audio store (content-addressed when the web supplies the hash).
-  // This is DURABLE DATA, not a cache: audio downloaded OR played is kept forever
-  // and is NEVER auto-evicted — only the user removes a book (manual unpin). It
-  // lives in Application Support, NOT Caches, precisely so iOS won't purge it
-  // under storage pressure. Same persistence guarantee as the text store; the
-  // user owns the storage tradeoff (full corpus audio is large, ~11 GB).
+  // Offline audio store (content-addressed when the web supplies the hash), in
+  // Application Support (NOT Caches — iOS purges Caches under pressure). DURABLE
+  // data, two tiers + a budget:
+  //   • PINNED  — books the user explicitly downloaded (🎧). Protected: never
+  //     auto-evicted; only a manual remove deletes them. Persisted in _pins.json.
+  //   • preload/played — fetched to fill the storage budget or as a side-effect of
+  //     playing. Evictable (LRU by access mtime) once the store exceeds `capBytes`.
+  // Text is a separate, tiny store (LvSyncController) and is NEVER evicted — its
+  // "weight" is effectively infinite vs audio.
   private var inFlight: Set<String> = []
   private lazy var cacheDir: URL = {
     let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -87,6 +90,18 @@ import WebKit
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
   }()
+  // Manual-download protection set (sanitized hashes), persisted across launches.
+  private lazy var pinsFile: URL = cacheDir.appendingPathComponent("_pins.json")
+  private lazy var pinned: Set<String> = {
+    guard let d = try? Data(contentsOf: pinsFile),
+          let a = try? JSONDecoder().decode([String].self, from: d) else { return [] }
+    return Set(a)
+  }()
+  private func savePins() { try? JSONEncoder().encode(Array(pinned)).write(to: pinsFile) }
+  // Storage budget for the audio store (bytes). The web owns the setting and pushes
+  // it via `setCap`; default 20 GB until told otherwise. Eviction (LRU, pinned-
+  // exempt) keeps the store at/under this.
+  private var capBytes: Int64 = 20_000_000_000
 
   private var timeObserver: Any?
   private var statusObs: NSKeyValueObservation?
@@ -134,7 +149,9 @@ import WebKit
         downloadToCache(u, cacheKey(forURL: u, hash: d?["hash"] as? String))
       }
     case "pin": pin(d)
+    case "preload": preload(d)
     case "unpin": unpin(d)
+    case "setCap": setCap(d)
     case "audioStats": audioStats(d)
     default: break
     }
@@ -142,46 +159,117 @@ import WebKit
 
   // MARK: offline downloads (per-book)
 
-  /// Download + keep a set of chapters: `items: [{url, hash}]`. Persisted forever
-  /// (never auto-evicted); idempotent (skips what's already on disk).
+  /// MANUAL download (🎧): download + mark PROTECTED. Pinned files survive eviction
+  /// — only a manual remove deletes them. `items: [{url, hash}]`. Idempotent.
   private func pin(_ d: [String: Any]?) {
     guard let items = d?["items"] as? [[String: Any]] else { return }
     for it in items {
+      guard let s = it["url"] as? String, let u = URL(string: s) else { continue }
+      pinned.insert(cacheKey(forURL: u, hash: it["hash"] as? String))
+      downloadToCache(u, cacheKey(forURL: u, hash: it["hash"] as? String))
+    }
+    savePins()
+  }
+
+  /// AUTO preload (fill the budget): download but EVICTABLE (not pinned). Stops
+  /// before exceeding the cap so a fill never blows past the budget.
+  private func preload(_ d: [String: Any]?) {
+    guard let items = d?["items"] as? [[String: Any]] else { return }
+    for it in items {
+      if usedBytes() >= capBytes { break }
       guard let s = it["url"] as? String, let u = URL(string: s) else { continue }
       downloadToCache(u, cacheKey(forURL: u, hash: it["hash"] as? String))
     }
   }
 
-  /// Remove (delete) the given keys' audio files — the ONLY way audio leaves the
-  /// store (it's data, not a cache: nothing is auto-evicted). `keys` are the
-  /// sanitized content hashes the web computed from the manifest.
+  /// Remove (delete) the given keys' audio files + unpin them. `keys` are sanitized
+  /// content hashes the web computed from the manifest.
   private func unpin(_ d: [String: Any]?) {
     guard let keys = d?["keys"] as? [String] else { return }
     let fm = FileManager.default
     for k in keys {
       let key = cacheKey(forURL: URL(string: "x:")!, hash: k) // sanitize same way
+      pinned.remove(key)
       try? fm.removeItem(at: cacheDir.appendingPathComponent(key))
+    }
+    savePins()
+  }
+
+  /// Set the storage budget (bytes) + immediately enforce it (a lowered cap evicts
+  /// down to fit). The web confirms destructive lowering with the user first.
+  private func setCap(_ d: [String: Any]?) {
+    if let c = d?["bytes"] as? Double, c > 0 { capBytes = Int64(c) }
+    enforceCap()
+  }
+
+  /// Total bytes of complete (non-`.part`, non-sidecar) audio files.
+  private func usedBytes() -> Int64 {
+    let fm = FileManager.default
+    guard let files = try? fm.contentsOfDirectory(
+      at: cacheDir, includingPropertiesForKeys: [.fileSizeKey]
+    ) else { return 0 }
+    var total: Int64 = 0
+    for f in files
+    where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_") {
+      total += Int64((try? f.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+    }
+    return total
+  }
+
+  /// LRU eviction (adaptive by access recency — `cachedFileURL` touches mtime on
+  /// every play): while OVER the cap, delete the least-recently-used EVICTABLE
+  /// (non-pinned) file. Pinned (manual) + the `_pins.json` sidecar are never
+  /// touched; if pinned alone exceeds the cap we stop (the user's deliberate choice
+  /// wins over the budget). Text is a separate store and is never evicted here.
+  private func enforceCap() {
+    let fm = FileManager.default
+    guard let files = try? fm.contentsOfDirectory(
+      at: cacheDir, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
+    ) else { return }
+    var total: Int64 = 0
+    var evictable: [(url: URL, date: Date, size: Int64)] = []
+    for f in files
+    where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_") {
+      let v = try? f.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+      let size = Int64(v?.fileSize ?? 0)
+      total += size
+      if !pinned.contains(f.lastPathComponent) {
+        evictable.append((f, v?.contentModificationDate ?? .distantPast, size))
+      }
+    }
+    guard total > capBytes else { return }
+    for e in evictable.sorted(by: { $0.date < $1.date }) { // oldest first
+      if total <= capBytes { break }
+      try? fm.removeItem(at: e.url)
+      total -= e.size
     }
   }
 
-  /// Report the audio store state for the Downloads UI: total bytes used + the set
-  /// of cached keys (the web maps keys→books via the manifest). No cap — audio is
-  /// durable data. Replied as JSON via `window.__lvAudioResolve(id, json)`.
+  /// Report the audio store state for the Downloads UI: total used, the cap,
+  /// pinned (protected) bytes, and the cached + pinned key sets (the web maps
+  /// keys→books via the manifest). Replied via `window.__lvAudioResolve(id, json)`.
   private func audioStats(_ d: [String: Any]?) {
     guard let id = d?["id"] as? String else { return }
     let fm = FileManager.default
     var cached: [String] = []
-    var usedBytes: Int64 = 0
+    var used: Int64 = 0
+    var pinnedBytes: Int64 = 0
     if let files = try? fm.contentsOfDirectory(
       at: cacheDir, includingPropertiesForKeys: [.fileSizeKey]
     ) {
       for f in files
       where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_") {
-        cached.append(f.lastPathComponent)
-        usedBytes += Int64((try? f.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        let key = f.lastPathComponent
+        cached.append(key)
+        let sz = Int64((try? f.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        used += sz
+        if pinned.contains(key) { pinnedBytes += sz }
       }
     }
-    let obj: [String: Any] = ["usedBytes": usedBytes, "cached": cached]
+    let obj: [String: Any] = [
+      "usedBytes": used, "cap": capBytes, "pinnedBytes": pinnedBytes,
+      "cached": cached, "pinned": Array(pinned),
+    ]
     let json = (try? JSONSerialization.data(withJSONObject: obj))
       .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     let esc = json.replacingOccurrences(of: "\\", with: "\\\\")
@@ -548,8 +636,10 @@ import WebKit
         try? fm.removeItem(at: part)
         return
       }
-      // No eviction: downloaded/played audio is durable data, kept until the user
-      // removes the book.
+      // Keep the store within the budget (LRU, pinned-exempt). A no-op while under
+      // cap — which, post-compression, is the common case (full audio ≈ 3.7GB ≪
+      // a 20GB default).
+      DispatchQueue.main.async { self.enforceCap() }
     }.resume()
   }
 
