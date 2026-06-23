@@ -69,7 +69,6 @@ export function OfflineSection(): React.JSX.Element | null {
   const [confirmCap, setConfirmCap] = useState<number | null>(null);
   const [speed, setSpeed] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof globalThis.setInterval> | undefined>(undefined);
-  const preloadedRef = useRef(false);
   // Rolling (t, audioUsedBytes) samples over the last ~10s → average download speed.
   const samplesRef = useRef<{ t: number; used: number }[]>([]);
 
@@ -148,18 +147,19 @@ export function OfflineSection(): React.JSX.Element | null {
     [audioRes, cachedSet],
   );
 
-  // One-shot auto-preload: fill the budget with every not-yet-cached chapter
-  // (evictable). Auto-download is always on; only the WiFi-only gate applies.
+  // Auto-preload, CHUNKED + self-healing: every poll (audio updates ~2s) feed the
+  // next ≤300 not-yet-cached chapters to the native scheduler. Re-running re-kicks
+  // it (native dedups what's already queued/in-flight/on-disk), so a stalled fill
+  // recovers on its own; chunking also avoids one ~340KB postMessage. Only the
+  // WiFi-only gate stops it.
   useEffect(() => {
-    if (preloadedRef.current || !audio || audioRes.length === 0) return;
+    if (!audio || audioRes.length === 0) return;
     if (wifiOnly && stats != null && stats.net !== "wifi") return;
     const items = audioRes
       .filter((r) => !cachedSet.has(r.hash))
+      .slice(0, 300)
       .map((r) => ({ url: `${REMOTE}${r.url}`, hash: r.hash }));
-    if (items.length > 0) {
-      preloadedRef.current = true;
-      nativeAudioPreload(items);
-    }
+    if (items.length > 0) nativeAudioPreload(items);
   }, [audio, audioRes, wifiOnly, stats, cachedSet]);
 
   if (!nativeSyncAvailable()) return null;
