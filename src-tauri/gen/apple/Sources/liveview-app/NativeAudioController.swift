@@ -131,7 +131,7 @@ import WebKit
   /// re-fetches them compressed. Marker-gated so it runs once; BUMP the marker
   /// name whenever the variant/cleanup changes so it re-runs exactly once more.
   private func purgeForeignAudio() {
-    let marker = cacheDir.appendingPathComponent("_purge_caf_v1")
+    let marker = cacheDir.appendingPathComponent("_purge_caf_v2")
     if FileManager.default.fileExists(atPath: marker.path) { return }
     let fm = FileManager.default
     if let files = try? fm.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: nil) {
