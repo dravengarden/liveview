@@ -595,7 +595,10 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     void (async () => {
       try {
-        const res = await contentFetch("/api/books");
+        // FRESH (network-first): the shelf is a LIVE list — a newly-deployed book
+        // must appear, not be hidden behind a stale offline cache. Falls back to
+        // cache when offline (native fresh-resolve).
+        const res = await contentFetch("/api/books", { fresh: true });
         const list = (await res.json()) as Book[];
         setBooks(list);
         // Warm the sidebar spines (both renditions) so a shelf card can be OPENED
@@ -617,6 +620,44 @@ export function App(): React.JSX.Element {
         console.error("Failed to fetch books:", e);
       }
     })();
+  }, []);
+
+  // Live shelf refresh: a newly-deployed book changes the Merkle deploy root, so
+  // poll /api/root (tiny) on an interval + on foreground; when it changes, re-fetch
+  // the book list FRESH so a new book appears without a manual reload.
+  useEffect(() => {
+    let lastRoot: string | null = null;
+    let cancelled = false;
+    const check = async (): Promise<void> => {
+      try {
+        const r = (await (await contentFetch("/api/root", { fresh: true })).json()) as {
+          root?: string;
+        };
+        const root = r.root ?? null;
+        if (cancelled || !root) return;
+        if (lastRoot === null) {
+          lastRoot = root; // baseline; the initial fetch above already has the latest
+          return;
+        }
+        if (root !== lastRoot) {
+          lastRoot = root;
+          const list = (await (await contentFetch("/api/books", { fresh: true })).json()) as Book[];
+          if (!cancelled) setBooks(list);
+        }
+      } catch {
+        // offline / transient — retry on the next tick or foreground.
+      }
+    };
+    const id = window.setInterval(() => void check(), 20_000);
+    const onVis = (): void => {
+      if (document.visibilityState === "visible") void check();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, []);
 
 

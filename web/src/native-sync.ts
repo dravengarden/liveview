@@ -45,14 +45,14 @@ function ensureResolver(): void {
 }
 
 let seq = 0;
-function call(cmd: string, url?: string, timeoutMs = 30_000): Promise<Reply> {
+function call(cmd: string, url?: string, timeoutMs = 30_000, fresh = false): Promise<Reply> {
   const h = handler();
   if (!h) return Promise.reject(new Error("native sync unavailable"));
   ensureResolver();
   const id = `s${++seq}`;
   return new Promise<Reply>((resolve) => {
     pending.set(id, resolve);
-    h.postMessage({ id, cmd, url });
+    h.postMessage({ id, cmd, url, fresh });
     setTimeout(() => {
       if (pending.delete(id)) resolve({ ok: false, payload: "" });
     }, timeoutMs);
@@ -60,10 +60,16 @@ function call(cmd: string, url?: string, timeoutMs = 30_000): Promise<Reply> {
 }
 
 /** Drop-in `fetch` for reader content. On the shell it resolves through the native
- *  content cache (offline-safe); on a miss while online it falls back to network. */
-export async function contentFetch(url: string): Promise<Response> {
+ *  content cache (offline-safe). `fresh` = network-first (then cache fallback) for
+ *  LIVE lists (/api/books, /api/tree) that change when the corpus changes, so a
+ *  newly-deployed book appears instead of a stale cache. Default cache-first for
+ *  immutable content-addressed reads. */
+export async function contentFetch(
+  url: string,
+  opts?: { fresh?: boolean },
+): Promise<Response> {
   if (nativeSyncAvailable()) {
-    const { ok, payload } = await call("resolve", url);
+    const { ok, payload } = await call("resolve", url, 30_000, opts?.fresh ?? false);
     if (ok) {
       const bin = atob(payload);
       const bytes = new Uint8Array(bin.length);
