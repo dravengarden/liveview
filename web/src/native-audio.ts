@@ -62,7 +62,13 @@ type OutMsg =
   | {
     readonly kind: "prefetch";
     readonly data: { readonly url: string; readonly hash?: string };
-  };
+  }
+  | {
+    readonly kind: "pin";
+    readonly data: { readonly items: { url: string; hash: string }[] };
+  }
+  | { readonly kind: "unpin"; readonly data: { readonly keys: string[] } }
+  | { readonly kind: "audioStats"; readonly data: { readonly id: string } };
 
 interface WebKitHandler {
   postMessage(message: unknown): void;
@@ -133,6 +139,67 @@ export function nativeAudioPrefetch(url: string, hash?: string): boolean {
     kind: "prefetch",
     data: hash !== undefined ? { url, hash } : { url },
   });
+}
+
+// ── Offline pinning (per-book audio download) + store stats. The audio store is
+// durable (Application Support) with two tiers: PINNED (user-downloaded, never
+// evicted) and auto (LRU-capped, cached as a side-effect of playing).
+
+/** Pin a book's chapters for durable offline playback (download + keep). */
+export function nativeAudioPin(items: { url: string; hash: string }[]): boolean {
+  return send({ kind: "pin", data: { items } });
+}
+
+/** Unpin keys (sanitized hashes) — they become LRU-evictable again. */
+export function nativeAudioUnpin(keys: string[]): boolean {
+  return send({ kind: "unpin", data: { keys } });
+}
+
+/** Audio store state for the Downloads UI. `cached`/`pinned` are cache keys
+ *  (sanitized content hashes); the caller maps them to books via the manifest. */
+export interface AudioStats {
+  cap: number;
+  pinnedBytes: number;
+  autoBytes: number;
+  cached: string[];
+  pinned: string[];
+}
+
+const audioPending = new Map<string, (json: string) => void>();
+let audioResolverInstalled = false;
+function ensureAudioResolver(): void {
+  if (audioResolverInstalled) return;
+  audioResolverInstalled = true;
+  (globalThis as unknown as {
+    __lvAudioResolve?: (id: string, json: string) => void;
+  }).__lvAudioResolve = (id, json) => {
+    const r = audioPending.get(id);
+    if (r) {
+      audioPending.delete(id);
+      r(json);
+    }
+  };
+}
+let audioSeq = 0;
+
+/** Query the native audio store (null off-shell or on timeout). */
+export async function nativeAudioStats(): Promise<AudioStats | null> {
+  if (!nativeAudioAvailable()) return null;
+  ensureAudioResolver();
+  const id = `a${++audioSeq}`;
+  const json = await new Promise<string>((resolve) => {
+    audioPending.set(id, resolve);
+    send({ kind: "audioStats", data: { id } });
+    setTimeout(() => {
+      if (audioPending.delete(id)) resolve("");
+    }, 20_000);
+  });
+  if (!json) return null;
+  try {
+    return JSON.parse(json) as AudioStats;
+  } catch {
+    return null;
+  }
 }
 
 /**
