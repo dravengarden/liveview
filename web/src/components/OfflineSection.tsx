@@ -78,7 +78,9 @@ export function OfflineSection(): React.JSX.Element | null {
   const total = stats?.total ?? 0;
   const cb = stats?.cb ?? 0;
   const tb = stats?.tb ?? 0;
-  const pct = tb > 0 ? Math.round((cb / tb) * 100) : 0;
+  // Clamp: MUI LinearProgress does NOT bound `value`, so a >100 value renders as
+  // a shifted/partial bar. Byte counts should keep cb ≤ tb, but clamp defensively.
+  const pct = tb > 0 ? Math.min(100, Math.round((cb / tb) * 100)) : 0;
   const waitingWifi = auto && wifiOnly && stats != null && stats.net !== "wifi";
 
   const books = (stats?.books ?? [])
@@ -165,11 +167,14 @@ export function OfflineSection(): React.JSX.Element | null {
       {books.length > 0 && (
         <Stack spacing={1.25} sx={{ mt: 0.5 }}>
           {books.map((b) => {
-            const bp = b.tb > 0
-              ? Math.round((b.cb / b.tb) * 100)
-              : b.total > 0
-              ? Math.round((b.cached / b.total) * 100)
-              : 0;
+            const bp = Math.min(
+              100,
+              b.tb > 0
+                ? Math.round((b.cb / b.tb) * 100)
+                : b.total > 0
+                ? Math.round((b.cached / b.total) * 100)
+                : 0,
+            );
             const full = b.cached >= b.total;
             return (
               <Box key={b.slug}>
