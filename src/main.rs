@@ -714,16 +714,15 @@ async fn api_dag(State(state): State<SharedState>) -> impl IntoResponse {
             }
         }
         if let Some(h) = &c.audio_hash {
-            // Point downloads at the COMPRESSED variant (/api/audio?…&fmt=c,
-            // transcoded + cached) instead of the raw blob, so the device stores
-            // the small Opus, not the 48k MP3. `hash` stays the SOURCE audio_hash
-            // — the same content-address key the player's stream uses — so a
-            // downloaded file is found on offline playback. `bytes` is the
-            // estimated compressed size (MP3 × ~0.33) for the UI.
+            // Audio downloads go through /api/audio (NOT the raw /api/blob) — it
+            // ALWAYS serves the compressed variant now (MP3 fully sunset), so the
+            // device stores the small Opus. `hash` stays the SOURCE audio_hash —
+            // the content-address key the player's stream shares — so a downloaded
+            // file is found on offline playback. `bytes` ≈ compressed size (×0.33).
             resources.push(serde_json::json!({
                 "path": format!("{doc}#audio"), "hash": h, "kind": "audio",
                 "bytes": c.audio_size.unwrap_or(0) * 33 / 100,
-                "url": format!("/api/audio?{q}&fmt=c"),
+                "url": format!("/api/audio?{q}"),
             }));
         }
         if let Some(h) = &c.marks_hash {
@@ -1323,10 +1322,6 @@ struct FileQuery {
     /// for the LAST chapter in the book's queue (it knows the spine order), so
     /// the server needs no spine knowledge. Ignored by the other handlers.
     tail: Option<String>,
-    /// Audio only: `"c"` asks `/api/audio` for the COMPRESSED variant (on-the-fly
-    /// transcode of the source MP3 to a much smaller codec, cached). Omitted ⇒ the
-    /// original MP3. The client always requests `c` on the native shell.
-    fmt: Option<String>,
 }
 
 /// A resolved request: the concrete rendition + the `(lang, default_lang)` pair
@@ -1646,14 +1641,10 @@ async fn compressed_audio(
     }
 }
 
-/// Serve MP3 `data` with `Content-Length`, `Accept-Ranges` and HTTP Range
-/// support (seeking). Shared by the audiobook and text read-aloud paths.
-fn serve_mp3_range(data: Vec<u8>, headers: &axum::http::HeaderMap) -> axum::response::Response {
-    serve_audio_range(data, headers, "audio/mpeg")
-}
-
-/// Like `serve_mp3_range` but with an explicit content-type (the compressed
-/// variant is Opus-in-CAF / AAC, not MP3). AVPlayer infers the format from this
+/// Serve audio `data` with an explicit content-type, `Content-Length`,
+/// `Accept-Ranges` and HTTP Range support (seeking). Audio is always the compressed
+/// variant now (Opus-in-CAF); the MP3 fallback path only triggers on a transcode
+/// failure. AVPlayer infers the format from this
 /// header when the URL has no extension.
 fn serve_audio_range(
     data: Vec<u8>,
@@ -1703,13 +1694,11 @@ async fn api_audio(
     if query.rendition.as_deref() == Some("text") {
         return match ensure_text_audio(&state, &query).await {
             Ok((audio_hash, _)) => match state.obj.get(&audio_hash).await {
+                // ALWAYS the compressed variant — MP3 is fully sunset client-side
+                // (the source MP3 is only the internal transcode input). One format.
                 Ok(data) => {
-                    if query.fmt.as_deref() == Some("c") {
-                        let (b, mime) = compressed_audio(&state, &audio_hash, data).await;
-                        serve_audio_range(b, &headers, mime)
-                    } else {
-                        serve_mp3_range(data, &headers)
-                    }
+                    let (b, mime) = compressed_audio(&state, &audio_hash, data).await;
+                    serve_audio_range(b, &headers, mime)
                 }
                 Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response(),
             },
@@ -1754,15 +1743,12 @@ async fn api_audio(
             data.extend_from_slice(&cue);
         }
     }
-    // Compressed variant (default on the native shell) — transcode + cache, keyed
-    // by the source hash (+ ".tail" when the bookend cue is baked in, which makes
-    // those bytes differ from the plain blob).
-    if query.fmt.as_deref() == Some("c") {
-        let ck = if is_bookend { format!("{hash}.tail") } else { hash.clone() };
-        let (bytes, mime) = compressed_audio(&state, &ck, data).await;
-        return serve_audio_range(bytes, &headers, mime);
-    }
-    serve_mp3_range(data, &headers)
+    // ALWAYS the compressed variant — MP3 is fully sunset client-side (one format;
+    // the source MP3 is only the internal transcode input). Cached by the source
+    // hash (+ ".tail" when the bookend cue is baked in, which differs from the blob).
+    let ck = if is_bookend { format!("{hash}.tail") } else { hash.clone() };
+    let (bytes, mime) = compressed_audio(&state, &ck, data).await;
+    serve_audio_range(bytes, &headers, mime)
 }
 
 /// Per-sentence time marks for the chapter audio (drives read-along highlight).
