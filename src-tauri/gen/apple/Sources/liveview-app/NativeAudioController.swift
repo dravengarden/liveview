@@ -75,34 +75,18 @@ import WebKit
   private var playingFromCache = false
 
   // Offline audio store (content-addressed when the web supplies the hash).
-  // TWO TIERS in ONE durable directory:
-  //   • PINNED   — books the user explicitly downloaded for offline. Exempt from
-  //     LRU eviction; this is durable app data, not a throwaway cache.
-  //   • auto     — chapters cached as a side-effect of streaming. LRU-evicted
-  //     above `cacheCapBytes` (pinned files are skipped by the evictor).
-  // It lives in Application Support, NOT Caches: iOS purges Caches under storage
-  // pressure, which would silently delete a book the user took offline. Audio is
-  // part of the app's content, so it must persist like the text store does.
+  // This is DURABLE DATA, not a cache: audio downloaded OR played is kept forever
+  // and is NEVER auto-evicted — only the user removes a book (manual unpin). It
+  // lives in Application Support, NOT Caches, precisely so iOS won't purge it
+  // under storage pressure. Same persistence guarantee as the text store; the
+  // user owns the storage tradeoff (full corpus audio is large, ~11 GB).
   private var inFlight: Set<String> = []
-  private let cacheCapBytes: Int64 = 1_500_000_000 // auto-tier cap (~1.5 GB), LRU
   private lazy var cacheDir: URL = {
     let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     let dir = base.appendingPathComponent("lv-audio", isDirectory: true)
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
   }()
-  // Pinned cache keys (sanitized hashes), persisted so a relaunch still knows what
-  // the user chose to keep offline. Stored as `_pins.json` INSIDE cacheDir; the
-  // leading "_" keeps it out of the content scans below.
-  private lazy var pinsFile: URL = cacheDir.appendingPathComponent("_pins.json")
-  private lazy var pinned: Set<String> = {
-    guard let d = try? Data(contentsOf: pinsFile),
-          let a = try? JSONDecoder().decode([String].self, from: d) else { return [] }
-    return Set(a)
-  }()
-  private func savePins() {
-    try? JSONEncoder().encode(Array(pinned)).write(to: pinsFile)
-  }
 
   private var timeObserver: Any?
   private var statusObs: NSKeyValueObservation?
@@ -156,54 +140,48 @@ import WebKit
     }
   }
 
-  // MARK: offline pinning (per-book download)
+  // MARK: offline downloads (per-book)
 
-  /// Pin (download + keep) a set of chapters: `items: [{url, hash}]`. Pinned files
-  /// are exempt from LRU eviction, so a downloaded book stays offline. Idempotent.
+  /// Download + keep a set of chapters: `items: [{url, hash}]`. Persisted forever
+  /// (never auto-evicted); idempotent (skips what's already on disk).
   private func pin(_ d: [String: Any]?) {
     guard let items = d?["items"] as? [[String: Any]] else { return }
     for it in items {
       guard let s = it["url"] as? String, let u = URL(string: s) else { continue }
-      let key = cacheKey(forURL: u, hash: it["hash"] as? String)
-      pinned.insert(key)
-      downloadToCache(u, key) // no-op if already on disk
+      downloadToCache(u, cacheKey(forURL: u, hash: it["hash"] as? String))
     }
-    savePins()
   }
 
-  /// Unpin keys (sanitized hashes): they become LRU-evictable again. Frees space
-  /// on the next cap check.
+  /// Remove (delete) the given keys' audio files — the ONLY way audio leaves the
+  /// store (it's data, not a cache: nothing is auto-evicted). `keys` are the
+  /// sanitized content hashes the web computed from the manifest.
   private func unpin(_ d: [String: Any]?) {
     guard let keys = d?["keys"] as? [String] else { return }
-    for k in keys { pinned.remove(k) }
-    savePins()
-    enforceCacheCap()
+    let fm = FileManager.default
+    for k in keys {
+      let key = cacheKey(forURL: URL(string: "x:")!, hash: k) // sanitize same way
+      try? fm.removeItem(at: cacheDir.appendingPathComponent(key))
+    }
   }
 
-  /// Report the audio store state for the Downloads UI: cap, pinned/auto byte
-  /// totals, and the set of cached + pinned keys (the web maps keys→books via the
-  /// manifest). Replied as JSON via `window.__lvAudioResolve(id, json)`.
+  /// Report the audio store state for the Downloads UI: total bytes used + the set
+  /// of cached keys (the web maps keys→books via the manifest). No cap — audio is
+  /// durable data. Replied as JSON via `window.__lvAudioResolve(id, json)`.
   private func audioStats(_ d: [String: Any]?) {
     guard let id = d?["id"] as? String else { return }
     let fm = FileManager.default
     var cached: [String] = []
-    var pinnedBytes: Int64 = 0
-    var autoBytes: Int64 = 0
+    var usedBytes: Int64 = 0
     if let files = try? fm.contentsOfDirectory(
       at: cacheDir, includingPropertiesForKeys: [.fileSizeKey]
     ) {
       for f in files
       where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_") {
-        let key = f.lastPathComponent
-        cached.append(key)
-        let sz = Int64((try? f.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
-        if pinned.contains(key) { pinnedBytes += sz } else { autoBytes += sz }
+        cached.append(f.lastPathComponent)
+        usedBytes += Int64((try? f.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
       }
     }
-    let obj: [String: Any] = [
-      "cap": cacheCapBytes, "pinnedBytes": pinnedBytes, "autoBytes": autoBytes,
-      "cached": cached, "pinned": Array(pinned),
-    ]
+    let obj: [String: Any] = ["usedBytes": usedBytes, "cached": cached]
     let json = (try? JSONSerialization.data(withJSONObject: obj))
       .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     let esc = json.replacingOccurrences(of: "\\", with: "\\\\")
@@ -570,35 +548,9 @@ import WebKit
         try? fm.removeItem(at: part)
         return
       }
-      DispatchQueue.main.async { self.enforceCacheCap() }
+      // No eviction: downloaded/played audio is durable data, kept until the user
+      // removes the book.
     }.resume()
-  }
-
-  /// LRU eviction: while the cache exceeds the cap, delete the least-recently-used
-  /// (oldest modification date) complete files. `.part` files are left alone.
-  private func enforceCacheCap() {
-    let fm = FileManager.default
-    guard let files = try? fm.contentsOfDirectory(
-      at: cacheDir, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
-    ) else { return }
-    var entries: [(url: URL, date: Date, size: Int64)] = []
-    var total: Int64 = 0
-    for f in files
-    where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_")
-      && !pinned.contains(f.lastPathComponent) {
-      // PINNED files (and the _pins.json sidecar) are NOT eviction candidates and
-      // don't count toward the auto-tier cap — a downloaded book stays put.
-      let v = try? f.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-      let size = Int64(v?.fileSize ?? 0)
-      entries.append((f, v?.contentModificationDate ?? .distantPast, size))
-      total += size
-    }
-    guard total > cacheCapBytes else { return }
-    for e in entries.sorted(by: { $0.date < $1.date }) { // oldest first
-      if total <= cacheCapBytes { break }
-      try? fm.removeItem(at: e.url)
-      total -= e.size
-    }
   }
 
   // MARK: native → web
