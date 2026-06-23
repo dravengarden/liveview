@@ -45,6 +45,9 @@ interface AudioRes {
 }
 
 const MAX_KEY = "lv.offline.maxGB";
+// Cached audio-corpus total (bytes) — a tiny "index" so the gauge shows a real
+// target instantly on open, before the live /api/dag total arrives.
+const TOTAL_KEY = "lv.offline.audioTotalBytes";
 const CAP_PRESETS = [2, 5, 10, 20, 30, 50];
 function maxGB(): number {
   return Number(globalThis.localStorage?.getItem(MAX_KEY) ?? "20") || 20;
@@ -127,12 +130,16 @@ export function OfflineSection(): React.JSX.Element | null {
 
   const cachedSet = useMemo(() => new Set(audio?.cached ?? []), [audio]);
 
-  // Audio totals from the manifest (compressed estimate) ∩ what's actually cached.
+  // Audio corpus total (compressed estimate, from the live manifest) + a cached
+  // fallback so the gauge isn't 0/0 before the dag loads.
   const audioTotalBytes = useMemo(() => audioRes.reduce((s, r) => s + r.bytes, 0), [audioRes]);
-  const audioDoneBytes = useMemo(
-    () => audioRes.reduce((s, r) => (cachedSet.has(r.hash) ? s + r.bytes : s), 0),
-    [audioRes, cachedSet],
+  const cachedTotal = useMemo(
+    () => Number(globalThis.localStorage?.getItem(TOTAL_KEY) ?? 0) || 0,
+    [],
   );
+  useEffect(() => {
+    if (audioTotalBytes > 0) globalThis.localStorage?.setItem(TOTAL_KEY, String(audioTotalBytes));
+  }, [audioTotalBytes]);
   const audioDoneCount = useMemo(
     () => audioRes.reduce((n, r) => (cachedSet.has(r.hash) ? n + 1 : n), 0),
     [audioRes, cachedSet],
@@ -158,13 +165,17 @@ export function OfflineSection(): React.JSX.Element | null {
   const textUsed = stats?.cb ?? 0;
   const used = audioUsed + textUsed;
   const capBytes = cap * 1_073_741_824;
-  const target = (stats?.tb ?? 0) + audioTotalBytes; // bytes for "fully offline"
+  // Preliminary total from the cached index (instant) → refined by the live dag.
+  const audioTotal = audioTotalBytes || cachedTotal;
+  const target = (stats?.tb ?? 0) + audioTotal; // bytes for "fully offline"
   const usedPct = capBytes > 0 ? Math.min(100, Math.round((used / capBytes) * 100)) : 0;
   const bufferPct = capBytes > 0
     ? Math.min(100, Math.round((Math.min(target, capBytes) / capBytes) * 100))
     : 0;
-  const audioPct = audioTotalBytes > 0
-    ? Math.min(100, Math.round((audioDoneBytes / audioTotalBytes) * 100))
+  // "Done" = actual on-disk audio bytes (authoritative + instant from native),
+  // against the corpus total (estimate). Keeps the gauge consistent with "used".
+  const audioPct = audioTotal > 0
+    ? Math.min(100, Math.round((audioUsed / audioTotal) * 100))
     : 0;
   const downloadComplete = audioRes.length > 0 && audioDoneCount >= audioRes.length
     && (stats == null || stats.cached >= stats.total);
@@ -267,7 +278,7 @@ export function OfflineSection(): React.JSX.Element | null {
         <Stack direction="row" justifyContent="space-between" sx={{ mt: 0.75 }} spacing={1}>
           <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
             {zh ? "文字 " : "Text "}{gb(textUsed)} · {zh ? "音频 " : "Audio "}
-            {gb(audioDoneBytes)} / {gb(audioTotalBytes)} · {audioPct}%
+            {gb(audioUsed)} / {gb(audioTotal)} · {audioPct}%
           </Typography>
           {downloading && !waitingWifi && speed != null && (
             <Typography
