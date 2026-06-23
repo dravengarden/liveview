@@ -380,6 +380,28 @@ function followScroll(scroller: HTMLElement, range: Range): void {
   scrollTopTo(scroller, lineTop + rr.height / 2 - scroller.clientHeight / 2);
 }
 
+/** Centre the line like {@link followScroll}, but CLAMP the scroll so the unit's
+ *  BLOCK stays on screen. On formula-heavy lines the per-sentence locate can drift
+ *  WITHIN the block (a math-stripped needle matches at the wrong offset), so
+ *  centring the raw range could scroll to the wrong spot; the block (located by
+ *  the server's `data-sourcepos`) is reliable, so the scroll can never leave it. */
+function followScrollClamped(
+  scroller: HTMLElement,
+  range: Range,
+  block: HTMLElement | null,
+): void {
+  const rr = range.getBoundingClientRect();
+  let target = contentTop(scroller, rr.top) + rr.height / 2 - scroller.clientHeight / 2;
+  if (block) {
+    const bTop = contentTop(scroller, block.getBoundingClientRect().top);
+    const bBot = bTop + block.getBoundingClientRect().height;
+    const lo = bBot - scroller.clientHeight; // block bottom at viewport bottom
+    const hi = bTop; // block top at viewport top
+    target = Math.min(Math.max(target, Math.min(lo, hi)), Math.max(lo, hi));
+  }
+  scrollTopTo(scroller, target);
+}
+
 export function useInPlaceHighlight(
   scrollerRef: RefObject<HTMLElement | null>,
   currentPath: string | null,
@@ -834,7 +856,11 @@ export function useInPlaceHighlight(
     // new sentence hasn't located yet) would scroll far off then snap back; skip
     // it — the next locate (focus effect → scrollSettle) re-runs this and centres.
     if (curRangeRef.current && curRangeIdxRef.current === currentIdx) {
-      followScroll(scroller, curRangeRef.current);
+      // Clamp the scroll to the unit's block (reliable via data-sourcepos) so a
+      // formula-heavy line whose sentence range drifted can never scroll to the
+      // wrong place — worst case it's off by a paragraph, not off-screen.
+      const blk = unit && body ? blockElForUnit(body, unit) : null;
+      followScrollClamped(scroller, curRangeRef.current, blk);
     }
     return undefined;
   }, [active, following, currentIdx, scrollSettle, scrollerRef, units]);
