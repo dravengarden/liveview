@@ -10,6 +10,7 @@ import {
 import type { Mark, SpokenContent } from "@/types";
 import { audioHash } from "@/audioHash";
 import { contentFetch } from "@/native-sync";
+import { remoteUrl } from "@/apiBase";
 import {
   nativeMediaAvailable,
   nativeMediaClear,
@@ -420,7 +421,10 @@ export function AudioPlayerProvider(
             // resolve a relative path) + metadata; it seeks to `position`, then
             // plays if autoplay. It owns the AVAudioSession + lock-screen tile,
             // and caches the audio (keyed by `hash`) for offline.
-            const origin = globalThis.location.origin;
+            // Bundled shell runs on a local origin → the native audio URL must
+            // point at the REMOTE server (remoteUrl(""); empty/relative on the
+            // remote origin + PWA).
+            const origin = remoteUrl("");
             // Content hash for the offline cache key (best-effort — native falls
             // back to URL-keying when absent). May await a small manifest fetch.
             const hash = await audioHash(np.bookSlug, np.chapterPath, np.lang);
@@ -1203,10 +1207,11 @@ export function AudioPlayerProvider(
       title: nowPlaying.chapterLabel,
       artist: nowPlaying.bookLabel,
       album: nowPlaying.bookLabel,
-      // Absolute URL — native URLSession can't resolve a relative path.
-      artworkUrl: `${globalThis.location.origin}/api/artwork?book=${
-        encodeURIComponent(nowPlaying.bookSlug)
-      }`,
+      // Absolute URL — native URLSession can't resolve a relative path (and a
+      // bundled shell's local origin isn't the server).
+      artworkUrl: remoteUrl(
+        `/api/artwork?book=${encodeURIComponent(nowPlaying.bookSlug)}`,
+      ),
       duration,
     });
   }, [nowPlaying, duration]);

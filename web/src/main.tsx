@@ -4,7 +4,14 @@ import { App } from "./App";
 import { I18nProvider } from "./i18n";
 import { AudioPlayerProvider } from "./audio/player";
 import { installHaptics } from "./_shell";
+import { BUNDLED, installApiShim } from "./apiBase";
 import "./styles/index.css";
+
+// When bundled into the native shell (local origin), point relative /api/* fetches
+// at the remote server so the app works; reader CONTENT still resolves offline via
+// the native plugin (contentFetch). No-op on the remote origin / PWA. Install
+// FIRST, before any module fires a fetch.
+installApiShim();
 
 // Global haptic delegation: ONE listener set buzzes every MUI control (button /
 // toggle / card / chip / Select), custom `cursor:pointer` clickable, text input,
@@ -41,7 +48,7 @@ try {
 
 // Register the PWA service worker (production builds only — in dev the Vite
 // server owns the page and a SW would serve stale modules).
-if (import.meta.env.PROD && "serviceWorker" in navigator) {
+if (import.meta.env.PROD && !BUNDLED && "serviceWorker" in navigator) {
   // Auto-reload once when a freshly-deployed SW takes control. The SW already
   // calls skipWaiting()+clients.claim() on a VERSION bump, which fires
   // `controllerchange` — without this listener the page keeps running the old
