@@ -89,7 +89,7 @@ import WebKit
     switch cmd {
     case "resolve":
       guard let url = body["url"] as? String else { reply(id, false, ""); return }
-      resolve(id: id, url: url)
+      resolve(id: id, url: url, fresh: (body["fresh"] as? Bool) ?? false)
     case "stats":
       stats(id: id)
     case "syncAll":
@@ -101,22 +101,33 @@ import WebKit
 
   // MARK: commands
 
-  private func resolve(id: String, url: String) {
+  /// `fresh=false` (default) = cache-first: immutable content-addressed reads.
+  /// `fresh=true` = network-first (fetch → store → reply; fall back to cache when
+  /// offline): for LIVE lists (/api/books, /api/tree) that change when the corpus
+  /// changes, so a newly-deployed book shows up instead of serving a stale cache.
+  ///
+  /// NOTE: text/units/marks are KB-sized — they do NOT ping the download gate.
+  /// Pinging here throttled the bulk audio fill to 1 connection during playback;
+  /// only AUDIO streaming (load(), MB-sized) yields the connection now.
+  private func resolve(id: String, url: String, fresh: Bool) {
     let key = cacheKey(url)
-    if let data = cachedData(key) {
+    if !fresh, let data = cachedData(key) {
       reply(id, true, data.base64EncodedString())
       return
     }
-    // NOTE: text/units/marks are KB-sized — they do NOT ping the download gate.
-    // Pinging here throttled the bulk audio fill to 1 connection during playback
-    // (the read-along refetches units/marks continuously), capping it at ~205KB/s.
-    // The bulk runs at low priority anyway; only AUDIO streaming (load(), MB-sized)
-    // yields the connection now.
     fetch(url) { [weak self] data in
       guard let self else { return }
-      guard let data else { self.reply(id, false, ""); return }
-      self.store(key, data)
-      self.reply(id, true, data.base64EncodedString())
+      if let data {
+        self.store(key, data)
+        self.reply(id, true, data.base64EncodedString())
+        return
+      }
+      // Network failed (offline/error) → fall back to the last-known cache.
+      if let cached = self.cachedData(key) {
+        self.reply(id, true, cached.base64EncodedString())
+        return
+      }
+      self.reply(id, false, "")
     }
   }
 

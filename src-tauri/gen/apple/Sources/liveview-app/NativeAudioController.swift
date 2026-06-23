@@ -41,23 +41,6 @@ import MediaPlayer
 import UIKit
 import WebKit
 
-/// Cross-controller foreground signal. A foreground network fetch — the reader
-/// pulling an uncached chapter's TEXT (LvSyncController) or streaming an uncached
-/// AUDIO chapter — "pings" this; the bulk audio download scheduler then pauses
-/// issuing new tasks for a short window so what the user is doing RIGHT NOW wins
-/// the shared HTTP/2 connection's bandwidth. This client-side gate is the real
-/// yield mechanism: `URLSessionTask.priority` maps to HTTP/2 stream priority,
-/// which RFC 9113 deprecated and most stacks ignore, so it can't be relied on.
-public enum LvDownloadGate {
-  private static var lastPing: TimeInterval = 0
-  public static func pingForeground() {
-    lastPing = Date().timeIntervalSinceReferenceDate
-  }
-  static var foregroundActive: Bool {
-    Date().timeIntervalSinceReferenceDate - lastPing < 2.0
-  }
-}
-
 @objc(NativeAudioController) public final class NativeAudioController: NSObject, WKScriptMessageHandler {
   private static var controllers: [ObjectIdentifier: NativeAudioController] = [:]
   private static let messageName = "lvNativeAudio"
@@ -122,18 +105,17 @@ public enum LvDownloadGate {
 
   // ── Adaptive bulk-download scheduler ────────────────────────────────────────
   // Bulk pin/preload no longer fire all tasks at once (under HTTP/2 they'd pile
-  // onto one connection with NO cap). A worker pool keeps exactly `dlLimit` in
+  // onto one connection with NO cap). A worker pool keeps up to `dlLimit` in
   // flight; `dlLimit` adapts by hill-climbing aggregate throughput (find the
-  // bandwidth knee), backs off hard on overload, and PAUSES entirely while a
-  // foreground fetch is active (the real yield — see LvDownloadGate). The
-  // currently-PLAYING chapter still downloads immediately (foreground), bypassing
-  // this queue.
+  // bandwidth knee) and backs off hard on overload. Default task priority + full
+  // concurrency saturate the link (~45 MB/s); the currently-PLAYING chapter
+  // downloads immediately, bypassing this queue.
   private struct DLItem { let url: URL; let key: String }
   private var dlQueue: [DLItem] = []
   private var dlInflight = 0
-  private var dlLimit = 8
-  private let dlMin = 2
-  private let dlMax = 32
+  private var dlLimit = 12
+  private let dlMin = 6
+  private let dlMax = 48
   private var dlWindowBytes: Int64 = 0
   private var dlWindowStart: TimeInterval = 0
   private var dlLastTput: Double = 0
@@ -274,14 +256,13 @@ public enum LvDownloadGate {
     pump()
   }
 
-  /// Keep up to `dlLimit` downloads in flight. While a foreground fetch is active
-  /// the bulk fill YIELDS to a floor of 1 (not 0): the reader/stream gets the bulk
-  /// of the shared connection, but the fill never fully stalls — on a fresh install
-  /// the reader fetches near-continuously, so a hard pause starved the fill to
-  /// 0 KB/s forever. One trickle slot keeps it progressing.
+  /// Keep up to `dlLimit` downloads in flight. No foreground gate: with the MP3
+  /// hog gone (compressed CAF) + default priority, the bulk and the foreground
+  /// stream/reads share the one H2 connection fine — the gate's hard throttle was
+  /// capping the whole fill at ~1 stream (~260 KB/s) while audio played. Full
+  /// concurrency matches the old unbounded path's ~45 MB/s.
   private func pump() {
-    let limit = LvDownloadGate.foregroundActive ? 1 : dlLimit
-    while dlInflight < limit, !dlQueue.isEmpty {
+    while dlInflight < dlLimit, !dlQueue.isEmpty {
       let item = dlQueue.removeFirst()
       if onDisk(item.key) || inFlight.contains(item.key) { continue }
       runScheduled(item)
@@ -339,16 +320,14 @@ public enum LvDownloadGate {
     let tput = dt > 0 ? Double(dlWindowBytes) / dt : 0
     dlWindowStart = now
     dlWindowBytes = 0
-    // Hill-climb toward the throughput knee (only meaningful when we were actually
-    // saturated — don't grow while app-limited or yielding to foreground).
-    if !LvDownloadGate.foregroundActive {
-      if tput > dlLastTput * 1.05 {
-        if dlInflight >= dlLimit { dlLimit = min(dlMax, dlLimit + 2) }
-      } else if tput < dlLastTput * 0.90 {
-        dlLimit = max(dlMin, dlLimit - 2)
-      }
-      dlLastTput = max(tput, dlLastTput * 0.5) // decay the reference so it re-probes
+    // Hill-climb toward the throughput knee (grow while saturated + improving;
+    // shrink if it drops). Bounded [dlMin, dlMax].
+    if tput > dlLastTput * 1.05 {
+      if dlInflight >= dlLimit { dlLimit = min(dlMax, dlLimit + 4) }
+    } else if tput < dlLastTput * 0.90 {
+      dlLimit = max(dlMin, dlLimit - 2)
     }
+    dlLastTput = max(tput, dlLastTput * 0.5) // decay the reference so it re-probes
     // Stalled tasks: a hung connection just fails (or hits URLSession's timeout) →
     // the completion handler requeues it (bounded). We keep no per-task handle, so
     // a slow-but-progressing task simply holds its slot and the limit compensates.
@@ -493,9 +472,6 @@ public enum LvDownloadGate {
     } else {
       item = AVPlayerItem(url: url)
       playingFromCache = false
-      // Streaming an uncached chapter is FOREGROUND network — make the bulk fill
-      // yield so this chapter buffers fast.
-      LvDownloadGate.pingForeground()
       downloadToCache(url, key)
     }
     observeItem(item)
