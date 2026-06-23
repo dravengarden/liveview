@@ -77,17 +77,104 @@ export async function contentFetch(url: string): Promise<Response> {
   return fetch(url);
 }
 
-/** Offline cache stats for non-audio content: [cachedCount, totalCount, cachedBytes, totalBytes]. */
-export async function nativeCacheStats(): Promise<[number, number, number, number]> {
-  const { ok, payload } = await call("stats");
-  if (!ok) throw new Error("stats unavailable");
-  return JSON.parse(payload) as [number, number, number, number];
+/** Per-book offline coverage. */
+export interface BookStat {
+  slug: string;
+  cached: number;
+  total: number;
+  cb: number;
+  tb: number;
+}
+/** Rich offline-cache stats for non-audio content. */
+export interface CacheStats {
+  net: "wifi" | "cell" | "none";
+  cached: number;
+  total: number;
+  cb: number;
+  tb: number;
+  books: BookStat[];
 }
 
-/** Eager-pull the whole corpus's non-audio content. Resolves to bytes cached.
- *  Long-running; fire it and poll {@link nativeCacheStats} for live progress. */
-export async function nativeSyncAll(): Promise<number> {
-  const { ok, payload } = await call("syncAll", undefined, 1_200_000);
+interface RawStats {
+  net?: string;
+  cached?: number;
+  total?: number;
+  cb?: number;
+  tb?: number;
+  books?: { s: string; c: number; t: number; cb: number; tb: number }[];
+}
+
+/** Global totals + per-book breakdown + current network type. */
+export async function nativeCacheStats(): Promise<CacheStats> {
+  const { ok, payload } = await call("stats");
+  if (!ok) throw new Error("stats unavailable");
+  const r = JSON.parse(payload) as RawStats;
+  return {
+    net: (r.net as CacheStats["net"]) ?? "none",
+    cached: r.cached ?? 0,
+    total: r.total ?? 0,
+    cb: r.cb ?? 0,
+    tb: r.tb ?? 0,
+    books: (r.books ?? []).map((b) => ({
+      slug: b.s,
+      cached: b.c,
+      total: b.t,
+      cb: b.cb,
+      tb: b.tb,
+    })),
+  };
+}
+
+/** Eager-pull the whole corpus's non-audio content. When `wifiOnly`, the native
+ *  side refuses to use cellular (returns the "nowifi" sentinel off WiFi). Resolves
+ *  to bytes downloaded this run; long-running, so poll {@link nativeCacheStats}
+ *  for live progress. A second call while one is in flight returns fast ("busy"). */
+export async function nativeSyncAll(wifiOnly = false): Promise<number> {
+  const h = handler();
+  if (!h) return 0;
+  ensureResolver();
+  const id = `s${++seq}`;
+  const { ok, payload } = await new Promise<Reply>((resolve) => {
+    pending.set(id, resolve);
+    h.postMessage({ id, cmd: "syncAll", wifiOnly });
+    setTimeout(() => {
+      if (pending.delete(id)) resolve({ ok: false, payload: "" });
+    }, 1_200_000);
+  });
   if (!ok) throw new Error("sync failed");
-  return Number(payload);
+  return Number(payload) || 0;
+}
+
+// ── Download preferences (persisted, shell-only). Auto-download defaults ON, and
+// WiFi-only defaults ON so we never surprise-burn cellular data.
+
+const AUTO_KEY = "lv.offline.auto";
+const WIFI_KEY = "lv.offline.wifiOnly";
+
+export function offlineAuto(): boolean {
+  return (globalThis.localStorage?.getItem(AUTO_KEY) ?? "1") === "1";
+}
+export function offlineWifiOnly(): boolean {
+  return (globalThis.localStorage?.getItem(WIFI_KEY) ?? "1") === "1";
+}
+export function setOfflineAuto(on: boolean): void {
+  globalThis.localStorage?.setItem(AUTO_KEY, on ? "1" : "0");
+  if (on) void ensureAutoSync();
+}
+export function setOfflineWifiOnly(on: boolean): void {
+  globalThis.localStorage?.setItem(WIFI_KEY, on ? "1" : "0");
+  // Relaxing the constraint may unblock a previously-refused run.
+  if (!on) void ensureAutoSync();
+}
+
+/** Kick off (or continue) the eager download IF auto-download is on. Safe to call
+ *  repeatedly — the native side guards against concurrent runs, and a WiFi-only
+ *  refusal is a no-op until WiFi returns (the settings poll re-fires it). */
+export async function ensureAutoSync(): Promise<void> {
+  if (!nativeSyncAvailable() || !offlineAuto()) return;
+  try {
+    await nativeSyncAll(offlineWifiOnly());
+  } catch {
+    /* transient; the next poll/startup retries */
+  }
 }

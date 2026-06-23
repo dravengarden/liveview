@@ -1,6 +1,6 @@
 import { rem } from "@/px";
 import { nativeNavPop, nativeNavPush, nativeNavReady } from "@/native-nav";
-import { contentFetch } from "@/native-sync";
+import { contentFetch, ensureAutoSync } from "@/native-sync";
 import {
   useCallback,
   useEffect,
@@ -608,6 +608,11 @@ export function App(): React.JSX.Element {
         // Idle-scheduled + session-deduped inside prefetch, so it's a background
         // trickle that never blocks the shelf.
         void prefetchAllBooks(list.map((b) => b.slug));
+        // Native shell: bulk-download the whole corpus into the offline content
+        // cache (auto-download, default on, WiFi-only by default). Runs with
+        // bounded concurrency native-side; no-op on web/PWA and when the user
+        // turned auto-download off in settings.
+        void ensureAutoSync();
       } catch (e) {
         console.error("Failed to fetch books:", e);
       }
