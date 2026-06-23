@@ -67,7 +67,12 @@ type OutMsg =
     readonly kind: "pin";
     readonly data: { readonly items: { url: string; hash: string }[] };
   }
+  | {
+    readonly kind: "preload";
+    readonly data: { readonly items: { url: string; hash: string }[] };
+  }
   | { readonly kind: "unpin"; readonly data: { readonly keys: string[] } }
+  | { readonly kind: "setCap"; readonly data: { readonly bytes: number } }
   | { readonly kind: "audioStats"; readonly data: { readonly id: string } };
 
 interface WebKitHandler {
@@ -145,9 +150,19 @@ export function nativeAudioPrefetch(url: string, hash?: string): boolean {
 // durable (Application Support) with two tiers: PINNED (user-downloaded, never
 // evicted) and auto (LRU-capped, cached as a side-effect of playing).
 
-/** Pin a book's chapters for durable offline playback (download + keep). */
+/** MANUAL download: pin a book's chapters (protected — never auto-evicted). */
 export function nativeAudioPin(items: { url: string; hash: string }[]): boolean {
   return send({ kind: "pin", data: { items } });
+}
+
+/** AUTO preload: fill the storage budget with these chapters (evictable, LRU). */
+export function nativeAudioPreload(items: { url: string; hash: string }[]): boolean {
+  return send({ kind: "preload", data: { items } });
+}
+
+/** Set the audio storage budget (bytes); native evicts evictable audio to fit. */
+export function nativeAudioSetCap(bytes: number): boolean {
+  return send({ kind: "setCap", data: { bytes } });
 }
 
 /** Remove (delete) a book's audio — the only way audio leaves the durable store
@@ -162,7 +177,14 @@ export function nativeAudioUnpin(keys: string[]): boolean {
  *  not a cache). */
 export interface AudioStats {
   usedBytes: number;
+  /** Storage budget in bytes (the user's max-storage setting). */
+  cap: number;
+  /** Bytes held by PINNED (manually-downloaded, eviction-protected) books. */
+  pinnedBytes: number;
+  /** All cache keys on disk (sanitized content hashes). */
   cached: string[];
+  /** The pinned (protected) subset. */
+  pinned: string[];
 }
 
 const audioPending = new Map<string, (json: string) => void>();
