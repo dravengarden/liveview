@@ -9,6 +9,7 @@ import {
 } from "react";
 import type { Mark, SpokenContent } from "@/types";
 import { audioHash } from "@/audioHash";
+import { contentFetch } from "@/native-sync";
 import {
   nativeMediaAvailable,
   nativeMediaClear,
@@ -384,13 +385,13 @@ export function AudioPlayerProvider(
       const q1 = query(np.chapterPath, np.lang, np.rendition);
       void (async () => {
         try {
-          const sres = await fetch(`/api/spoken?${q1}`);
+          const sres = await contentFetch(`/api/spoken?${q1}`);
           if (!sres.ok) throw new Error(`spoken: ${sres.status}`);
           const sdata = (await sres.json()) as SpokenContent;
           if (loadSeq.current !== seq) return;
           setSentences(sdata.sentences);
 
-          const mres = await fetch(`/api/marks?${q1}`);
+          const mres = await contentFetch(`/api/marks?${q1}`);
           if (!mres.ok) throw new Error(`marks: ${mres.status}`);
           const mdata = (await mres.json()) as Mark[];
           if (loadSeq.current !== seq) return;

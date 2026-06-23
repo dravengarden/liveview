@@ -1,5 +1,6 @@
 import { rem } from "@/px";
 import { nativeNavPop, nativeNavPush, nativeNavReady } from "@/native-nav";
+import { contentFetch } from "@/native-sync";
 import {
   useCallback,
   useEffect,
@@ -735,7 +736,7 @@ export function App(): React.JSX.Element {
       currentPathRef.current = path;
       setFileError(null);
       try {
-        const res = await fetch(
+        const res = await contentFetch(
           `/api/file?path=${encodeURIComponent(path)}&lang=${
             encodeURIComponent(reqLang)
           }&rendition=${encodeURIComponent(reqRendition)}`,
