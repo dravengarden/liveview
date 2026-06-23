@@ -113,9 +113,14 @@ import WebKit
   private struct DLItem { let url: URL; let key: String }
   private var dlQueue: [DLItem] = []
   private var dlInflight = 0
-  private var dlLimit = 12
-  private let dlMin = 6
-  private let dlMax = 48
+  // High concurrency on purpose: URLSession uses ONE HTTP/2 connection, so on a
+  // high-BDP path (device → tunnel → host) a handful of multiplexed streams can't
+  // fill the pipe — each stream is flow-control-window-limited. The old unbounded
+  // prefetch hit ~45 MB/s precisely because it had hundreds of concurrent streams.
+  // Match that: start wide, cap at ~the server's max-concurrent-streams.
+  private var dlLimit = 48
+  private let dlMin = 16
+  private let dlMax = 100
   private var dlWindowBytes: Int64 = 0
   private var dlWindowStart: TimeInterval = 0
   private var dlLastTput: Double = 0
