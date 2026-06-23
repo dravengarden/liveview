@@ -404,6 +404,12 @@ export function useInPlaceHighlight(
   // heartbeat forced a repaint thrice a second and made the line flicker.)
   // The spoken line's live range, so the jump button can re-centre on it.
   const curRangeRef = useRef<Range | null>(null);
+  // Which unit idx `curRangeRef` was located for. The follow effect must NOT
+  // scroll to it unless it's for the CURRENT idx — otherwise, the instant the line
+  // advances but the new sentence isn't located yet (DOM/units still settling),
+  // we'd scroll to the STALE previous range (often far off-screen) and snap back
+  // once it relocates ("突然跳到不存在的行，然后又回去").
+  const curRangeIdxRef = useRef<number>(-1);
   // The block element currently carrying the paused DOM-background tint (see the
   // focus effect), so we can clear it when the line moves or playback resumes.
   const litBlockRef = useRef<HTMLElement | null>(null);
@@ -513,8 +519,16 @@ export function useInPlaceHighlight(
     prevChapRef.current = nowPlaying.chapterPath;
     if (prev === null || prev === nowPlaying.chapterPath) return;
     curRangeRef.current = null;
+    curRangeIdxRef.current = -1;
     const scroller = scrollerRef.current;
     if (scroller) scroller.scrollTop = 0;
+    // Re-run locate/focus + follow once the NEW chapter's DOM has had a frame to
+    // mount — otherwise, if units land before the new markdown renders, the focus
+    // effect locates against stale/absent DOM and the new page shows NO highlight
+    // ("播放到新页面没有高亮"). A double-rAF clears the swap.
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => setScrollSettle((s) => s + 1))
+    );
   }, [active, nowPlaying?.chapterPath, scrollerRef]);
 
   // RETURN FROM BACKGROUND = a RE-ENTRY: re-orient to the spoken line, always.
@@ -773,7 +787,10 @@ export function useInPlaceHighlight(
     // Remember the spoken line so the jump button + the auto-follow effect can
     // re-centre it. (The actual scrolling lives in the dedicated follow effect
     // below, so it fires on sentence CHANGE only — not on every repaint tick.)
-    if (curRange) curRangeRef.current = curRange;
+    if (curRange) {
+      curRangeRef.current = curRange;
+      curRangeIdxRef.current = currentIdx;
+    }
     // Conditional: a re-run mid-scroll (suspended) must keep the frozen paint, not
     // clear it. When the scroll settles the effect re-runs with suspend already
     // off, so this clears normally and the body repaints to the live position.
@@ -813,7 +830,10 @@ export function useInPlaceHighlight(
         return undefined;
       }
     }
-    if (curRangeRef.current) {
+    // Only follow a range that belongs to the CURRENT line. A stale range (the
+    // new sentence hasn't located yet) would scroll far off then snap back; skip
+    // it — the next locate (focus effect → scrollSettle) re-runs this and centres.
+    if (curRangeRef.current && curRangeIdxRef.current === currentIdx) {
       followScroll(scroller, curRangeRef.current);
     }
     return undefined;
