@@ -2,7 +2,7 @@ import { Box, LinearProgress, Typography } from "@mui/material";
 import { useEffect, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import { CloudDownload, ExpandMore, GraphicEq } from "@mui/icons-material";
-import { DetentSheet } from "../_shell";
+import { DetentSheet, useAnyDetentSheetOpen } from "../_shell";
 import { useNavbarAtBottom } from "@/hooks";
 import { rem } from "@/px";
 import {
@@ -51,6 +51,10 @@ export function SyncIndicator(
   // top, so the strip rides at top:0 as a hairline above it.
   const navbarAtBottom = useNavbarAtBottom();
   const [open, setOpen] = useState(false);
+  // Hide the ambient bottom strip while ANY DetentSheet (Settings, TOC, the
+  // PlaybackSheet…) is open — the strip is fixed at appBar z-index and would
+  // otherwise float OVER the sheet's content.
+  const anySheetOpen = useAnyDetentSheetOpen();
 
   // The strip surfaces only GENUINE background work — audio GENERATION. Routine
   // offline prefetch (warming text/audio as you browse) is instant-ish and stays
@@ -118,7 +122,7 @@ export function SyncIndicator(
 
   return (
     <>
-      {generating && !open && (
+      {generating && !open && !anySheetOpen && (
         <Box
           role="button"
           tabIndex={0}
