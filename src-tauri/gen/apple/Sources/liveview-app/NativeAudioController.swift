@@ -274,10 +274,14 @@ public enum LvDownloadGate {
     pump()
   }
 
-  /// Keep exactly `dlLimit` downloads in flight — UNLESS a foreground fetch is
-  /// active, in which case the bulk fill yields entirely (issues nothing new).
+  /// Keep up to `dlLimit` downloads in flight. While a foreground fetch is active
+  /// the bulk fill YIELDS to a floor of 1 (not 0): the reader/stream gets the bulk
+  /// of the shared connection, but the fill never fully stalls — on a fresh install
+  /// the reader fetches near-continuously, so a hard pause starved the fill to
+  /// 0 KB/s forever. One trickle slot keeps it progressing.
   private func pump() {
-    while !LvDownloadGate.foregroundActive, dlInflight < dlLimit, !dlQueue.isEmpty {
+    let limit = LvDownloadGate.foregroundActive ? 1 : dlLimit
+    while dlInflight < limit, !dlQueue.isEmpty {
       let item = dlQueue.removeFirst()
       if onDisk(item.key) || inFlight.contains(item.key) { continue }
       runScheduled(item)
