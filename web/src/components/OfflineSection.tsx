@@ -16,7 +16,6 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type CacheStats,
-  contentFetch,
   ensureAutoSync,
   nativeCacheStats,
   nativeSyncAvailable,
@@ -109,7 +108,11 @@ export function OfflineSection(): React.JSX.Element | null {
     nativeAudioSetCap(maxGB() * 1_073_741_824);
     void (async () => {
       try {
-        const dag = (await (await contentFetch("/api/dag")).json()) as {
+        // FRESH fetch (not contentFetch): the offline cache may hold a stale dag
+        // from before the audio URLs switched to the compressed `?fmt=c` form —
+        // and the Merkle root doesn't change on a URL-scheme change, so the cached
+        // copy would never refresh, making us download the old uncompressed MP3s.
+        const dag = (await (await fetch(`${REMOTE}/api/dag`)).json()) as {
           resources: { hash: string; kind: string; bytes: number; url: string }[];
         };
         setAudioRes(
