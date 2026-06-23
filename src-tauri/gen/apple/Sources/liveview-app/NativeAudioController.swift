@@ -120,6 +120,37 @@ import WebKit
     c.wireRemoteCommands()
     c.observeAudioSession()
     c.startTimeObserver()
+    c.purgeLegacyMp3()
+  }
+
+  /// One-time cleanup: delete legacy UNCOMPRESSED MP3s left from before audio
+  /// compression shipped. They sit under the same content-hash keys as the new
+  /// compressed (CAF) files, so `downloadToCache` skips them and the store stays
+  /// bloated (a mix of MP3 + CAF) forever. Identify MP3 by magic bytes ("ID3" tag
+  /// or a 0xFF frame sync) and remove them — the next preload re-fetches them
+  /// compressed. CAF ("caff") / m4a ("ftyp") are left untouched. Gated by a marker
+  /// so it runs once.
+  private func purgeLegacyMp3() {
+    let marker = cacheDir.appendingPathComponent("_mp3purged")
+    if FileManager.default.fileExists(atPath: marker.path) { return }
+    let fm = FileManager.default
+    if let files = try? fm.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: nil) {
+      for f in files
+      where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_") {
+        guard let h = try? FileHandle(forReadingFrom: f) else { continue }
+        let head = try? h.read(upToCount: 3)
+        try? h.close()
+        guard let head else { continue }
+        let isMp3 = head.starts(with: [0x49, 0x44, 0x33]) // "ID3"
+          || (head.count >= 2 && head[0] == 0xFF && (head[1] & 0xE0) == 0xE0) // frame sync
+        if isMp3 {
+          try? fm.removeItem(at: f)
+          pinned.remove(f.lastPathComponent)
+        }
+      }
+    }
+    savePins()
+    fm.createFile(atPath: marker.path, contents: Data())
   }
 
   private init(webView: WKWebView) {
