@@ -9,6 +9,8 @@ const COMMANDS: &[&str] = &[
     "refresh",
     "offline_fraction",
     "sync_book",
+    "sync_all",
+    "cache_stats",
     "gc",
 ];
 

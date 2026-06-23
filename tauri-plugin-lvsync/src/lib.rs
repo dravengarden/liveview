@@ -216,6 +216,46 @@ async fn gc(state: State<'_, LvState>) -> Result<u64, String> {
     Ok(state.engine.gc(&m).await as u64)
 }
 
+/// Offline cache stats for the NON-audio reader content (audio is the native
+/// AVPlayer's separate cache, so excluding it makes the number meaningful):
+/// `(cached_count, total_count, cached_bytes, total_bytes)`. Drives the
+/// "downloaded for offline" indicator.
+#[tauri::command]
+async fn cache_stats(state: State<'_, LvState>) -> Result<(u64, u64, u64, u64), String> {
+    let resources: Vec<Resource> = {
+        let m = state.manifest.read().await;
+        m.resources.iter().filter(|r| r.kind != "audio").cloned().collect()
+    };
+    let (mut cc, mut cb) = (0u64, 0u64);
+    let total = resources.len() as u64;
+    let total_bytes: u64 = resources.iter().map(|r| r.bytes).sum();
+    for r in &resources {
+        if state.engine.store().has(&r.hash).await {
+            cc += 1;
+            cb = cb.saturating_add(r.bytes);
+        }
+    }
+    Ok((cc, total, cb, total_bytes))
+}
+
+/// Eager-pull the WHOLE corpus's NON-audio content into the store (every book's
+/// text/units/spoken/marks/asset). Returns bytes cached. The UI fires this and
+/// polls `cache_stats` for live progress (both can run concurrently).
+#[tauri::command]
+async fn sync_all(state: State<'_, LvState>) -> Result<u64, String> {
+    let resources: Vec<Resource> = {
+        let m = state.manifest.read().await;
+        m.resources.iter().filter(|r| r.kind != "audio").cloned().collect()
+    };
+    let mut done = 0u64;
+    for r in &resources {
+        if state.engine.resolve(r).await.is_ok() {
+            done = done.saturating_add(r.bytes);
+        }
+    }
+    Ok(done)
+}
+
 /// Build the state from the app data dir, manage it, and kick a background
 /// manifest refresh. Best-effort — a failure here must not stop the shell.
 fn setup_state<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -241,6 +281,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             refresh,
             offline_fraction,
             sync_book,
+            sync_all,
+            cache_stats,
             gc,
         ])
         .setup(|app, _api| {

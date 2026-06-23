@@ -17,6 +17,8 @@
     "lvsync:allow-refresh",
     "lvsync:allow-offline-fraction",
     "lvsync:allow-sync-book",
+    "lvsync:allow-sync-all",
+    "lvsync:allow-cache-stats",
     "lvsync:allow-gc"
   ]
 }
