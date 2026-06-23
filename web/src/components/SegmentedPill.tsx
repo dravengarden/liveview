@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import type { SxProps, Theme } from "@mui/material";
 import { Box, ButtonBase } from "@mui/material";
 import { alpha } from "@mui/material/styles";
+import { rem } from "@/px";
 
 // A frosted-glass segmented "pill" switch — the 微信读书 / iOS segmented-control
 // shape, MUI-themed: a translucent rounded track with a single filled active pill
@@ -24,7 +25,12 @@ export function SegmentedPill<T extends string>({
     <Box
       sx={{
         position: "relative",
-        display: "inline-flex",
+        // EQUAL-width columns (not content-width flex) so every segment is the
+        // same size as the sliding pill — otherwise a wider label ("Downloads")
+        // makes its segment wider than the equal-width pill and the text reads as
+        // off-centre. Grid 1fr columns + a centred ButtonBase fix the alignment.
+        display: "inline-grid",
+        gridTemplateColumns: `repeat(${String(n)}, 1fr)`,
         p: 0.5,
         borderRadius: 999,
         // Translucent track on the frosted sheet — carries its own light blur so
@@ -82,11 +88,15 @@ export function SegmentedPill<T extends string>({
             sx={{
               position: "relative",
               zIndex: 1,
-              minWidth: 76,
-              px: 1.75,
+              width: "100%",
+              justifyContent: "center",
+              minWidth: rem(72),
+              // rem so the control (text + its breathing room) scales with the
+              // app-wide font-size setting, like every other UI surface.
+              px: rem(14),
               py: 0.5,
               borderRadius: 999,
-              fontSize: 13.5,
+              fontSize: rem(13.5),
               fontWeight: 600,
               letterSpacing: 0.1,
               // Active label: neutral in dark; in light a touch of the brand purple

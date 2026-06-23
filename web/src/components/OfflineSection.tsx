@@ -203,8 +203,8 @@ export function OfflineSection(): React.JSX.Element | null {
           }}
         />
         <ToggleRow
-          label={zh ? "仅 WiFi 下载" : "WiFi only"}
-          hint={zh ? "避免使用蜂窝数据" : "Avoid using cellular data"}
+          label={zh ? "仅 WiFi 预加载" : "Prefetch on WiFi only"}
+          hint={zh ? "蜂窝网络下不自动预加载" : "Don't auto-preload on cellular"}
           checked={wifiOnly}
           onChange={(v) => {
             setWifiOnly(v);
