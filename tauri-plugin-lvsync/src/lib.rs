@@ -1,22 +1,17 @@
-//! Native offline-first data layer (eager mode) for the iOS/Mac shell.
+//! Native offline-first data layer (eager mode) for the iOS/Mac shell, as a
+//! Tauri PLUGIN so the REMOTE web UI can reach it (app commands can't be invoked
+//! from a remote origin in Tauri 2 — see capabilities/remote-sync.json).
 //!
-//! The shell loads the REMOTE liveview UI in a WKWebView. With no service worker
-//! (unreliable in WKWebView) the web app would have NO offline content. This
-//! module gives it one: the remote UI calls the `lv_*` commands over Tauri IPC,
-//! which resolve through the shared [`lv_sync::Engine`] — store-first against a
-//! filesystem content-addressed cache, fetching + caching on a miss. Once a
-//! resource has been read online it replays OFFLINE with zero network.
+//! The remote UI calls `plugin:lvsync|resolve` etc. over IPC; each resolves
+//! through the shared [`lv_sync::Engine`] — store-first against a filesystem
+//! content-addressed cache, fetching + caching on a miss. Once read online, a
+//! resource replays OFFLINE with zero network. Scope: NON-audio reader content
+//! (text/units/spoken/marks/assets) + navigation metadata (tree/books/covers,
+//! url-keyed). Audio stays in NativeAudioController (its own AVPlayer cache).
 //!
-//! Scope: NON-audio reader content (text html, units, spoken, marks, assets).
-//! Audio stays in NativeAudioController (its own AVPlayer + offline cache). The
-//! retention planner (lv_sync::retention) decides WHICH audio books to pull; the
-//! Swift layer executes that — out of scope here.
-//!
-//! Manifest lifecycle: load the cached `/api/dag` from disk at startup (so the
-//! first launch offline still has the last-known map), then refresh from the
-//! network in the background and rewrite the cache. resolve() never blocks on the
-//! refresh — an empty/old manifest just means "not resolvable yet", and the web
-//! facade falls back to a direct fetch (which is what it did before this layer).
+//! Manifest lifecycle: seed from the on-disk `/api/dag` cache at startup
+//! (offline-launch safe), refresh from the network in the background, never block
+//! app start. resolve() never blocks on the refresh.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,7 +19,8 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use lv_sync::native::FsBlobStore;
 use lv_sync::{Engine, Fetcher, Manifest, Resource};
-use tauri::{AppHandle, Manager, State};
+use tauri::plugin::{Builder, TauriPlugin};
+use tauri::{AppHandle, Manager, Runtime, State};
 use tokio::sync::RwLock;
 
 /// The remote liveview origin (same as the loader's REMOTE / tauri.conf devUrl).
@@ -105,18 +101,13 @@ impl LvState {
 }
 
 fn index(m: &Manifest) -> HashMap<String, Resource> {
-    m.resources
-        .iter()
-        .map(|r| (norm(&r.url), r.clone()))
-        .collect()
+    m.resources.iter().map(|r| (norm(&r.url), r.clone())).collect()
 }
 
 /// Percent-decode a URL so the web's `encodeURIComponent`'d reads match the
-/// manifest's raw URLs. The app fetches `/api/file?path=slug%2Frel&...` while
-/// `/api/dag` emits the equivalent `/api/file?path=slug/rel&...` (ASCII corpus,
-/// raw query) — decoding both sides makes them equal. Manifest URLs carry no `%`,
-/// so decoding them is a no-op; only the incoming query URLs actually change.
-/// `%blob/<hash>` URLs have no `%`, so they pass through unchanged.
+/// manifest's raw URLs (e.g. `/api/file?path=slug%2Frel` ⇄ `…path=slug/rel`).
+/// Manifest URLs carry no `%`, so decoding them is a no-op; `/api/blob/<hash>`
+/// URLs have no `%` either, so they pass through unchanged.
 fn norm(url: &str) -> String {
     let bytes = url.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -137,24 +128,20 @@ fn norm(url: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-// ── Tauri commands (called from the remote UI over IPC) ──────────────────────
+// ── Plugin commands (invoked from the remote UI as `plugin:lvsync|<name>`) ────
 
-/// Resolve a content URL → raw bytes (binary IPC response, NOT a JSON number
-/// array), offline-safe. A MANIFEST resource resolves store-first by content
-/// hash (immutable, instant when cached). Any OTHER content URL — the navigation
-/// metadata the manifest doesn't enumerate (`/api/tree`, `/api/books`, covers) —
-/// goes through the url-keyed network-first cache so it too works offline. This
-/// is the SOLE content path on the shell: the web must NOT fall back to a raw
-/// WKWebView `fetch`, which HANGS offline (the whole bug this fixes). Errors
-/// `"offline"` when uncached + unreachable.
+/// Resolve a content URL → raw bytes (binary IPC response), offline-safe. A
+/// MANIFEST resource resolves store-first by content hash; any OTHER content URL
+/// (navigation metadata: /api/tree, /api/books, covers) goes through the url-keyed
+/// network-first cache so it too works offline. Errors `"offline"` when uncached
+/// + unreachable.
 #[tauri::command]
-pub(crate) async fn lv_resolve(state: State<'_, LvState>, url: String) -> Result<tauri::ipc::Response, String> {
+async fn resolve(state: State<'_, LvState>, url: String) -> Result<tauri::ipc::Response, String> {
     let n = norm(&url);
     let res = state.by_url.read().await.get(&n).cloned();
     let bytes = match res {
         Some(r) => state.engine.resolve(&r).await,
         None => {
-            // Non-manifest content (tree/books/cover): cache it keyed by the URL.
             let key = format!("{}{}", lv_sync::URL_KEY_PREFIX, lv_sync::hash_hex(n.as_bytes()));
             state.engine.fetch_keyed(&key, &n).await
         }
@@ -166,39 +153,36 @@ pub(crate) async fn lv_resolve(state: State<'_, LvState>, url: String) -> Result
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-/// Whether a URL is in the current manifest (the web decides whether to route via
-/// `lv_resolve` or fall back to `fetch`).
+/// Whether a URL is a known MANIFEST resource (non-manifest content is still
+/// resolvable via `resolve`'s url-keyed path; this just reports manifest membership).
 #[tauri::command]
-pub(crate) async fn lv_knows(state: State<'_, LvState>, url: String) -> Result<bool, String> {
+async fn knows(state: State<'_, LvState>, url: String) -> Result<bool, String> {
     Ok(state.by_url.read().await.contains_key(&norm(&url)))
 }
 
-/// The current manifest root + resource count (readiness probe for the web).
+/// The current manifest root + resource count (readiness probe).
 #[tauri::command]
-pub(crate) async fn lv_status(state: State<'_, LvState>) -> Result<(String, usize), String> {
+async fn status(state: State<'_, LvState>) -> Result<(String, usize), String> {
     let m = state.manifest.read().await;
     Ok((m.root.clone(), m.resources.len()))
 }
 
 /// Re-pull the manifest from the network. Returns the new root.
 #[tauri::command]
-pub(crate) async fn lv_refresh(state: State<'_, LvState>) -> Result<String, String> {
+async fn refresh(state: State<'_, LvState>) -> Result<String, String> {
     state.refresh().await
 }
 
 /// Byte-weighted offline fraction in [0,1] over the whole corpus.
 #[tauri::command]
-pub(crate) async fn lv_offline_fraction(state: State<'_, LvState>) -> Result<f64, String> {
+async fn offline_fraction(state: State<'_, LvState>) -> Result<f64, String> {
     let m = state.manifest.read().await;
     Ok(state.engine.offline_fraction(&m).await)
 }
 
-/// Eager-pull a single book's NON-audio resources into the store (text/units/
-/// spoken/marks/asset). Audio is the Swift layer's job. Returns bytes cached.
+/// Eager-pull a single book's NON-audio resources into the store. Bytes cached.
 #[tauri::command]
-pub(crate) async fn lv_sync_book(state: State<'_, LvState>, slug: String) -> Result<u64, String> {
-    // Snapshot the book's non-audio resources, then drop the manifest lock before
-    // the (potentially long) fetch loop so a background refresh isn't blocked.
+async fn sync_book(state: State<'_, LvState>, slug: String) -> Result<u64, String> {
     let to_fetch: Vec<Resource> = {
         let m = state.manifest.read().await;
         let prefix = format!("{slug}/");
@@ -217,25 +201,45 @@ pub(crate) async fn lv_sync_book(state: State<'_, LvState>, slug: String) -> Res
     Ok(done)
 }
 
-/// GC store entries no longer in the manifest. Returns the count dropped.
+/// GC store entries no longer in the manifest (preserves url-keyed metadata).
 #[tauri::command]
-pub(crate) async fn lv_gc(state: State<'_, LvState>) -> Result<u64, String> {
+async fn gc(state: State<'_, LvState>) -> Result<u64, String> {
     let m = state.manifest.read().await;
     Ok(state.engine.gc(&m).await as u64)
 }
 
-/// Initialise the data layer on the given app: build the state from the app data
-/// dir, manage it, and kick a background manifest refresh. Call from `setup`.
-pub fn init(app: &AppHandle) -> Result<(), String> {
+/// Build the state from the app data dir, manage it, and kick a background
+/// manifest refresh. Best-effort — a failure here must not stop the shell.
+fn setup_state<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
     let state = LvState::new(&data_dir)?;
     app.manage(state);
-    // Refresh the manifest in the background — never block app start on the net.
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = handle.state::<LvState>();
         let _ = state.refresh().await;
     });
     Ok(())
+}
+
+/// The plugin entry point — register with `.plugin(tauri_plugin_lvsync::init())`.
+pub fn init<R: Runtime>() -> TauriPlugin<R> {
+    Builder::new("lvsync")
+        .invoke_handler(tauri::generate_handler![
+            resolve,
+            knows,
+            status,
+            refresh,
+            offline_fraction,
+            sync_book,
+            gc,
+        ])
+        .setup(|app, _api| {
+            if let Err(e) = setup_state(app) {
+                eprintln!("lvsync init failed: {e}");
+            }
+            Ok(())
+        })
+        .build()
 }

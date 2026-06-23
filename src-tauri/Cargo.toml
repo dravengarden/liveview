@@ -40,13 +40,7 @@ tauri-plugin-opener = "2"
 # `plugin:haptics|*` via the injected IPC bridge; granted to the remote origin in
 # capabilities/remote-haptics.json. installHaptics() (web) buzzes every control.
 tauri-plugin-haptics = "2"
-# Offline-first data layer (eager native mode). lv-sync is the shared Merkle/
-# resolve/retention CORE (path dep, native-only); the shell supplies its IO — a
-# filesystem FsBlobStore (from lv-sync) + a reqwest Fetcher (sync.rs). The remote
-# web UI calls the `lv_*` commands over IPC so content reads come from the local
-# content-addressed store and work fully OFFLINE. See sync.rs.
-lv-sync = { path = "../../lv-sync" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-serde_json = "1"
-async-trait = "0.1"
-tokio = { version = "1", features = ["sync"] }
+# Offline-first data layer, as a PLUGIN (remote origin can only reach plugin
+# commands in Tauri 2). It owns lv-sync + the FS store + the reqwest fetcher; the
+# remote UI calls `plugin:lvsync|*`. See ../tauri-plugin-lvsync.
+tauri-plugin-lvsync = { path = "../tauri-plugin-lvsync" }
