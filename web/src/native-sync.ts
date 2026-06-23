@@ -171,7 +171,7 @@ export function setOfflineWifiOnly(on: boolean): void {
  *  repeatedly — the native side guards against concurrent runs, and a WiFi-only
  *  refusal is a no-op until WiFi returns (the settings poll re-fires it). */
 export async function ensureAutoSync(): Promise<void> {
-  if (!nativeSyncAvailable() || !offlineAuto()) return;
+  if (!nativeSyncAvailable()) return;
   try {
     await nativeSyncAll(offlineWifiOnly());
   } catch {

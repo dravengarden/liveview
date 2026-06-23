@@ -20,9 +20,7 @@ import {
   ensureAutoSync,
   nativeCacheStats,
   nativeSyncAvailable,
-  offlineAuto,
   offlineWifiOnly,
-  setOfflineAuto,
   setOfflineWifiOnly,
 } from "@/native-sync";
 import {
@@ -64,7 +62,6 @@ export function OfflineSection(): React.JSX.Element | null {
   const [stats, setStats] = useState<CacheStats | null>(null);
   const [audio, setAudio] = useState<AudioStats | null>(null);
   const [audioRes, setAudioRes] = useState<AudioRes[]>([]);
-  const [auto, setAuto] = useState(offlineAuto());
   const [wifiOnly, setWifiOnly] = useState(offlineWifiOnly());
   const [cap, setCap] = useState(maxGB());
   const [confirmCap, setConfirmCap] = useState<number | null>(null);
@@ -142,9 +139,9 @@ export function OfflineSection(): React.JSX.Element | null {
   );
 
   // One-shot auto-preload: fill the budget with every not-yet-cached chapter
-  // (evictable). Gated on auto + WiFi-only; native downloads in the background.
+  // (evictable). Auto-download is always on; only the WiFi-only gate applies.
   useEffect(() => {
-    if (preloadedRef.current || !audio || audioRes.length === 0 || !auto) return;
+    if (preloadedRef.current || !audio || audioRes.length === 0) return;
     if (wifiOnly && stats != null && stats.net !== "wifi") return;
     const items = audioRes
       .filter((r) => !cachedSet.has(r.hash))
@@ -153,7 +150,7 @@ export function OfflineSection(): React.JSX.Element | null {
       preloadedRef.current = true;
       nativeAudioPreload(items);
     }
-  }, [audio, audioRes, auto, wifiOnly, stats, cachedSet]);
+  }, [audio, audioRes, wifiOnly, stats, cachedSet]);
 
   if (!nativeSyncAvailable()) return null;
 
@@ -171,8 +168,8 @@ export function OfflineSection(): React.JSX.Element | null {
     : 0;
   const downloadComplete = audioRes.length > 0 && audioDoneCount >= audioRes.length
     && (stats == null || stats.cached >= stats.total);
-  const waitingWifi = auto && wifiOnly && stats != null && stats.net !== "wifi";
-  const downloading = auto && !downloadComplete;
+  const waitingWifi = wifiOnly && stats != null && stats.net !== "wifi";
+  const downloading = !downloadComplete;
 
   const applyCap = (newGB: number): void => {
     if (newGB * 1_073_741_824 < used) {
@@ -193,15 +190,6 @@ export function OfflineSection(): React.JSX.Element | null {
       </Typography>
 
       <Stack>
-        <ToggleRow
-          label={zh ? "自动下载" : "Auto-download"}
-          hint={zh ? "在上限内自动缓存全部内容" : "Cache everything within the budget"}
-          checked={auto}
-          onChange={(v) => {
-            setAuto(v);
-            setOfflineAuto(v);
-          }}
-        />
         <ToggleRow
           label={zh ? "仅 WiFi 预加载" : "Prefetch on WiFi only"}
           hint={zh ? "蜂窝网络下不自动预加载" : "Don't auto-preload on cellular"}
