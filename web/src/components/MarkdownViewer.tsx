@@ -132,6 +132,11 @@ function mermaidConfig(isDark: boolean): Record<string, unknown> {
       nodeSpacing: 55,
       rankSpacing: 60,
       padding: 12,
+      // Subgraph titles default to 0 margin, so the title sits ON TOP of the first
+      // node (the "一·科学发现的方法" title clipped into "01"). A bottom margin
+      // clears the title from the first node; top pads it inside the cluster. Fixes
+      // every book's subgraphs at the renderer — authors write nothing extra.
+      subGraphTitleMargin: { top: 6, bottom: 16 },
       curve: "basis",
     },
     sequence: { useMaxWidth: true, wrap: true },
