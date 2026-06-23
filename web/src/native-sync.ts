@@ -50,12 +50,6 @@ export async function contentFetch(url: string): Promise<Response> {
       const buf = await invoke<ArrayBuffer>("lv_resolve", { url });
       return new Response(buf, { status: 200 });
     } catch {
-      // Native couldn't serve it. ONLINE → fall back to a normal fetch: a
-      // WKWebView fetch works fine online (the hang is OFFLINE-only), so this
-      // keeps the shell fully functional even if the native data layer is
-      // unavailable. OFFLINE → do NOT fetch (it would hang); return a fast non-ok
-      // so the caller shows its offline state.
-      if (navigator.onLine) return fetch(url);
       return new Response(null, { status: 504, statusText: "offline" });
     }
   }
