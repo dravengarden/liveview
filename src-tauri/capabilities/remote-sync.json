@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-sync",
+  "description": "Allow the remote liveview UI (loaded over the tailnet from liveview.hawk.thundersparrow.top) to invoke the native offline data-layer commands (lv_resolve / lv_knows / lv_status / lv_refresh / lv_offline_fraction / lv_sync_book / lv_gc, defined in src/sync.rs). These are APP commands (not a plugin), so they carry no plugin permission token — a remote origin can reach them only when a capability covers it with core:default + the remote urls, which this grants. The result: reader content (text/units/spoken/marks/assets) resolves from the local content-addressed store and works fully offline.",
+  "windows": ["main"],
+  "remote": {
+    "urls": [
+      "https://liveview.hawk.thundersparrow.top",
+      "https://liveview.hawk.thundersparrow.top/*"
+    ]
+  },
+  "permissions": ["core:default"]
+}

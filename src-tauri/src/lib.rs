@@ -15,11 +15,32 @@
 //
 // `mobile_entry_point` is the symbol the generated iOS/Android projects call;
 // on desktop `main.rs` calls `run()` directly.
+mod sync;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_haptics::init())
+        // Offline-first data layer: the remote UI calls these over IPC so reader
+        // content resolves from the local content-addressed store (sync.rs).
+        .invoke_handler(tauri::generate_handler![
+            sync::lv_resolve,
+            sync::lv_knows,
+            sync::lv_status,
+            sync::lv_refresh,
+            sync::lv_offline_fraction,
+            sync::lv_sync_book,
+            sync::lv_gc,
+        ])
+        .setup(|app| {
+            // Best-effort: a data-layer init failure must not stop the shell from
+            // showing the (online) UI — log and continue.
+            if let Err(e) = sync::init(app.handle()) {
+                eprintln!("lv-sync init failed: {e}");
+            }
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running liveview native shell");
 }
