@@ -131,9 +131,9 @@ public enum LvDownloadGate {
   private struct DLItem { let url: URL; let key: String }
   private var dlQueue: [DLItem] = []
   private var dlInflight = 0
-  private var dlLimit = 6
+  private var dlLimit = 8
   private let dlMin = 2
-  private let dlMax = 24
+  private let dlMax = 32
   private var dlWindowBytes: Int64 = 0
   private var dlWindowStart: TimeInterval = 0
   private var dlLastTput: Double = 0
@@ -313,7 +313,11 @@ public enum LvDownloadGate {
         self.pump()
       }
     }
-    task.priority = URLSessionTask.lowPriority // best-effort hint (real yield = the gate)
+    // NOTE: do NOT set a low task.priority — on iOS URLSession that doesn't just
+    // hint H2 stream priority (deprecated/ignored anyway), it THROTTLES the
+    // transfer's scheduling, which capped the bulk fill at ~349 KB/s vs the
+    // ~45 MB/s a default-priority fill reaches. Yielding to foreground is the
+    // gate's job (stop issuing), not priority.
     task.resume()
   }
 
@@ -848,11 +852,9 @@ public enum LvDownloadGate {
       // a 20GB default).
       DispatchQueue.main.async { self.enforceCap() }
     }
-    // LOW priority: the background fill must YIELD bandwidth to what the user is
-    // actually doing right now — reading (on-demand text via lvSync) and streaming
-    // the open chapter (AVPlayer). Both run at default priority and so win, so the
-    // book you just opened loads fast instead of queuing behind the whole corpus.
-    task.priority = URLSessionTask.lowPriority
+    // Default priority (NOT low): a low URLSessionTask.priority throttles the
+    // transfer's scheduling on iOS and capped the fill at a few hundred KB/s.
+    // Yielding to foreground is handled by the gate (stop issuing), not priority.
     task.resume()
   }
 
