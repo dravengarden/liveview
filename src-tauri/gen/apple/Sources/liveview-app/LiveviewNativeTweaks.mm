@@ -114,6 +114,15 @@ static id lv_wk_init(id self, SEL _cmd, CGRect frame, id configuration) {
         if (audioCls && [audioCls respondsToSelector:installSel]) {
             ((void (*)(id, SEL, id))objc_msgSend)(audioCls, installSel, wv);
         }
+        // Offline reader-CONTENT bridge (LvSyncController.swift): the "lvSync"
+        // WKScriptMessageHandler that caches text/units/spoken/marks natively —
+        // the only webview→native channel that works from the remote origin (Tauri
+        // plugin IPC + custom URL scheme both fail on device). Same header-free
+        // dynamic install.
+        Class syncCls = NSClassFromString(@"LvSyncController");
+        if (syncCls && [syncCls respondsToSelector:installSel]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(syncCls, installSel, wv);
+        }
     }
     return wv;
 }
