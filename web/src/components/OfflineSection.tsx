@@ -169,18 +169,24 @@ export function OfflineSection(): React.JSX.Element | null {
   const used = audioUsed + textUsed;
   const capBytes = cap * 1_073_741_824;
   // Preliminary total from the cached index (instant) → refined by the live dag.
+  // Byte estimates (MP3×0.33) run a bit low vs the real Opus, so for the BAR's
+  // target take max(estimate, actual-used) — never let the solid fill overrun the
+  // tint, and never show >100%.
   const audioTotal = audioTotalBytes || cachedTotal;
-  const target = (stats?.tb ?? 0) + audioTotal; // bytes for "fully offline"
+  const target = Math.max((stats?.tb ?? 0) + audioTotal, used);
   const usedPct = capBytes > 0 ? Math.min(100, Math.round((used / capBytes) * 100)) : 0;
   const bufferPct = capBytes > 0
     ? Math.min(100, Math.round((Math.min(target, capBytes) / capBytes) * 100))
     : 0;
-  // "Done" = actual on-disk audio bytes (authoritative + instant from native),
-  // against the corpus total (estimate). Keeps the gauge consistent with "used".
-  const audioPct = audioTotal > 0
-    ? Math.min(100, Math.round((audioUsed / audioTotal) * 100))
-    : 0;
-  const downloadComplete = audioRes.length > 0 && audioDoneCount >= audioRes.length
+  // Progress + completion are COUNT-based (chapters cached / total) — exact, unlike
+  // byte estimates which drift (so the old gauge showed a fake clamped 100% while
+  // chapters were still downloading). Before the dag loads, fall back to a byte
+  // estimate so it isn't 0.
+  const haveDag = audioRes.length > 0;
+  const audioPct = haveDag
+    ? Math.round((audioDoneCount / audioRes.length) * 100)
+    : (cachedTotal > 0 ? Math.min(99, Math.round((audioUsed / cachedTotal) * 100)) : 0);
+  const downloadComplete = haveDag && audioDoneCount >= audioRes.length
     && (stats == null || stats.cached >= stats.total);
   const waitingWifi = wifiOnly && stats != null && stats.net !== "wifi";
   const downloading = !downloadComplete;
@@ -281,7 +287,9 @@ export function OfflineSection(): React.JSX.Element | null {
         <Stack direction="row" justifyContent="space-between" sx={{ mt: 0.75 }} spacing={1}>
           <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
             {zh ? "文字 " : "Text "}{gb(textUsed)} · {zh ? "音频 " : "Audio "}
-            {gb(audioUsed)} / {gb(audioTotal)} · {audioPct}%
+            {gb(audioUsed)}
+            {haveDag && ` · ${audioDoneCount}/${audioRes.length} ${zh ? "章" : "ch"}`}
+            {" · "}{audioPct}%
           </Typography>
           {downloading && !waitingWifi && speed != null && (
             <Typography
