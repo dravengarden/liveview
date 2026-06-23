@@ -5,7 +5,7 @@
   "identifier": "top.thundersparrow.liveview",
   "build": {
     "devUrl": "https://liveview.hawk.thundersparrow.top",
-    "frontendDist": "../webdist"
+    "frontendDist": "../loader"
   },
   "app": {
     "withGlobalTauri": true,

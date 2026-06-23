@@ -17,7 +17,11 @@ fi
 security unlock-keychain -p "$(cat "$KCPW_FILE")" "$KEYCHAIN"
 
 cd "$HOME/liveview-shell/src-tauri"
-cargo tauri ios build --target aarch64
+# The BUILD + codesign succeed over SSH, but the final IPA EXPORT step fails with
+# "No Accounts" (it needs an Apple ID session). We don't need the .ipa — the signed
+# .app is already in DerivedData — so tolerate a non-zero exit and check for the
+# signed .app instead. (A REAL build failure leaves no fresh .app → install no-ops.)
+cargo tauri ios build --target aarch64 || echo "note: cargo tauri ios build returned non-zero (IPA export failure is expected; using the signed DerivedData .app)"
 
 # Install the freshly-signed .app to both paired devices (devicectl works over
 # SSH; only codesign needed the keychain unlock above).

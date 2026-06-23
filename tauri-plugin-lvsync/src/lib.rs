@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use lv_sync::native::FsBlobStore;
-use lv_sync::{Engine, Fetcher, Manifest, Resource};
+use lv_sync::{BlobStore, Engine, Fetcher, Manifest, Resource};
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{AppHandle, Manager, Runtime, State};
 use tokio::sync::RwLock;
@@ -256,6 +256,99 @@ async fn sync_all(state: State<'_, LvState>) -> Result<u64, String> {
     Ok(done)
 }
 
+// ── Custom URI scheme `lvsync://` ─────────────────────────────────────────────
+// The webview→plugin IPC is unreliable on iOS (the custom-protocol channel trips
+// and PERMANENTLY falls back to postMessage → the Swift PluginManager, which has
+// no native lvsync → "Plugin lvsync not initialized"). A registered URL scheme is
+// handled by WKWebView's URLSchemeHandler and reaches Rust DIRECTLY from any
+// origin, sidestepping that. The web fetches `lvsync://localhost/<path>?<query>`.
+
+/// Raw value of query param `k` (`k=value&…`), or None.
+fn query_get(query: &str, k: &str) -> Option<String> {
+    query.split('&').find_map(|kv| {
+        let mut it = kv.splitn(2, '=');
+        if it.next() == Some(k) {
+            it.next().map(str::to_string)
+        } else {
+            None
+        }
+    })
+}
+
+/// Percent-decode until stable — undoes BOTH the query's `encodeURIComponent` and
+/// the app URL's own path encoding, yielding the manifest's raw URL key.
+fn decode_all(s: &str) -> String {
+    let mut cur = s.to_string();
+    loop {
+        let next = norm(&cur);
+        if next == cur {
+            return cur;
+        }
+        cur = next;
+    }
+}
+
+/// Bytes already cached + total, for non-audio content: (cached, total, cb, tb).
+async fn stats_inner(state: &LvState) -> (u64, u64, u64, u64) {
+    let resources: Vec<Resource> = {
+        let m = state.manifest.read().await;
+        m.resources.iter().filter(|r| r.kind != "audio").cloned().collect()
+    };
+    let (mut cc, mut cb) = (0u64, 0u64);
+    let total = resources.len() as u64;
+    let total_bytes: u64 = resources.iter().map(|r| r.bytes).sum();
+    for r in &resources {
+        if state.engine.store().has(&r.hash).await {
+            cc += 1;
+            cb = cb.saturating_add(r.bytes);
+        }
+    }
+    (cc, total, cb, total_bytes)
+}
+
+/// Dispatch a `lvsync://localhost/<path>?<query>` request → (HTTP status, body).
+async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<u8>) {
+    match path {
+        "/resolve" => {
+            let Some(raw) = query_get(query, "u") else {
+                return (400, b"missing u".to_vec());
+            };
+            let url = decode_all(&raw);
+            let res = state.by_url.read().await.get(&url).cloned();
+            let bytes = match res {
+                Some(r) => state.engine.resolve(&r).await,
+                None => {
+                    let key =
+                        format!("{}{}", lv_sync::URL_KEY_PREFIX, lv_sync::hash_hex(url.as_bytes()));
+                    state.engine.fetch_keyed(&key, &url).await
+                }
+            };
+            match bytes {
+                Ok(b) => (200, b),
+                Err(_) => (504, Vec::new()),
+            }
+        }
+        "/stats" => {
+            let (c, t, cb, tb) = stats_inner(state).await;
+            (200, format!("[{c},{t},{cb},{tb}]").into_bytes())
+        }
+        "/sync_all" => {
+            let resources: Vec<Resource> = {
+                let m = state.manifest.read().await;
+                m.resources.iter().filter(|r| r.kind != "audio").cloned().collect()
+            };
+            let mut done = 0u64;
+            for r in &resources {
+                if state.engine.resolve(r).await.is_ok() {
+                    done = done.saturating_add(r.bytes);
+                }
+            }
+            (200, format!("{done}").into_bytes())
+        }
+        _ => (404, b"not found".to_vec()),
+    }
+}
+
 /// Build the state from the app data dir, manage it, and kick a background
 /// manifest refresh. Best-effort — a failure here must not stop the shell.
 fn setup_state<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
@@ -290,6 +383,26 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 eprintln!("lvsync init failed: {e}");
             }
             Ok(())
+        })
+        .register_asynchronous_uri_scheme_protocol("lvsync", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let path = request.uri().path().to_string();
+            let query = request.uri().query().unwrap_or("").to_string();
+            tauri::async_runtime::spawn(async move {
+                let (status, body) = {
+                    let state = app.state::<LvState>();
+                    scheme_dispatch(&state, &path, &query).await
+                };
+                let resp = tauri::http::Response::builder()
+                    .status(status)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Content-Type", "application/octet-stream")
+                    .body(std::borrow::Cow::<[u8]>::Owned(body))
+                    .unwrap_or_else(|_| {
+                        tauri::http::Response::new(std::borrow::Cow::Owned(Vec::new()))
+                    });
+                responder.respond(resp);
+            });
         })
         .build()
 }
