@@ -47,7 +47,7 @@ interface AudioRes {
 }
 
 const MAX_KEY = "lv.offline.maxGB";
-const CAP_PRESETS = [2, 5, 10, 20, 50];
+const CAP_PRESETS = [2, 5, 10, 20, 30, 50];
 function maxGB(): number {
   return Number(globalThis.localStorage?.getItem(MAX_KEY) ?? "20") || 20;
 }
@@ -68,8 +68,11 @@ export function OfflineSection(): React.JSX.Element | null {
   const [wifiOnly, setWifiOnly] = useState(offlineWifiOnly());
   const [cap, setCap] = useState(maxGB());
   const [confirmCap, setConfirmCap] = useState<number | null>(null);
+  const [speed, setSpeed] = useState<number | null>(null);
   const pollRef = useRef<ReturnType<typeof globalThis.setInterval> | undefined>(undefined);
   const preloadedRef = useRef(false);
+  // Rolling (t, audioUsedBytes) samples over the last ~10s → average download speed.
+  const samplesRef = useRef<{ t: number; used: number }[]>([]);
 
   const tick = useCallback(async () => {
     let s: CacheStats | null = null;
@@ -79,7 +82,25 @@ export function OfflineSection(): React.JSX.Element | null {
     } catch {
       /* keep last-known */
     }
-    setAudio(await nativeAudioStats());
+    const a = await nativeAudioStats();
+    setAudio(a);
+    // Average download speed over a ~10s window (audio is the bulk that grows;
+    // text is static). The window itself smooths; we only report once we have a
+    // ≥2s span so the very first sample doesn't show a wild number.
+    if (a) {
+      const now = Date.now();
+      const arr = samplesRef.current;
+      arr.push({ t: now, used: a.usedBytes });
+      while (arr.length > 1 && now - (arr[0]?.t ?? now) > 10_000) arr.shift();
+      const first = arr[0];
+      if (first && arr.length >= 2 && now - first.t >= 2000) {
+        const dB = a.usedBytes - first.used;
+        const dT = (now - first.t) / 1000;
+        setSpeed(dB > 0 ? dB / dT : 0);
+      } else {
+        setSpeed(null);
+      }
+    }
     if (s && s.cached < s.total) void ensureAutoSync();
   }, []);
 
@@ -139,12 +160,19 @@ export function OfflineSection(): React.JSX.Element | null {
   const audioUsed = audio?.usedBytes ?? 0;
   const textUsed = stats?.cb ?? 0;
   const used = audioUsed + textUsed;
-  const storagePct = Math.min(100, Math.round((used / (cap * 1_073_741_824)) * 100));
+  const capBytes = cap * 1_073_741_824;
+  const target = (stats?.tb ?? 0) + audioTotalBytes; // bytes for "fully offline"
+  const usedPct = capBytes > 0 ? Math.min(100, Math.round((used / capBytes) * 100)) : 0;
+  const bufferPct = capBytes > 0
+    ? Math.min(100, Math.round((Math.min(target, capBytes) / capBytes) * 100))
+    : 0;
   const audioPct = audioTotalBytes > 0
     ? Math.min(100, Math.round((audioDoneBytes / audioTotalBytes) * 100))
     : 0;
-  const audioComplete = audioRes.length > 0 && audioDoneCount >= audioRes.length;
+  const downloadComplete = audioRes.length > 0 && audioDoneCount >= audioRes.length
+    && (stats == null || stats.cached >= stats.total);
   const waitingWifi = auto && wifiOnly && stats != null && stats.net !== "wifi";
+  const downloading = auto && !downloadComplete;
 
   const applyCap = (newGB: number): void => {
     if (newGB * 1_073_741_824 < used) {
@@ -196,45 +224,43 @@ export function OfflineSection(): React.JSX.Element | null {
         </Stack>
       </Stack>
 
-      {/* Storage gauge */}
-      <Box>
-        <Stack direction="row" justifyContent="space-between" alignItems="baseline">
-          <Typography variant="body2">{zh ? "已用存储" : "Storage used"}</Typography>
-          <Typography variant="body2" color="text.secondary">{gb(used)} / {cap} GB</Typography>
-        </Stack>
-        <LinearProgress
-          variant="determinate"
-          value={storagePct}
-          sx={{ borderRadius: 1, height: 8, mt: 0.75 }}
-        />
-      </Box>
-
-      {/* Audio progress (aggregate) */}
+      {/* One merged bar: solid = downloaded, buffer (animated dots = active
+          loading) = target (text+audio total), track = budget. */}
       <Box>
         <Stack direction="row" justifyContent="space-between" alignItems="baseline">
           <Typography variant="body2">
             {waitingWifi
-              ? (zh ? "音频 · 等待 WiFi" : "Audio · waiting for WiFi")
-              : audioComplete
-              ? (zh ? "音频 · 已全部下载" : "Audio · all downloaded")
-              : auto
-              ? (zh ? "音频 · 下载中…" : "Audio · downloading…")
-              : (zh ? "音频" : "Audio")}
+              ? (zh ? "等待 WiFi" : "Waiting for WiFi")
+              : downloadComplete
+              ? (zh ? "已全部下载" : "All downloaded")
+              : downloading
+              ? (zh ? "下载中…" : "Downloading…")
+              : (zh ? "离线内容" : "Offline content")}
           </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {gb(audioDoneBytes)} / {gb(audioTotalBytes)}
-          </Typography>
+          <Typography variant="body2" color="text.secondary">{gb(used)} / {cap} GB</Typography>
         </Stack>
         <LinearProgress
-          variant={audio == null ? "indeterminate" : "determinate"}
-          value={audioPct}
-          color={waitingWifi ? "warning" : audioComplete ? "success" : "primary"}
+          variant={audio == null
+            ? "indeterminate"
+            : (downloading && !waitingWifi ? "buffer" : "determinate")}
+          value={usedPct}
+          valueBuffer={bufferPct}
+          color={waitingWifi ? "warning" : downloadComplete ? "success" : "primary"}
           sx={{ borderRadius: 1, height: 8, mt: 0.75 }}
         />
-        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: "block" }}>
-          {audioDoneCount}/{audioRes.length} {zh ? "章" : "chapters"} · {audioPct}%
-          {textUsed > 0 && ` · ${zh ? "文字" : "text"} ${gb(textUsed)}`}
-        </Typography>
+        <Stack direction="row" justifyContent="space-between" sx={{ mt: 0.5 }}>
+          <Typography variant="caption" color="text.secondary">
+            {zh ? "文字 " : "Text "}{gb(textUsed)} · {zh ? "音频 " : "Audio "}
+            {gb(audioDoneBytes)} / {gb(audioTotalBytes)} ({audioPct}%)
+          </Typography>
+          {downloading && !waitingWifi && speed != null && (
+            <Typography variant="caption" color="primary">
+              ↓ {speed >= 1_048_576
+                ? `${(speed / 1_048_576).toFixed(1)} MB/s`
+                : `${Math.max(0, Math.round(speed / 1024))} KB/s`}
+            </Typography>
+          )}
+        </Stack>
       </Box>
 
       <Dialog open={confirmCap != null} onClose={() => setConfirmCap(null)}>
