@@ -14,6 +14,17 @@ function mb(bytes: number): string {
   return `${(bytes / 1_048_576).toFixed(1)} MB`;
 }
 
+/** Tauri command rejections are strings; other throws may be Error/objects. */
+function errMsg(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+}
+
 /**
  * Offline-cache section for the settings sheet — ONLY on the native shell (where
  * the lvsync plugin runs). Shows how much reader content (non-audio) is cached
@@ -34,8 +45,9 @@ export function OfflineSection(): React.JSX.Element | null {
   const refresh = useCallback(async () => {
     try {
       setStats(await nativeCacheStats());
+      setError(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errMsg(e));
     }
   }, []);
 
@@ -58,7 +70,7 @@ export function OfflineSection(): React.JSX.Element | null {
     try {
       await nativeSyncAll();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errMsg(e));
     } finally {
       if (pollRef.current !== undefined) {
         clearInterval(pollRef.current);
@@ -73,35 +85,39 @@ export function OfflineSection(): React.JSX.Element | null {
   const pct = total > 0 ? Math.round((cached / total) * 100) : 0;
 
   return (
-    <Stack spacing={1}>
-      <Typography variant="overline" color="text.secondary">
-        {zh ? "离线缓存" : "Offline"}
-      </Typography>
+    <Stack spacing={1.25}>
       <Typography variant="body2" color="text.secondary">
+        {zh
+          ? "把全部文字内容下载到本机,断网也能读。音频由播放器单独缓存。"
+          : "Download all text content to this device for offline reading. Audio is cached separately by the player."}
+      </Typography>
+      <Typography variant="body2">
         {stats
           ? `${zh ? "已缓存" : "Cached"} ${cached}/${total} · ${mb(cb)} / ${
             mb(tb)
           } · ${pct}%`
+          : error
+          ? "—"
           : (zh ? "读取中…" : "Loading…")}
       </Typography>
       <LinearProgress
         variant={syncing && pct === 0 ? "indeterminate" : "determinate"}
         value={pct}
-        sx={{ borderRadius: 1, height: 6 }}
+        sx={{ borderRadius: 1, height: 8 }}
       />
       {error && (
-        <Typography variant="caption" color="error">
+        <Typography variant="caption" color="error" sx={{ wordBreak: "break-all" }}>
           {error}
         </Typography>
       )}
       <Button
-        variant="outlined"
-        size="small"
+        variant="contained"
         onClick={() => void download()}
         disabled={syncing}
+        sx={{ mt: 0.5 }}
       >
         {syncing
-          ? (zh ? "下载中…（可关闭设置）" : "Downloading…")
+          ? (zh ? "下载中…(可关闭设置,后台继续)" : "Downloading…")
           : (zh ? "下载全部用于离线" : "Download all for offline")}
       </Button>
     </Stack>

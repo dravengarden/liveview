@@ -5,6 +5,8 @@ import {
   Select,
   Stack,
   Switch,
+  Tab,
+  Tabs,
   ToggleButton,
   ToggleButtonGroup,
   Typography,
@@ -32,6 +34,7 @@ import {
 import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
 import { OfflineSection } from "./OfflineSection";
+import { nativeSyncAvailable } from "@/native-sync";
 
 interface SettingsButtonProps {
   variant: ThemeVariant;
@@ -176,6 +179,19 @@ export function SettingsButton({
   const selectedFont = FONT_PRESETS.find((p) => p.id === fontId) ??
     FONT_PRESETS[0];
 
+  // Tabbed settings (cowboy-style). The Offline/Downloads tab only exists on the
+  // native shell (the PWA caches via the SW, nothing to manage here).
+  const zh = lang === "zh";
+  const offlineTab = nativeSyncAvailable();
+  const TABS: { key: string; label: string }[] = [
+    { key: "look", label: zh ? "外观" : "Appearance" },
+    { key: "read", label: zh ? "阅读" : "Reading" },
+    { key: "shelf", label: zh ? "书架" : "Library" },
+    ...(offlineTab ? [{ key: "offline", label: zh ? "下载" : "Downloads" }] : []),
+    { key: "general", label: zh ? "通用" : "General" },
+  ];
+  const [tab, setTab] = useState("look");
+
   return (
     <SettingsSheet title={t("settings.title")} wide cover>
       {
@@ -184,11 +200,22 @@ export function SettingsButton({
           sections. No floating <Divider>s — they sat in a big gap and read as
           stray lines / wasted space; the headers do the separating. */
       }
-      <Stack spacing={2.25}>
-        {/* ── Offline cache (native shell only; inert/hidden on PWA) ──────── */}
-        <OfflineSection />
+      <Stack spacing={2}>
+        <Tabs
+          value={tab}
+          onChange={(_, v: string) => setTab(v)}
+          variant="scrollable"
+          scrollButtons={false}
+          sx={{
+            minHeight: 38,
+            "& .MuiTab-root": { minHeight: 38, py: 0.5, minWidth: 0, px: 1.5 },
+          }}
+        >
+          {TABS.map((tb) => <Tab key={tb.key} value={tb.key} label={tb.label} />)}
+        </Tabs>
 
         {/* ── Theme: palette pair + light/dark mode ──────────────────────── */}
+        {tab === "look" && (
         <Stack spacing={1.5}>
           <Typography variant="overline" color="text.secondary">
             {t("settings.theme")}
@@ -312,7 +339,10 @@ export function SettingsButton({
           </Stack>
         </Stack>
 
+        )}
+
         {/* ── Reading: font + layout ─────────────────────────────────────── */}
+        {tab === "read" && (
         <Stack spacing={1.5}>
           <Typography variant="overline" color="text.secondary">
             {t("settings.reading")}
@@ -470,7 +500,10 @@ export function SettingsButton({
           />
         </Stack>
 
+        )}
+
         {/* ── Library: bookshelf order. */}
+        {tab === "shelf" && (
         <Stack spacing={1.5}>
           <Typography variant="overline" color="text.secondary">
             {t("settings.layout")}
@@ -520,7 +553,14 @@ export function SettingsButton({
           />
         </Stack>
 
-        {/* ── Interface language ─────────────────────────────────────────── */}
+        )}
+
+        {/* ── Downloads / offline cache (native shell only) ──────────────── */}
+        {tab === "offline" && <OfflineSection />}
+
+        {/* ── General: interface language + about ────────────────────────── */}
+        {tab === "general" && (
+        <Stack spacing={2}>
         <Stack spacing={1}>
           <Typography variant="overline" color="text.secondary">
             {t("settings.language")}
@@ -547,6 +587,8 @@ export function SettingsButton({
             {t("settings.aboutText")}
           </Typography>
         </Stack>
+        </Stack>
+        )}
       </Stack>
     </SettingsSheet>
   );
