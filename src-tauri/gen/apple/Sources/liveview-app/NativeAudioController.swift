@@ -652,7 +652,7 @@ import WebKit
     let dest = cacheDir.appendingPathComponent(key)
     if FileManager.default.fileExists(atPath: dest.path) || inFlight.contains(key) { return }
     inFlight.insert(key)
-    URLSession.shared.downloadTask(with: url) { [weak self] tmp, resp, _ in
+    let task = URLSession.shared.downloadTask(with: url) { [weak self] tmp, resp, _ in
       guard let self else { return }
       defer { DispatchQueue.main.async { self.inFlight.remove(key) } }
       guard let tmp, let code = (resp as? HTTPURLResponse)?.statusCode, code == 200 else { return }
@@ -671,7 +671,13 @@ import WebKit
       // cap — which, post-compression, is the common case (full audio ≈ 3.7GB ≪
       // a 20GB default).
       DispatchQueue.main.async { self.enforceCap() }
-    }.resume()
+    }
+    // LOW priority: the background fill must YIELD bandwidth to what the user is
+    // actually doing right now — reading (on-demand text via lvSync) and streaming
+    // the open chapter (AVPlayer). Both run at default priority and so win, so the
+    // book you just opened loads fast instead of queuing behind the whole corpus.
+    task.priority = URLSessionTask.lowPriority
+    task.resume()
   }
 
   // MARK: native → web
