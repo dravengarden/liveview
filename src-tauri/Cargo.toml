@@ -48,3 +48,5 @@ tauri-plugin-haptics = "2"
 lv-sync = { path = "../../lv-sync" }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 serde_json = "1"
+async-trait = "0.1"
+tokio = { version = "1", features = ["sync"] }

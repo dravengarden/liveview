@@ -211,7 +211,7 @@ pub(crate) async fn lv_sync_book(state: State<'_, LvState>, slug: String) -> Res
 #[tauri::command]
 pub(crate) async fn lv_gc(state: State<'_, LvState>) -> Result<u64, String> {
     let m = state.manifest.read().await;
-    Ok(state.engine.gc(&m).await)
+    Ok(state.engine.gc(&m).await as u64)
 }
 
 /// Initialise the data layer on the given app: build the state from the app data
