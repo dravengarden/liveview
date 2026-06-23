@@ -130,13 +130,21 @@ fn norm(url: &str) -> String {
 
 // ── Plugin commands (invoked from the remote UI as `plugin:lvsync|<name>`) ────
 
-/// Resolve a content URL → raw bytes (binary IPC response), offline-safe. A
+/// Resolve a content URL → its content as a UTF-8 STRING, offline-safe. A
 /// MANIFEST resource resolves store-first by content hash; any OTHER content URL
 /// (navigation metadata: /api/tree, /api/books, covers) goes through the url-keyed
 /// network-first cache so it too works offline. Errors `"offline"` when uncached
 /// + unreachable.
+///
+/// Returns a String, NOT raw `ipc::Response` bytes: the shell loads a REMOTE
+/// origin, where Tauri's custom-protocol IPC is blocked (cross-origin/CSP) and
+/// falls back to the postMessage channel — which is JSON/string only, so raw
+/// bytes come back CORRUPTED (serialized as a number array). A String survives
+/// BOTH IPC transports intact. Every URL routed here is text (JSON/HTML), so
+/// UTF-8 is lossless; binary resources (audio/images) are NOT routed through this
+/// (audio is the native AVPlayer; images load via <img src>).
 #[tauri::command]
-async fn resolve(state: State<'_, LvState>, url: String) -> Result<tauri::ipc::Response, String> {
+async fn resolve(state: State<'_, LvState>, url: String) -> Result<String, String> {
     let n = norm(&url);
     let res = state.by_url.read().await.get(&n).cloned();
     let bytes = match res {
@@ -150,7 +158,7 @@ async fn resolve(state: State<'_, LvState>, url: String) -> Result<tauri::ipc::R
         lv_sync::ResolveError::Offline => "offline".to_string(),
         lv_sync::ResolveError::Integrity => "integrity".to_string(),
     })?;
-    Ok(tauri::ipc::Response::new(bytes))
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Whether a URL is a known MANIFEST resource (non-manifest content is still

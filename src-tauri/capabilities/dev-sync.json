@@ -1,0 +1,24 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dev-sync",
+  "description": "DEV ONLY (iOS simulator self-test): grant the local vite dev origin the same lvsync plugin + core IPC as the production remote-sync capability, so the simulator loading http://192.168.0.96:5173 can exercise the offline data layer without touching production. Safe to keep — it only matches the LAN dev URL, which production never loads.",
+  "windows": ["main"],
+  "remote": {
+    "urls": [
+      "http://192.168.0.96:5173",
+      "http://192.168.0.96:5173/*",
+      "http://localhost:5173",
+      "http://localhost:5173/*"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "lvsync:allow-resolve",
+    "lvsync:allow-knows",
+    "lvsync:allow-status",
+    "lvsync:allow-refresh",
+    "lvsync:allow-offline-fraction",
+    "lvsync:allow-sync-book",
+    "lvsync:allow-gc"
+  ]
+}
