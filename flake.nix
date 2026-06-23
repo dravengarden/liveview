@@ -146,6 +146,12 @@
           pkgs.pkg-config
           pkgs.sqlite
           edgeTts
+          # WASM toolchain for the lv-sync core (../lv-sync → web/ pkg). The
+          # `wasm-bindgen` CRATE in lv-sync is pinned to this CLI's version
+          # (0.2.121) — they must match exactly or codegen errors. `lld` provides
+          # `wasm-ld`, the linker the wasm32-unknown-unknown target needs.
+          pkgs.wasm-bindgen-cli
+          pkgs.lld
         ];
       };
     };
