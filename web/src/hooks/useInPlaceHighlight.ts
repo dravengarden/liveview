@@ -6,6 +6,7 @@ import {
   useState,
 } from "react";
 import { haptic } from "../_shell";
+import { contentFetch } from "@/native-sync";
 import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import type { Mark, SpokenUnits, Unit } from "@/types";
 
@@ -463,12 +464,10 @@ export function useInPlaceHighlight(
     // 生成完没高亮"). Re-poll until the units land (bounded), then stop.
     const load = (): void => {
       void Promise.all([
-        fetch(`/api/units?${q}`).then((r) => (r.ok ? r.json() : null)).catch(
-          () => null,
-        ),
-        fetch(`/api/marks?${q}`).then((r) => (r.ok ? r.json() : null)).catch(
-          () => null,
-        ),
+        contentFetch(`/api/units?${q}`).then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
+        contentFetch(`/api/marks?${q}`).then((r) => (r.ok ? r.json() : null))
+          .catch(() => null),
       ]).then(([u, m]: [SpokenUnits | null, Mark[] | null]) => {
         if (cancelled) return;
         const gotUnits = !!u && u.units.length > 0;

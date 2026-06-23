@@ -79,6 +79,11 @@ export default defineConfig({
     stampServiceWorker(),
   ],
   resolve: {
+    // Force a SINGLE React/React-DOM copy. Without this a duplicated React (a
+    // transitively-bundled second copy, e.g. via the _shell SDK) leaves the hooks
+    // dispatcher null → `$.H.useSyncExternalStore`/`dispatcher.useContext` is null
+    // → white screen. Harmless when there's already one copy.
+    dedupe: ["react", "react-dom"],
     alias: {
       "@": resolve(import.meta.dirname, "./src"),
     },
