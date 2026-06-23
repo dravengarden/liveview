@@ -49,6 +49,11 @@ const CONTENT_API = [
   "/api/cover",
   "/api/artwork",
   "/api/manifest",
+  // The lv-sync corpus manifest (root + every resource hash/url). The WASM core
+  // fetches this once at init to know what's resolvable; it MUST be cache-first
+  // so the core can boot OFFLINE (a network-first miss would hang on iOS and the
+  // whole offline data layer would never initialise).
+  "/api/dag",
   // Reading progress (shelf % + per-book resume). Mutable, so network-first =
   // fresh online; but persisting it means the shelf %/resume survive OFFLINE and
   // across deploys (last-good) instead of resetting. Covers /api/progress AND
