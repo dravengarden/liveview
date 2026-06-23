@@ -74,15 +74,35 @@ import WebKit
   private var currentCacheKey: String?
   private var playingFromCache = false
 
-  // Offline cache (content-addressed when the web supplies the hash).
+  // Offline audio store (content-addressed when the web supplies the hash).
+  // TWO TIERS in ONE durable directory:
+  //   • PINNED   — books the user explicitly downloaded for offline. Exempt from
+  //     LRU eviction; this is durable app data, not a throwaway cache.
+  //   • auto     — chapters cached as a side-effect of streaming. LRU-evicted
+  //     above `cacheCapBytes` (pinned files are skipped by the evictor).
+  // It lives in Application Support, NOT Caches: iOS purges Caches under storage
+  // pressure, which would silently delete a book the user took offline. Audio is
+  // part of the app's content, so it must persist like the text store does.
   private var inFlight: Set<String> = []
-  private let cacheCapBytes: Int64 = 1_500_000_000 // ~1.5 GB, LRU-evicted
+  private let cacheCapBytes: Int64 = 1_500_000_000 // auto-tier cap (~1.5 GB), LRU
   private lazy var cacheDir: URL = {
-    let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     let dir = base.appendingPathComponent("lv-audio", isDirectory: true)
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
   }()
+  // Pinned cache keys (sanitized hashes), persisted so a relaunch still knows what
+  // the user chose to keep offline. Stored as `_pins.json` INSIDE cacheDir; the
+  // leading "_" keeps it out of the content scans below.
+  private lazy var pinsFile: URL = cacheDir.appendingPathComponent("_pins.json")
+  private lazy var pinned: Set<String> = {
+    guard let d = try? Data(contentsOf: pinsFile),
+          let a = try? JSONDecoder().decode([String].self, from: d) else { return [] }
+    return Set(a)
+  }()
+  private func savePins() {
+    try? JSONEncoder().encode(Array(pinned)).write(to: pinsFile)
+  }
 
   private var timeObserver: Any?
   private var statusObs: NSKeyValueObservation?
@@ -129,7 +149,69 @@ import WebKit
       if let s = d?["url"] as? String, let u = URL(string: s) {
         downloadToCache(u, cacheKey(forURL: u, hash: d?["hash"] as? String))
       }
+    case "pin": pin(d)
+    case "unpin": unpin(d)
+    case "audioStats": audioStats(d)
     default: break
+    }
+  }
+
+  // MARK: offline pinning (per-book download)
+
+  /// Pin (download + keep) a set of chapters: `items: [{url, hash}]`. Pinned files
+  /// are exempt from LRU eviction, so a downloaded book stays offline. Idempotent.
+  private func pin(_ d: [String: Any]?) {
+    guard let items = d?["items"] as? [[String: Any]] else { return }
+    for it in items {
+      guard let s = it["url"] as? String, let u = URL(string: s) else { continue }
+      let key = cacheKey(forURL: u, hash: it["hash"] as? String)
+      pinned.insert(key)
+      downloadToCache(u, key) // no-op if already on disk
+    }
+    savePins()
+  }
+
+  /// Unpin keys (sanitized hashes): they become LRU-evictable again. Frees space
+  /// on the next cap check.
+  private func unpin(_ d: [String: Any]?) {
+    guard let keys = d?["keys"] as? [String] else { return }
+    for k in keys { pinned.remove(k) }
+    savePins()
+    enforceCacheCap()
+  }
+
+  /// Report the audio store state for the Downloads UI: cap, pinned/auto byte
+  /// totals, and the set of cached + pinned keys (the web maps keys→books via the
+  /// manifest). Replied as JSON via `window.__lvAudioResolve(id, json)`.
+  private func audioStats(_ d: [String: Any]?) {
+    guard let id = d?["id"] as? String else { return }
+    let fm = FileManager.default
+    var cached: [String] = []
+    var pinnedBytes: Int64 = 0
+    var autoBytes: Int64 = 0
+    if let files = try? fm.contentsOfDirectory(
+      at: cacheDir, includingPropertiesForKeys: [.fileSizeKey]
+    ) {
+      for f in files
+      where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_") {
+        let key = f.lastPathComponent
+        cached.append(key)
+        let sz = Int64((try? f.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        if pinned.contains(key) { pinnedBytes += sz } else { autoBytes += sz }
+      }
+    }
+    let obj: [String: Any] = [
+      "cap": cacheCapBytes, "pinnedBytes": pinnedBytes, "autoBytes": autoBytes,
+      "cached": cached, "pinned": Array(pinned),
+    ]
+    let json = (try? JSONSerialization.data(withJSONObject: obj))
+      .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    let esc = json.replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "'", with: "\\'")
+    let safeId = id.replacingOccurrences(of: "'", with: "")
+    let js = "window.__lvAudioResolve&&window.__lvAudioResolve('\(safeId)','\(esc)')"
+    DispatchQueue.main.async { [weak self] in
+      self?.webView?.evaluateJavaScript(js, completionHandler: nil)
     }
   }
 
@@ -501,7 +583,11 @@ import WebKit
     ) else { return }
     var entries: [(url: URL, date: Date, size: Int64)] = []
     var total: Int64 = 0
-    for f in files where f.pathExtension != "part" {
+    for f in files
+    where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_")
+      && !pinned.contains(f.lastPathComponent) {
+      // PINNED files (and the _pins.json sidecar) are NOT eviction candidates and
+      // don't count toward the auto-tier cap — a downloaded book stays put.
       let v = try? f.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
       let size = Int64(v?.fileSize ?? 0)
       entries.append((f, v?.contentModificationDate ?? .distantPast, size))
