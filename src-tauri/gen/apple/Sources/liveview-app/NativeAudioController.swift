@@ -120,30 +120,28 @@ import WebKit
     c.wireRemoteCommands()
     c.observeAudioSession()
     c.startTimeObserver()
-    c.purgeLegacyMp3()
+    c.purgeForeignAudio()
   }
 
-  /// One-time cleanup: delete legacy UNCOMPRESSED MP3s left from before audio
-  /// compression shipped. They sit under the same content-hash keys as the new
-  /// compressed (CAF) files, so `downloadToCache` skips them and the store stays
-  /// bloated (a mix of MP3 + CAF) forever. Identify MP3 by magic bytes ("ID3" tag
-  /// or a 0xFF frame sync) and remove them — the next preload re-fetches them
-  /// compressed. CAF ("caff") / m4a ("ftyp") are left untouched. Gated by a marker
-  /// so it runs once.
-  private func purgeLegacyMp3() {
-    let marker = cacheDir.appendingPathComponent("_mp3purged")
+  /// One-time cleanup: delete any audio file that is NOT the current compressed
+  /// variant (Opus-in-CAF). Legacy uncompressed MP3s (and any old variant) sit
+  /// under the same content-hash keys as the new CAF, so `downloadToCache` skips
+  /// them and the store stays bloated (used ≫ what's actually current). Keep only
+  /// files whose magic bytes are "caff"; delete the rest — the next preload
+  /// re-fetches them compressed. Marker-gated so it runs once; BUMP the marker
+  /// name whenever the variant/cleanup changes so it re-runs exactly once more.
+  private func purgeForeignAudio() {
+    let marker = cacheDir.appendingPathComponent("_purge_caf_v1")
     if FileManager.default.fileExists(atPath: marker.path) { return }
     let fm = FileManager.default
     if let files = try? fm.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: nil) {
       for f in files
       where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_") {
         guard let h = try? FileHandle(forReadingFrom: f) else { continue }
-        let head = try? h.read(upToCount: 3)
+        let head = try? h.read(upToCount: 4)
         try? h.close()
-        guard let head else { continue }
-        let isMp3 = head.starts(with: [0x49, 0x44, 0x33]) // "ID3"
-          || (head.count >= 2 && head[0] == 0xFF && (head[1] & 0xE0) == 0xE0) // frame sync
-        if isMp3 {
+        let isCaf = head?.starts(with: [0x63, 0x61, 0x66, 0x66]) ?? false // "caff"
+        if !isCaf {
           try? fm.removeItem(at: f)
           pinned.remove(f.lastPathComponent)
         }
