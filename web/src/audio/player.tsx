@@ -9,7 +9,6 @@ import {
 } from "react";
 import type { Mark, SpokenContent } from "@/types";
 import { audioHash } from "@/audioHash";
-import { lvBlobUrl } from "@/lvsync";
 import {
   nativeMediaAvailable,
   nativeMediaClear,
@@ -317,10 +316,6 @@ export function AudioPlayerProvider(
   const queueIndexRef = useRef(-1);
   // Monotonic load token: a newer load() invalidates an in-flight older fetch.
   const loadSeq = useRef(0);
-  // The blob: object URL currently bound to <audio> (web facade path). Held so it
-  // can be revoked when the next chapter loads / on unmount — leaking these pins
-  // each chapter's bytes in memory for the page's life.
-  const objUrlRef = useRef<string | null>(null);
   // Chapter path we've already warmed the *next* synth for, so we prefetch once.
   const prefetchedFrom = useRef<string | null>(null);
   // Throttle the SYNCHRONOUS localStorage resume-seed write (see handlePosition):
@@ -343,14 +338,6 @@ export function AudioPlayerProvider(
   playingRef.current = playing;
 
   rateRef.current = rate;
-
-  // Release the last audiobook blob: URL when the player unmounts.
-  useEffect(
-    () => () => {
-      if (objUrlRef.current) URL.revokeObjectURL(objUrlRef.current);
-    },
-    [],
-  );
 
   const persistSession = useCallback(
     (np: NowPlaying, q: Track[], qi: number) => {
@@ -461,31 +448,9 @@ export function AudioPlayerProvider(
               ? await audioHash(np.bookSlug, np.chapterPath, np.lang)
               : undefined;
             if (loadSeq.current !== seq) return;
-            // Audiobook blob → resolve through the lv-sync core so the bytes land
-            // in IndexedDB by hash and replay OFFLINE with zero network. On any
-            // miss (URL not in the manifest, or offline+uncached) fall back to
-            // the direct blob URL — identical to the pre-facade behaviour, so the
-            // facade can only ever ADD offline capability, never regress.
-            const prevObjUrl = objUrlRef.current;
-            objUrlRef.current = null;
-            if (ah) {
-              let src = `/api/blob/${ah}`;
-              try {
-                const u = await lvBlobUrl(`/api/blob/${ah}`, "audio/mpeg");
-                if (loadSeq.current !== seq) {
-                  URL.revokeObjectURL(u);
-                  return;
-                }
-                objUrlRef.current = u;
-                src = u;
-              } catch {
-                // keep the direct blob URL
-              }
-              audio.src = src;
-            } else {
-              audio.src = `/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`;
-            }
-            if (prevObjUrl) URL.revokeObjectURL(prevObjUrl);
+            audio.src = ah
+              ? `/api/blob/${ah}`
+              : `/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`;
             // load() resets playbackRate from defaultPlaybackRate — set both so
             // the chosen rate survives (also re-applied on loadedmetadata).
             audio.defaultPlaybackRate = rateRef.current;
