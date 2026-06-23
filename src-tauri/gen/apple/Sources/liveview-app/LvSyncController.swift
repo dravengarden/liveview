@@ -107,6 +107,10 @@ import WebKit
       reply(id, true, data.base64EncodedString())
       return
     }
+    // Cache MISS = the reader is pulling content it's about to show → FOREGROUND.
+    // Make the bulk audio fill yield so this loads fast (the skeleton-while-
+    // downloading complaint). A cache hit does no network, so it never yields.
+    LvDownloadGate.pingForeground()
     fetch(url) { [weak self] data in
       guard let self else { return }
       guard let data else { self.reply(id, false, ""); return }

@@ -41,6 +41,23 @@ import MediaPlayer
 import UIKit
 import WebKit
 
+/// Cross-controller foreground signal. A foreground network fetch — the reader
+/// pulling an uncached chapter's TEXT (LvSyncController) or streaming an uncached
+/// AUDIO chapter — "pings" this; the bulk audio download scheduler then pauses
+/// issuing new tasks for a short window so what the user is doing RIGHT NOW wins
+/// the shared HTTP/2 connection's bandwidth. This client-side gate is the real
+/// yield mechanism: `URLSessionTask.priority` maps to HTTP/2 stream priority,
+/// which RFC 9113 deprecated and most stacks ignore, so it can't be relied on.
+public enum LvDownloadGate {
+  private static var lastPing: TimeInterval = 0
+  public static func pingForeground() {
+    lastPing = Date().timeIntervalSinceReferenceDate
+  }
+  static var foregroundActive: Bool {
+    Date().timeIntervalSinceReferenceDate - lastPing < 2.0
+  }
+}
+
 @objc(NativeAudioController) public final class NativeAudioController: NSObject, WKScriptMessageHandler {
   private static var controllers: [ObjectIdentifier: NativeAudioController] = [:]
   private static let messageName = "lvNativeAudio"
@@ -102,6 +119,26 @@ import WebKit
   // it via `setCap`; default 20 GB until told otherwise. Eviction (LRU, pinned-
   // exempt) keeps the store at/under this.
   private var capBytes: Int64 = 20_000_000_000
+
+  // ── Adaptive bulk-download scheduler ────────────────────────────────────────
+  // Bulk pin/preload no longer fire all tasks at once (under HTTP/2 they'd pile
+  // onto one connection with NO cap). A worker pool keeps exactly `dlLimit` in
+  // flight; `dlLimit` adapts by hill-climbing aggregate throughput (find the
+  // bandwidth knee), backs off hard on overload, and PAUSES entirely while a
+  // foreground fetch is active (the real yield — see LvDownloadGate). The
+  // currently-PLAYING chapter still downloads immediately (foreground), bypassing
+  // this queue.
+  private struct DLItem { let url: URL; let key: String }
+  private var dlQueue: [DLItem] = []
+  private var dlInflight = 0
+  private var dlLimit = 6
+  private let dlMin = 2
+  private let dlMax = 24
+  private var dlWindowBytes: Int64 = 0
+  private var dlWindowStart: TimeInterval = 0
+  private var dlLastTput: Double = 0
+  private var dlTimer: Timer?
+  private var dlRetries: [String: Int] = [:]
 
   private var timeObserver: Any?
   private var statusObs: NSKeyValueObservation?
@@ -189,27 +226,142 @@ import WebKit
 
   // MARK: offline downloads (per-book)
 
-  /// MANUAL download (🎧): download + mark PROTECTED. Pinned files survive eviction
-  /// — only a manual remove deletes them. `items: [{url, hash}]`. Idempotent.
+  /// MANUAL download (🎧): mark PROTECTED + enqueue at the FRONT (the user wants
+  /// this book now, ahead of the background fill). Idempotent.
   private func pin(_ d: [String: Any]?) {
     guard let items = d?["items"] as? [[String: Any]] else { return }
+    var front: [DLItem] = []
     for it in items {
       guard let s = it["url"] as? String, let u = URL(string: s) else { continue }
-      pinned.insert(cacheKey(forURL: u, hash: it["hash"] as? String))
-      downloadToCache(u, cacheKey(forURL: u, hash: it["hash"] as? String))
+      let key = cacheKey(forURL: u, hash: it["hash"] as? String)
+      pinned.insert(key)
+      if !onDisk(key) { front.append(DLItem(url: u, key: key)) }
     }
     savePins()
+    // Prepend (skip dups already queued/in-flight).
+    let queued = Set(dlQueue.map(\.key))
+    dlQueue.insert(contentsOf: front.filter { !queued.contains($0.key) && !inFlight.contains($0.key) }, at: 0)
+    startScheduler()
   }
 
-  /// AUTO preload (fill the budget): download but EVICTABLE (not pinned). Stops
-  /// before exceeding the cap so a fill never blows past the budget.
+  /// AUTO preload (fill the budget): enqueue EVICTABLE (not pinned) at the BACK.
   private func preload(_ d: [String: Any]?) {
     guard let items = d?["items"] as? [[String: Any]] else { return }
+    let queued = Set(dlQueue.map(\.key))
+    var seen = queued
     for it in items {
-      if usedBytes() >= capBytes { break }
       guard let s = it["url"] as? String, let u = URL(string: s) else { continue }
-      downloadToCache(u, cacheKey(forURL: u, hash: it["hash"] as? String))
+      let key = cacheKey(forURL: u, hash: it["hash"] as? String)
+      if onDisk(key) || inFlight.contains(key) || seen.contains(key) { continue }
+      seen.insert(key)
+      dlQueue.append(DLItem(url: u, key: key))
     }
+    startScheduler()
+  }
+
+  // MARK: adaptive download scheduler
+
+  /// Start the worker pool + the hill-climb timer (idempotent).
+  private func startScheduler() {
+    if dlTimer == nil {
+      dlWindowStart = Date.timeIntervalSinceReferenceDate
+      dlWindowBytes = 0
+      // Adjust the limit + sweep stuck tasks every 2s while there's work.
+      dlTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+        self?.schedulerTick()
+      }
+    }
+    pump()
+  }
+
+  /// Keep exactly `dlLimit` downloads in flight — UNLESS a foreground fetch is
+  /// active, in which case the bulk fill yields entirely (issues nothing new).
+  private func pump() {
+    while !LvDownloadGate.foregroundActive, dlInflight < dlLimit, !dlQueue.isEmpty {
+      let item = dlQueue.removeFirst()
+      if onDisk(item.key) || inFlight.contains(item.key) { continue }
+      runScheduled(item)
+    }
+  }
+
+  /// One scheduled (bulk) download with throughput accounting + bounded retry.
+  private func runScheduled(_ item: DLItem) {
+    inFlight.insert(item.key)
+    dlInflight += 1
+    let task = URLSession.shared.downloadTask(with: item.url) { [weak self] tmp, resp, _ in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.dlInflight -= 1
+        self.inFlight.remove(item.key)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        if code == 200, let tmp, let n = self.publish(tmp, item.key) {
+          self.dlWindowBytes += n
+          self.dlRetries[item.key] = nil
+          // (Budget enforced on the 2s tick, not per-completion — see schedulerTick.)
+        } else {
+          // Overload → hard multiplicative decrease. Retryable → requeue (bounded).
+          if code == 429 || code == 503 || code == 0 {
+            self.dlLimit = max(self.dlMin, Int(Double(self.dlLimit) * 0.7))
+          }
+          let r = (self.dlRetries[item.key] ?? 0) + 1
+          if r <= 3 { self.dlRetries[item.key] = r; self.dlQueue.append(item) }
+        }
+        self.pump()
+      }
+    }
+    task.priority = URLSessionTask.lowPriority // best-effort hint (real yield = the gate)
+    task.resume()
+  }
+
+  /// 2s tick: hill-climb `dlLimit` on aggregate throughput, enforce the budget,
+  /// stop when drained. (Budget check lives here, not in `pump`, so the O(files)
+  /// dir scan runs ~every 2s instead of after every completion.)
+  private func schedulerTick() {
+    if dlQueue.isEmpty && dlInflight == 0 {
+      dlTimer?.invalidate()
+      dlTimer = nil
+      return
+    }
+    if usedBytes() >= capBytes { // budget full → stop filling + evict to fit
+      dlQueue.removeAll()
+      enforceCap()
+    }
+    let now = Date.timeIntervalSinceReferenceDate
+    let dt = now - dlWindowStart
+    let tput = dt > 0 ? Double(dlWindowBytes) / dt : 0
+    dlWindowStart = now
+    dlWindowBytes = 0
+    // Hill-climb toward the throughput knee (only meaningful when we were actually
+    // saturated — don't grow while app-limited or yielding to foreground).
+    if !LvDownloadGate.foregroundActive {
+      if tput > dlLastTput * 1.05 {
+        if dlInflight >= dlLimit { dlLimit = min(dlMax, dlLimit + 2) }
+      } else if tput < dlLastTput * 0.90 {
+        dlLimit = max(dlMin, dlLimit - 2)
+      }
+      dlLastTput = max(tput, dlLastTput * 0.5) // decay the reference so it re-probes
+    }
+    // Stalled tasks: a hung connection just fails (or hits URLSession's timeout) →
+    // the completion handler requeues it (bounded). We keep no per-task handle, so
+    // a slow-but-progressing task simply holds its slot and the limit compensates.
+    pump()
+  }
+
+  /// Move a freshly-downloaded temp file into the cache under `key`; returns bytes.
+  private func publish(_ tmp: URL, _ key: String) -> Int64? {
+    let dest = cacheDir.appendingPathComponent(key)
+    let part = dest.appendingPathExtension("part")
+    let fm = FileManager.default
+    try? fm.removeItem(at: part)
+    try? fm.removeItem(at: dest)
+    do {
+      try fm.moveItem(at: tmp, to: part)
+      try fm.moveItem(at: part, to: dest)
+    } catch {
+      try? fm.removeItem(at: part)
+      return nil
+    }
+    return Int64((try? dest.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
   }
 
   /// Remove (delete) the given keys' audio files + unpin them. `keys` are sanitized
@@ -333,6 +485,9 @@ import WebKit
     } else {
       item = AVPlayerItem(url: url)
       playingFromCache = false
+      // Streaming an uncached chapter is FOREGROUND network — make the bulk fill
+      // yield so this chapter buffers fast.
+      LvDownloadGate.pingForeground()
       downloadToCache(url, key)
     }
     observeItem(item)
@@ -644,6 +799,12 @@ import WebKit
     var h: UInt64 = 14695981039346656037
     for b in s.utf8 { h = (h ^ UInt64(b)) &* 1099511628211 }
     return String(h, radix: 16)
+  }
+
+  /// Pure existence check (no mtime touch — used by the scheduler for dedup, which
+  /// must NOT mark a not-yet-played file as recently used).
+  private func onDisk(_ key: String) -> Bool {
+    FileManager.default.fileExists(atPath: cacheDir.appendingPathComponent(key).path)
   }
 
   /// The local file for a fully-cached key, or nil. Touches it so the LRU keeps
