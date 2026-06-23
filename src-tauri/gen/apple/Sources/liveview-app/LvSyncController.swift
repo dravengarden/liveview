@@ -107,10 +107,11 @@ import WebKit
       reply(id, true, data.base64EncodedString())
       return
     }
-    // Cache MISS = the reader is pulling content it's about to show → FOREGROUND.
-    // Make the bulk audio fill yield so this loads fast (the skeleton-while-
-    // downloading complaint). A cache hit does no network, so it never yields.
-    LvDownloadGate.pingForeground()
+    // NOTE: text/units/marks are KB-sized — they do NOT ping the download gate.
+    // Pinging here throttled the bulk audio fill to 1 connection during playback
+    // (the read-along refetches units/marks continuously), capping it at ~205KB/s.
+    // The bulk runs at low priority anyway; only AUDIO streaming (load(), MB-sized)
+    // yields the connection now.
     fetch(url) { [weak self] data in
       guard let self else { return }
       guard let data else { self.reply(id, false, ""); return }
