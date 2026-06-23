@@ -173,6 +173,7 @@ import WebKit
     case "seek": if let p = d?["position"] as? Double { seek(p) }
     case "rate": if let r = d?["rate"] as? Double { setRate(r) }
     case "stop": stop()
+    case "state": emitState()
     case "prefetch":
       if let s = d?["url"] as? String, let u = URL(string: s) {
         downloadToCache(u, cacheKey(forURL: u, hash: d?["hash"] as? String))
@@ -362,6 +363,18 @@ import WebKit
     player.pause()
     pushNowPlaying(playing: false, position: currentPosition())
     emit("{type:'paused'}")
+  }
+
+  /// Re-emit the CURRENT state on demand. The web loses its in-memory playing/
+  /// position when it reloads, but the native player keeps playing — so the web
+  /// requests this on mount to re-sync (else it shows a paused button while audio
+  /// is actually playing). `time` only fires on a tick/seek, so it can't be relied
+  /// on to re-assert play state after a reload.
+  private func emitState() {
+    let d = duration
+    if d > 0 { emit("{type:'durationchange',duration:\(d)}") }
+    emit("{type:'time',position:\(currentPosition()),duration:\(d)}")
+    emit(isPlaying() ? "{type:'playing'}" : "{type:'paused'}")
   }
 
   private func seek(_ p: Double) {
