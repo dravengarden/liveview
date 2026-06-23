@@ -1,7 +1,23 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Core defaults for the liveview native shell. The only extra permission is opener:allow-open-url, used solely by the bundled loader's 'go to Settings' button to open the iOS app-settings page.",
+  "description": "Core defaults for the liveview native shell. Now that the SPA is BUNDLED (frontendDist=../webdist) it loads from the LOCAL origin — covered by THIS default capability, not the remote-* ones — so the lvsync offline data-layer plugin + haptics tokens must be granted here. opener:allow-open-url is for the (legacy) settings deep-link.",
   "windows": ["main"],
-  "permissions": ["core:default", "opener:allow-open-url"]
+  "permissions": [
+    "core:default",
+    "opener:allow-open-url",
+    "haptics:allow-impact-feedback",
+    "haptics:allow-notification-feedback",
+    "haptics:allow-selection-feedback",
+    "haptics:allow-vibrate",
+    "lvsync:allow-resolve",
+    "lvsync:allow-knows",
+    "lvsync:allow-status",
+    "lvsync:allow-refresh",
+    "lvsync:allow-offline-fraction",
+    "lvsync:allow-sync-book",
+    "lvsync:allow-sync-all",
+    "lvsync:allow-cache-stats",
+    "lvsync:allow-gc"
+  ]
 }
