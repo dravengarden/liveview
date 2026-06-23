@@ -595,7 +595,7 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     void (async () => {
       try {
-        const res = await contentFetch("/api/books");
+        const res = await fetch("/api/books");
         const list = (await res.json()) as Book[];
         setBooks(list);
         // Warm the sidebar spines (both renditions) so a shelf card can be OPENED
@@ -906,7 +906,7 @@ export function App(): React.JSX.Element {
       }
       void (async () => {
         try {
-          const res = await contentFetch(`/api/tree?rendition=audio`);
+          const res = await fetch(`/api/tree?rendition=audio`);
           const spine = (await res.json()) as TreeNode[];
           const root = spine.find((n) => n.path === slug);
           const scope = root ? [root] : spine;
@@ -1254,7 +1254,7 @@ export function App(): React.JSX.Element {
       // Nothing to resume (or the saved book is gone): seed the default (text)
       // sidebar spine for the bookshelf.
       try {
-        const res = await contentFetch("/api/tree");
+        const res = await fetch("/api/tree");
         setTree((await res.json()) as TreeNode[]);
       } catch (e) {
         console.error("Failed to fetch tree:", e);
