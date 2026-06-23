@@ -17,6 +17,16 @@ fi
 security unlock-keychain -p "$(cat "$KCPW_FILE")" "$KEYCHAIN"
 
 cd "$HOME/liveview-shell/src-tauri"
+
+# Re-run xcodegen so any NEW Sources/*.swift|*.mm files get globbed into the
+# xcodeproj. `cargo tauri ios build` does NOT regenerate the project, so a freshly
+# added controller would compile-skip silently (BUILD SUCCEEDED, but the file's
+# not in pbxproj → symbol absent → its WKScriptMessageHandler never installs).
+# Regenerating from the committed project.yml keeps signing (DEVELOPMENT_TEAM +
+# Automatic) intact. xcodegen lives in Homebrew, which a non-login bash lacks.
+export PATH="/opt/homebrew/bin:$PATH"
+( cd gen/apple && xcodegen generate )
+
 # The BUILD + codesign succeed over SSH, but the final IPA EXPORT step fails with
 # "No Accounts" (it needs an Apple ID session). We don't need the .ipa — the signed
 # .app is already in DerivedData — so tolerate a non-zero exit and check for the
