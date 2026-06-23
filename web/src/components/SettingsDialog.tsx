@@ -31,6 +31,7 @@ import {
 } from "@/hooks";
 import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
+import { OfflineSection } from "./OfflineSection";
 
 interface SettingsButtonProps {
   variant: ThemeVariant;
@@ -184,6 +185,9 @@ export function SettingsButton({
           stray lines / wasted space; the headers do the separating. */
       }
       <Stack spacing={2.25}>
+        {/* ── Offline cache (native shell only; inert/hidden on PWA) ──────── */}
+        <OfflineSection />
+
         {/* ── Theme: palette pair + light/dark mode ──────────────────────── */}
         <Stack spacing={1.5}>
           <Typography variant="overline" color="text.secondary">

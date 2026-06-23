@@ -75,6 +75,18 @@ export function nativeSyncBook(slug: string): Promise<number> {
   return invoke<number>("plugin:lvsync|sync_book", { slug });
 }
 
+/** Eager-pull the WHOLE corpus's non-audio content. Resolves to bytes cached.
+ *  Long-running; fire it and poll {@link nativeCacheStats} for live progress. */
+export function nativeSyncAll(): Promise<number> {
+  return invoke<number>("plugin:lvsync|sync_all");
+}
+
+/** Offline cache stats for non-audio content:
+ *  `[cachedCount, totalCount, cachedBytes, totalBytes]`. */
+export function nativeCacheStats(): Promise<[number, number, number, number]> {
+  return invoke<[number, number, number, number]>("plugin:lvsync|cache_stats");
+}
+
 /** Re-pull the manifest from the network; resolves to the new root hash. */
 export function nativeRefresh(): Promise<string> {
   return invoke<string>("plugin:lvsync|refresh");
