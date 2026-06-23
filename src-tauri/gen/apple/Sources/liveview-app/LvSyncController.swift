@@ -8,18 +8,19 @@
 // NativeAudioController uses successfully. So content caching lives here, in Swift,
 // mirroring the audio cache: a persistent content-addressed file cache + URLSession.
 //
-//   web → native  (WKScriptMessage "lvSync"): { id, cmd, url? }
+//   web → native  (WKScriptMessage "lvSync"): { id, cmd, url?, wifiOnly? }
 //     cmd "resolve" → cache-first bytes for `url` (fetch+cache on miss)
-//     cmd "stats"   → [cachedCount, totalCount, cachedBytes, totalBytes] (non-audio)
-//     cmd "syncAll" → download every non-audio manifest resource
+//     cmd "stats"   → rich JSON: net + global totals + per-book breakdown (below)
+//     cmd "syncAll" → download every non-audio resource; honours `wifiOnly`
 //   native → web   window.__lvSyncResolve(id, ok, payload)
 //     resolve → payload = base64 of the bytes
-//     stats   → payload = the JSON array text
-//     syncAll → payload = bytes-cached count as text
+//     stats   → payload = JSON {net,cached,total,cb,tb,books:[{s,c,t,cb,tb}]}
+//     syncAll → payload = bytes-cached this run, or "busy"/"nowifi" sentinels
 //
 // Installed from LiveviewNativeTweaks.mm (lv_wk_init) like the other controllers.
 
 import Foundation
+import Network
 import WebKit
 
 @objc(LvSyncController) public final class LvSyncController: NSObject, WKScriptMessageHandler {
@@ -38,7 +39,21 @@ import WebKit
     return dir
   }()
 
-  private var inFlight = Set<String>()
+  // Live network-path type (wifi / cell / none) so the WiFi-only download
+  // preference can be honoured without the web guessing from `navigator`.
+  private let monitor = NWPathMonitor()
+  private let monitorQueue = DispatchQueue(label: "lvsync.netmon")
+  private var currentPath: NWPath?
+
+  // Re-entry guard: the web fires syncAll on a poll/auto loop; one in-flight run
+  // is enough (it's idempotent + skips what's cached).
+  private var syncing = false
+
+  override init() {
+    super.init()
+    monitor.pathUpdateHandler = { [weak self] p in self?.currentPath = p }
+    monitor.start(queue: monitorQueue)
+  }
 
   @objc public static func installOnWebView(_ webView: WKWebView) {
     let key = ObjectIdentifier(webView)
@@ -47,6 +62,13 @@ import WebKit
     c.webView = webView
     controllers[key] = c
     webView.configuration.userContentController.add(c, name: messageName)
+  }
+
+  /// "wifi" (incl. wired / unknown-but-online, e.g. simulator) | "cell" | "none".
+  private func netType() -> String {
+    guard let p = currentPath, p.status == .satisfied else { return "none" }
+    if p.usesInterfaceType(.cellular) && !p.usesInterfaceType(.wifi) { return "cell" }
+    return "wifi"
   }
 
   // MARK: web → native
@@ -62,7 +84,7 @@ import WebKit
     case "stats":
       stats(id: id)
     case "syncAll":
-      syncAll(id: id)
+      syncAll(id: id, wifiOnly: (body["wifiOnly"] as? Bool) ?? false)
     default:
       reply(id, false, "")
     }
@@ -84,24 +106,50 @@ import WebKit
     }
   }
 
+  /// Global totals + per-book breakdown + current net type. Uses file-attribute
+  /// existence/size checks (NOT loading each blob) so it stays cheap over 10k+
+  /// resources.
   private func stats(id: String) {
     manifest { [weak self] resources in
       guard let self else { return }
-      var cached = 0
-      var cb: Int64 = 0
-      var tb: Int64 = 0
+      var cached = 0, cb = 0, tb = 0
+      // slug → (cached, total, cachedBytes, totalBytes)
+      var books: [String: [Int]] = [:]
       for r in resources {
-        tb += Int64(r.bytes)
-        if self.cachedData(self.cacheKey(r.url)) != nil {
+        tb += r.bytes
+        var e = books[r.slug] ?? [0, 0, 0, 0]
+        e[1] += 1
+        e[3] += r.bytes
+        if let sz = self.cachedSize(self.cacheKey(r.url)) {
           cached += 1
-          cb += Int64(r.bytes)
+          cb += r.bytes
+          e[0] += 1
+          e[2] += (r.bytes > 0 ? r.bytes : sz)
         }
+        books[r.slug] = e
       }
-      self.reply(id, true, "[\(cached),\(resources.count),\(cb),\(tb)]")
+      let bookArr: [[String: Any]] = books.map { (slug, e) in
+        ["s": slug, "c": e[0], "t": e[1], "cb": e[2], "tb": e[3]]
+      }
+      let obj: [String: Any] = [
+        "net": self.netType(), "cached": cached, "total": resources.count,
+        "cb": cb, "tb": tb, "books": bookArr,
+      ]
+      let json = (try? JSONSerialization.data(withJSONObject: obj))
+        .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+      self.reply(id, true, json)
     }
   }
 
-  private func syncAll(id: String) {
+  private func syncAll(id: String, wifiOnly: Bool) {
+    if syncing { reply(id, true, "busy"); return }
+    if wifiOnly && netType() != "wifi" { reply(id, true, "nowifi"); return }
+    syncing = true
+    // A dedicated session so WiFi-only can be enforced at the transport layer:
+    // with cellular disallowed, requests simply don't fire over cell.
+    let cfg = URLSessionConfiguration.default
+    cfg.allowsCellularAccess = !wifiOnly
+    let session = URLSession(configuration: cfg)
     manifest { [weak self] resources in
       guard let self else { return }
       let group = DispatchGroup()
@@ -110,32 +158,41 @@ import WebKit
       let lock = NSLock()
       for r in resources {
         let key = self.cacheKey(r.url)
-        if self.cachedData(key) != nil { continue }
+        if self.cachedSize(key) != nil { continue }
         group.enter()
         sem.wait()
-        self.fetch(r.url) { data in
-          if let data { self.store(key, data); lock.lock(); done += Int64(data.count); lock.unlock() }
+        self.fetch(r.url, session: session) { data in
+          if let data {
+            self.store(key, data)
+            lock.lock(); done += Int64(data.count); lock.unlock()
+          }
           sem.signal()
           group.leave()
         }
       }
-      group.notify(queue: .main) { self.reply(id, true, "\(done)") }
+      group.notify(queue: .main) {
+        self.syncing = false
+        self.reply(id, true, "\(done)")
+      }
     }
   }
 
   // MARK: manifest
 
-  private struct Res { let url: String; let bytes: Int }
+  private struct Res { let url: String; let bytes: Int; let slug: String }
 
   /// Fetch + parse the non-audio resources from /api/dag (cache the raw JSON so
-  /// `stats` works offline from the last-known manifest).
+  /// `stats` works offline from the last-known manifest). `slug` = the book, the
+  /// first path segment ("<slug>/<rendition>/<lang>/<rel_path>").
   private func manifest(_ done: @escaping ([Res]) -> Void) {
     let parse: (Data) -> [Res] = { data in
       guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let arr = obj["resources"] as? [[String: Any]] else { return [] }
       return arr.compactMap { r in
         guard let url = r["url"] as? String, (r["kind"] as? String) != "audio" else { return nil }
-        return Res(url: url, bytes: (r["bytes"] as? Int) ?? 0)
+        let path = (r["path"] as? String) ?? ""
+        let slug = path.split(separator: "/").first.map(String.init) ?? "?"
+        return Res(url: url, bytes: (r["bytes"] as? Int) ?? 0, slug: slug)
       }
     }
     let dagFile = contentDir.appendingPathComponent("dag.json")
@@ -159,8 +216,14 @@ import WebKit
   }
 
   private func cachedData(_ key: String) -> Data? {
+    try? Data(contentsOf: contentDir.appendingPathComponent(key))
+  }
+
+  /// Byte size if cached, else nil — existence/size without loading the blob.
+  private func cachedSize(_ key: String) -> Int? {
     let f = contentDir.appendingPathComponent(key)
-    return try? Data(contentsOf: f)
+    guard let a = try? FileManager.default.attributesOfItem(atPath: f.path) else { return nil }
+    return (a[.size] as? Int) ?? 0
   }
 
   private func store(_ key: String, _ data: Data) {
@@ -173,10 +236,11 @@ import WebKit
 
   /// GET `path` (relative → prepend remote; absolute passes through). Returns the
   /// body Data on a 200, else nil (offline / error).
-  private func fetch(_ path: String, _ done: @escaping (Data?) -> Void) {
+  private func fetch(_ path: String, session: URLSession = .shared,
+                     _ done: @escaping (Data?) -> Void) {
     let full = path.hasPrefix("http") ? path : remote + path
     guard let u = URL(string: full) else { done(nil); return }
-    URLSession.shared.dataTask(with: u) { data, resp, _ in
+    session.dataTask(with: u) { data, resp, _ in
       let ok = (resp as? HTTPURLResponse)?.statusCode == 200
       done(ok ? data : nil)
     }.resume()
