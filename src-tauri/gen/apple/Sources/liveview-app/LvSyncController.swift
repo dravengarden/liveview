@@ -120,11 +120,16 @@ import WebKit
         var e = books[r.slug] ?? [0, 0, 0, 0]
         e[1] += 1
         e[3] += r.bytes
-        if let sz = self.cachedSize(self.cacheKey(r.url)) {
+        // Byte-weighted progress must use the SAME basis (declared `bytes`) for
+        // cached and total, or per-book cb can exceed tb (units/spoken declare 0
+        // bytes; substituting their on-disk size inflated cb past tb → a >100%
+        // value that MUI LinearProgress renders as a SHIFTED/partial bar). Stick
+        // to declared bytes so cb ≤ tb and % ∈ [0,100], consistent with the count.
+        if self.cachedSize(self.cacheKey(r.url)) != nil {
           cached += 1
           cb += r.bytes
           e[0] += 1
-          e[2] += (r.bytes > 0 ? r.bytes : sz)
+          e[2] += r.bytes
         }
         books[r.slug] = e
       }
