@@ -407,16 +407,39 @@ function followScrollClamped(
   range: Range,
   block: HTMLElement | null,
 ): void {
-  const rr = range.getBoundingClientRect();
-  let target = contentTop(scroller, rr.top) + rr.height / 2 - scroller.clientHeight / 2;
+  const vh = scroller.clientHeight;
   if (block) {
-    const bTop = contentTop(scroller, block.getBoundingClientRect().top);
-    const bBot = bTop + block.getBoundingClientRect().height;
-    const lo = bBot - scroller.clientHeight; // block bottom at viewport bottom
+    const bRect = block.getBoundingClientRect();
+    const bTop = contentTop(scroller, bRect.top);
+    const bH = bRect.height;
+    // Block FITS the viewport → centre the whole BLOCK, not the sentence range.
+    // Two bugs this fixes, both from anchoring on a text-range rect:
+    //  • JITTER: every sentence in a multi-sentence paragraph has a slightly
+    //    different range rect, so centring each one micro-scrolled the page line
+    //    by line ("上下抖动"). The block rect is the SAME for every sentence in it,
+    //    so advancing within a paragraph is now a no-op (idempotent target).
+    //  • FLY-OFF: a range can mis-locate on rich lines (inline math/list/table —
+    //    the math-stripped needle matches the wrong offset), and centring that
+    //    wrong rect scrolled the line off-screen ("飞到页面外"). An element rect
+    //    (located by the server's data-sourcepos) can't drift, so it can't fly off.
+    // This mirrors the audiobook reader, which centres a real DOM element and never
+    // jitters/flies.
+    if (bH <= vh) {
+      scrollTopTo(scroller, bTop + bH / 2 - vh / 2);
+      return;
+    }
+    // Block TALLER than the viewport (big table/quote) → centre the line but CLAMP
+    // so the block always fills the viewport (the line can't leave its own block).
+    const rr = range.getBoundingClientRect();
+    const t = contentTop(scroller, rr.top) + rr.height / 2 - vh / 2;
+    const lo = bTop + bH - vh; // block bottom at viewport bottom
     const hi = bTop; // block top at viewport top
-    target = Math.min(Math.max(target, Math.min(lo, hi)), Math.max(lo, hi));
+    scrollTopTo(scroller, Math.min(Math.max(t, Math.min(lo, hi)), Math.max(lo, hi)));
+    return;
   }
-  scrollTopTo(scroller, target);
+  // No block anchor (rare: no data-sourcepos/data-blk) → centre the range.
+  const rr = range.getBoundingClientRect();
+  scrollTopTo(scroller, contentTop(scroller, rr.top) + rr.height / 2 - vh / 2);
 }
 
 export function useInPlaceHighlight(
