@@ -189,7 +189,11 @@ export interface AudioStats {
   cap: number;
   /** Bytes held by PINNED (manually-downloaded, eviction-protected) books. */
   pinnedBytes: number;
-  /** All cache keys on disk (sanitized content hashes). */
+  /** Count of cached blobs — the O(1) SQLite aggregate. Lets the Downloads UI show
+   *  done/total WITHOUT diffing the full `cached` array against the manifest. */
+  cachedCount: number;
+  /** All cache keys on disk (sanitized content hashes). Still used by the download
+   *  driver to skip already-cached items; the UI prefers `cachedCount`. */
   cached: string[];
   /** The pinned (protected) subset. */
   pinned: string[];
@@ -226,7 +230,15 @@ export async function nativeAudioStats(): Promise<AudioStats | null> {
   });
   if (!json) return null;
   try {
-    return JSON.parse(json) as AudioStats;
+    const o = JSON.parse(json) as Partial<AudioStats>;
+    return {
+      usedBytes: o.usedBytes ?? 0,
+      cap: o.cap ?? 0,
+      pinnedBytes: o.pinnedBytes ?? 0,
+      cachedCount: o.cachedCount ?? (o.cached?.length ?? 0),
+      cached: o.cached ?? [],
+      pinned: o.pinned ?? [],
+    };
   } catch {
     return null;
   }

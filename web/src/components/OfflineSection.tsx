@@ -36,11 +36,6 @@ function gb(bytes: number): string {
   return `${(bytes / 1_048_576).toFixed(0)} MB`;
 }
 
-interface AudioRes {
-  hash: string;
-  url: string;
-  bytes: number;
-}
 
 const MAX_KEY = "lv.offline.maxGB";
 // Cached audio-corpus total (bytes) — a tiny "index" so the gauge shows a real
@@ -62,7 +57,11 @@ export function OfflineSection(): React.JSX.Element | null {
   const zh = lang === "zh";
   const [stats, setStats] = useState<CacheStats | null>(null);
   const [audio, setAudio] = useState<AudioStats | null>(null);
-  const [audioRes, setAudioRes] = useState<AudioRes[]>([]);
+  // Download TOTALS from the cheap server index (/api/sizes), keyed by deploy root
+  // — replaces fetching + parsing the ~4 MB /api/dag here just to sum sizes.
+  const [sizes, setSizes] = useState<
+    { audioBytes: number; audioCount: number; textBytes: number } | null
+  >(null);
   const [wifiOnly, setWifiOnly] = useState(offlineWifiOnly());
   const [cap, setCap] = useState(maxGB());
   const [confirmCap, setConfirmCap] = useState<number | null>(null);
@@ -106,20 +105,21 @@ export function OfflineSection(): React.JSX.Element | null {
     nativeAudioSetCap(maxGB() * 1_073_741_824);
     void (async () => {
       try {
-        // FRESH fetch (not contentFetch): the offline cache may hold a stale dag
-        // from before the audio URLs switched to the compressed `?fmt=c` form —
-        // and the Merkle root doesn't change on a URL-scheme change, so the cached
-        // copy would never refresh, making us download the old uncompressed MP3s.
-        const dag = (await (await fetch(`${REMOTE}/api/dag`)).json()) as {
-          resources: { hash: string; kind: string; bytes: number; url: string }[];
+        // Cheap precomputed totals (tiny JSON), NOT the 4 MB dag. Network-first so
+        // a deploy's new totals show; offline this throws and the gauge falls back
+        // to the cached byte estimate + native count.
+        const s = (await (await fetch(`${REMOTE}/api/sizes`)).json()) as {
+          audio_bytes: number;
+          audio_count: number;
+          text_bytes: number;
         };
-        setAudioRes(
-          dag.resources
-            .filter((r) => r.kind === "audio")
-            .map((r) => ({ hash: r.hash, url: r.url, bytes: r.bytes ?? 0 })),
-        );
+        setSizes({
+          audioBytes: s.audio_bytes ?? 0,
+          audioCount: s.audio_count ?? 0,
+          textBytes: s.text_bytes ?? 0,
+        });
       } catch {
-        /* offline → audio totals from native only */
+        /* offline → totals from native/local fallback only */
       }
     })();
     void tick();
@@ -129,11 +129,9 @@ export function OfflineSection(): React.JSX.Element | null {
     };
   }, [tick]);
 
-  const cachedSet = useMemo(() => new Set(audio?.cached ?? []), [audio]);
-
-  // Audio corpus total (compressed estimate, from the live manifest) + a cached
-  // fallback so the gauge isn't 0/0 before the dag loads.
-  const audioTotalBytes = useMemo(() => audioRes.reduce((s, r) => s + r.bytes, 0), [audioRes]);
+  // Audio corpus total (compressed estimate) from the server index, + a cached
+  // fallback so the gauge isn't 0/0 before /api/sizes loads (offline).
+  const audioTotalBytes = sizes?.audioBytes ?? 0;
   const cachedTotal = useMemo(
     () => Number(globalThis.localStorage?.getItem(TOTAL_KEY) ?? 0) || 0,
     [],
@@ -141,10 +139,10 @@ export function OfflineSection(): React.JSX.Element | null {
   useEffect(() => {
     if (audioTotalBytes > 0) globalThis.localStorage?.setItem(TOTAL_KEY, String(audioTotalBytes));
   }, [audioTotalBytes]);
-  const audioDoneCount = useMemo(
-    () => audioRes.reduce((n, r) => (cachedSet.has(r.hash) ? n + 1 : n), 0),
-    [audioRes, cachedSet],
-  );
+  // Done = the native O(1) cached count (SQLite aggregate); total = the server's
+  // audio_count. No more diffing the full cached-key array against the manifest.
+  const audioTotalCount = sizes?.audioCount ?? 0;
+  const audioDoneCount = audio?.cachedCount ?? 0;
 
   // NOTE: the auto-preload FEED loop now lives at app level
   // (useAudioPreloadDriver), so the download runs whenever the app is open — not
@@ -171,11 +169,11 @@ export function OfflineSection(): React.JSX.Element | null {
   // byte estimates which drift (so the old gauge showed a fake clamped 100% while
   // chapters were still downloading). Before the dag loads, fall back to a byte
   // estimate so it isn't 0.
-  const haveDag = audioRes.length > 0;
-  const audioPct = haveDag
-    ? Math.round((audioDoneCount / audioRes.length) * 100)
+  const haveTotals = audioTotalCount > 0;
+  const audioPct = haveTotals
+    ? Math.round((audioDoneCount / audioTotalCount) * 100)
     : (cachedTotal > 0 ? Math.min(99, Math.round((audioUsed / cachedTotal) * 100)) : 0);
-  const downloadComplete = haveDag && audioDoneCount >= audioRes.length
+  const downloadComplete = haveTotals && audioDoneCount >= audioTotalCount
     && (stats == null || stats.cached >= stats.total);
   const waitingWifi = wifiOnly && stats != null && stats.net !== "wifi";
   const downloading = !downloadComplete;
@@ -277,7 +275,7 @@ export function OfflineSection(): React.JSX.Element | null {
           <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
             {zh ? "文字 " : "Text "}{gb(textUsed)} · {zh ? "音频 " : "Audio "}
             {gb(audioUsed)}
-            {haveDag && ` · ${audioDoneCount}/${audioRes.length} ${zh ? "章" : "ch"}`}
+            {haveTotals && ` · ${audioDoneCount}/${audioTotalCount} ${zh ? "章" : "ch"}`}
             {" · "}{audioPct}%
           </Typography>
           {downloading && !waitingWifi && speed != null && (

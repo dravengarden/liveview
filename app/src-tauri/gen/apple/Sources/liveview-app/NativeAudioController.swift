@@ -98,6 +98,43 @@ import WebKit
     return Set(a)
   }()
   private func savePins() { try? JSONEncoder().encode(Array(pinned)).write(to: pinsFile) }
+
+  // SQLite resource INDEX (LvStore.swift): one row per cached blob (key+bytes+
+  // pinned+mtime). Lets audioStats/usedBytes be an O(1) aggregate instead of a
+  // contentsOfDirectory scan + per-file stat on every 2s poll + panel open — the
+  // fix for the slow Downloads panel. Maintained on every publish/evict/unpin/pin.
+  private lazy var store: LvStore? = {
+    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    guard let s = LvStore(path: base.appendingPathComponent("lv-index-audio.sqlite").path)
+    else { return nil }
+    // One-time import: index any blobs already on disk (upgrade from the pre-index
+    // build) so stats are correct without re-downloading.
+    if s.isEmpty() { importExisting(into: s) }
+    return s
+  }()
+
+  /// Populate the index from the files currently in cacheDir (one-time migration).
+  private func importExisting(into s: LvStore) {
+    let fm = FileManager.default
+    guard let files = try? fm.contentsOfDirectory(
+      at: cacheDir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]
+    ) else { return }
+    for f in files
+    where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_") {
+      let key = f.lastPathComponent
+      let v = try? f.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+      let bytes = Int64(v?.fileSize ?? 0)
+      let mtime = Int64((v?.contentModificationDate ?? Date(timeIntervalSince1970: 0))
+        .timeIntervalSince1970)
+      s.upsert(key: key, kind: "audio", bytes: bytes, pinned: pinned.contains(key), mtime: mtime)
+    }
+  }
+
+  /// Index a freshly-published blob. `now` mtime so LRU treats new files as recent.
+  private func indexPut(_ key: String, _ bytes: Int64) {
+    store?.upsert(key: key, kind: "audio", bytes: bytes,
+                  pinned: pinned.contains(key), mtime: Int64(Date().timeIntervalSince1970))
+  }
   // Storage budget for the audio store (bytes). The web owns the setting and pushes
   // it via `setCap`; default 20 GB until told otherwise. Eviction (LRU, pinned-
   // exempt) keeps the store at/under this.
@@ -198,6 +235,7 @@ import WebKit
         if !isCaf {
           try? fm.removeItem(at: f)
           pinned.remove(f.lastPathComponent)
+          store?.remove(key: f.lastPathComponent)
         }
       }
     }
@@ -252,7 +290,11 @@ import WebKit
       guard let s = it["url"] as? String, let u = URL(string: s) else { continue }
       let key = cacheKey(forURL: u, hash: it["hash"] as? String)
       pinned.insert(key)
-      if !onDisk(key) { front.append(DLItem(url: u, key: key)) }
+      if onDisk(key) {
+        store?.setPinned(key: key, pinned: true) // already cached → just flag it
+      } else {
+        front.append(DLItem(url: u, key: key))
+      }
     }
     savePins()
     // Prepend (skip dups already queued/in-flight).
@@ -330,6 +372,7 @@ import WebKit
         if let n {
           self.dlWindowBytes += n
           self.dlRetries[item.key] = nil
+          self.indexPut(item.key, n) // maintain the SQLite stats index
         } else {
           // Overload → hard multiplicative decrease. Retryable → requeue (bounded).
           if code == 429 || code == 503 || code == 0 {
@@ -408,6 +451,7 @@ import WebKit
       let key = cacheKey(forURL: URL(string: "x:")!, hash: k) // sanitize same way
       pinned.remove(key)
       try? fm.removeItem(at: cacheDir.appendingPathComponent(key))
+      store?.remove(key: key)
     }
     savePins()
   }
@@ -419,18 +463,10 @@ import WebKit
     enforceCap()
   }
 
-  /// Total bytes of complete (non-`.part`, non-sidecar) audio files.
+  /// Total bytes of cached audio — O(1) from the SQLite index (the budget check
+  /// on every 2s scheduler tick used to scan the whole directory here).
   private func usedBytes() -> Int64 {
-    let fm = FileManager.default
-    guard let files = try? fm.contentsOfDirectory(
-      at: cacheDir, includingPropertiesForKeys: [.fileSizeKey]
-    ) else { return 0 }
-    var total: Int64 = 0
-    for f in files
-    where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_") {
-      total += Int64((try? f.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
-    }
-    return total
+    store?.stats().bytes ?? 0
   }
 
   /// LRU eviction (adaptive by access recency — `cachedFileURL` touches mtime on
@@ -458,6 +494,7 @@ import WebKit
     for e in evictable.sorted(by: { $0.date < $1.date }) { // oldest first
       if total <= capBytes { break }
       try? fm.removeItem(at: e.url)
+      store?.remove(key: e.url.lastPathComponent)
       total -= e.size
     }
   }
@@ -467,25 +504,15 @@ import WebKit
   /// keys→books via the manifest). Replied via `window.__lvAudioResolve(id, json)`.
   private func audioStats(_ d: [String: Any]?) {
     guard let id = d?["id"] as? String else { return }
-    let fm = FileManager.default
-    var cached: [String] = []
-    var used: Int64 = 0
-    var pinnedBytes: Int64 = 0
-    if let files = try? fm.contentsOfDirectory(
-      at: cacheDir, includingPropertiesForKeys: [.fileSizeKey]
-    ) {
-      for f in files
-      where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_") {
-        let key = f.lastPathComponent
-        cached.append(key)
-        let sz = Int64((try? f.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
-        used += sz
-        if pinned.contains(key) { pinnedBytes += sz }
-      }
-    }
+    // O(1) from the SQLite index — no contentsOfDirectory + per-file stat (the old
+    // per-poll cost). `cachedCount` lets the web show done/total WITHOUT the full
+    // `cached` array; the array is kept (indexed read) for the current consumers
+    // until they switch to the count.
+    let (count, used, pinnedBytes) = store?.stats() ?? (0, 0, 0)
+    let cached: [String] = store?.allKeys() ?? []
     let obj: [String: Any] = [
       "usedBytes": used, "cap": capBytes, "pinnedBytes": pinnedBytes,
-      "cached": cached, "pinned": Array(pinned),
+      "cachedCount": count, "cached": cached, "pinned": Array(pinned),
     ]
     let json = (try? JSONSerialization.data(withJSONObject: obj))
       .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
@@ -871,6 +898,8 @@ import WebKit
         try? fm.removeItem(at: part)
         return
       }
+      let bytes = Int64((try? dest.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+      DispatchQueue.main.async { self.indexPut(key, bytes) } // maintain the index
       // Keep the store within the budget (LRU, pinned-exempt). A no-op while under
       // cap — which, post-compression, is the common case (full audio ≈ 3.7GB ≪
       // a 20GB default).
