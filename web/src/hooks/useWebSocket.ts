@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { FileType, TreeNode, WsMessage } from "@/types";
+import { BUNDLED, REMOTE } from "@/apiBase";
 import { connectionLost, connectionReady } from "@/connectionStore";
 import { emitServerSettingPush } from "@/syncBackends";
 import { dispatchChapterReady } from "@/syncStore";
@@ -23,8 +24,14 @@ export function useWebSocket(
   );
 
   const connect = useCallback(() => {
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    // BUNDLED (native app, local origin): window.location.host is the LOCAL
+    // origin (tauri://localhost), which has no /ws server — point at the REMOTE
+    // server instead (https→wss). Offline it simply won't connect (live updates
+    // degrade; the reconnect banner handles it). PWA/remote: same-origin /ws.
+    const url = BUNDLED
+      ? `${REMOTE.replace(/^http/, "ws")}/ws`
+      : `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`;
+    const ws = new WebSocket(url);
 
     ws.onopen = () => {
       // Resets the reconnect counter, flashes the green banner if an outage was
