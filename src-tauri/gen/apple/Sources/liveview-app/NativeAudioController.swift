@@ -113,11 +113,12 @@ import WebKit
   private struct DLItem { let url: URL; let key: String }
   private var dlQueue: [DLItem] = []
   private var dlInflight = 0
-  // High concurrency on purpose: URLSession uses ONE HTTP/2 connection, so on a
-  // high-BDP path (device → tunnel → host) a handful of multiplexed streams can't
-  // fill the pipe — each stream is flow-control-window-limited. The old unbounded
-  // prefetch hit ~45 MB/s precisely because it had hundreds of concurrent streams.
-  // Match that: start wide, cap at ~the server's max-concurrent-streams.
+  // High concurrency on purpose, SPREAD across the session pool (see dlSessions):
+  // a high-BDP path (device → tunnel → host) needs many in-flight transfers over
+  // SEVERAL connections to fill the pipe — one connection's streams are each
+  // flow-control-window-limited and share one congestion window. The old unbounded
+  // webview prefetch hit ~45 MB/s precisely because it had many concurrent
+  // transfers; we match that with dlLimit tasks fanned over N pool connections.
   private var dlLimit = 48
   private let dlMin = 16
   private let dlMax = 100
@@ -126,6 +127,35 @@ import WebKit
   private var dlLastTput: Double = 0
   private var dlTimer: Timer?
   private var dlRetries: [String: Int] = [:]
+
+  // POOL of independent download sessions. URLSession multiplexes ALL of a
+  // session's tasks onto a SINGLE HTTP/2 connection to a host; the remote origin
+  // is a TLS domain reached through a relay (NOT the LAN), so over that high-RTT
+  // path one connection's congestion + h2 flow-control window caps aggregate
+  // throughput to ~one stream's worth (~200–350 KB/s) NO MATTER how many streams
+  // are in flight — which is exactly the slowdown vs the old webview `fetch()`
+  // path (a separate network stack with its own connections). N independent
+  // sessions = N separate connections = N parallel windows, restoring the old
+  // ~tens-of-MB/s fill. Tasks are spread round-robin across the pool.
+  private lazy var dlSessions: [URLSession] = (0..<8).map { _ in
+    let cfg = URLSessionConfiguration.default
+    cfg.httpMaximumConnectionsPerHost = 8
+    cfg.timeoutIntervalForRequest = 90
+    cfg.waitsForConnectivity = true
+    // Don't let the shared URL cache intercept/store these large blobs — we cache
+    // them ourselves on disk, content-addressed.
+    cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+    cfg.urlCache = nil
+    return URLSession(configuration: cfg)
+  }
+  private var dlRR = 0
+  /// Next session from the pool, round-robin — spreads the fill across all N
+  /// connections instead of piling every task onto one.
+  private func nextDLSession() -> URLSession {
+    let s = dlSessions[dlRR % dlSessions.count]
+    dlRR &+= 1
+    return s
+  }
 
   private var timeObserver: Any?
   private var statusObs: NSKeyValueObservation?
@@ -278,7 +308,7 @@ import WebKit
   private func runScheduled(_ item: DLItem) {
     inFlight.insert(item.key)
     dlInflight += 1
-    let task = URLSession.shared.downloadTask(with: item.url) { [weak self] tmp, resp, _ in
+    let task = nextDLSession().downloadTask(with: item.url) { [weak self] tmp, resp, _ in
       DispatchQueue.main.async {
         guard let self else { return }
         self.dlInflight -= 1
@@ -813,7 +843,7 @@ import WebKit
     let dest = cacheDir.appendingPathComponent(key)
     if FileManager.default.fileExists(atPath: dest.path) || inFlight.contains(key) { return }
     inFlight.insert(key)
-    let task = URLSession.shared.downloadTask(with: url) { [weak self] tmp, resp, _ in
+    let task = nextDLSession().downloadTask(with: url) { [weak self] tmp, resp, _ in
       guard let self else { return }
       defer { DispatchQueue.main.async { self.inFlight.remove(key) } }
       guard let tmp, let code = (resp as? HTTPURLResponse)?.statusCode, code == 200 else { return }
