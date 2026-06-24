@@ -600,12 +600,27 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     void (async () => {
       try {
-        // FRESH (network-first): the shelf is a LIVE list — a newly-deployed book
-        // must appear, not be hidden behind a stale offline cache. Falls back to
-        // cache when offline (native fresh-resolve).
-        const res = await contentFetch("/api/books", { fresh: true });
+        // STALE-WHILE-REVALIDATE. CACHE-FIRST render = instant shelf, online OR
+        // offline, never a network wait (the fix for "断网点不开" — every open path
+        // now resolves from cache, never a network-first fetch that hangs/fails
+        // offline). Then a background network revalidate updates the shelf if a new
+        // book deployed since the cache was written — so freshness costs nothing on
+        // the critical path. (The root-watcher below keeps it fresh thereafter.)
+        const res = await contentFetch("/api/books");
         const list = (await res.json()) as Book[];
         setBooks(list);
+        // Background revalidate (online only; offline this falls back to the same
+        // cache → no-op). Don't await — the shelf is already showing.
+        void (async () => {
+          try {
+            const fresh = (await (
+              await contentFetch("/api/books", { fresh: true })
+            ).json()) as Book[];
+            setBooks(fresh);
+          } catch {
+            /* offline / transient — the cached shelf stands */
+          }
+        })();
         // Warm the sidebar spines (both renditions) so a shelf card can be OPENED
         // offline — entering a book fetches its spine first; uncached, the tap
         // would do nothing. Cheap (2 fetches), runs on every load (lazy + eager).
@@ -646,8 +661,16 @@ export function App(): React.JSX.Element {
         }
         if (root !== lastRoot) {
           lastRoot = root;
+          // Deploy changed → revalidate the LIVE lists from the network (the only
+          // place we force `fresh`). Refresh the shelf AND re-warm BOTH spines into
+          // the cache, so opening the new/changed book reads its NEW spine from the
+          // (now cache-first) open path. Each updates its own cache entry.
           const list = (await (await contentFetch("/api/books", { fresh: true })).json()) as Book[];
           if (!cancelled) setBooks(list);
+          await Promise.all([
+            contentFetch("/api/tree?rendition=text", { fresh: true }).catch(() => undefined),
+            contentFetch("/api/tree?rendition=audio", { fresh: true }).catch(() => undefined),
+          ]);
         }
       } catch {
         // offline / transient — retry on the next tick or foreground.
@@ -957,7 +980,7 @@ export function App(): React.JSX.Element {
       }
       void (async () => {
         try {
-          const res = await contentFetch(`/api/tree?rendition=audio`, { fresh: true });
+          const res = await contentFetch(`/api/tree?rendition=audio`);
           const spine = (await res.json()) as TreeNode[];
           const root = spine.find((n) => n.path === slug);
           const scope = root ? [root] : spine;
@@ -1031,11 +1054,14 @@ export function App(): React.JSX.Element {
         return;
       }
       void (async () => {
-        // Always fetch the default rendition's spine on entry: the cached
-        // `tree` may hold another rendition's spine (we just left an audio
-        // book) or be stale, so we can't trust it for resume/README lookup.
+        // Resolve the rendition's spine through the CACHE (contentFetch), NOT a
+        // raw network fetch — the raw fetch bypassed the offline store, so a card
+        // tap did nothing offline AND never populated the cache. Cache-first =
+        // instant + offline-safe (prefetchTrees + the root-watcher keep it warm /
+        // fresh). The in-state `tree` may hold another rendition's spine (we just
+        // left an audio book), so we always re-resolve on entry.
         try {
-          const res = await fetch(
+          const res = await contentFetch(
             `/api/tree?rendition=${encodeURIComponent(r.kind)}`,
           );
           const spine = (await res.json()) as TreeNode[];
@@ -1232,7 +1258,9 @@ export function App(): React.JSX.Element {
         writeHash(path, langForHash, renditionForHash, true);
       }
       try {
-        const res = await fetch(
+        // Cache-first (offline-safe), same as enterBook — never a raw network
+        // fetch that fails offline / skips the cache.
+        const res = await contentFetch(
           `/api/tree?rendition=${encodeURIComponent(kind)}`,
         );
         setTree((await res.json()) as TreeNode[]);
@@ -1305,7 +1333,8 @@ export function App(): React.JSX.Element {
       // Nothing to resume (or the saved book is gone): seed the default (text)
       // sidebar spine for the bookshelf.
       try {
-        const res = await contentFetch("/api/tree", { fresh: true });
+        // Cache-first (offline-safe); the root-watcher revalidates on deploy.
+        const res = await contentFetch("/api/tree");
         setTree((await res.json()) as TreeNode[]);
       } catch (e) {
         console.error("Failed to fetch tree:", e);

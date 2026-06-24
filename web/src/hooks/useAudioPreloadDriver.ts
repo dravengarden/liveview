@@ -7,6 +7,7 @@ import {
   offlineWifiOnly,
 } from "@/native-sync";
 import { nativeAudioPreload, nativeAudioSetCap, nativeAudioStats } from "@/native-audio";
+import { contentFetch } from "@/native-sync";
 
 // Mirror of OfflineSection's storage budget key (the Settings → Downloads
 // "Max storage" select writes it). Read live each tick so a change takes effect
@@ -47,12 +48,27 @@ export function useAudioPreloadDriver(): void {
     void (async () => {
       try {
         const dag = (await (await fetch(`${REMOTE}/api/dag`)).json()) as {
-          resources: { hash: string; kind: string; url: string }[];
+          resources: { hash: string; kind: string; url: string; path: string }[];
         };
         if (cancelled) return;
         audioRes = dag.resources
           .filter((r) => r.kind === "audio")
           .map((r) => ({ hash: r.hash, url: r.url }));
+        // Warm every book's /api/manifest into the cache (cache-first → cheap when
+        // already cached). The native audio player keys its offline store by each
+        // chapter's content HASH, which the web reads from this manifest (audioHash
+        // → contentFetch). Without it cached, offline playback can't resolve the
+        // hash → it looks under a URL key → the hash-keyed downloaded file isn't
+        // found → no offline play. Warming all manifests makes EVERY downloaded
+        // book playable offline, not only ones played online once.
+        const slugs = [
+          ...new Set(dag.resources.map((r) => r.path.split("/")[0] ?? "")),
+        ].filter((s) => s.length > 0);
+        for (const slug of slugs) {
+          if (cancelled) break;
+          await contentFetch(`/api/manifest/${encodeURIComponent(slug)}`)
+            .catch(() => undefined);
+        }
       } catch {
         /* offline → nothing to drive until a later launch */
       }
