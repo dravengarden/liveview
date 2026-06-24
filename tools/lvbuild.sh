@@ -16,7 +16,13 @@ fi
 
 security unlock-keychain -p "$(cat "$KCPW_FILE")" "$KEYCHAIN"
 
-cd "$HOME/liveview-shell/src-tauri"
+# Build from the consolidated layout (~/liveview/app, synced from main/app; the
+# plugin is at ../../plugins/lvsync, the bundled SPA at ../../web/dist-app).
+cd "$HOME/liveview/app/src-tauri"
+
+# project.yml lists gen/apple/assets (build stages the frontend there); empty dir
+# git can't track → ensure it exists or xcodegen fails.
+mkdir -p gen/apple/assets
 
 # Re-run xcodegen so any NEW Sources/*.swift|*.mm files get globbed into the
 # xcodeproj. `cargo tauri ios build` does NOT regenerate the project, so a freshly
