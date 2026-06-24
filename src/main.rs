@@ -826,7 +826,17 @@ fn build_app(state: SharedState) -> Router {
         // a stale build id right after a deploy, defeating the whole check.
         .route("/api/version", get(version))
         .route("/ws", get(server::ws::ws_handler))
-        .with_state(state.clone());
+        .with_state(state.clone())
+        // CORS for the BUNDLED native app. The iOS/macOS Tauri shell now loads the
+        // SPA from a LOCAL origin (tauri://localhost) and fetches `/api/...`
+        // CROSS-ORIGIN against this server (via apiBase.ts installApiShim). WKWebView
+        // enforces CORS, so without these headers every /api fetch from the app is
+        // blocked — reading history/progress/settings silently came back empty after
+        // the bundled-app cutover (the old shell loaded the remote origin directly,
+        // same-origin, so no CORS was ever needed). permissive() echoes any origin and
+        // answers the PUT preflight; requests are unauthenticated (single-user LAN +
+        // tailnet), so there are no credentials/cookies to protect.
+        .layer(tower_http::cors::CorsLayer::permissive());
 
     #[cfg(feature = "embedded")]
     {
