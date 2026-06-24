@@ -1,6 +1,8 @@
 #!/bin/bash
 # Headless iOS SIMULATOR build + install + launch for fast, signing-free testing.
-# Runs ON the Mac (ssh macbook-air 'bash -s' < lvbuild-sim.sh [SIM_UDID]).
+# Runs ON the Mac (ssh macbook-air 'bash -s' < tools/lvbuild-sim.sh [SIM_UDID]).
+# Builds from the consolidated layout: ~/liveview/app (synced from main/app) with
+# the plugin at ~/liveview/plugins/lvsync (../../plugins/lvsync from src-tauri).
 #
 # Why: the device build (lvbuild.sh) needs keychain unlock + provisioning and
 # installs to physical iPhone/iPad. A SIMULATOR build needs NO code-signing, so
@@ -13,7 +15,12 @@ export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
 SIM="${1:-D89613B8-4B25-4486-A690-5A7205AC2788}"
 BID="top.thundersparrow.liveview"
 
-cd "$HOME/liveview-shell/src-tauri"
+cd "$HOME/liveview/app/src-tauri"
+
+# project.yml lists gen/apple/assets (where the build stages the frontend); it's
+# an empty dir git can't track, so ensure it exists or xcodegen spec-validation
+# fails ("missing source directory ... /assets").
+mkdir -p gen/apple/assets
 
 # Re-glob any new Sources/*.swift (cargo tauri ios build won't regenerate the
 # xcodeproj on its own — a newly added controller would compile-skip silently).

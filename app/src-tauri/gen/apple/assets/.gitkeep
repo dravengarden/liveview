@@ -1,0 +1,2 @@
+# Tauri stages the bundled frontend here at build time; keep the dir tracked
+# (project.yml lists it as a source path, xcodegen needs it to exist).

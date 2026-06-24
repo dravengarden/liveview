@@ -20,11 +20,13 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_haptics::init())
-        // Offline-first data layer as a PLUGIN: the remote UI invokes
-        // `plugin:lvsync|*` over IPC so reader content resolves from the local
-        // content-addressed store. A plugin (not app commands) because a remote
-        // origin can only reach ACL-permitted plugin commands in Tauri 2.
-        .plugin(tauri_plugin_lvsync::init())
+        // NOTE: the offline data layer currently runs as SWIFT WKScriptMessageHandler
+        // controllers (gen/apple/Sources: LvSyncController + NativeAudioController)
+        // installed on the webview — that's what the web (native-sync.ts /
+        // native-audio.ts) calls. The Rust `tauri-plugin-lvsync` (plugins/lvsync)
+        // was an earlier, runtime-UNUSED experiment and is NOT registered here; it
+        // is the BASE for the B2 rewrite (cross-platform Rust + SQLite), which will
+        // re-add `.plugin(tauri_plugin_lvsync::init())` once it's real.
         .run(tauri::generate_context!())
         .expect("error while running liveview native shell");
 }

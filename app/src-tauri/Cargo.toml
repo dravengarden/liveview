@@ -40,7 +40,7 @@ tauri-plugin-opener = "2"
 # `plugin:haptics|*` via the injected IPC bridge; granted to the remote origin in
 # capabilities/remote-haptics.json. installHaptics() (web) buzzes every control.
 tauri-plugin-haptics = "2"
-# Offline-first data layer, as a PLUGIN (remote origin can only reach plugin
-# commands in Tauri 2). It owns lv-sync + the FS store + the reqwest fetcher; the
-# remote UI calls `plugin:lvsync|*`. See ../../plugins/lvsync.
-tauri-plugin-lvsync = { path = "../../plugins/lvsync" }
+# NOTE: the Rust `tauri-plugin-lvsync` (plugins/lvsync) is NOT a dependency yet —
+# the offline data layer currently runs as Swift controllers (gen/apple/Sources),
+# and the Rust plugin (+ its lv-sync core) is the B2 rewrite base. Re-add it here
+# once B2 lands it (cross-platform Rust + SQLite, lv-sync vendored into the repo).
