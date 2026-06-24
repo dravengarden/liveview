@@ -475,27 +475,14 @@ import WebKit
   /// touched; if pinned alone exceeds the cap we stop (the user's deliberate choice
   /// wins over the budget). Text is a separate store and is never evicted here.
   private func enforceCap() {
-    let fm = FileManager.default
-    guard let files = try? fm.contentsOfDirectory(
-      at: cacheDir, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]
-    ) else { return }
-    var total: Int64 = 0
-    var evictable: [(url: URL, date: Date, size: Int64)] = []
-    for f in files
-    where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_") {
-      let v = try? f.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
-      let size = Int64(v?.fileSize ?? 0)
-      total += size
-      if !pinned.contains(f.lastPathComponent) {
-        evictable.append((f, v?.contentModificationDate ?? .distantPast, size))
-      }
-    }
+    let total = usedBytes() // O(1) from the index
     guard total > capBytes else { return }
-    for e in evictable.sorted(by: { $0.date < $1.date }) { // oldest first
-      if total <= capBytes { break }
-      try? fm.removeItem(at: e.url)
-      store?.remove(key: e.url.lastPathComponent)
-      total -= e.size
+    // LRU candidates (non-pinned, oldest mtime first) straight from the SQLite
+    // index — no directory scan. Delete the file + its row for each.
+    let fm = FileManager.default
+    for key in store?.lruEvictionCandidates(toFree: total - capBytes) ?? [] {
+      try? fm.removeItem(at: cacheDir.appendingPathComponent(key))
+      store?.remove(key: key)
     }
   }
 
@@ -871,7 +858,9 @@ import WebKit
   private func cachedFileURL(_ key: String) -> URL? {
     let f = cacheDir.appendingPathComponent(key)
     guard FileManager.default.fileExists(atPath: f.path) else { return nil }
-    try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: f.path)
+    let now = Date()
+    try? FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: f.path)
+    store?.touch(key: key, mtime: Int64(now.timeIntervalSince1970)) // LRU recency in the index
     return f
   }
 
