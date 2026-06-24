@@ -1,6 +1,11 @@
 import { useEffect } from "react";
 import { REMOTE } from "@/apiBase";
-import { nativeCacheStats, nativeSyncAvailable, offlineWifiOnly } from "@/native-sync";
+import {
+  ensureAutoSync,
+  nativeCacheStats,
+  nativeSyncAvailable,
+  offlineWifiOnly,
+} from "@/native-sync";
 import { nativeAudioPreload, nativeAudioSetCap, nativeAudioStats } from "@/native-audio";
 
 // Mirror of OfflineSection's storage budget key (the Settings → Downloads
@@ -54,6 +59,21 @@ export function useAudioPreloadDriver(): void {
     })();
 
     const pump = async (): Promise<void> => {
+      if (cancelled) return;
+      // TEXT sync, app-level + self-healing. The text/units/marks fill (the bytes
+      // a book needs to OPEN + read offline) used to be kicked only once per books
+      // load (App) and re-nudged only while the Downloads panel was open — so if
+      // that one run failed / was starved by the audio fill / refused on a network
+      // blip, text stayed at 0 and a book wouldn't open offline ("断网点 card 无法
+      // 扩展"). Drive it here every tick: ensureAutoSync self-guards (WiFi-only +
+      // concurrent-run guard), and nativeCacheStats Merkle-short-circuits, so once
+      // text is complete this is a cheap no-op.
+      try {
+        const cs = await nativeCacheStats();
+        if (!cancelled && cs && cs.cached < cs.total) void ensureAutoSync();
+      } catch {
+        /* stats unavailable → skip this round */
+      }
       if (cancelled || audioRes.length === 0) return;
       // Re-read the budget each round so a Settings change applies live.
       nativeAudioSetCap(maxBytes());
