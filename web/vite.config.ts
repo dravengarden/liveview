@@ -2,7 +2,7 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { splashHtml } from "./src/_shell/splash";
 
 const ReactCompilerConfig = {
@@ -68,7 +68,33 @@ function stampServiceWorker(): Plugin {
   };
 }
 
-export default defineConfig({
+// App build only: the native (iOS/macOS) bundle has NO service worker — the
+// shell serves its own offline layer. Drop the precached sw.js from dist-app.
+function stripServiceWorker(): Plugin {
+  return {
+    name: "lv-strip-sw",
+    apply: "build",
+    closeBundle() {
+      try {
+        rmSync(resolve(import.meta.dirname, "dist-app", "sw.js"));
+      } catch {
+        // not emitted — fine.
+      }
+    },
+  };
+}
+
+// Two build targets share ONE src core (see src/platform):
+//   • `vite build`            → dist/      — PWA + service worker, served by the server.
+//   • `vite build --mode app` → dist-app/  — native iOS/macOS bundle, NO service worker.
+// The app build bakes `__TARGET__="app"` so IS_APP is a build-time constant and
+// the SW / pwa code tree-shakes out. The pwa build leaves `__TARGET__` undefined
+// → src/platform/target.ts uses a runtime fallback, so the server-served build
+// still behaves correctly in a browser (pwa) AND in the old remote-loading shell
+// (app), until A3 switches the shell to dist-app.
+export default defineConfig(({ mode }) => {
+  const isApp = mode === "app";
+  return {
   plugins: [
     react({
       babel: {
@@ -76,8 +102,9 @@ export default defineConfig({
       },
     }),
     splashInjector(),
-    stampServiceWorker(),
+    ...(isApp ? [stripServiceWorker()] : [stampServiceWorker()]),
   ],
+  define: isApp ? { __TARGET__: JSON.stringify("app") } : {},
   resolve: {
     // Force a SINGLE React/React-DOM copy. Without this a duplicated React (a
     // transitively-bundled second copy, e.g. via the _shell SDK) leaves the hooks
@@ -89,7 +116,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "dist",
+    outDir: isApp ? "dist-app" : "dist",
     emptyOutDir: true,
     sourcemap: false,
     minify: "esbuild",
@@ -111,4 +138,5 @@ export default defineConfig({
       },
     },
   },
+  };
 });
