@@ -99,6 +99,7 @@ impl Validator for MarkdownValidator {
         self.check_broken_ref_links(file, root, &mut diags);
         self.check_assets(file, ctx, root, &mut diags);
         self.check_stray_emphasis(file, root, &mut diags);
+        self.check_stray_math_delim(file, root, &mut diags);
         self.check_raw_math_delim(file, root, &mut diags);
 
         // Stable, location-ordered output regardless of which sub-check found
@@ -363,6 +364,65 @@ impl MarkdownValidator {
                             .to_string(),
                     ),
                     snippet: Some("**".to_string()),
+                });
+            }
+        }
+    }
+
+    /// `md/stray-math-delim` (Warning).
+    ///
+    /// comrak consumes a *matched* `$$…$$` display block into a `Math` node — the
+    /// `$$` fences are gone from the tree (the same property `math/parse-error`
+    /// relies on to validate them). So a literal `$$` that survives inside an
+    /// inline `Text` node is a display-math fence comrak could NOT pair, which the
+    /// reader ships as raw `$$…\frac…$$` text instead of a rendered formula.
+    /// `math/parse-error` is blind to this: the body never becomes a `Math` node,
+    /// so KaTeX is never invoked — "checked clean" yet visibly broken.
+    ///
+    /// Observed trigger (comrak 0.36 `math_dollars`): a `$$` block whose body
+    /// spans multiple source lines (a line that is a lone `=` / `\times`, or any
+    /// soft-wrapped multi-line body) is not always recognised, leaving both
+    /// fences as literal `$$`. The reliable shape is the formula on a SINGLE line
+    /// between the `$$` fences. A simple unbalanced `$$` (odd count) leaks the
+    /// same way.
+    ///
+    /// Scanning only `Text` nodes means a `$$` inside a code span/block (a `Code`/
+    /// `CodeBlock` node) is correctly ignored, exactly as `check_stray_emphasis`
+    /// ignores `**` there. Known limitation, mirroring stray-emphasis: a
+    /// deliberately escaped `\$\$` collapses to a `$$` Text node and is flagged —
+    /// rare, and warn-only.
+    fn check_stray_math_delim<'a>(
+        &self,
+        file: &CheckFile,
+        root: &'a AstNode<'a>,
+        diags: &mut Vec<Diagnostic>,
+    ) {
+        for node in root.descendants() {
+            let data = node.data.borrow();
+            let NodeValue::Text(text) = &data.value else {
+                continue;
+            };
+            let base = sourcepos_start(&data.sourcepos);
+            for (off, _) in text.match_indices("$$") {
+                let (line, col) = offset_within(base, text, off);
+                diags.push(Diagnostic {
+                    file: file.rel.clone(),
+                    line,
+                    col,
+                    end_line: line,
+                    end_col: col + 1, // spans the two `$` chars.
+                    severity: Severity::Warning,
+                    source: "markdown",
+                    rule: "md/stray-math-delim".to_string(),
+                    message: "literal `$$` survived rendering — display math did not parse"
+                        .to_string(),
+                    hint: Some(
+                        "a `$$…$$` block whose body spans multiple lines (e.g. a lone `=`/`\\times` \
+                         line) can fail to parse and ship as raw text; put the formula on a single \
+                         line between the `$$` fences, or balance an unpaired `$$`"
+                            .to_string(),
+                    ),
+                    snippet: Some("$$".to_string()),
                 });
             }
         }
@@ -714,6 +774,35 @@ mod tests {
         let r = rules(&d);
         assert_eq!(r, ["md/stray-emphasis", "md/stray-emphasis"], "got {r:?}");
         assert!(d.iter().all(|x| x.severity == Severity::Warning));
+    }
+
+    // --- md/stray-math-delim -------------------------------------------------
+    // comrak consumes a matched `$$…$$` display block into a Math node, so any
+    // `$$` left in a Text node is an unpaired fence the reader ships as raw text.
+
+    #[test]
+    fn single_line_display_math_not_flagged() {
+        // The reliable shape: the whole formula on one line between the fences.
+        let d = check("$$\n\\frac{a}{b} = \\frac{c}{d}\n$$\n");
+        assert!(d.is_empty(), "valid display math flagged: {:?}", rules(&d));
+    }
+
+    #[test]
+    fn display_math_with_lone_operator_line_flagged() {
+        // The real-world bug: a body line that is a lone `=` is parsed as a
+        // setext heading underline, which fragments the paragraph so the `$$`
+        // fences never pair — both survive as literal `$$`.
+        let d = check("$$\n\\frac{a}{b}\n=\n\\frac{c}{d}\n$$\n");
+        let r = rules(&d);
+        assert_eq!(r, ["md/stray-math-delim", "md/stray-math-delim"], "got {r:?}");
+        assert!(d.iter().all(|x| x.severity == Severity::Warning));
+    }
+
+    #[test]
+    fn dollar_in_code_span_not_flagged() {
+        // `$$` inside a code span is a Code node, never Text — not a stray fence.
+        let d = check("Use `$$x$$` as the delimiter.\n");
+        assert!(d.is_empty(), "code-span `$$` flagged: {:?}", rules(&d));
     }
 
     #[test]
