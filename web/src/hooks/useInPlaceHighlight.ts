@@ -549,7 +549,16 @@ export function useInPlaceHighlight(
     // effect locates against stale/absent DOM and the new page shows NO highlight
     // ("播放到新页面没有高亮"). A double-rAF clears the swap.
     requestAnimationFrame(() =>
-      requestAnimationFrame(() => setScrollSettle((s) => s + 1))
+      requestAnimationFrame(() => {
+        // INVALIDATE the per-chapter located map now that the new DOM is mounted.
+        // ensureLocated keys the map on `units` IDENTITY alone, so a rebuild that
+        // raced ahead of the markdown swap (units landed before React committed the
+        // new chapter) bound the ranges to the OLD DOM and was never refreshed —
+        // the new page then showed no highlight at all. Nulling it forces the
+        // scrollSettle-triggered focus re-run below to relocate against the NEW DOM.
+        locatedForRef.current = null;
+        setScrollSettle((s) => s + 1);
+      })
     );
   }, [active, nowPlaying?.chapterPath, scrollerRef]);
 
