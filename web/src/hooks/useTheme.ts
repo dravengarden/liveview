@@ -268,6 +268,13 @@ export function useTheme(): UseThemeResult {
     // a dark theme that's dark-on-dark = washed-out chrome (the bundled-app "theme
     // looks faint" report). This makes the UA defaults track the active theme.
     document.documentElement.style.colorScheme = dark ? "dark" : "light";
+    // Paint the ROOT element with the theme background too. MUI CssBaseline only
+    // colours <body>; the WKWebView's own backing is WHITE by default, so any
+    // region the body doesn't cover — notably the bottom safe-area / home-indicator
+    // strip under the bottom navbar — showed the white webview through (a light bar
+    // washing out its text in dark mode, only in the bundled local-origin app).
+    // Colouring documentElement (html) seals that gap.
+    document.documentElement.style.backgroundColor = getThemeColors(theme).bgDefault;
     // bgPaper is the mobile top nav-bar surface, so the status bar reads as a
     // seamless extension of it.
     applyThemeColor(getThemeColors(theme).bgPaper);

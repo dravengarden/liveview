@@ -110,7 +110,20 @@ export default defineConfig(({ mode }) => {
     // transitively-bundled second copy, e.g. via the _shell SDK) leaves the hooks
     // dispatcher null → `$.H.useSyncExternalStore`/`dispatcher.useContext` is null
     // → white screen. Harmless when there's already one copy.
-    dedupe: ["react", "react-dom"],
+    // Also dedupe MUI + emotion: a SECOND copy (pulled transitively via the
+    // staged _shell SDK) gives that copy its OWN React context, so a shared
+    // component (NavShell) reads MUI's theme from a context the app's
+    // <ThemeProvider> never populated → it falls back to a default/light theme
+    // (the bottom navbar rendered light-on-light in dark mode). One copy = one
+    // theme context. (react/react-dom were already deduped for the same reason.)
+    dedupe: [
+      "react",
+      "react-dom",
+      "@mui/material",
+      "@mui/system",
+      "@emotion/react",
+      "@emotion/styled",
+    ],
     alias: {
       "@": resolve(import.meta.dirname, "./src"),
     },
