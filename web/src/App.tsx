@@ -667,10 +667,30 @@ export function App(): React.JSX.Element {
           // (now cache-first) open path. Each updates its own cache entry.
           const list = (await (await contentFetch("/api/books", { fresh: true })).json()) as Book[];
           if (!cancelled) setBooks(list);
-          await Promise.all([
+          const [bareTree] = await Promise.all([
+            // The bare key is what the bookshelf seeds `tree` from (line ~1337);
+            // the rendition keys are what the open-book entry paths read. ALL
+            // three must be revalidated, or one stays stale across a deploy.
+            contentFetch("/api/tree", { fresh: true }).catch(() => undefined),
             contentFetch("/api/tree?rendition=text", { fresh: true }).catch(() => undefined),
             contentFetch("/api/tree?rendition=audio", { fresh: true }).catch(() => undefined),
           ]);
+          // Re-seed the live `tree` so the shelf's reading-progress meters index
+          // against the NEW spine. Why: the meters resolve each book's chapter to
+          // a spine position; a newly-synced or re-synced book changes the root
+          // but NOT the cache-first `tree` state, so its chapter isn't found →
+          // `fraction` falls back to raw in-chapter scroll (a freshly-opened late
+          // chapter reads 0%) and the "continue" line shows the raw filename
+          // instead of the title. ONLY on the shelf (`currentPath === null`) —
+          // inside a book `tree` holds that book's (possibly audio) spine and must
+          // not be clobbered; returning to the shelf re-seeds from the now-fresh cache.
+          if (!cancelled && currentPathRef.current === null && bareTree) {
+            try {
+              setTree((await bareTree.json()) as TreeNode[]);
+            } catch {
+              /* malformed/cancelled — keep the prior tree, next deploy retries */
+            }
+          }
         }
       } catch {
         // offline / transient — retry on the next tick or foreground.
@@ -1102,6 +1122,20 @@ export function App(): React.JSX.Element {
     currentPathRef.current = null;
     setCurrentContent(null);
     setUntranslated(null);
+    // Restore the bookshelf's text spine. `tree` may still hold the book we just
+    // left — for an AUDIO book that's the audio spine, against which EVERY text
+    // progress row misses (`.md` ∉ `.spoken.md` spine) → all reading meters
+    // collapse to raw in-chapter scroll. The seed effect doesn't re-run on return
+    // (its deps don't change), so re-seed here, cache-first (warm via prefetchTrees
+    // / the root-watcher; offline-safe). No-op when `tree` is already the text spine.
+    void (async () => {
+      try {
+        const res = await contentFetch("/api/tree");
+        setTree((await res.json()) as TreeNode[]);
+      } catch {
+        /* offline / transient — keep the prior tree */
+      }
+    })();
     // Tell native the shelf has painted so it swaps the held snapshot for the live
     // webview. Double-rAF = through the first painted frame.
     if (native) {
