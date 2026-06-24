@@ -35,4 +35,9 @@ plugins/lvsync/target/
 app/src-tauri/gen/apple/build/
 app/src-tauri/gen/apple/Externals/
 app/src-tauri/gen/apple/*.xcodeproj/project.xcworkspace/xcuserdata/
-app/src-tauri/gen/apple/*/Assets.xcassets/AppIcon.appiconset/*.png
+
+# ...but the app's ICON pngs are committed build inputs (tauri-build needs
+# icons/32x32.png; iOS reads AppIcon.appiconset) — track them despite `*.png`.
+# Without this the consolidated layout shipped a blank home-screen icon.
+!app/src-tauri/icons/*.png
+!app/src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/*.png
