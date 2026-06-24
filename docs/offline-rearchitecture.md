@@ -59,22 +59,52 @@ the PWA only, and replace the scan-everything stats with a maintained index.
 
 ### 3.1 Two build targets, one shared core
 
+The split is **app vs pwa**, NOT ios vs pwa — the **macOS** desktop shell belongs
+with iOS in the native "app" target (same bundled SPA + native data layer + no
+SW), not with the browser PWA.
+
 ```
 web/src/                     shared SPA core (reader, audio UI, components, hooks)
   platform/
     index.ts                 re-exports the adapter chosen by __TARGET__
-    ios.ts                   native adapter (lvSync/audio + SQLite bridges)
+    app.ts                   native adapter (Tauri plugin + native audio) — iOS + macOS
     pwa.ts                   web adapter (fetch + service worker)
 ```
 
 - `vite build --mode pwa` → `dist-pwa/`: **service worker kept**, remote origin,
   served by the server. Unchanged behaviour for browsers/PWA.
-- `vite build --mode ios` → `dist-ios/`: **no service worker** (drop the
+- `vite build --mode app` → `dist-app/`: **no service worker** (drop the
   registration *and* the `stampServiceWorker` plugin), native adapter only.
-  Bundled into the Tauri app.
+  Bundled into the Tauri app (iOS **and** macOS).
 - A build-time `__TARGET__` define + the `platform/` indirection let Rollup
-  tree-shake the unused stack out of each bundle (no SW code on iOS; no native
-  bridge on PWA).
+  tree-shake the unused stack out of each bundle (no SW code in the app build; no
+  native bridge in the PWA build).
+
+### 3.1a Native data layer: cross-platform Rust Tauri plugin (iOS + macOS)
+
+The current iOS data layer is **Swift** (`LvSyncController`/`NativeAudioController`
+as WKScriptMessageHandlers), reachable because the shell loads the remote origin.
+That code is **iOS-only** — the macOS desktop shell (`cargo tauri build`, wry
+WebView) does not compile `gen/apple/Sources`, so it cannot reuse it. To serve
+BOTH Apple platforms from one native layer with no SW, the **content/Merkle/SQLite
+store becomes a Rust Tauri plugin** (`plugin:lvsync|*`), shared by iOS + macOS —
+which is exactly what memories `tauri-remote-ipc-needs-plugin` and
+`lvsync-rust-offline-core` already pointed to (a Rust Merkle+resolve+retention
+core exists in `src/sync`). The plugin is reachable only from a **local (bundled)
+origin** — another reason the app target must be bundled (§3.2).
+
+- **Data** (content resolve, Merkle DAG, SQLite index, retention/eviction,
+  download scheduling): **Rust plugin** + `rusqlite`. Native, no SW, shared.
+- **Audio playback** (lock-screen / background) stays **native Swift AVPlayer**
+  on iOS (a thin per-platform piece); macOS can use AVFoundation or, lower
+  priority, the web `<audio>` element. "Prefer Swift where it's Apple-specific"
+  → audio; "prefer one shared native core" → the data/store layer in Rust.
+- Migration: the iOS Swift `LvSyncController` content path is retired once the app
+  loads bundled (plugin reachable); `NativeAudioController` (AVPlayer) is kept and
+  its store is backed by the same SQLite index via the plugin.
+- **macOS is not yet in the Tauri Apple project** (gen/apple is iOS-only; macOS is
+  a separate desktop `cargo tauri build`). Adding the macOS app target + wiring
+  the shared Rust plugin is its own task (A5).
 
 ### 3.2 iOS: bundled SPA + native, **no service worker**
 
