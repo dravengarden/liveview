@@ -28,3 +28,11 @@ assets/tailwind.css
 result
 web/src/_shell
 .shell-src
+
+# native app (Tauri) build artifacts
+app/src-tauri/target/
+plugins/lvsync/target/
+app/src-tauri/gen/apple/build/
+app/src-tauri/gen/apple/Externals/
+app/src-tauri/gen/apple/*.xcodeproj/project.xcworkspace/xcuserdata/
+app/src-tauri/gen/apple/*/Assets.xcassets/AppIcon.appiconset/*.png

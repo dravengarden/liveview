@@ -1,0 +1,46 @@
+# liveview native shell (Tauri 2).
+#
+# This is a THIN remote WebView wrapper, not a second copy of the server.
+# liveview's real backend (axum + pg + rustfs) only runs on hawk; the client is
+# a pure reader over the already-https UI. The whole point of this crate is to
+# get a NATIVE WKWebView (iOS) / WKWebView (macOS) around
+# https://liveview.hawk.thundersparrow.top (behind caddy on the tailnet),
+# because a pure-web PWA on iOS CANNOT keep an audiobook playing once the screen
+# locks / the app backgrounds, nor drive the lock-screen media controls — only a
+# native shell (UIBackgroundModes=audio + an AVAudioSession in the Playback
+# category) can. See src-tauri/README.md.
+#
+# Separate crate with its own Cargo.lock; the repo-root liveview package and the
+# Nix flake build are untouched (the flake builds the server only).
+[package]
+name = "liveview-app"
+version = "0.1.0"
+description = "liveview native shell — WKWebView around the hawk liveview UI"
+edition = "2021"
+
+# Mobile (iOS/Android) links the app as a shared/static lib loaded by the
+# platform entry point; desktop uses the rlib + the main.rs binary. All three
+# crate-types are required for `tauri ios`/`android` to build.
+[lib]
+name = "liveview_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# Only native command the shell exposes: open the iOS app-settings page from the
+# loader's "去设置开启" button (where the Local Network toggle lives). On iOS the
+# opener routes `app-settings:` through UIApplication.open; a no-op everywhere the
+# loader's error card never shows (desktop/Android).
+tauri-plugin-opener = "2"
+# Native OS haptics (real UIImpactFeedbackGenerator on iOS — the only reliable
+# iOS haptic; Safari/PWA has none). The remote liveview UI calls
+# `plugin:haptics|*` via the injected IPC bridge; granted to the remote origin in
+# capabilities/remote-haptics.json. installHaptics() (web) buzzes every control.
+tauri-plugin-haptics = "2"
+# Offline-first data layer, as a PLUGIN (remote origin can only reach plugin
+# commands in Tauri 2). It owns lv-sync + the FS store + the reqwest fetcher; the
+# remote UI calls `plugin:lvsync|*`. See ../../plugins/lvsync.
+tauri-plugin-lvsync = { path = "../../plugins/lvsync" }

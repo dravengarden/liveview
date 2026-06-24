@@ -1,0 +1,114 @@
+name: liveview-app
+options:
+  bundleIdPrefix: top.thundersparrow.liveview
+  deploymentTarget:
+    iOS: 14.0
+fileGroups: [../../src]
+configs:
+  debug: debug
+  release: release
+settingGroups:
+  app:
+    base:
+      PRODUCT_NAME: LiveView
+      PRODUCT_BUNDLE_IDENTIFIER: top.thundersparrow.liveview
+targetTemplates:
+  app:
+    type: application
+    sources:
+      - path: Sources
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+    settings:
+      groups: [app]
+targets:
+  liveview-app_iOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Assets.xcassets
+      - path: liveview-app_iOS
+      - path: assets
+        buildPhase: resources
+        type: folder
+      - path: LaunchScreen.storyboard
+    info:
+      path: liveview-app_iOS/Info.plist
+      properties:
+        LSRequiresIPhoneOS: true
+        UILaunchStoryboardName: LaunchScreen
+        UIRequiredDeviceCapabilities: [arm64, metal]
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CFBundleShortVersionString: 0.1.0
+        CFBundleVersion: "0.1.0"
+    entitlements:
+      path: liveview-app_iOS/liveview-app_iOS.entitlements
+    scheme:
+      environmentVariables:
+        RUST_BACKTRACE: full
+        RUST_LOG: info
+    settings:
+      base:
+        ENABLE_BITCODE: false
+        ARCHS: [arm64]
+        VALID_ARCHS: arm64 
+        LIBRARY_SEARCH_PATHS[arch=x86_64]: $(inherited) $(PROJECT_DIR)/Externals/x86_64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        LIBRARY_SEARCH_PATHS[arch=arm64]: $(inherited) $(PROJECT_DIR)/Externals/arm64/$(CONFIGURATION) $(SDKROOT)/usr/lib/swift $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/$(PLATFORM_NAME) $(DEVELOPER_DIR)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.0/$(PLATFORM_NAME)
+        ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES: true
+        EXCLUDED_ARCHS[sdk=iphoneos*]: x86_64
+        # Compile the Swift sources (SnapshotNavController.swift — native-nav). The
+        # target was ObjC-only before; without an explicit version Xcode errors on
+        # the first .swift. swift-5.0 libs are already on LIBRARY_SEARCH_PATHS above.
+        SWIFT_VERSION: "5.0"
+        # Signing: xcodegen regenerates the .xcodeproj from THIS file, so the team
+        # MUST be pinned here (a team set only in Xcode is dropped on regen).
+        # CRITICAL: this must be 9Z95WKM9DT — the team the already-downloaded
+        # Xcode-managed profile ("iOS Team Provisioning Profile: top.thundersparrow.
+        # liveview") actually belongs to. The earlier value 3ND84C46TG was WRONG:
+        # automatic signing then found no profile for that team and tried to CREATE
+        # one, which needs an Apple-ID session a headless SSH `xcodebuild` lacks
+        # ("No Accounts" / "No profiles ... were found"). With the correct team the
+        # managed profile already on disk matches and codesign uses it — no account.
+        # (Manual signing can't be used: the profile is Xcode-managed, which manual
+        # mode rejects.) NOTE: free-tier dev profiles expire ~weekly; when this one
+        # lapses, a single GUI build re-downloads a fresh same-name profile, after
+        # which headless automatic builds resume working.
+        DEVELOPMENT_TEAM: 9Z95WKM9DT
+        CODE_SIGN_STYLE: Automatic
+      groups: [app]
+    dependencies:
+      - framework: libapp.a
+        embed: false
+      - sdk: CoreGraphics.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: QuartzCore.framework
+      - sdk: Security.framework
+      - sdk: UIKit.framework
+      - sdk: WebKit.framework
+      # AVFoundation: AVAudioSession for background/lock-screen audio. MediaPlayer:
+      # pins the lock-screen skip interval to 15s via MPRemoteCommandCenter. Both
+      # are used by LiveviewNativeTweaks.mm and are NOT auto-linked from the
+      # #import, so listed explicitly. NOTE: `cargo tauri ios init` regenerates
+      # project.yml from a template and DROPS these lines — re-add them (then
+      # `xcodegen generate`) if you ever re-init. See src-tauri/README.md.
+      - sdk: AVFoundation.framework
+      - sdk: MediaPlayer.framework
+    preBuildScripts:
+      - script: cargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
+        name: Build Rust Code
+        basedOnDependencyAnalysis: false
+        outputFiles:
+          - $(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a
+          - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a

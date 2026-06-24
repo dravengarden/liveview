@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Extra iOS Info.plist keys, MERGED into the generated app Info.plist by Tauri
+  on every build. Kept HERE (not in gen/apple/.../Info.plist) on purpose:
+  `cargo tauri ios init` regenerates the in-project Info.plist from a template
+  and wipes hand edits, but it merges this file every build, so these keys are
+  durable.
+-->
+<plist version="1.0">
+<dict>
+	<!-- Home-screen / app-switcher name. iOS prefers CFBundleDisplayName over
+	     CFBundleName; Tauri lowercases the iOS PRODUCT_NAME (→ CFBundleName
+	     "liveview"), so this is how the capitalized "LiveView" label is set. The
+	     macOS app name comes from tauri.conf.json productName instead. -->
+	<key>CFBundleDisplayName</key>
+	<string>LiveView</string>
+	<!-- THE reason this native shell exists: keep the audiobook playing when the
+	     screen locks / the app is backgrounded, and let the lock-screen / Control
+	     Center media controls drive it. A pure-web PWA cannot do this on iOS — web
+	     audio is suspended on background with no `audio` UIBackgroundMode. Paired
+	     with the AVAudioSession Playback category set in LiveviewNativeTweaks.mm,
+	     this is what makes background listening work. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
+	<!-- The UI lives on hawk over the tailnet (a local-network address), so iOS
+	     shows a one-time "Local Network" prompt on first launch. This string is
+	     its explanation; the bundled loader page (frontendDist) survives the
+	     prompt and auto-reconnects once it's granted. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>LiveView connects to its server on your local network (hawk) over Tailscale.</string>
+	<!-- No custom crypto; skips the export-compliance prompt on every upload. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>

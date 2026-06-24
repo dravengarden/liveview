@@ -169,6 +169,31 @@ is an indexed no-op. One queue drives both the text and audio fills.
   numbers + a cheap per-book breakdown, never the 3388-element key list, and
   nothing scans the filesystem.
 
+## 3.6 Repo layout (single source of truth on `main`)
+
+The shell used to live on a divergent `tauri-shell` branch (with its own STALE
+copy of `web/src`) and was built from a non-git Mac working copy — three diverged
+copies. Consolidated onto **`main`**, one coherent monorepo, Android-ready:
+
+```
+liveview/ (main)
+├── src/              Rust server + CLI (sync/check/serve)     [flake builds this]
+├── web/              the SHARED React SPA (one source of truth) [flake builds dist]
+│   └── src/platform/ app|pwa adapters (target.ts + index.ts)
+├── app/              Tauri native shell — iOS · macOS · Android (see app/README.md)
+│   ├── src-tauri/    gen/apple (iOS Swift), gen/android (future), capabilities, src
+│   └── loader/       legacy remote-probe page (dropped at A3)
+├── plugins/lvsync/   cross-platform Rust Tauri plugin (offline data layer + SQLite)
+├── tools/            lvbuild.sh (device) · lvbuild-sim.sh (simulator)
+└── docs/
+```
+
+The `tauri-shell` branch + the Mac `~/liveview-shell` working copy are RETIRED
+once the consolidated build is verified; the Mac build dir then syncs from
+`main/app` (no more hand-edited divergence). Adding `app/`, `plugins/`, `tools/`
+is purely additive — the nix flake only reads `src/` + `web/`, so the server build
+is untouched.
+
 ## 4. Plan / sequencing
 
 | Phase | Tasks | Notes |
