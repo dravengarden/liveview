@@ -1023,22 +1023,31 @@ export function App(): React.JSX.Element {
             target = rows.find((r) => hasFilePath(scope, r.path))?.path ??
               findFirstFile(scope);
           }
-          if (!target) {
-            setNotice(t("audiobook.empty"));
-            return;
-          }
-          setTree(spine);
-          renditionRef.current = "audio";
           const prefLang = bookPrefs[slug]?.lang;
           const audioLang = prefLang && r.langs.some((l) => l.lang === prefLang)
             ? prefLang
             : pickInitialLang(r);
+          if (!target) {
+            // Spine loaded but no playable chapter resolved — still ENTER the book
+            // (text README) rather than dead-ending the tap with only a toast.
+            void openFile(`${slug}/README.md`, audioLang, "text", replace);
+            return;
+          }
+          setTree(spine);
+          renditionRef.current = "audio";
           void openFile(target, audioLang, "audio", replace);
         } catch (e) {
-          // Offline + the audio spine isn't cached: surface it instead of a dead
-          // tap. (prefetchTrees warms both spines, so this is the rare fallback.)
+          // Offline + the audio spine isn't cached (the "card does nothing offline"
+          // bug): the audio path used to dead-end with only a toast, UNLIKE the text
+          // path which always navigates. Enter the book in TEXT at its README so the
+          // tap is never dead — the user gets into the book and can read offline;
+          // reconnecting (prefetchTrees warms both spines) restores audio.
           console.error("Failed to open audiobook:", e);
-          setNotice(t("audiobook.empty"));
+          const prefLang = bookPrefs[slug]?.lang;
+          const lang = prefLang && r.langs.some((l) => l.lang === prefLang)
+            ? prefLang
+            : pickInitialLang(r);
+          void openFile(`${slug}/README.md`, lang, "text", replace);
         }
       })();
     },
