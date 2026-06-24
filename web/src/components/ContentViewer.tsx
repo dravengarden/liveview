@@ -1,8 +1,8 @@
 import { rem } from "@/px";
 import { lazy, Suspense } from "react";
-import { Box, CircularProgress, Typography } from "@mui/material";
+import { Box, CircularProgress, Skeleton, Typography } from "@mui/material";
 import { Description as FileIcon } from "@mui/icons-material";
-import type { FileType, Theme } from "@/types";
+import { READING_COLUMN_MAX, type FileType, type Theme } from "@/types";
 import { useI18n } from "@/i18n";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { ImageViewer } from "./viewers/ImageViewer";
@@ -72,6 +72,60 @@ function ViewerLoading(): React.JSX.Element {
   );
 }
 
+/** File types whose viewer needs the fetched body. Image/PDF load by path, so
+ *  they render immediately and never wait on `content`. */
+function needsContent(fileType: FileType): boolean {
+  return fileType !== "image" && fileType !== "pdf";
+}
+
+/** Reading-shaped loading placeholder: a title bar + paragraph lines laid out in
+ *  the same centred column the reader uses, so opening a book shows the page
+ *  *taking shape* instead of a blank white flash while `/api/file` is in flight.
+ *  Shown only on a COLD open (no prior content); chapter→chapter nav keeps the
+ *  previous text up and cross-fades, so the skeleton never flashes mid-book. */
+function ReaderSkeleton({
+  contentMaxWidth,
+}: {
+  contentMaxWidth: number;
+}): React.JSX.Element {
+  // A few paragraphs of varying length — the last line of each is short, like
+  // real prose. Pure visual filler; widths chosen to read as text, not a table.
+  const paras = [
+    [92, 88, 95, 60],
+    [90, 96, 84, 91, 48],
+    [94, 87, 92, 70],
+    [89, 93, 86, 95, 55],
+  ];
+  return (
+    <Box
+      aria-busy
+      aria-label="Loading"
+      sx={{ flex: 1, overflow: "hidden", px: `${contentMaxWidth}px`, py: 4 }}
+    >
+      <Box sx={{ maxWidth: `${READING_COLUMN_MAX}px`, mx: "auto" }}>
+        {/* Chapter title */}
+        <Skeleton
+          variant="text"
+          animation="wave"
+          sx={{ fontSize: rem(34), width: "70%", mb: 3 }}
+        />
+        {paras.map((lines, p) => (
+          <Box key={p} sx={{ mb: 3 }}>
+            {lines.map((w, i) => (
+              <Skeleton
+                key={i}
+                variant="text"
+                animation="wave"
+                sx={{ fontSize: rem(18), width: `${w}%` }}
+              />
+            ))}
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  );
+}
+
 export function ContentViewer({
   content,
   fileType,
@@ -102,6 +156,13 @@ export function ContentViewer({
         <Typography variant="body1">{t("content.selectFile")}</Typography>
       </Box>
     );
+  }
+
+  // A chapter is selected but its body hasn't arrived yet (`null` = still
+  // fetching; `""` is a genuinely empty file and renders as empty, not a
+  // skeleton). Show the reading-shaped placeholder instead of a blank screen.
+  if (content === null && needsContent(fileType)) {
+    return <ReaderSkeleton contentMaxWidth={contentMaxWidth} />;
   }
 
   let node: React.JSX.Element;
