@@ -1,4 +1,5 @@
 import type { RemoteBackend } from "@/_sync/mod.ts";
+import { contentFetch } from "@/native-sync";
 import type { ProgressEntry } from "@/types";
 
 // RemoteBackend adapters over liveview's EXISTING server endpoints, for the
@@ -16,7 +17,9 @@ import type { ProgressEntry } from "@/types";
 let settingsCache: Promise<Record<string, string>> | null = null;
 
 function loadSettingsMap(): Promise<Record<string, string>> {
-  settingsCache ??= fetch("/api/settings")
+  // fresh: live settings online, last-known offline (the native shell caches the
+  // map so reader prefs hydrate offline instead of resetting to defaults).
+  settingsCache ??= contentFetch("/api/settings", { fresh: true })
     .then((r) => (r.ok ? (r.json() as Promise<Record<string, string>>) : {}))
     .catch(() => ({}));
   return settingsCache;

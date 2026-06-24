@@ -4,6 +4,7 @@
 // A tiny pub/sub (like connectionStore), consumable via `useSyncStatus`.
 
 import { useSyncExternalStore } from "react";
+import { contentFetch } from "@/native-sync";
 
 /** Per-book audio-generation counts (from `/api/tasks`). */
 export interface BookAudioStatus {
@@ -71,7 +72,9 @@ interface RollupRow {
  *  push, and periodically while anything is pending. */
 export async function refreshSyncStatus(): Promise<void> {
   try {
-    const res = await fetch("/api/tasks");
+    // fresh: live audio-gen status online, last-known offline (don't fail the
+    // Sync sheet / ambient indicator on a dropped network).
+    const res = await contentFetch("/api/tasks", { fresh: true });
     if (!res.ok) return;
     const rows = (await res.json()) as RollupRow[];
     const books: BookAudioStatus[] = rows

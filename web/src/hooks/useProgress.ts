@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { mirroredStore, type MirroredStore } from "@/_sync/mod.ts";
 import { progressBackend } from "@/syncBackends";
+import { contentFetch } from "@/native-sync";
 import type { ProgressEntry } from "@/types";
 
 const SAVE_DEBOUNCE_MS = 800;
@@ -57,8 +58,12 @@ export function useProgress(): UseProgress {
   const loadBookRows = useCallback(
     async (slug: string): Promise<ProgressEntry[]> => {
       try {
-        const res = await fetch(
+        // fresh: network-first then cache fallback (native shell), so resume +
+        // reading meters reflect live progress online but still work offline from
+        // the last-known rows. Plain fetch on web (the SW covers its offline read).
+        const res = await contentFetch(
           `/api/progress?book=${encodeURIComponent(slug)}`,
+          { fresh: true },
         );
         if (!res.ok) return [];
         const rows = (await res.json()) as ProgressEntry[];
@@ -81,7 +86,9 @@ export function useProgress(): UseProgress {
 
   const loadRecent = useCallback(async (): Promise<ProgressEntry[]> => {
     try {
-      const res = await fetch("/api/progress/recent");
+      // fresh: live history online, last-known offline (the reading-history view
+      // came back empty offline because this was a raw network fetch).
+      const res = await contentFetch("/api/progress/recent", { fresh: true });
       if (!res.ok) return [];
       const rows = (await res.json()) as ProgressEntry[];
       for (const r of rows) ratios.current.set(r.path, r.scroll);
