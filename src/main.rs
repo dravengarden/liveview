@@ -738,6 +738,29 @@ async fn api_dag(State(state): State<SharedState>) -> impl IntoResponse {
             }));
         }
     }
+    // List/spine endpoints — REQUIRED for offline book-OPEN, not just offline read.
+    // The chapter bytes above let a cached chapter render, but opening a book from
+    // the shelf first resolves its rendition SPINE (`/api/tree?rendition=…`, the
+    // ordered chapter list) and the shelf itself needs `/api/books`. Those are live
+    // (not content-addressed) and were absent from the dag, so the native cache had
+    // every chapter yet a card tap did nothing offline (spine resolve → 504 → the
+    // book couldn't be entered). Cache them like everything else, keyed on the
+    // merkle `root` so they refresh on every corpus change. These are the exact URLs
+    // the client requests via contentFetch (App.tsx enterBook/backToLanding + the
+    // shelf load), so the offline cache-first hit matches. Bytes 0 (tiny; the size
+    // accounting is dominated by audio anyway).
+    let root_key = root.clone().unwrap_or_default();
+    for u in [
+        "/api/books",
+        "/api/tree",
+        "/api/tree?rendition=text",
+        "/api/tree?rendition=audio",
+    ] {
+        resources.push(serde_json::json!({
+            "path": u, "hash": format!("{root_key}:{u}"), "kind": "list",
+            "bytes": 0, "url": u,
+        }));
+    }
     Json(serde_json::json!({ "root": root, "resources": resources })).into_response()
 }
 
