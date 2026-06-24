@@ -331,10 +331,21 @@ import WebKit
     storeDirty = true // invalidate the stats short-circuit — disk changed
   }
 
+  /// DEBUG ONLY: when set, every network fetch fails immediately — a deterministic
+  /// "airplane mode" for testing the offline cache path in the simulator (which has
+  /// no per-app network toggle). Flipped via LvDevBridge `/offline?on=1`. Cache-first
+  /// resolves still return cached bytes; only the network miss path is forced to fail.
+  #if DEBUG
+  @objc public static var forceOffline = false
+  #endif
+
   /// GET `path` (relative → prepend remote; absolute passes through). Returns the
   /// body Data on a 200, else nil (offline / error).
   private func fetch(_ path: String, session: URLSession = .shared,
                      _ done: @escaping (Data?) -> Void) {
+    #if DEBUG
+    if LvSyncController.forceOffline { done(nil); return }
+    #endif
     let full = path.hasPrefix("http") ? path : remote + path
     guard let u = URL(string: full) else { done(nil); return }
     session.dataTask(with: u) { data, resp, _ in
