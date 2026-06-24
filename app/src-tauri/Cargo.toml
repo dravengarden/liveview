@@ -40,7 +40,9 @@ tauri-plugin-opener = "2"
 # `plugin:haptics|*` via the injected IPC bridge; granted to the remote origin in
 # capabilities/remote-haptics.json. installHaptics() (web) buzzes every control.
 tauri-plugin-haptics = "2"
-# NOTE: the Rust `tauri-plugin-lvsync` (plugins/lvsync) is NOT a dependency yet —
-# the offline data layer currently runs as Swift controllers (gen/apple/Sources),
-# and the Rust plugin (+ its lv-sync core) is the B2 rewrite base. Re-add it here
-# once B2 lands it (cross-platform Rust + SQLite, lv-sync vendored into the repo).
+# B2: the cross-platform Rust offline data layer (lv-sync core + SqliteBlobStore),
+# served to the bundled SPA via the `lvsync://` URI scheme (iOS webview→plugin IPC
+# is unreliable). Registered ALONGSIDE the Swift controllers during migration — the
+# web keeps using the Swift path until the plugin is verified end-to-end, then the
+# Swift offline layer is retired. Cross-compiles to aarch64-apple-ios (verified).
+tauri-plugin-lvsync = { path = "../../plugins/lvsync" }

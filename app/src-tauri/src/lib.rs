@@ -20,13 +20,14 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_haptics::init())
-        // NOTE: the offline data layer currently runs as SWIFT WKScriptMessageHandler
-        // controllers (gen/apple/Sources: LvSyncController + NativeAudioController)
-        // installed on the webview — that's what the web (native-sync.ts /
-        // native-audio.ts) calls. The Rust `tauri-plugin-lvsync` (plugins/lvsync)
-        // was an earlier, runtime-UNUSED experiment and is NOT registered here; it
-        // is the BASE for the B2 rewrite (cross-platform Rust + SQLite), which will
-        // re-add `.plugin(tauri_plugin_lvsync::init())` once it's real.
+        // B2: cross-platform Rust offline data layer (lv-sync + SqliteBlobStore),
+        // exposed to the bundled SPA via the `lvsync://` URI scheme. Registered
+        // ALONGSIDE the Swift WKScriptMessageHandler controllers (gen/apple/Sources:
+        // LvSyncController + NativeAudioController) during migration: the web still
+        // calls the Swift path (native-sync.ts / native-audio.ts), so this is inert
+        // at runtime until the web is switched to lvsync:// and verified offline —
+        // only then is the Swift content layer retired. Audio stays native (AVPlayer).
+        .plugin(tauri_plugin_lvsync::init())
         .run(tauri::generate_context!())
         .expect("error while running liveview native shell");
 }
