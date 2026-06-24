@@ -1817,6 +1817,7 @@ export function App(): React.JSX.Element {
                   <Typography
                     variant="subtitle2"
                     noWrap
+                    color="text.primary"
                     sx={{ fontWeight: 700, lineHeight: 1.25 }}
                   >
                     {chapterLabel || bookLabel}

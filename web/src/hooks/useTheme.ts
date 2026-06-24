@@ -257,10 +257,17 @@ export function useTheme(): UseThemeResult {
     document.documentElement.setAttribute("data-theme", theme);
     // A theme-agnostic light/dark flag for CSS that only cares about the scheme
     // (e.g. the dark-mode image plate in markdown.css).
+    const dark = isDarkTheme(theme);
     document.documentElement.setAttribute(
       "data-color-scheme",
-      isDarkTheme(theme) ? "dark" : "light",
+      dark ? "dark" : "light",
     );
+    // Also set the CSS `color-scheme` PROPERTY (not just the data-attr). Without
+    // it WKWebView treats the page as light, so native controls AND any text that
+    // inherits the UA *initial* color render with light-mode defaults (black) — on
+    // a dark theme that's dark-on-dark = washed-out chrome (the bundled-app "theme
+    // looks faint" report). This makes the UA defaults track the active theme.
+    document.documentElement.style.colorScheme = dark ? "dark" : "light";
     // bgPaper is the mobile top nav-bar surface, so the status bar reads as a
     // seamless extension of it.
     applyThemeColor(getThemeColors(theme).bgPaper);
