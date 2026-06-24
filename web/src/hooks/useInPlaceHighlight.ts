@@ -219,6 +219,62 @@ function pausedAnchorEl(
  *
  *  Blocks are found by the server-emitted `data-sourcepos` anchor (see
  *  {@link blockElForUnit}). */
+/** Locate the prose units of ONE block (all share `blk`) into `out`. Split out so
+ *  a single block can be re-located cheaply after its text nodes were mutated
+ *  (paused-span wrap/unwrap) WITHOUT re-walking the whole chapter — re-locating
+ *  the entire chapter on every play/pause toggle janked long chapters. */
+function locateBlock(
+  body: HTMLElement,
+  blkUnits: Unit[],
+  out: Map<number, Located>,
+): void {
+  const first = blkUnits[0];
+  if (!first) return;
+  const blockEl = blockElForUnit(body, first);
+  if (!blockEl) return;
+  const { norm, map } = normalizeBlock(blockEl);
+  // Pass 1: locate what matches exactly, forward cursor. A sentence with inline
+  // math fails here — the server's unit text DROPS the math, but the DOM has
+  // KaTeX-rendered glyphs, so the char streams differ. Record null, DON'T
+  // advance the cursor (the next sentence still starts after this one's slot).
+  const pos: ({ at: number; len: number } | null)[] = [];
+  let cursor = 0;
+  for (const u of blkUnits) {
+    const needle = u.text.replace(/\s+/g, "");
+    if (!needle) { pos.push(null); continue; }
+    const at = norm.indexOf(needle, cursor); // forward cursor disambiguates repeats
+    if (at < 0) { pos.push(null); continue; }
+    pos.push({ at, len: needle.length });
+    cursor = at + needle.length;
+  }
+  // Pass 2: a math-broken sentence gets the GAP between its located neighbours
+  // (end of the previous match → start of the next) — its real slice, math
+  // included — instead of the whole paragraph. This keeps the highlight
+  // SENTENCE-level on math lines instead of ballooning to the block.
+  for (let i = 0; i < blkUnits.length; i++) {
+    const p = pos[i];
+    if (p) { out.set(blkUnits[i]!.idx, { map, at: p.at, len: p.len }); continue; }
+    let prevEnd = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      const q = pos[j];
+      if (q) { prevEnd = q.at + q.len; break; }
+    }
+    let nextStart = norm.length;
+    for (let j = i + 1; j < blkUnits.length; j++) {
+      const q = pos[j];
+      if (q) { nextStart = q.at; break; }
+    }
+    if (nextStart > prevEnd) {
+      out.set(blkUnits[i]!.idx, { map, at: prevEnd, len: nextStart - prevEnd });
+    }
+  }
+}
+
+/** Prose units of `blk`, in unit order (the input order locateBlock relies on). */
+function proseUnitsOfBlock(units: Unit[], blk: number): Unit[] {
+  return units.filter((u) => u.kind === "prose" && !!u.text.trim() && u.blk === blk);
+}
+
 function locateChapter(
   body: HTMLElement,
   units: Unit[],
@@ -231,46 +287,7 @@ function locateChapter(
     if (arr) arr.push(u);
     else byBlk.set(u.blk, [u]);
   }
-  for (const [, blkUnits] of byBlk) {
-    const blockEl = blockElForUnit(body, blkUnits[0]);
-    if (!blockEl) continue;
-    const { norm, map } = normalizeBlock(blockEl);
-    // Pass 1: locate what matches exactly, forward cursor. A sentence with inline
-    // math fails here — the server's unit text DROPS the math, but the DOM has
-    // KaTeX-rendered glyphs, so the char streams differ. Record null, DON'T
-    // advance the cursor (the next sentence still starts after this one's slot).
-    const pos: ({ at: number; len: number } | null)[] = [];
-    let cursor = 0;
-    for (const u of blkUnits) {
-      const needle = u.text.replace(/\s+/g, "");
-      if (!needle) { pos.push(null); continue; }
-      const at = norm.indexOf(needle, cursor); // forward cursor disambiguates repeats
-      if (at < 0) { pos.push(null); continue; }
-      pos.push({ at, len: needle.length });
-      cursor = at + needle.length;
-    }
-    // Pass 2: a math-broken sentence gets the GAP between its located neighbours
-    // (end of the previous match → start of the next) — its real slice, math
-    // included — instead of the whole paragraph. This keeps the highlight
-    // SENTENCE-level on math lines instead of ballooning to the block.
-    for (let i = 0; i < blkUnits.length; i++) {
-      const p = pos[i];
-      if (p) { out.set(blkUnits[i]!.idx, { map, at: p.at, len: p.len }); continue; }
-      let prevEnd = 0;
-      for (let j = i - 1; j >= 0; j--) {
-        const q = pos[j];
-        if (q) { prevEnd = q.at + q.len; break; }
-      }
-      let nextStart = norm.length;
-      for (let j = i + 1; j < blkUnits.length; j++) {
-        const q = pos[j];
-        if (q) { nextStart = q.at; break; }
-      }
-      if (nextStart > prevEnd) {
-        out.set(blkUnits[i]!.idx, { map, at: prevEnd, len: nextStart - prevEnd });
-      }
-    }
-  }
+  for (const [, blkUnits] of byBlk) locateBlock(body, blkUnits, out);
   return out;
 }
 
@@ -673,12 +690,26 @@ export function useInPlaceHighlight(
     ) {
       return undefined;
     }
-    // State changed (resumed / moved / inactive): remove the paused spans and
-    // invalidate the located map — wrapping had split this block's text nodes.
+    // State changed (resumed / moved / inactive): remove the paused spans. The
+    // wrap had split ONLY this sentence's block text nodes, so its cached offset
+    // map is stale — re-locate JUST that block, not the whole chapter. (Nulling
+    // the entire map here forced a full-chapter re-locate on EVERY play/pause
+    // toggle → "点击暂停和播放会卡" on long chapters.)
     if (pausedRef.current) {
+      const pausedIdx = pausedRef.current.idx;
       unwrapSpans(pausedRef.current.spans);
       pausedRef.current = null;
-      locatedForRef.current = null;
+      const blk = units[pausedIdx]?.blk;
+      if (
+        body && blk !== undefined && locatedForRef.current === units
+      ) {
+        // Patch the affected block's entries in place; keep the map keyed to the
+        // current `units` so ensureLocated doesn't rebuild the whole thing.
+        locateBlock(body, proseUnitsOfBlock(units, blk), locatedRef.current);
+      } else {
+        // No usable map to patch (chapter changed, etc.) → let ensureLocated rebuild.
+        locatedForRef.current = null;
+      }
     }
     if (!active || !api || !body) {
       api?.clearAll();
