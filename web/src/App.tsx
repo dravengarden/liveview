@@ -969,7 +969,15 @@ export function App(): React.JSX.Element {
   const entryChapter = useCallback(
     async (slug: string, spine: TreeNode[]): Promise<string | null> => {
       const root = spine.find((n) => n.path === slug);
-      const scope = root ? [root] : spine;
+      // CRITICAL: if the slug isn't in this spine (a STALE / cross-rendition
+      // cached tree — e.g. offline with a tree synced before this book existed),
+      // DO NOT widen the scope to the whole corpus. findReadme(spine) would then
+      // return the FIRST corpus README — i.e. tapping "The Strategy Factory"
+      // opened "Draven Harness Garden". Always scope to the REQUESTED book; with
+      // no subtree, fall straight to its own README path so openFile fetches the
+      // right book (cached or live), never a different one.
+      if (!root) return `${slug}/README.md`;
+      const scope = [root];
       // Resume the newest read chapter THAT EXISTS IN THIS rendition's spine —
       // NOT the globally-newest row. Text + audio share one per-book progress
       // table with distinct chapter paths, so after listening, the newest row is
@@ -1084,7 +1092,23 @@ export function App(): React.JSX.Element {
           const res = await contentFetch(
             `/api/tree?rendition=${encodeURIComponent(r.kind)}`,
           );
-          const spine = (await res.json()) as TreeNode[];
+          let spine = (await res.json()) as TreeNode[];
+          // If the cache-first spine predates this book (stale tree → the slug is
+          // absent), refetch FRESH so we open the real entry chapter instead of the
+          // README fallback. Offline (fresh throws) keeps the cached spine; the
+          // slug-scoped fallback in entryChapter still opens the RIGHT book.
+          if (!spine.some((n) => n.path === slug)) {
+            try {
+              spine = (await (
+                await contentFetch(
+                  `/api/tree?rendition=${encodeURIComponent(r.kind)}`,
+                  { fresh: true },
+                )
+              ).json()) as TreeNode[];
+            } catch {
+              // offline + stale cache — keep what we have; entryChapter handles it.
+            }
+          }
           setTree(spine);
           renditionRef.current = r.kind;
           const entry = await entryChapter(slug, spine);
