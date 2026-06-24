@@ -24,7 +24,6 @@ import {
 } from "@/native-sync";
 import {
   type AudioStats,
-  nativeAudioPreload,
   nativeAudioSetCap,
   nativeAudioStats,
 } from "@/native-audio";
@@ -147,20 +146,10 @@ export function OfflineSection(): React.JSX.Element | null {
     [audioRes, cachedSet],
   );
 
-  // Auto-preload, CHUNKED + self-healing: every poll (audio updates ~2s) feed the
-  // next ≤300 not-yet-cached chapters to the native scheduler. Re-running re-kicks
-  // it (native dedups what's already queued/in-flight/on-disk), so a stalled fill
-  // recovers on its own; chunking also avoids one ~340KB postMessage. Only the
-  // WiFi-only gate stops it.
-  useEffect(() => {
-    if (!audio || audioRes.length === 0) return;
-    if (wifiOnly && stats != null && stats.net !== "wifi") return;
-    const items = audioRes
-      .filter((r) => !cachedSet.has(r.hash))
-      .slice(0, 300)
-      .map((r) => ({ url: `${REMOTE}${r.url}`, hash: r.hash }));
-    if (items.length > 0) nativeAudioPreload(items);
-  }, [audio, audioRes, wifiOnly, stats, cachedSet]);
+  // NOTE: the auto-preload FEED loop now lives at app level
+  // (useAudioPreloadDriver), so the download runs whenever the app is open — not
+  // only while this panel is mounted. This component is display-only for the fill;
+  // it just reflects native stats + the manifest.
 
   if (!nativeSyncAvailable()) return null;
 

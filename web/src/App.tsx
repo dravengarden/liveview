@@ -57,6 +57,7 @@ import { type Track, useAudioPlayer } from "@/audio/player";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { useAutoUpdate } from "@/hooks/useAutoUpdate";
+import { useAudioPreloadDriver } from "@/hooks/useAudioPreloadDriver";
 import { applyUpdate, useConnectionBanner } from "@/connectionStore";
 import { NavShell } from "./_shell";
 import type {
@@ -421,6 +422,10 @@ export function App(): React.JSX.Element {
   // blue "new version" banner instead of yanking the page out from under the
   // reader/listener. See connectionStore + ReconnectBanner.
   useAutoUpdate();
+  // Drive the offline audio fill from app level, so it runs the moment the app
+  // opens (not only while the Settings → Downloads panel is mounted). Native
+  // shell only; no-op on web/PWA.
+  useAudioPreloadDriver();
 
   // Make the update actually LAND on an installed iOS PWA. `useAutoUpdate` only
   // probes and raises the banner; the reload then depends on the shared overlay's
