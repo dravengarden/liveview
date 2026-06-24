@@ -278,7 +278,15 @@ import WebKit
       if let serverRoot,
          let cached = try? Data(contentsOf: dagFile),
          let obj = try? JSONSerialization.jsonObject(with: cached) as? [String: Any],
-         (obj["root"] as? String) == serverRoot {
+         (obj["root"] as? String) == serverRoot,
+         // Schema guard: the dag now also carries the list/spine resources (kind
+         // "list": /api/books + /api/tree*) that offline book-OPEN needs. An older
+         // cached dag.json at the SAME corpus root predates them, so the Merkle
+         // short-circuit would otherwise pin a dag that can never cache the spine →
+         // offline card taps stay dead forever. Require a "list" resource to reuse
+         // the cache; if absent (old schema), fall through and re-fetch once.
+         ((obj["resources"] as? [[String: Any]])?
+           .contains { ($0["kind"] as? String) == "list" } ?? false) {
         done(parse(cached))
         return
       }

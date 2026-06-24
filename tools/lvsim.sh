@@ -60,6 +60,9 @@ case "$cmd" in
                osascript -e "tell application \"System Events\" to click at {$1, $2}"; echo "tap $1 $2" ;;
   ping)        curl -s -m 4 "http://127.0.0.1:$DEVPORT/ping" || echo "(down)" ;;
   eval)        dev_eval "$1" ;;
+  aeval)       # async eval: body runs as an async function; use `return` + `await`
+               # (for fetch/contentFetch). e.g. aeval 'return (await fetch("/x")).status'
+               curl -s -m 20 --data-binary "$1" "http://127.0.0.1:$DEVPORT/aeval" ;;
   url)         dev_eval 'location.href' ;;
   reload)      dev_eval 'location.reload()' ;;
   log)         # native NSLog / os_log for the app (catches Swift-side prints, incl. LvDevBridge)

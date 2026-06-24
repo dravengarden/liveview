@@ -72,6 +72,22 @@ import WebKit
       if path.hasPrefix("/ping") {
         self.respond(conn, "ok"); return
       }
+      // /aeval: run the body as an ASYNC function (callAsyncJavaScript) so it can
+      // `await` — needed to test fetch/contentFetch (evaluateJavaScript returns the
+      // unresolved Promise → "unsupported type"). Body must `return` its value.
+      if path.hasPrefix("/aeval") {
+        let js = body.isEmpty ? "return undefined" : body
+        DispatchQueue.main.async {
+          guard let wv = self.webView else { self.respond(conn, "ERR: no webview"); return }
+          wv.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { result in
+            switch result {
+            case .success(let v): self.respond(conn, Self.encode(v))
+            case .failure(let e): self.respond(conn, "ERR: \(e.localizedDescription)")
+            }
+          }
+        }
+        return
+      }
       if path.hasPrefix("/eval") {
         let js = body.isEmpty ? "void 0" : body
         DispatchQueue.main.async {
