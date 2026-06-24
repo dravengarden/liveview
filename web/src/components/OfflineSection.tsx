@@ -176,7 +176,13 @@ export function OfflineSection(): React.JSX.Element | null {
   const downloadComplete = haveTotals && audioDoneCount >= audioTotalCount
     && (stats == null || stats.cached >= stats.total);
   const waitingWifi = wifiOnly && stats != null && stats.net !== "wifi";
-  const downloading = !downloadComplete;
+  // ACTIVELY transferring = real byte growth in the rolling window. `downloading`
+  // used to mean merely "not 100% complete", so the panel said "Downloading · 0
+  // KB/s" while idle — and when /api/sizes hadn't loaded, downloadComplete was
+  // false forever, so a fully-downloaded library still read "Downloading 0%". Only
+  // claim "Downloading" when bytes are actually moving; otherwise show a neutral
+  // state and never a fake 0% / 0 KB/s.
+  const active = !downloadComplete && !waitingWifi && speed != null && speed > 0;
 
   const applyCap = (newGB: number): void => {
     if (newGB * 1_073_741_824 < used) {
@@ -225,7 +231,7 @@ export function OfflineSection(): React.JSX.Element | null {
       <Box>
         <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
           <Stack direction="row" alignItems="center" spacing={0.75} sx={{ minWidth: 0 }}>
-            {downloading && !waitingWifi && (
+            {active && (
               <CircularProgress size={13} thickness={5} sx={{ color: "text.disabled" }} />
             )}
             <Typography variant="body2">
@@ -233,7 +239,7 @@ export function OfflineSection(): React.JSX.Element | null {
                 ? (zh ? "等待 WiFi" : "Waiting for WiFi")
                 : downloadComplete
                 ? (zh ? "已离线" : "Available offline")
-                : downloading
+                : active
                 ? (zh ? "下载中" : "Downloading")
                 : (zh ? "离线内容" : "Offline content")}
             </Typography>
@@ -275,10 +281,14 @@ export function OfflineSection(): React.JSX.Element | null {
           <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
             {zh ? "文字 " : "Text "}{gb(textUsed)} · {zh ? "音频 " : "Audio "}
             {gb(audioUsed)}
-            {haveTotals && ` · ${audioDoneCount}/${audioTotalCount} ${zh ? "章" : "ch"}`}
-            {" · "}{audioPct}%
+            {/* Chapter count + % ONLY when we have the real corpus total (/api/sizes).
+                Without it a byte-estimate "0%" is just noise next to GBs of cached
+                audio — show the bytes alone instead of a misleading percentage. */}
+            {haveTotals
+              && ` · ${audioDoneCount}/${audioTotalCount} ${zh ? "章" : "ch"} · ${audioPct}%`}
           </Typography>
-          {downloading && !waitingWifi && speed != null && (
+          {/* Speed only while bytes are actually moving — never "↓ 0 KB/s". */}
+          {active && speed != null && speed > 0 && (
             <Typography
               variant="caption"
               color="text.secondary"
@@ -286,7 +296,7 @@ export function OfflineSection(): React.JSX.Element | null {
             >
               ↓ {speed >= 1_048_576
                 ? `${(speed / 1_048_576).toFixed(1)} MB/s`
-                : `${Math.max(0, Math.round(speed / 1024))} KB/s`}
+                : `${Math.max(1, Math.round(speed / 1024))} KB/s`}
             </Typography>
           )}
         </Stack>
