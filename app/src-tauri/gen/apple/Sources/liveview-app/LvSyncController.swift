@@ -39,6 +39,29 @@ import WebKit
     return dir
   }()
 
+  // SQLite resource INDEX (LvStore.swift) for the TEXT store — so `stats()` reports
+  // cached count + bytes as an O(1) aggregate instead of stat-ing every one of
+  // ~11k content files on every 2s Downloads poll (the other half of the slow
+  // panel; audio is indexed the same way in NativeAudioController). Maintained on
+  // every store(); one-time import of existing files on first launch.
+  private lazy var index: LvStore? = {
+    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    guard let s = LvStore(path: base.appendingPathComponent("lv-index-text.sqlite").path)
+    else { return nil }
+    if s.isEmpty() {
+      let fm = FileManager.default
+      if let files = try? fm.contentsOfDirectory(
+        at: contentDir, includingPropertiesForKeys: [.fileSizeKey]
+      ) {
+        for f in files where !f.lastPathComponent.hasPrefix("_") {
+          let b = Int64((try? f.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+          s.upsert(key: f.lastPathComponent, kind: "text", bytes: b, pinned: false, mtime: 0)
+        }
+      }
+    }
+    return s
+  }()
+
   // Live network-path type (wifi / cell / none) so the WiFi-only download
   // preference can be honoured without the web guessing from `navigator`.
   private let monitor = NWPathMonitor()
@@ -158,15 +181,17 @@ import WebKit
       self.manifest { resources in
         var cached = 0, cb = 0, tb = 0
         var books: [String: [Int]] = [:] // slug → [cached, total, cachedBytes, totalBytes]
+        // ONE indexed read (SQLite) → in-memory membership, instead of stat-ing
+        // every one of ~11k content files on disk (the slow per-poll cost). Keeps
+        // the per-resource DECLARED-bytes accounting so cb ≤ tb + the per-book
+        // breakdown are unchanged.
+        let cachedKeys = Set(self.index?.allKeys() ?? [])
         for r in resources {
           tb += r.bytes
           var e = books[r.slug] ?? [0, 0, 0, 0]
           e[1] += 1
           e[3] += r.bytes
-          // Byte-weighted progress uses declared `bytes` for BOTH cached + total
-          // so cb ≤ tb and % ∈ [0,100] (substituting on-disk size for 0-byte
-          // units/spoken inflated cb>tb → MUI shifted the bar past 100%).
-          if self.cachedSize(self.cacheKey(r.url)) != nil {
+          if cachedKeys.contains(self.cacheKey(r.url)) {
             cached += 1
             cb += r.bytes
             e[0] += 1
@@ -294,6 +319,7 @@ import WebKit
     try? data.write(to: part, options: .atomic)
     try? FileManager.default.removeItem(at: dest)
     try? FileManager.default.moveItem(at: part, to: dest)
+    index?.upsert(key: key, kind: "text", bytes: Int64(data.count), pinned: false, mtime: 0)
     storeDirty = true // invalidate the stats short-circuit — disk changed
   }
 
