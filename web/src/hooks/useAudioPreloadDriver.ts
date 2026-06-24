@@ -95,16 +95,11 @@ export function useAudioPreloadDriver(): void {
       nativeAudioSetCap(maxBytes());
       // WiFi-only heuristic: don't auto-fill the bulk audio on cellular when the
       // pref is set. Unknown network → proceed (best effort).
-      if (offlineWifiOnly()) {
-        try {
-          const cs = await nativeCacheStats();
-          if (!cancelled && cs && cs.net !== "wifi") return;
-        } catch {
-          /* unknown net → proceed */
-        }
-      }
       const a = await nativeAudioStats();
       if (cancelled || !a) return;
+      // WiFi-only gate reads net from the AUDIO layer now (it owns the WiFi-gated
+      // big download); the content store (nativeCacheStats) is Rust + not net-aware.
+      if (offlineWifiOnly() && a.net !== "wifi") return;
       const cached = new Set(a.cached);
       const items = audioRes
         .filter((r) => !cached.has(r.hash))

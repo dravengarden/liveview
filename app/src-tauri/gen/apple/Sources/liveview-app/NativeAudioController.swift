@@ -38,6 +38,7 @@
 
 import AVFoundation
 import MediaPlayer
+import Network
 import UIKit
 import WebKit
 
@@ -47,6 +48,12 @@ import WebKit
   private static let skip: NSNumber = 15
 
   private weak var webView: WKWebView?
+  // Live network-path type so the WiFi-only download gate (web: useAudioPreloadDriver
+  // reads `net` from the audio stats) honours "prefetch on WiFi only" for the large
+  // audio download. Moved here from the retired LvSyncController — audio IS the
+  // WiFi-gated download, so net belongs with it.
+  private let netMonitor = NWPathMonitor()
+  private var netPath: NWPath?
   private let player = AVPlayer()
   private var nowPlayingInfo: [String: Any] = [:]
   private var artworkURL: String?
@@ -251,6 +258,15 @@ import WebKit
     // and playImmediately, playback stalls forever at 0:00 — the "this chapter
     // won't play" bug on a chapter resumed near its end.
     player.automaticallyWaitsToMinimizeStalling = true
+    netMonitor.pathUpdateHandler = { [weak self] p in self?.netPath = p }
+    netMonitor.start(queue: DispatchQueue(label: "lv.net"))
+  }
+
+  /// "wifi" (incl. wired / unknown-but-online, e.g. the simulator) | "cell" | "none".
+  private func netType() -> String {
+    guard let p = netPath, p.status == .satisfied else { return "none" }
+    if p.usesInterfaceType(.cellular) && !p.usesInterfaceType(.wifi) { return "cell" }
+    return "wifi"
   }
 
   // MARK: web → native
@@ -500,6 +516,7 @@ import WebKit
     let obj: [String: Any] = [
       "usedBytes": used, "cap": capBytes, "pinnedBytes": pinnedBytes,
       "cachedCount": count, "cached": cached, "pinned": Array(pinned),
+      "net": netType(),
     ]
     let json = (try? JSONSerialization.data(withJSONObject: obj))
       .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"

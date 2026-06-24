@@ -175,7 +175,9 @@ export function OfflineSection(): React.JSX.Element | null {
     : (cachedTotal > 0 ? Math.min(99, Math.round((audioUsed / cachedTotal) * 100)) : 0);
   const downloadComplete = haveTotals && audioDoneCount >= audioTotalCount
     && (stats == null || stats.cached >= stats.total);
-  const waitingWifi = wifiOnly && stats != null && stats.net !== "wifi";
+  // net lives with the AUDIO layer now (the WiFi-gated big download); the content
+  // store (Rust) isn't net-aware.
+  const waitingWifi = wifiOnly && audio != null && audio.net !== "wifi";
   // ACTIVELY transferring = real byte growth in the rolling window. `downloading`
   // used to mean merely "not 100% complete", so the panel said "Downloading · 0
   // KB/s" while idle — and when /api/sizes hadn't loaded, downloadComplete was

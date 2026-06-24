@@ -197,6 +197,9 @@ export interface AudioStats {
   cached: string[];
   /** The pinned (protected) subset. */
   pinned: string[];
+  /** Live network path type — drives the "prefetch on WiFi only" gate for the large
+   *  audio download (the WiFi-gated one). Moved here from the retired content layer. */
+  net: "wifi" | "cell" | "none";
 }
 
 const audioPending = new Map<string, (json: string) => void>();
@@ -238,6 +241,7 @@ export async function nativeAudioStats(): Promise<AudioStats | null> {
       cachedCount: o.cachedCount ?? (o.cached?.length ?? 0),
       cached: o.cached ?? [],
       pinned: o.pinned ?? [],
+      net: o.net ?? "wifi",
     };
   } catch {
     return null;

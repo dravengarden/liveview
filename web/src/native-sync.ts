@@ -1,89 +1,45 @@
-// Bridge to the native offline-content layer via the `lvSync` WKScriptMessageHandler
-// (LvSyncController.swift). This is the ONLY webview→native channel that works from
-// the shell's remote origin on a real device — Tauri plugin IPC and custom URL
-// schemes both fail there (see memory tauri-remote-ipc-needs-plugin). Same mechanism
-// native-audio uses successfully.
+// Bridge to the native offline-content layer via the `lvsync://` URI SCHEME
+// (tauri-plugin-lvsync, Rust + SqliteBlobStore). The bundled SPA loads from the
+// LOCAL origin (tauri://localhost), where a registered WKURLSchemeHandler reaches
+// Rust DIRECTLY — reliable on device, unlike webview→plugin IPC. This REPLACES the
+// old Swift "lvSync" WKScriptMessageHandler (LvSyncController) for reader CONTENT;
+// AUDIO stays in native-audio.ts (native AVPlayer, its own cache).
 //
-// Request/response over a one-way message channel: post `{id, cmd, url?}`, and the
-// native side calls back `window.__lvSyncResolve(id, ok, payload)`. resolve→payload
-// is base64 of the content bytes; stats→a JSON array; syncAll→a number.
+//   GET lvsync://localhost/resolve?u=<encoded api url>  → bytes (200) | 504 offline
+//   GET lvsync://localhost/stats                        → [cached,total,cb,tb]
+//   GET lvsync://localhost/sync_all                     → bytes-cached (number)
 //
-// Off the shell (PWA / browser) the handler is absent → every helper falls back to
-// a normal `fetch` (SW handles offline there). Audio stays in native-audio.ts.
+// Off the shell (PWA / browser) the scheme is absent → every helper falls back to a
+// normal `fetch` (the service worker handles offline there).
 
-interface MsgHandler {
-  postMessage: (m: unknown) => void;
-}
-function handler(): MsgHandler | null {
-  const w = globalThis as { webkit?: { messageHandlers?: { lvSync?: MsgHandler } } };
-  return w.webkit?.messageHandlers?.lvSync ?? null;
-}
+const SCHEME = "lvsync://localhost";
 
-/** True only inside the native shell (where the lvSync handler is installed). */
+/** True only inside the native shell (where the lvsync:// plugin is registered). */
 export function nativeSyncAvailable(): boolean {
-  return handler() !== null;
-}
-
-interface Reply {
-  ok: boolean;
-  payload: string;
-}
-const pending = new Map<string, (r: Reply) => void>();
-let resolverInstalled = false;
-function ensureResolver(): void {
-  if (resolverInstalled) return;
-  resolverInstalled = true;
-  (globalThis as unknown as {
-    __lvSyncResolve?: (id: string, ok: boolean, payload: string) => void;
-  }).__lvSyncResolve = (id, ok, payload) => {
-    const r = pending.get(id);
-    if (r) {
-      pending.delete(id);
-      r({ ok, payload });
-    }
-  };
-}
-
-let seq = 0;
-function call(cmd: string, url?: string, timeoutMs = 30_000, fresh = false): Promise<Reply> {
-  const h = handler();
-  if (!h) return Promise.reject(new Error("native sync unavailable"));
-  ensureResolver();
-  const id = `s${++seq}`;
-  return new Promise<Reply>((resolve) => {
-    pending.set(id, resolve);
-    h.postMessage({ id, cmd, url, fresh });
-    setTimeout(() => {
-      if (pending.delete(id)) resolve({ ok: false, payload: "" });
-    }, timeoutMs);
-  });
+  return "__TAURI_INTERNALS__" in globalThis;
 }
 
 /** Drop-in `fetch` for reader content. On the shell it resolves through the native
- *  content cache (offline-safe). `fresh` = network-first (then cache fallback) for
- *  LIVE lists (/api/books, /api/tree) that change when the corpus changes, so a
- *  newly-deployed book appears instead of a stale cache. Default cache-first for
- *  immutable content-addressed reads. */
+ *  Rust content store (offline-safe): the engine serves immutable content-addressed
+ *  resources cache-first and LIVE lists (/api/tree, /api/books, progress…) network-
+ *  first-then-cache automatically, so freshness is implied by the resource — `fresh`
+ *  is accepted for API compatibility but no longer needed. */
 export async function contentFetch(
   url: string,
-  opts?: { fresh?: boolean },
+  _opts?: { fresh?: boolean },
 ): Promise<Response> {
-  if (nativeSyncAvailable()) {
-    const { ok, payload } = await call("resolve", url, 30_000, opts?.fresh ?? false);
-    if (ok) {
-      const bin = atob(payload);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      return new Response(bytes, { status: 200 });
-    }
-    return navigator.onLine
-      ? fetch(url)
-      : new Response(null, { status: 504, statusText: "offline" });
+  if (!nativeSyncAvailable()) return fetch(url);
+  try {
+    const r = await fetch(`${SCHEME}/resolve?u=${encodeURIComponent(url)}`);
+    if (r.status === 200) return new Response(await r.arrayBuffer(), { status: 200 });
+    return new Response(null, { status: 504, statusText: "offline" });
+  } catch {
+    // Scheme failed unexpectedly — last resort to the network (online only).
+    return navigator.onLine ? fetch(url) : new Response(null, { status: 504 });
   }
-  return fetch(url);
 }
 
-/** Per-book offline coverage. */
+/** Per-book offline coverage (not currently surfaced by the panel; kept for the type). */
 export interface BookStat {
   slug: string;
   cached: number;
@@ -91,7 +47,10 @@ export interface BookStat {
   cb: number;
   tb: number;
 }
-/** Rich offline-cache stats for non-audio content. */
+/** Offline-cache stats for non-audio content. `net` is a neutral placeholder here —
+ *  content sync isn't network-gated (it's small); the "Waiting for WiFi" cue reads
+ *  the AUDIO layer's reachability (native-audio), which owns the large WiFi-gated
+ *  download. */
 export interface CacheStats {
   net: "wifi" | "cell" | "none";
   cached: number;
@@ -101,54 +60,31 @@ export interface CacheStats {
   books: BookStat[];
 }
 
-interface RawStats {
-  net?: string;
-  cached?: number;
-  total?: number;
-  cb?: number;
-  tb?: number;
-  books?: { s: string; c: number; t: number; cb: number; tb: number }[];
-}
-
-/** Global totals + per-book breakdown + current network type. */
+/** Global non-audio content totals from the Rust store: [cached, total, cb, tb]. */
 export async function nativeCacheStats(): Promise<CacheStats> {
-  const { ok, payload } = await call("stats");
-  if (!ok) throw new Error("stats unavailable");
-  const r = JSON.parse(payload) as RawStats;
+  const r = await fetch(`${SCHEME}/stats`);
+  if (r.status !== 200) throw new Error("stats unavailable");
+  const a = (await r.json()) as [number, number, number, number];
   return {
-    net: (r.net as CacheStats["net"]) ?? "none",
-    cached: r.cached ?? 0,
-    total: r.total ?? 0,
-    cb: r.cb ?? 0,
-    tb: r.tb ?? 0,
-    books: (r.books ?? []).map((b) => ({
-      slug: b.s,
-      cached: b.c,
-      total: b.t,
-      cb: b.cb,
-      tb: b.tb,
-    })),
+    net: "wifi", // content isn't wifi-gated; OfflineSection takes net from audio
+    cached: a[0] ?? 0,
+    total: a[1] ?? 0,
+    cb: a[2] ?? 0,
+    tb: a[3] ?? 0,
+    books: [],
   };
 }
 
-/** Eager-pull the whole corpus's non-audio content. When `wifiOnly`, the native
- *  side refuses to use cellular (returns the "nowifi" sentinel off WiFi). Resolves
- *  to bytes downloaded this run; long-running, so poll {@link nativeCacheStats}
- *  for live progress. A second call while one is in flight returns fast ("busy"). */
-export async function nativeSyncAll(wifiOnly = false): Promise<number> {
-  const h = handler();
-  if (!h) return 0;
-  ensureResolver();
-  const id = `s${++seq}`;
-  const { ok, payload } = await new Promise<Reply>((resolve) => {
-    pending.set(id, resolve);
-    h.postMessage({ id, cmd: "syncAll", wifiOnly });
-    setTimeout(() => {
-      if (pending.delete(id)) resolve({ ok: false, payload: "" });
-    }, 1_200_000);
-  });
-  if (!ok) throw new Error("sync failed");
-  return Number(payload) || 0;
+/** Eager-pull the whole corpus's non-audio content into the Rust store. Resolves to
+ *  bytes downloaded this run; long-running, so poll {@link nativeCacheStats} for
+ *  live progress. Content is small (~tens of MB) so it is NOT WiFi-gated — the large
+ *  audio download stays WiFi-gated in native-audio. `wifiOnly` is accepted for API
+ *  compatibility but not enforced for content. */
+export async function nativeSyncAll(_wifiOnly = false): Promise<number> {
+  if (!nativeSyncAvailable()) return 0;
+  const r = await fetch(`${SCHEME}/sync_all`);
+  if (r.status !== 200) throw new Error("sync failed");
+  return Number(await r.text()) || 0;
 }
 
 // ── Download preferences (persisted, shell-only). Auto-download defaults ON, and
