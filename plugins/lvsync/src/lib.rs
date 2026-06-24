@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use lv_sync::native::FsBlobStore;
+use lv_sync::sqlite::SqliteBlobStore;
 use lv_sync::{BlobStore, Engine, Fetcher, Manifest, Resource};
 use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{AppHandle, Manager, Runtime, State};
@@ -51,7 +51,7 @@ impl Fetcher for HttpFetcher {
 /// Managed state: the engine (store + fetcher) + the current manifest (hot-swapped
 /// on refresh) + a `url → Resource` index for O(1) command lookups.
 pub struct LvState {
-    engine: Engine<FsBlobStore, HttpFetcher>,
+    engine: Engine<SqliteBlobStore, HttpFetcher>,
     manifest: RwLock<Manifest>,
     by_url: RwLock<HashMap<String, Resource>>,
     /// Where the cached `/api/dag` JSON lives (offline-launch seed).
@@ -62,8 +62,11 @@ impl LvState {
     /// Construct synchronously from the app data dir: open the blob dir, seed the
     /// manifest from the on-disk cache if present (so offline launch has a map).
     fn new(data_dir: &PathBuf) -> Result<Self, String> {
-        let blob_dir = data_dir.join("blobs");
-        let store = FsBlobStore::new(&blob_dir).map_err(|e| e.to_string())?;
+        // One SQLite DB (blobs + bytes + LRU index) instead of a file-per-hash dir
+        // — O(1) stats + SQL eviction, and the same store compiles for every native
+        // platform (iOS/macOS/Android). Cross-compiles to aarch64-apple-ios via
+        // rusqlite's bundled SQLite (verified).
+        let store = SqliteBlobStore::open(data_dir.join("lvsync.sqlite"))?;
         // verify OFF: a resource hash is a content key (rustfs / source blake3),
         // not blake3 of the SERVED bytes (rendered html) — trust the store key.
         let engine = Engine::new(store, HttpFetcher { client: reqwest::Client::new() }).without_verify();
