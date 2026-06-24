@@ -20,6 +20,18 @@
   box-sizing: border-box;
 }
 
+/* The shared NavShell bottom bar (.lv-nav-bar) read its surface + text from MUI's
+   theme, whose palette.mode resolved to LIGHT in the bundled app even in dark mode
+   — a near-white bar with washed-out text. Force its background + text from the
+   theme-correct CSS vars useTheme publishes (set in JS where the active theme is
+   unambiguous), bypassing the bad MUI context entirely. */
+.lv-nav-bar {
+  background-color: var(--lv-bar-bg) !important;
+}
+.lv-nav-bar .MuiTypography-root {
+  color: var(--lv-bar-fg) !important;
+}
+
 /* Pull-to-refresh spinner rotation (the shelf's PTR indicator). */
 @keyframes lv-spin {
   to {

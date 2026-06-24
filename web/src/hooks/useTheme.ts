@@ -274,10 +274,19 @@ export function useTheme(): UseThemeResult {
     // strip under the bottom navbar — showed the white webview through (a light bar
     // washing out its text in dark mode, only in the bundled local-origin app).
     // Colouring documentElement (html) seals that gap.
-    document.documentElement.style.backgroundColor = getThemeColors(theme).bgDefault;
+    const c = getThemeColors(theme);
+    document.documentElement.style.backgroundColor = c.bgDefault;
+    // Publish the bar surface + foreground as CSS vars, computed HERE in JS where
+    // the active theme is unambiguous. The shared NavShell's bottom bar reads these
+    // instead of `theme.palette.*`, because its MUI palette.mode was resolving to
+    // LIGHT in the bundled app even in dark mode → a near-white bar with washed
+    // text. Driving the bar from data-color-scheme-correct vars bypasses that.
+    document.documentElement.style.setProperty("--lv-bar-bg", c.bgPaper);
+    document.documentElement.style.setProperty("--lv-bar-fg", c.textPrimary);
+    document.documentElement.style.setProperty("--lv-bar-fg-dim", c.textSecondary);
     // bgPaper is the mobile top nav-bar surface, so the status bar reads as a
     // seamless extension of it.
-    applyThemeColor(getThemeColors(theme).bgPaper);
+    applyThemeColor(c.bgPaper);
   }, [theme]);
 
   const muiTheme = useMemo(() => {
