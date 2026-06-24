@@ -309,15 +309,27 @@ import WebKit
     inFlight.insert(item.key)
     dlInflight += 1
     let task = nextDLSession().downloadTask(with: item.url) { [weak self] tmp, resp, _ in
+      guard let self else { return }
+      let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+      // Publish SYNCHRONOUSLY, RIGHT HERE. This closure runs on URLSession's
+      // background delegate queue (NOT main), and the downloaded temp file is
+      // valid ONLY for the duration of this call — URLSession reclaims it the
+      // instant we return. The old code deferred the move into a
+      // DispatchQueue.main.async, so under main-thread load (the playing
+      // read-along hammers main every audio tick) the temp file was frequently
+      // GONE by the time the move ran → publish failed → the chapter was requeued
+      // and RE-DOWNLOADED. That burned the link on repeats while net stored bytes
+      // (the speed readout = usedBytes delta) crawled — the real reason the fill
+      // sat at ~1 stream's worth despite full concurrency. Moving it here also
+      // keeps the file I/O off the contended main thread. Each task writes a
+      // DISTINCT key, so concurrent publishes don't race.
+      let n: Int64? = (code == 200 && tmp != nil) ? self.publish(tmp!, item.key) : nil
       DispatchQueue.main.async {
-        guard let self else { return }
         self.dlInflight -= 1
         self.inFlight.remove(item.key)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        if code == 200, let tmp, let n = self.publish(tmp, item.key) {
+        if let n {
           self.dlWindowBytes += n
           self.dlRetries[item.key] = nil
-          // (Budget enforced on the 2s tick, not per-completion — see schedulerTick.)
         } else {
           // Overload → hard multiplicative decrease. Retryable → requeue (bounded).
           if code == 429 || code == 503 || code == 0 {
@@ -362,6 +374,7 @@ import WebKit
     } else if tput < dlLastTput * 0.90 {
       dlLimit = max(dlMin, dlLimit - 2)
     }
+    NSLog("lvdl: tput=%.0f KB/s inflight=%d limit=%d queued=%d", tput / 1024, dlInflight, dlLimit, dlQueue.count)
     dlLastTput = max(tput, dlLastTput * 0.5) // decay the reference so it re-probes
     // Stalled tasks: a hung connection just fails (or hits URLSession's timeout) →
     // the completion handler requeues it (bounded). We keep no per-task handle, so
