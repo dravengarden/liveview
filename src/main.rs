@@ -741,6 +741,61 @@ async fn api_dag(State(state): State<SharedState>) -> impl IntoResponse {
     Json(serde_json::json!({ "root": root, "resources": resources })).into_response()
 }
 
+/// `GET /api/sizes` — PRECOMPUTED download totals (per-book + global), keyed by
+/// the deploy root, so the Downloads UI gets a TINY response instead of fetching
+/// + parsing the ~4 MB `/api/dag` just to sum sizes. Same byte accounting as the
+/// dag (audio ≈ source ×0.33 compressed). The client caches this by `root` and
+/// re-fetches only when the root changes; the per-device CACHED progress is the
+/// client's own index — this endpoint is the denominator, not the numerator.
+async fn api_sizes(State(state): State<SharedState>) -> impl IntoResponse {
+    let (root, _) = state.store.manifest_books().await.unwrap_or((None, Vec::new()));
+    let chapters = state.store.dag_chapters().await.unwrap_or_default();
+    #[derive(Default)]
+    struct Agg {
+        audio_bytes: i64,
+        audio_count: i64,
+        text_bytes: i64,
+        text_count: i64,
+    }
+    let mut books: std::collections::BTreeMap<String, Agg> = std::collections::BTreeMap::new();
+    let mut total = Agg::default();
+    for c in &chapters {
+        let e = books.entry(c.book_slug.clone()).or_default();
+        if c.file_type == "markdown" || c.file_type == "html" {
+            let b = c.html_bytes.unwrap_or(0);
+            e.text_bytes += b;
+            e.text_count += 1;
+            total.text_bytes += b;
+            total.text_count += 1;
+        }
+        if c.audio_hash.is_some() {
+            // Match the dag's compressed estimate (Opus ≈ source ×0.33).
+            let b = c.audio_size.unwrap_or(0) * 33 / 100;
+            e.audio_bytes += b;
+            e.audio_count += 1;
+            total.audio_bytes += b;
+            total.audio_count += 1;
+        }
+    }
+    let books_json: Vec<serde_json::Value> = books
+        .into_iter()
+        .map(|(slug, a)| {
+            serde_json::json!({
+                "slug": slug,
+                "audio_bytes": a.audio_bytes, "audio_count": a.audio_count,
+                "text_bytes": a.text_bytes, "text_count": a.text_count,
+            })
+        })
+        .collect();
+    Json(serde_json::json!({
+        "root": root,
+        "audio_bytes": total.audio_bytes, "audio_count": total.audio_count,
+        "text_bytes": total.text_bytes, "text_count": total.text_count,
+        "books": books_json,
+    }))
+    .into_response()
+}
+
 fn build_app(state: SharedState) -> Router {
     let api_router = Router::new()
         .route("/api/books", get(api_books))
@@ -765,6 +820,7 @@ fn build_app(state: SharedState) -> Router {
         .route("/api/manifest/{slug}", get(api_manifest_book))
         .route("/api/root", get(api_root))
         .route("/api/dag", get(api_dag))
+        .route("/api/sizes", get(api_sizes))
         // Under /api/ so the service worker treats it network-first (sw.js):
         // a top-level /version would fall into the cache-first bucket and serve
         // a stale build id right after a deploy, defeating the whole check.
