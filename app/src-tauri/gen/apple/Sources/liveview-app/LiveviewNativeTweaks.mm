@@ -82,6 +82,27 @@ static id (*lv_orig_wk_init)(id, SEL, CGRect, id) = NULL;
 static id lv_wk_init(id self, SEL _cmd, CGRect frame, id configuration) {
     id wv = lv_orig_wk_init(self, _cmd, frame, configuration);
     if (wv) {
+        // DEBUG ONLY: make the webview show up in Safari's Web Inspector AND to
+        // ios_webkit_debug_proxy (iOS 16.4+ requires this opt-in; without it the
+        // WebView is invisible to all remote debuggers). This is what lets an agent
+        // attach devtools to the running app — read the DOM, computed styles,
+        // console, and eval JS — headlessly via ios_webkit_debug_proxy. Gated to
+        // DEBUG so release/device builds never expose the inspector.
+#if DEBUG
+        if (@available(iOS 16.4, macOS 13.3, *)) {
+            ((WKWebView *)wv).inspectable = YES;
+        }
+        // Headless eval bridge (LvDevBridge.swift): a loopback HTTP server that runs
+        // evaluateJavaScript on this webview, so an agent can read the DOM / eval JS
+        // over SSH without a GUI. iOS-simulator devtools the usbmux-based
+        // ios_webkit_debug_proxy can't provide. DEBUG-only; same header-free dynamic
+        // install as the controllers below.
+        SEL devInstallSel = NSSelectorFromString(@"installOnWebView:");
+        Class devCls = NSClassFromString(@"LvDevBridge");
+        if (devCls && [devCls respondsToSelector:devInstallSel]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(devCls, devInstallSel, wv);
+        }
+#endif
         // WKWebView's built-in back-forward gesture is now OFF: the native-nav
         // bridge below OWNS the back transition (it snapshots + slides + holds
         // until the web is painted, which the built-in gesture does NOT — that
