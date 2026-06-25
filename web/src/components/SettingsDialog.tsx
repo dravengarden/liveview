@@ -44,6 +44,21 @@ interface SettingsButtonProps {
 
 const MODE_OPTIONS: ThemeMode[] = ["auto", "light", "dark"];
 
+// The running web build's content hash (the entry chunk's hashed filename). The
+// native app version is a static 0.1.0, so on a device this is the ONLY reliable
+// way to tell which web bundle is actually live — i.e. whether a deploy/cold-launch
+// truly picked up new code. Shown in Settings → About. "dev" off the bundle.
+const BUILD_ID = ((): string => {
+  try {
+    const src = [...document.querySelectorAll<HTMLScriptElement>("script[src]")]
+      .map((e) => e.src)
+      .find((s) => /\/assets\/index-/.test(s));
+    return src ? (/index-([A-Za-z0-9_-]+)\.js/.exec(src)?.[1] ?? "dev") : "dev";
+  } catch {
+    return "dev";
+  }
+})();
+
 // Bookshelf group-by options, in display order (labels via `group.<key>`).
 const SHELF_GROUPS: ShelfGroup[] = ["none", "collection"];
 
@@ -528,6 +543,9 @@ export function SettingsButton({
           </Typography>
           <Typography variant="body2" color="text.secondary">
             {t("settings.aboutText")}
+          </Typography>
+          <Typography variant="caption" color="text.disabled">
+            build {BUILD_ID}
           </Typography>
         </Stack>
         </Stack>
