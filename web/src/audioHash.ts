@@ -24,10 +24,18 @@ async function fetchMap(slug: string): Promise<Map<string, string>> {
         chapters: { id: string; audio?: { hash: string | null } }[];
       };
       for (const ch of data.chapters) {
-        // id = "<rendition>/<lang>/<rel_path>"
+        // id = "<rendition>/<lang>/<rel_path>". Map EVERY chapter that carries an
+        // audio hash — keyed by "<lang>/<rel>" with the rendition prefix stripped —
+        // NOT just the audio rendition. BOTH renditions ship read-aloud audio that
+        // is downloaded under its content hash: the audiobook
+        // (audio/<lang>/<rel>.spoken.md) AND the text read-aloud
+        // (text/<lang>/<rel>.md). Skipping the text rendition meant 边看边听 could
+        // never resolve its hash, so the hash-keyed local file wasn't found and it
+        // tried to STREAM — "下完所有数据后切音频一直 loading". The two renditions'
+        // rel paths differ (.spoken.md vs .md), so the keys never collide.
         const a = ch.id.indexOf("/");
         const b = ch.id.indexOf("/", a + 1);
-        if (a < 0 || b < 0 || ch.id.slice(0, a) !== "audio") continue;
+        if (a < 0 || b < 0) continue;
         if (ch.audio?.hash) {
           m.set(`${ch.id.slice(a + 1, b)}/${ch.id.slice(b + 1)}`, ch.audio.hash);
         }
