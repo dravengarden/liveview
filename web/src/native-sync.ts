@@ -39,6 +39,20 @@ export async function contentFetch(
   }
 }
 
+/** The `src` for a book-cover `<img>`. On the bundled native origin a relative
+ *  `/api/cover` would resolve to `tauri://localhost/api/cover` → 404 (the shim
+ *  only intercepts `fetch`, not `<img>`), so covers were blank on the shell —
+ *  online AND offline. Route them through the lvsync:// scheme instead: the
+ *  url-keyed path is NETWORK-FIRST (fresh cover when online) and falls back to the
+ *  cached bytes offline, so one online shelf view caches every cover. Off-shell it
+ *  stays the plain server URL (the SW handles offline). */
+export function coverSrc(slug: string): string {
+  const u = `/api/cover?book=${encodeURIComponent(slug)}`;
+  return nativeSyncAvailable()
+    ? `${SCHEME}/resolve?u=${encodeURIComponent(u)}`
+    : u;
+}
+
 /** Per-book offline coverage (not currently surfaced by the panel; kept for the type). */
 export interface BookStat {
   slug: string;

@@ -328,6 +328,30 @@ fn decode_all(s: &str) -> String {
     }
 }
 
+/// Guess a response Content-Type from the body's magic bytes. Images MUST carry
+/// a real image/* type to render in an `<img>` over the custom scheme; everything
+/// else is read as text/bytes by the web and doesn't care, so it falls through to
+/// octet-stream.
+fn sniff_content_type(body: &[u8]) -> &'static str {
+    match body {
+        [0x89, b'P', b'N', b'G', ..] => "image/png",
+        [0xFF, 0xD8, 0xFF, ..] => "image/jpeg",
+        [b'G', b'I', b'F', b'8', ..] => "image/gif",
+        // WEBP: "RIFF" .... "WEBP"
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => "image/webp",
+        // SVG (text) — match a leading "<?xml" or "<svg" after optional BOM/space.
+        _ if {
+            let s = &body[..body.len().min(64)];
+            let t = std::str::from_utf8(s).unwrap_or("").trim_start();
+            t.starts_with("<svg") || (t.starts_with("<?xml") && body.windows(4).take(256).any(|w| w == b"<svg"))
+        } =>
+        {
+            "image/svg+xml"
+        }
+        _ => "application/octet-stream",
+    }
+}
+
 /// Bytes already cached + total, for non-audio content: (cached, total, cb, tb).
 async fn stats_inner(state: &LvState) -> (u64, u64, u64, u64) {
     let resources: Vec<Resource> = {
@@ -442,7 +466,13 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 let resp = tauri::http::Response::builder()
                     .status(status)
                     .header("Access-Control-Allow-Origin", "*")
-                    .header("Content-Type", "application/octet-stream")
+                    // Sniff the content type from magic bytes. Text/JSON content the
+                    // web reads via fetch().text() (type-agnostic), but an
+                    // `<img src="lvsync://…/resolve?u=/api/cover…">` only RENDERS when
+                    // the response carries an image/* type — a custom scheme gets no
+                    // browser MIME-sniffing fallback. So covers (and any image asset)
+                    // resolve offline-first through this same path.
+                    .header("Content-Type", sniff_content_type(&body))
                     .body(std::borrow::Cow::<[u8]>::Owned(body))
                     .unwrap_or_else(|_| {
                         tauri::http::Response::new(std::borrow::Cow::Owned(Vec::new()))

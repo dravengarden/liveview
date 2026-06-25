@@ -1,4 +1,5 @@
 import { rem } from "@/px";
+import { coverSrc } from "@/native-sync";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Box, CircularProgress } from "@mui/material";
 import { Headphones as AudiobookIcon } from "@mui/icons-material";
@@ -364,7 +365,7 @@ export function FloatingBubble({
           ? (
             <Box
               component="img"
-              src={`/api/cover?book=${encodeURIComponent(slug)}`}
+              src={coverSrc(slug)}
               alt=""
               draggable={false}
               sx={{

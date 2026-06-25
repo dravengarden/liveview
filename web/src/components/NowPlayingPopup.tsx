@@ -1,4 +1,5 @@
 import { rem } from "@/px";
+import { coverSrc } from "@/native-sync";
 import { useEffect, useRef, useState } from "react";
 import {
   Box,
@@ -73,7 +74,7 @@ function CoverTile({
         ? (
           <Box
             component="img"
-            src={`/api/cover?book=${encodeURIComponent(slug)}`}
+            src={coverSrc(slug)}
             alt=""
             sx={{
               position: "absolute",

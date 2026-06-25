@@ -1,4 +1,5 @@
 import { rem } from "@/px";
+import { coverSrc } from "@/native-sync";
 import {
   Box,
   ButtonBase,
@@ -126,9 +127,7 @@ export function MiniPlayer(
               ? (
                 <Box
                   component="img"
-                  src={`/api/cover?book=${
-                    encodeURIComponent(nowPlaying.bookSlug)
-                  }`}
+                  src={coverSrc(nowPlaying.bookSlug)}
                   alt=""
                   sx={{
                     position: "absolute",

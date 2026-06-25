@@ -1,4 +1,5 @@
 import { rem } from "@/px";
+import { coverSrc } from "@/native-sync";
 import {
   Box,
   Card,
@@ -243,7 +244,7 @@ function BookCover({
         ? (
           <Box
             component="img"
-            src={`/api/cover?book=${encodeURIComponent(book.slug)}`}
+            src={coverSrc(book.slug)}
             alt=""
             loading="lazy"
             onError={() => {
@@ -582,7 +583,7 @@ function HistoryRow(
           ? (
             <Box
               component="img"
-              src={`/api/cover?book=${encodeURIComponent(book.slug)}`}
+              src={coverSrc(book.slug)}
               alt=""
               loading="lazy"
               onError={() => setImgFailed(true)}
