@@ -3,6 +3,7 @@ import { REMOTE } from "@/apiBase";
 import {
   ensureAutoSync,
   nativeCacheStats,
+  nativeRefreshManifest,
   nativeSyncAvailable,
   offlineWifiOnly,
 } from "@/native-sync";
@@ -52,6 +53,10 @@ export function useAudioPreloadDriver(): void {
     // native cache keys we diff against `nativeAudioStats().cached`.
     void (async () => {
       try {
+        // Refresh the native content manifest FIRST (on mount / cold launch), so
+        // newly-added corpus resources (e.g. audio `spoken` transcripts) are known
+        // before the sync runs. Foreground refresh is wired below.
+        await nativeRefreshManifest();
         // contentFetch: cache-first + timed (offline-safe). A raw network fetch of
         // the 4 MB dag here hung the audio driver offline.
         const dag = (await (await contentFetch("/api/dag")).json()) as {
@@ -132,9 +137,24 @@ export function useAudioPreloadDriver(): void {
 
     void pump();
     timer = globalThis.setInterval(() => void pump(), 3000);
+
+    // Refresh the native content manifest on EVERY foreground (not just cold
+    // launch). A warm-resumed device would otherwise never learn about corpus
+    // resources added since its last cold launch (e.g. the audio `spoken`
+    // transcripts) → they'd stay blank offline. After the manifest grows, the
+    // 3s pump above downloads whatever's newly listed.
+    const onVisible = (): void => {
+      if (globalThis.document?.visibilityState === "visible") {
+        void nativeRefreshManifest().then(() => {
+          if (!cancelled) void pump();
+        });
+      }
+    };
+    globalThis.document?.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
       if (timer !== undefined) clearInterval(timer);
+      globalThis.document?.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 }

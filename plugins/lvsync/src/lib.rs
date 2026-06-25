@@ -517,12 +517,18 @@ async fn sync_all(state: State<'_, LvState>) -> Result<u64, String> {
         let m = state.manifest.read().await;
         m.resources.iter().filter(|r| r.kind != "audio").cloned().collect()
     };
-    let mut done = 0u64;
-    for r in &resources {
-        if state.engine.resolve(r).await.is_ok() {
-            done = done.saturating_add(r.bytes);
-        }
-    }
+    // CONCURRENT (was sequential): the text store has ~12k tiny resources; resolving
+    // them one-at-a-time over the high-latency remote tunnel took MINUTES, so a
+    // device that added new resources (e.g. audio `spoken` transcripts) often went
+    // offline before the fill finished → chapters stayed blank offline. Already-
+    // cached resources resolve instantly (store hit); only the missing few hit the
+    // network, now up to 24 in flight, so a full fill completes in seconds.
+    use futures_util::StreamExt as _;
+    let done = futures_util::stream::iter(resources.iter())
+        .map(|r| async move { if state.engine.resolve(r).await.is_ok() { r.bytes } else { 0 } })
+        .buffer_unordered(24)
+        .fold(0u64, |acc, b| async move { acc.saturating_add(b) })
+        .await;
     Ok(done)
 }
 
@@ -677,6 +683,20 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
             // web shows the "更新将在 3s 后生效" banner and reloads into the new bundle.
             let msg = state.web_ota_check().await;
             (200, msg.into_bytes())
+        }
+        "/refresh" => {
+            // Re-pull /api/dag → swap the manifest + by_url index. The web driver
+            // calls this on EVERY app open + foreground (not just cold launch, which
+            // is the only other time setup_state refreshes). Without it, a device
+            // that warm-resumes never learns about resources ADDED to the corpus
+            // after its last cold launch (e.g. the audio-rendition `spoken`
+            // transcripts) — so `total` never grows, the cached<total sync never
+            // fires, and those chapters stay blank offline forever. With it, the
+            // manifest is always current and the pump downloads whatever's new.
+            match state.refresh().await {
+                Ok(root) => (200, root.into_bytes()),
+                Err(e) => (504, e.into_bytes()),
+            }
         }
         "/sync_all" => {
             let resources: Vec<Resource> = {

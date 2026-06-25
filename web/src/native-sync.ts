@@ -106,6 +106,22 @@ export async function nativeSyncAll(_wifiOnly = false): Promise<number> {
   return Number(await r.text()) || 0;
 }
 
+/** Re-pull /api/dag → refresh the native content manifest. MUST run on every app
+ *  open + foreground, not just cold launch: otherwise a warm-resumed device never
+ *  learns about resources ADDED to the corpus since its last cold launch (e.g. the
+ *  audio-rendition `spoken` transcripts), so `total` never grows, the cached<total
+ *  sync never fires, and those chapters stay blank offline. After this returns the
+ *  sync pump (useAudioPreloadDriver) downloads whatever's newly listed. No-op
+ *  off-shell; never throws. */
+export async function nativeRefreshManifest(): Promise<void> {
+  if (!nativeSyncAvailable()) return;
+  try {
+    await fetch(`${SCHEME}/refresh`);
+  } catch {
+    /* offline / transient — the next foreground retries */
+  }
+}
+
 // ── Download preferences (persisted, shell-only). Auto-download defaults ON, and
 // WiFi-only defaults ON so we never surprise-burn cellular data.
 
