@@ -128,7 +128,11 @@ import WebKit
     ) else { return }
     for f in files
     where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_") {
-      let key = f.lastPathComponent
+      // The logical key is the bare content hash; on-disk files carry .caf (see
+      // fileURL). Strip it so the index keys match what playback/pins/stats use.
+      let key = f.pathExtension == "caf"
+        ? String(f.deletingPathExtension().lastPathComponent)
+        : f.lastPathComponent
       let v = try? f.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
       let bytes = Int64(v?.fileSize ?? 0)
       let mtime = Int64((v?.contentModificationDate ?? Date(timeIntervalSince1970: 0))
@@ -443,7 +447,7 @@ import WebKit
 
   /// Move a freshly-downloaded temp file into the cache under `key`; returns bytes.
   private func publish(_ tmp: URL, _ key: String) -> Int64? {
-    let dest = cacheDir.appendingPathComponent(key)
+    let dest = fileURL(key) // <key>.caf — see fileURL()
     let part = dest.appendingPathExtension("part")
     let fm = FileManager.default
     try? fm.removeItem(at: part)
@@ -466,7 +470,8 @@ import WebKit
     for k in keys {
       let key = cacheKey(forURL: URL(string: "x:")!, hash: k) // sanitize same way
       pinned.remove(key)
-      try? fm.removeItem(at: cacheDir.appendingPathComponent(key))
+      try? fm.removeItem(at: fileURL(key)) // <key>.caf
+      try? fm.removeItem(at: cacheDir.appendingPathComponent(key)) // legacy (pre-.caf)
       store?.remove(key: key)
     }
     savePins()
@@ -497,7 +502,8 @@ import WebKit
     // index — no directory scan. Delete the file + its row for each.
     let fm = FileManager.default
     for key in store?.lruEvictionCandidates(toFree: total - capBytes) ?? [] {
-      try? fm.removeItem(at: cacheDir.appendingPathComponent(key))
+      try? fm.removeItem(at: fileURL(key)) // <key>.caf
+      try? fm.removeItem(at: cacheDir.appendingPathComponent(key)) // legacy (pre-.caf)
       store?.remove(key: key)
     }
   }
@@ -669,18 +675,21 @@ import WebKit
         }
         self.emit("{type:'canplay'}")
       case .failed:
-        // SELF-HEAL: a failed CACHED file is likely corrupt — drop it and
-        // re-stream from the origin (once). A failed STREAM surfaces as an error.
-        if self.playingFromCache, let key = self.currentCacheKey,
-           let origin = self.currentOriginURL {
+        // A cached LOCAL file should no longer fail now that it carries a .caf
+        // extension (AVURLAsset can infer the container). If it still does, DO NOT
+        // delete the download — deleting a perfectly-good offline file was the old
+        // "downloads vanish" death-loop (an extension-less CAF read as "corrupt",
+        // got wiped, and offline there was nothing left to fall back to). When
+        // ONLINE, re-stream from the origin as a fallback but KEEP the file; when
+        // OFFLINE, surface the error and keep the file for a later retry.
+        if self.playingFromCache, let origin = self.currentOriginURL,
+           self.netType() != "none" {
           self.playingFromCache = false
-          try? FileManager.default.removeItem(at: self.cacheDir.appendingPathComponent(key))
           let wasPlaying = self.isPlaying()
           self.teardownItem() // drop this (now-stale) item's observers
           let fresh = AVPlayerItem(url: origin)
           self.observeItem(fresh)
           self.player.replaceCurrentItem(with: fresh)
-          self.downloadToCache(origin, key)
           if wasPlaying { self.play() }
         } else {
           self.emit("{type:'error',message:'item failed'}")
@@ -872,15 +881,39 @@ import WebKit
 
   /// Pure existence check (no mtime touch — used by the scheduler for dedup, which
   /// must NOT mark a not-yet-played file as recently used).
+  /// On-disk path for a cache key. Files carry a `.caf` EXTENSION on purpose:
+  /// AVURLAsset infers a LOCAL file's container type from its path extension, and
+  /// our content-hash keys have none — without it Opus-in-CAF fails to load with
+  /// "item failed" on OFFLINE playback (streaming works only because the HTTP
+  /// Content-Type supplies the type). The logical KEY stays the bare hash
+  /// everywhere (index / pins / stats); only the filename gets the extension.
+  private func fileURL(_ key: String) -> URL {
+    cacheDir.appendingPathComponent(key + ".caf")
+  }
+
+  /// Resolve a key to its on-disk file, lazily migrating a legacy extension-less
+  /// blob (`<hash>` → `<hash>.caf`) IN PLACE — instant, same bytes, no re-download.
+  /// nil if neither exists.
+  private func resolveFile(_ key: String) -> URL? {
+    let caf = fileURL(key)
+    let fm = FileManager.default
+    if fm.fileExists(atPath: caf.path) { return caf }
+    let legacy = cacheDir.appendingPathComponent(key)
+    if fm.fileExists(atPath: legacy.path) {
+      try? fm.moveItem(at: legacy, to: caf)
+      return fm.fileExists(atPath: caf.path) ? caf : legacy
+    }
+    return nil
+  }
+
   private func onDisk(_ key: String) -> Bool {
-    FileManager.default.fileExists(atPath: cacheDir.appendingPathComponent(key).path)
+    resolveFile(key) != nil
   }
 
   /// The local file for a fully-cached key, or nil. Touches it so the LRU keeps
   /// recently-played audio.
   private func cachedFileURL(_ key: String) -> URL? {
-    let f = cacheDir.appendingPathComponent(key)
-    guard FileManager.default.fileExists(atPath: f.path) else { return nil }
+    guard let f = resolveFile(key) else { return nil }
     let now = Date()
     try? FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: f.path)
     store?.touch(key: key, mtime: Int64(now.timeIntervalSince1970)) // LRU recency in the index
@@ -892,8 +925,8 @@ import WebKit
   /// explicit prefetch (save-offline). Atomic publish (.part → rename) so a crash
   /// never leaves a truncated file masquerading as complete.
   private func downloadToCache(_ url: URL, _ key: String) {
-    let dest = cacheDir.appendingPathComponent(key)
-    if FileManager.default.fileExists(atPath: dest.path) || inFlight.contains(key) { return }
+    let dest = fileURL(key) // <key>.caf — see fileURL()
+    if onDisk(key) || inFlight.contains(key) { return }
     inFlight.insert(key)
     let task = nextDLSession().downloadTask(with: url) { [weak self] tmp, resp, _ in
       guard let self else { return }
