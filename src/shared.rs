@@ -93,4 +93,11 @@ pub enum WsMessage {
         key: String,
         value: String,
     },
+    /// Server push of the current embedded app-bundle version, sent once right
+    /// after a client connects. A deploy = server restart = every client
+    /// reconnects = a fresh push, so the native shell picks up a new web bundle
+    /// instantly (it runs the OTA check on receipt). The web/PWA ignores it.
+    AppVersion {
+        version: String,
+    },
 }

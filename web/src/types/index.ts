@@ -160,7 +160,10 @@ export type WsMessage =
     content: string;
   }
   | { type: "TreeUpdate"; tree: TreeNode[] }
-  | { type: "SettingUpdate"; key: string; value: string };
+  | { type: "SettingUpdate"; key: string; value: string }
+  // Server push of the current app-bundle version (sent on WS connect). The
+  // native shell reacts by running the OTA check; the web/PWA ignores it.
+  | { type: "AppVersion"; version: string };
 
 // Reading-oriented themes only (Day / Sepia / Dark / Night). The old
 // code-editor schemes (solarized, dracula, nord, monokai, one-dark, gruvbox)

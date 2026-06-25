@@ -4,6 +4,7 @@ import { BUNDLED, REMOTE } from "@/apiBase";
 import { connectionLost, connectionReady } from "@/connectionStore";
 import { emitServerSettingPush } from "@/syncBackends";
 import { dispatchChapterReady } from "@/syncStore";
+import { runOtaCheck } from "@/otaUpdater";
 
 interface UseWebSocketOptions {
   onContentUpdate: (
@@ -37,10 +38,9 @@ export function useWebSocket(
       // Resets the reconnect counter, flashes the green banner if an outage was
       // surfaced, and probes /version for a redeploy (see connectionStore).
       connectionReady();
-      // A server DEPLOY = server restart = this WS reconnects. Signal it so the
-      // app-bundle OTA updater checks immediately (instant pickup after a deploy,
-      // no polling). otaUpdater listens for this.
-      globalThis.dispatchEvent(new Event("lv-ws-open"));
+      // App-bundle OTA is now SERVER-PUSHED: the server sends an `AppVersion`
+      // message right after this connect (see below), so there's nothing to poll
+      // here — a deploy = server restart = reconnect = fresh AppVersion push.
     };
 
     ws.onmessage = (event: MessageEvent<string>) => {
@@ -61,7 +61,13 @@ export function useWebSocket(
           return;
         }
         const msg = raw as unknown as WsMessage;
-        if (msg.type === "ContentUpdate") {
+        if (msg.type === "AppVersion") {
+          // SERVER PUSH: the server announces its current app-bundle version on
+          // connect (and a deploy = restart = reconnect = a fresh push). Ask the
+          // native plugin to probe + incrementally pull + flip to it, then reload
+          // silently. Off the native shell runOtaCheck is a no-op.
+          void runOtaCheck();
+        } else if (msg.type === "ContentUpdate") {
           onContentUpdate(msg.path, msg.lang, msg.file_type, msg.content);
         } else if (msg.type === "TreeUpdate") {
           onTreeUpdate(msg.tree);

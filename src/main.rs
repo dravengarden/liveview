@@ -118,12 +118,19 @@ mod embedded_assets {
     /// `GET /app-dist/manifest.json` — the OTA bundle's `version` (the content-hashed
     /// entry name, so it changes every web build) + the full file list. The plugin
     /// compares `version` to its stored copy and downloads each file when it differs.
-    pub async fn app_dist_manifest(headers: axum::http::HeaderMap) -> impl IntoResponse {
-        let version = DIST_DIR
+    /// The embedded app-bundle's version = the content-hashed entry-bundle name
+    /// Vite stamps into `app-bundle/index.html`. Changes iff the shipped web app
+    /// changes. Shared by the OTA manifest endpoint and the WS `AppVersion` push.
+    pub fn app_bundle_version() -> String {
+        DIST_DIR
             .get_file("app-bundle/index.html")
             .and_then(|f| f.contents_utf8())
             .and_then(super::entry_bundle)
-            .unwrap_or_else(|| "0".to_string());
+            .unwrap_or_else(|| "0".to_string())
+    }
+
+    pub async fn app_dist_manifest(headers: axum::http::HeaderMap) -> impl IntoResponse {
+        let version = app_bundle_version();
         // Cheap conditional probe: the client sends its current version as
         // If-None-Match; unchanged → 304 (a few bytes), no manifest body.
         if headers
@@ -176,6 +183,17 @@ async fn version() -> Response {
         Some(v) => Json(serde_json::json!({ "version": v })).into_response(),
         None => (StatusCode::NOT_FOUND, "UI not built").into_response(),
     }
+}
+
+/// The current embedded app-bundle version, for the WS `AppVersion` push. `None`
+/// in non-embedded dev builds (no compiled-in bundle → nothing to OTA).
+#[cfg(feature = "embedded")]
+fn app_version() -> Option<String> {
+    Some(embedded_assets::app_bundle_version())
+}
+#[cfg(not(feature = "embedded"))]
+fn app_version() -> Option<String> {
+    None
 }
 
 /// Pull Vite's content-hashed entry-bundle name out of index.html. Returns e.g.
