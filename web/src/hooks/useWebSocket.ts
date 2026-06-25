@@ -37,6 +37,10 @@ export function useWebSocket(
       // Resets the reconnect counter, flashes the green banner if an outage was
       // surfaced, and probes /version for a redeploy (see connectionStore).
       connectionReady();
+      // A server DEPLOY = server restart = this WS reconnects. Signal it so the
+      // app-bundle OTA updater checks immediately (instant pickup after a deploy,
+      // no polling). otaUpdater listens for this.
+      globalThis.dispatchEvent(new Event("lv-ws-open"));
     };
 
     ws.onmessage = (event: MessageEvent<string>) => {

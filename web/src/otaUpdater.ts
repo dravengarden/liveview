@@ -13,8 +13,11 @@
 
 import { nativeSyncAvailable } from "@/native-sync";
 
-// Re-check on a relaxed cadence — the probe is a 304 (a few bytes) when unchanged.
-const CHECK_MS = 5 * 60_000;
+// Safety-net interval (ms) while the app is FOREGROUNDED — the main triggers are
+// WS-reconnect (instant on a deploy) + foreground-resume, so this just covers an app
+// left open across a deploy. The probe is a cheap 304 when unchanged. Paused when
+// backgrounded (no point polling a hidden app).
+const CHECK_MS = 30_000;
 const BANNER_MS = 3000;
 
 async function checkOnce(onUpdated: () => void): Promise<void> {
@@ -61,8 +64,20 @@ export function startOtaUpdater(): void {
     showBanner();
     globalThis.setTimeout(() => globalThis.location.reload(), BANNER_MS);
   };
-  void checkOnce(onUpdated);
-  globalThis.setInterval(() => {
+  const check = (): void => {
     if (!applying) void checkOnce(onUpdated);
+  };
+  // Triggers, fastest first:
+  // 1. WS reconnect — a deploy restarts the server → the WS reconnects → instant check.
+  globalThis.addEventListener("lv-ws-open", check);
+  // 2. Foreground resume — catch a deploy that happened while the app was backgrounded.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") check();
+  });
+  // 3. On load.
+  check();
+  // 4. Safety-net interval, ONLY while visible (don't poll a hidden app).
+  globalThis.setInterval(() => {
+    if (document.visibilityState === "visible") check();
   }, CHECK_MS);
 }
