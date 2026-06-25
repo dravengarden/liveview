@@ -29,19 +29,23 @@ async function checkOnce(onUpdated: () => void): Promise<void> {
 function showBanner(): void {
   const el = document.createElement("div");
   el.textContent = "已更新到新版本，即将刷新…";
+  // TOP banner. Font + padding in `rem` so it scales with Settings → Font size
+  // (App sets the root html font-size from `fontScale`, so rem tracks it).
   el.style.cssText = [
     "position:fixed",
     "left:50%",
-    "bottom:calc(env(safe-area-inset-bottom, 0px) + 88px)",
+    "top:calc(env(safe-area-inset-top, 0px) + 12px)",
     "transform:translateX(-50%)",
     "z-index:2147483647",
     "background:rgba(124,58,237,0.96)",
     "color:#fff",
-    "padding:10px 18px",
+    "padding:0.6rem 1.1rem",
     "border-radius:999px",
-    "font:600 14px/1.2 system-ui, -apple-system, sans-serif",
+    "font:600 0.95rem/1.2 system-ui, -apple-system, sans-serif",
     "box-shadow:0 6px 20px rgba(0,0,0,0.35)",
     "pointer-events:none",
+    "max-width:90vw",
+    "text-align:center",
   ].join(";");
   document.body.appendChild(el);
 }
