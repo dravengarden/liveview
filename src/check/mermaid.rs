@@ -11,6 +11,13 @@
 //!
 //! Everything past the type line (node syntax, edges, labels) is left to the
 //! reader's mermaid.js, which is authoritative. Severity is Warning.
+//!
+//! THIS IS ONLY A PRE-FILTER. Pure Rust can't run mermaid's grammar, so this
+//! passes diagrams the reader then rejects with "Syntax error in text". The
+//! 100%-faithful check (checker == renderer) is `tools/mermaid-lint.ts` — it runs
+//! the REAL `mermaid.parse()` at the exact vendored version (auto-read from
+//! web/public/mermaid.min.js) under jsdom. The books delivery gate runs it; see
+//! books/AGENTS.md and the `liveview-mermaid-100pct-checker` memory.
 
 use comrak::nodes::NodeValue;
 use comrak::{parse_document, Arena};
