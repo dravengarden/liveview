@@ -118,14 +118,30 @@ mod embedded_assets {
     /// `GET /app-dist/manifest.json` — the OTA bundle's `version` (the content-hashed
     /// entry name, so it changes every web build) + the full file list. The plugin
     /// compares `version` to its stored copy and downloads each file when it differs.
-    pub async fn app_dist_manifest() -> impl IntoResponse {
+    pub async fn app_dist_manifest(headers: axum::http::HeaderMap) -> impl IntoResponse {
         let version = DIST_DIR
             .get_file("app-bundle/index.html")
             .and_then(|f| f.contents_utf8())
             .and_then(super::entry_bundle)
             .unwrap_or_else(|| "0".to_string());
+        // Cheap conditional probe: the client sends its current version as
+        // If-None-Match; unchanged → 304 (a few bytes), no manifest body.
+        if headers
+            .get(header::IF_NONE_MATCH)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v == version)
+        {
+            return (StatusCode::NOT_MODIFIED, [(header::ETAG, version)]).into_response();
+        }
         let body = serde_json::json!({ "version": version, "files": app_bundle_paths() });
-        ([(header::CACHE_CONTROL, "no-cache")], axum::Json(body)).into_response()
+        (
+            [
+                (header::ETAG, version),
+                (header::CACHE_CONTROL, "no-cache".to_string()),
+            ],
+            axum::Json(body),
+        )
+            .into_response()
     }
 
     /// `GET /app-dist/<path>` — one OTA bundle file from the embedded `app-bundle/`.

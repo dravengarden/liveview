@@ -73,11 +73,18 @@ pub struct LvState {
     by_url: RwLock<HashMap<String, Resource>>,
     /// Where the cached `/api/dag` JSON lives (offline-launch seed).
     manifest_file: PathBuf,
-    /// OTA web-bundle dir (`<data>/web-ota/`): the downloaded SPA that overrides the
-    /// embedded one, so the web hot-updates without an app reinstall. Empty until an
-    /// OTA download populates it; the `/app/` handler then falls back to the embedded
+    /// OTA web base dir (`<data>/web/`): the content-addressed app-bundle store that
+    /// overrides the embedded SPA so the web hot-updates without an app reinstall.
+    /// Layout:
+    ///   web/files/<path>          every asset by path (Vite hashes the filename, so
+    ///                             unchanged chunks are shared across versions)
+    ///   web/roots/<v>/index.html  the (un-hashed) entry, per version
+    ///   web/roots/<v>/manifest.json  {version, assets:[...]} for that version
+    ///   web/current               the live version string
+    ///   web/versions              newline list, newest last (retention order)
+    /// Empty until an OTA download; the `/app/` handler then falls back to the embedded
     /// bundle, so a fresh install / offline always works.
-    web_dir: PathBuf,
+    web_root: PathBuf,
 }
 
 impl LvState {
@@ -117,55 +124,73 @@ impl LvState {
             .and_then(|s| Manifest::from_json(&s).ok())
             .unwrap_or_default();
         let by_url = index(&manifest);
-        // Apply-on-next-launch OTA: if the previous run finished downloading a new
-        // web bundle into `web-ota.staged`, swap it into `web-ota` NOW — synchronously,
-        // BEFORE the window loads — so this launch serves the new bundle and a swap
-        // never disturbs an already-running session (a mid-session dir swap could 404
-        // a lazily-imported chunk). web_ota_update() only ever writes the staged dir.
-        let web_dir = data_dir.join("web-ota");
-        let staged = data_dir.join("web-ota.staged");
-        if staged.join("index.html").is_file() {
-            let _ = std::fs::remove_dir_all(&web_dir);
-            let _ = std::fs::rename(&staged, &web_dir);
-        }
         Ok(Self {
             engine,
             manifest: RwLock::new(manifest),
             by_url: RwLock::new(by_url),
             manifest_file,
-            web_dir,
+            web_root: data_dir.join("web"),
         })
     }
 
-    /// An OTA web-bundle file by its bundle-relative path, or None when not present
-    /// (→ the `/app/` handler serves the embedded bundle). Path-traversal guarded.
+    /// Sanitize an OTA version string (the entry filename, which has `/` and `.`) into
+    /// a single safe path component for `web/roots/<v>/`.
+    fn ver_dir(version: &str) -> String {
+        version.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
+    }
+
+    /// An OTA web-bundle file for the CURRENT version, or None (→ the `/app/` handler
+    /// serves the embedded bundle). `index.html` comes from the current version's root
+    /// dir; every other path from the shared content-addressed `web/files/`.
     async fn web_get(&self, rel: &str) -> Option<Vec<u8>> {
         let rel = rel.trim_start_matches('/');
         if rel.is_empty() || rel.contains("..") {
             return None;
         }
-        std::fs::read(self.web_dir.join(rel)).ok()
+        let current = std::fs::read_to_string(self.web_root.join("current")).ok()?;
+        let current = current.trim();
+        if current.is_empty() {
+            return None;
+        }
+        if rel == "index.html" {
+            return std::fs::read(
+                self.web_root.join("roots").join(Self::ver_dir(current)).join("index.html"),
+            )
+            .ok();
+        }
+        std::fs::read(self.web_root.join("files").join(rel)).ok()
     }
 
-    /// OTA: fetch the server's web-bundle version; if it differs from what's applied,
-    /// download the whole bundle into `web-ota.staged` (a complete, atomic stage that
-    /// `new()` swaps in on the NEXT launch). Best-effort + never throws: a failure
-    /// leaves the current bundle untouched, and the `/app/` handler keeps serving it
-    /// (or the embedded fallback). Runs in the background after the window has loaded,
-    /// so it never disturbs the running session.
-    async fn web_ota_update(&self) -> String {
+    /// OTA update check + INCREMENTAL download (content-addressed). Cheap ETag probe,
+    /// then download only the assets this device doesn't already have, make the new
+    /// version `current`, and retain the last 3 versions. Best-effort + never throws:
+    /// any failure leaves the current/embedded bundle serving. Returns a status string;
+    /// "updated:<version>" means a new version is live (the web shows the banner + reloads).
+    async fn web_ota_check(&self) -> String {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(8))
             .timeout(Duration::from_secs(120))
             .build()
             .unwrap_or_default();
-        let manifest: WebManifest = match client
+        let current = std::fs::read_to_string(self.web_root.join("current"))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        // Cheap conditional probe: If-None-Match the current version → 304 = no update.
+        let resp = match client
             .get(format!("{REMOTE}/app-dist/manifest.json"))
+            .header("If-None-Match", current.clone())
             .send()
             .await
-            .and_then(|r| r.error_for_status())
         {
-            // reqwest is built without the `json` feature here; parse via serde_json.
+            Ok(r) => r,
+            Err(e) => return format!("check-err: {e}"),
+        };
+        if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+            return "uptodate".into();
+        }
+        let manifest: WebManifest = match resp.error_for_status() {
+            // reqwest has no `json` feature here; parse via serde_json.
             Ok(r) => match r.text().await {
                 Ok(t) => match serde_json::from_str::<WebManifest>(&t) {
                     Ok(m) => m,
@@ -178,59 +203,144 @@ impl LvState {
         if manifest.version.is_empty() || manifest.files.is_empty() {
             return "manifest-empty".into();
         }
-        // Already up to date? (applied stamp == server version AND a bundle present).
-        let applied = std::fs::read_to_string(self.web_dir.join(".version")).unwrap_or_default();
-        if applied.trim() == manifest.version && self.web_dir.join("index.html").is_file() {
-            return format!("up-to-date: {}", manifest.version);
+        if manifest.version == current && self.web_get("index.html").await.is_some() {
+            return "uptodate".into();
         }
-        let Some(data) = self.web_dir.parent() else { return "no-parent".into() };
-        let staged = data.join("web-ota.staged");
-        let tmp = data.join("web-ota.staged.tmp");
-        let _ = std::fs::remove_dir_all(&tmp);
-        if let Err(e) = std::fs::create_dir_all(&tmp) {
+
+        let files_dir = self.web_root.join("files");
+        let root_dir = self.web_root.join("roots").join(Self::ver_dir(&manifest.version));
+        if let Err(e) = std::fs::create_dir_all(&root_dir) {
             return format!("mkdir-err: {e}");
         }
-        // Skip large, STABLE font files: they keep the same filenames across builds,
-        // so the per-file `/app/` fallback serves them from the embedded bundle. This
-        // keeps the OTA download tiny (the changed JS/CSS/index, ~hundreds of KB) and
-        // reliable — re-downloading ~10MB of fonts every update was both wasteful and
-        // the most likely thing to time out / drop and abort the whole bundle.
-        let is_font =
-            |f: &str| [".woff2", ".woff", ".ttf", ".otf", ".eot"].iter().any(|e| f.ends_with(e));
-        let mut got = 0usize;
+        // INCREMENTAL: download each asset only when it's not already on disk. Vite's
+        // content-hashed filenames make "same path ⇒ same bytes", so unchanged chunks
+        // (already present from a prior version) are skipped — a typical update fetches
+        // index.html + the few changed chunks.
+        let mut assets: Vec<String> = Vec::new();
+        let mut fetched = 0usize;
         for f in &manifest.files {
-            if f.contains("..") || is_font(f) {
+            if f.contains("..") {
                 continue;
             }
-            let bytes = match client
-                .get(format!("{REMOTE}/app-dist/{f}"))
-                .send()
-                .await
-                .and_then(|r| r.error_for_status())
-            {
-                Ok(r) => match r.bytes().await {
+            if f == "index.html" {
+                // The entry is per-version (not content-hashed); always fetch it.
+                let bytes = match Self::dl(&client, f).await {
                     Ok(b) => b,
-                    Err(e) => return format!("download-body-err {f}: {e}"),
-                },
-                Err(e) => return format!("download-err {f}: {e}"),
+                    Err(e) => return e,
+                };
+                if let Err(e) = std::fs::write(root_dir.join("index.html"), &bytes) {
+                    return format!("write-index-err: {e}");
+                }
+                continue;
+            }
+            assets.push(f.clone());
+            let dest = files_dir.join(f);
+            if dest.is_file() {
+                continue; // already have this exact (hashed) asset
+            }
+            let bytes = match Self::dl(&client, f).await {
+                Ok(b) => b,
+                Err(e) => return e,
             };
-            let dest = tmp.join(f);
             if let Some(p) = dest.parent() {
                 let _ = std::fs::create_dir_all(p);
             }
             if let Err(e) = std::fs::write(&dest, &bytes) {
                 return format!("write-err {f}: {e}");
             }
-            got += 1;
+            fetched += 1;
         }
-        // Stamp the completed tmp, then atomically promote it to the staged dir
-        // (new() applies staged → web-ota on the next launch).
-        let _ = std::fs::write(tmp.join(".version"), &manifest.version);
-        let _ = std::fs::remove_dir_all(&staged);
-        if let Err(e) = std::fs::rename(&tmp, &staged) {
-            return format!("promote-err: {e}");
+        // Record this version's asset list (for serving + retention GC), then flip
+        // `current` — atomically last, so a partial download never goes live.
+        let root_json = serde_json::json!({ "version": manifest.version, "assets": assets });
+        if let Err(e) = std::fs::write(root_dir.join("manifest.json"), root_json.to_string()) {
+            return format!("write-manifest-err: {e}");
         }
-        format!("staged {} files, version {}", got, manifest.version)
+        if !root_dir.join("index.html").is_file() {
+            return "no-index".into();
+        }
+        let _ = std::fs::write(self.web_root.join("current"), &manifest.version);
+        self.web_record_version(&manifest.version);
+        self.web_gc();
+        format!("updated:{} ({} fetched)", manifest.version, fetched)
+    }
+
+    /// Download one OTA bundle file → bytes, or an error string.
+    async fn dl(client: &reqwest::Client, path: &str) -> Result<Vec<u8>, String> {
+        match client.get(format!("{REMOTE}/app-dist/{path}")).send().await.and_then(|r| r.error_for_status()) {
+            Ok(r) => r.bytes().await.map(|b| b.to_vec()).map_err(|e| format!("dl-body {path}: {e}")),
+            Err(e) => Err(format!("dl {path}: {e}")),
+        }
+    }
+
+    /// Append `version` to the newest-last retention list (dedup, move-to-end).
+    fn web_record_version(&self, version: &str) {
+        let p = self.web_root.join("versions");
+        let mut vs: Vec<String> = std::fs::read_to_string(&p)
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| !l.is_empty() && *l != version)
+            .map(str::to_string)
+            .collect();
+        vs.push(version.to_string());
+        let _ = std::fs::write(&p, vs.join("\n"));
+    }
+
+    /// Retain the last 3 versions: drop older root dirs + any `web/files/` asset not
+    /// referenced by a kept version (content-addressed → shared assets stay). Enables
+    /// rollback to any of the 3 and bounds storage.
+    fn web_gc(&self) {
+        let vs: Vec<String> = std::fs::read_to_string(self.web_root.join("versions"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect();
+        let keep: std::collections::HashSet<&String> = vs.iter().rev().take(3).collect();
+        let roots = self.web_root.join("roots");
+        // Remove root dirs for dropped versions + collect kept versions' assets.
+        let mut keep_assets: std::collections::HashSet<String> = std::collections::HashSet::new();
+        if let Ok(entries) = std::fs::read_dir(&roots) {
+            for e in entries.flatten() {
+                let vdir = e.file_name().to_string_lossy().to_string();
+                let kept = keep.iter().any(|v| Self::ver_dir(v) == vdir);
+                if !kept {
+                    let _ = std::fs::remove_dir_all(e.path());
+                    continue;
+                }
+                if let Ok(t) = std::fs::read_to_string(e.path().join("manifest.json")) {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
+                        if let Some(arr) = v.get("assets").and_then(|a| a.as_array()) {
+                            for a in arr {
+                                if let Some(s) = a.as_str() {
+                                    keep_assets.insert(s.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Prune unreferenced assets (recurse web/files/, compare bundle-relative path).
+        let files = self.web_root.join("files");
+        Self::prune_files(&files, &files, &keep_assets);
+        // Trim the versions list to the kept set (newest-last order preserved).
+        let trimmed: Vec<String> = vs.iter().filter(|v| keep.contains(v)).cloned().collect();
+        let _ = std::fs::write(self.web_root.join("versions"), trimmed.join("\n"));
+    }
+
+    fn prune_files(base: &PathBuf, dir: &PathBuf, keep: &std::collections::HashSet<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                Self::prune_files(base, &p, keep);
+            } else if let Ok(rel) = p.strip_prefix(base) {
+                if !keep.contains(&rel.to_string_lossy().to_string()) {
+                    let _ = std::fs::remove_file(&p);
+                }
+            }
+        }
     }
 
     /// Re-pull `/api/dag` from the network; on success swap the manifest + index
@@ -561,11 +671,11 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
             FORCE_OFFLINE.store(on, std::sync::atomic::Ordering::Relaxed);
             (200, format!("offline={on}").into_bytes())
         }
-        "/ota-run" => {
-            // Debug: run the web OTA update synchronously + report the outcome (the
-            // background launch path is fire-and-forget). Staged bundle applies next
-            // launch via LvState::new.
-            let msg = state.web_ota_update().await;
+        "/ota-check" => {
+            // The web's updater calls this (timer + on load): cheap ETag probe, then
+            // INCREMENTAL download + make the new version current. "updated:<v>" ⇒ the
+            // web shows the "更新将在 3s 后生效" banner and reloads into the new bundle.
+            let msg = state.web_ota_check().await;
             (200, msg.into_bytes())
         }
         "/sync_all" => {
@@ -596,10 +706,10 @@ fn setup_state<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     tauri::async_runtime::spawn(async move {
         let state = handle.state::<LvState>();
         let _ = state.refresh().await;
-        // OTA the web bundle into the staged dir for next launch (apply-on-next-
-        // launch; new() swaps it in). Background, after the window has loaded.
-        state.web_ota_update().await;
     });
+    // The WEB drives the app-bundle OTA: it calls lvsync://localhost/ota-check on load
+    // + on a timer, and on "updated:<v>" shows the banner and reloads (web_ota_check
+    // does the ETag probe + incremental download + flips `current`).
     Ok(())
 }
 
