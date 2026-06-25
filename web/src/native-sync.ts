@@ -106,6 +106,31 @@ export async function nativeSyncAll(_wifiOnly = false): Promise<number> {
   return Number(await r.text()) || 0;
 }
 
+/** Tell the native fetcher whether to fast-fail network reads. The plugin's
+ *  content fetcher waits a 4s TCP connect-timeout per network-first MISS; offline,
+ *  a single screen (e.g. switching to the audiobook) fires several such reads and
+ *  each stalls 4s → the tap feels frozen. Flipping this when `navigator.onLine`
+ *  goes false makes those misses fail INSTANTLY (cache hits are unaffected — they
+ *  never touch the fetcher), so offline navigation is snappy. No-op off-shell. */
+function setNativeOffline(on: boolean): void {
+  if (!nativeSyncAvailable()) return;
+  try {
+    void fetch(`${SCHEME}/offline?on=${on ? 1 : 0}`);
+  } catch {
+    /* non-fatal */
+  }
+}
+
+/** Keep the native fast-fail flag in sync with connectivity: set it now from
+ *  navigator.onLine and on every online/offline transition. Call once at startup
+ *  (BEFORE the first content fetch) so an offline cold launch is fast immediately. */
+export function startOfflineFlagSync(): void {
+  if (!nativeSyncAvailable()) return;
+  setNativeOffline(!navigator.onLine);
+  globalThis.addEventListener("online", () => setNativeOffline(false));
+  globalThis.addEventListener("offline", () => setNativeOffline(true));
+}
+
 /** Re-pull /api/dag → refresh the native content manifest. MUST run on every app
  *  open + foreground, not just cold launch: otherwise a warm-resumed device never
  *  learns about resources ADDED to the corpus since its last cold launch (e.g. the
@@ -115,6 +140,9 @@ export async function nativeSyncAll(_wifiOnly = false): Promise<number> {
  *  off-shell; never throws. */
 export async function nativeRefreshManifest(): Promise<void> {
   if (!nativeSyncAvailable()) return;
+  // Skip offline: refresh re-fetches /api/dag (its own 4s connect timeout), wasted
+  // when we know there's no network. The next foreground (online) retries.
+  if (!navigator.onLine) return;
   try {
     await fetch(`${SCHEME}/refresh`);
   } catch {

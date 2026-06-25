@@ -5,6 +5,7 @@ import { I18nProvider } from "./i18n";
 import { AudioPlayerProvider } from "./audio/player";
 import { installHaptics } from "./_shell";
 import { BUNDLED, installApiShim } from "./apiBase";
+import { startOfflineFlagSync } from "./native-sync";
 import { startSyncQueue } from "./syncQueue";
 import { startOtaUpdater } from "./otaUpdater";
 import "./styles/index.css";
@@ -14,6 +15,11 @@ import "./styles/index.css";
 // the native plugin (contentFetch). No-op on the remote origin / PWA. Install
 // FIRST, before any module fires a fetch.
 installApiShim();
+
+// Mirror connectivity into the native fetcher's fast-fail flag (BEFORE any content
+// fetch) so an offline cold launch never eats the 4s-per-miss connect timeout —
+// network-first reads fail instantly offline, cache hits are untouched. Native only.
+startOfflineFlagSync();
 
 // Drain any cross-device writes (settings / progress) left pending from a prior
 // offline session. AFTER the shim so relative /api/* hits the remote origin.
