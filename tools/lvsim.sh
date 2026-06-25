@@ -59,10 +59,12 @@ case "$cmd" in
   tap)         # pixel tap (fragile — depends on Simulator window placement). Prefer `eval`+click.
                osascript -e "tell application \"System Events\" to click at {$1, $2}"; echo "tap $1 $2" ;;
   ping)        curl -s -m 4 "http://127.0.0.1:$DEVPORT/ping" || echo "(down)" ;;
-  offline)     # deterministic airplane mode for the native content layer (DEBUG):
-               # `lvsim offline on` / `lvsim offline off`. Tests the offline cache path.
+  offline)     # deterministic airplane mode for the Rust content fetcher (DEBUG):
+               # `lvsim offline on` / `lvsim offline off`. Forces lvsync:// network
+               # misses to fail fast so the offline cache path can be tested. Driven
+               # through the webview (the toggle lives in the Rust plugin now).
                on=$([ "${1:-on}" = "off" ] && echo 0 || echo 1)
-               curl -s -m 4 "http://127.0.0.1:$DEVPORT/offline?on=$on" ;;
+               curl -s -m 8 --data-binary "return await (await fetch('lvsync://localhost/offline?on=$on')).text()" "http://127.0.0.1:$DEVPORT/aeval" ;;
   eval)        dev_eval "$1" ;;
   aeval)       # async eval: body runs as an async function; use `return` + `await`
                # (for fetch/contentFetch). e.g. aeval 'return (await fetch("/x")).status'

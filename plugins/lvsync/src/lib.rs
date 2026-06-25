@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use lv_sync::sqlite::SqliteBlobStore;
@@ -26,6 +27,12 @@ use tokio::sync::RwLock;
 /// The remote liveview origin (same as the loader's REMOTE / tauri.conf devUrl).
 const REMOTE: &str = "https://liveview.hawk.thundersparrow.top";
 
+/// Debug airplane mode: when set, the fetcher fails immediately so the OFFLINE
+/// cache path can be exercised in the simulator (which has no per-app network
+/// switch). Toggled via the `lvsync://localhost/offline?on=1` scheme. Cache-first
+/// resolves still serve hits; only network misses are forced to fail fast.
+static FORCE_OFFLINE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// reqwest-backed network fetcher. Manifest URLs are origin-relative
 /// (`/api/...`); absolute URLs (rare) pass through unchanged.
 struct HttpFetcher {
@@ -35,6 +42,9 @@ struct HttpFetcher {
 #[async_trait]
 impl Fetcher for HttpFetcher {
     async fn fetch(&self, url: &str) -> Result<Vec<u8>, String> {
+        if FORCE_OFFLINE.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("forced offline".into());
+        }
         let full = if url.starts_with("http") {
             url.to_string()
         } else {
@@ -69,7 +79,19 @@ impl LvState {
         let store = SqliteBlobStore::open(data_dir.join("lvsync.sqlite"))?;
         // verify OFF: a resource hash is a content key (rustfs / source blake3),
         // not blake3 of the SERVED bytes (rendered html) — trust the store key.
-        let engine = Engine::new(store, HttpFetcher { client: reqwest::Client::new() }).without_verify();
+        // TIMEOUTS ARE CRITICAL: without them, an OFFLINE resolve miss makes reqwest
+        // hang on the TCP connect to the (unreachable tailnet) REMOTE for a long OS
+        // timeout — so a card tap's `await contentFetch` froze with no navigation
+        // until the network came back ("needs network to jump"). A short connect
+        // timeout fails fast → the engine returns Offline → lvsync:// 504 → the web
+        // enters the book at a cached page or the offline placeholder immediately.
+        // (Cached resources are store-first and never hit the network at all.)
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(4))
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_default();
+        let engine = Engine::new(store, HttpFetcher { client }).without_verify();
         let manifest_file = data_dir.join("dag.json");
         let manifest = std::fs::read_to_string(&manifest_file)
             .ok()
@@ -87,7 +109,15 @@ impl LvState {
     /// Re-pull `/api/dag` from the network; on success swap the manifest + index
     /// and rewrite the on-disk cache. Best-effort: offline keeps the old map.
     async fn refresh(&self) -> Result<String, String> {
-        let json = reqwest::get(format!("{REMOTE}/api/dag"))
+        // Timeout so a background refresh can't hang forever offline (mirrors the
+        // engine fetcher's timeouts).
+        let json = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(4))
+            .timeout(Duration::from_secs(30))
+            .build()
+            .unwrap_or_default()
+            .get(format!("{REMOTE}/api/dag"))
+            .send()
             .await
             .map_err(|e| e.to_string())?
             .text()
@@ -334,6 +364,12 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
         "/stats" => {
             let (c, t, cb, tb) = stats_inner(state).await;
             (200, format!("[{c},{t},{cb},{tb}]").into_bytes())
+        }
+        "/offline" => {
+            // Debug airplane mode for the Rust fetcher (sim has no network switch).
+            let on = query.contains("on=1");
+            FORCE_OFFLINE.store(on, std::sync::atomic::Ordering::Relaxed);
+            (200, format!("offline={on}").into_bytes())
         }
         "/sync_all" => {
             let resources: Vec<Resource> = {
