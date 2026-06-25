@@ -4,7 +4,6 @@ import {
   MenuItem,
   Select,
   Stack,
-  Switch,
   ToggleButton,
   ToggleButtonGroup,
   Typography,
@@ -20,14 +19,9 @@ import { SettingsSheet } from "../_shell";
 import type { MenuBarSettings, Theme, ThemeMode, ThemeVariant } from "@/types";
 import { THEME_VARIANTS, VARIANT_OPTIONS } from "@/types";
 import {
-  setCompactCards,
   setShelfGroup,
-  setShelfSort,
   type ShelfGroup,
-  type ShelfSort,
-  useCompactCards,
   useShelfGroup,
-  useShelfSort,
 } from "@/hooks";
 import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
@@ -49,9 +43,6 @@ interface SettingsButtonProps {
 }
 
 const MODE_OPTIONS: ThemeMode[] = ["auto", "light", "dark"];
-
-// Bookshelf sort options, in display order (labels via `sort.<key>`).
-const SHELF_SORTS: ShelfSort[] = ["updated", "read", "added", "name"];
 
 // Bookshelf group-by options, in display order (labels via `group.<key>`).
 const SHELF_GROUPS: ShelfGroup[] = ["none", "collection"];
@@ -167,9 +158,7 @@ export function SettingsButton({
   onFontScaleChange,
 }: SettingsButtonProps): React.JSX.Element {
   const { t, lang, setLang } = useI18n();
-  const shelfSort = useShelfSort();
   const shelfGroup = useShelfGroup();
-  const compactCards = useCompactCards();
   // The font picker is collapsed by default — its 7 preview cards would
   // otherwise dominate the sheet. Collapsed shows just the current face,
   // previewed in itself; expanding drops the full list, and picking a face
@@ -490,38 +479,12 @@ export function SettingsButton({
           />
         </Stack>
 
-        {/* ── Library: bookshelf order. */}
+        {/* ── Library: bookshelf grouping (sort + kind filter live in the shelf's
+            own Sort & Filter control now; compact is the only card style). */}
         <Stack spacing={1.5}>
           <Typography variant="overline" color="text.secondary">
             {t("settings.layout")}
           </Typography>
-          <Row
-            label={t("settings.sort")}
-            desc={t("settings.sortDesc")}
-            control={
-              <Select
-                size="small"
-                value={shelfSort}
-                onChange={(e) => setShelfSort(e.target.value as ShelfSort)}
-                sx={{ minWidth: 132 }}
-              >
-                {SHELF_SORTS.map((s) => (
-                  <MenuItem key={s} value={s}>{t(`sort.${s}`)}</MenuItem>
-                ))}
-              </Select>
-            }
-          />
-          <Row
-            label={t("settings.compact")}
-            desc={t("settings.compactDesc")}
-            control={
-              <Switch
-                checked={compactCards}
-                onChange={(e) => setCompactCards(e.target.checked)}
-                inputProps={{ "aria-label": t("settings.compact") }}
-              />
-            }
-          />
           <Row
             label={t("settings.group")}
             desc={t("settings.groupDesc")}

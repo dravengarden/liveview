@@ -1,22 +1,23 @@
 import { rem } from "@/px";
 import { coverSrc } from "@/native-sync";
 import {
+  Badge,
   Box,
+  Button,
   Card,
   CardActionArea,
-  Checkbox,
   Chip,
   CircularProgress,
   Collapse,
-  FormControl,
+  FormControlLabel,
   IconButton,
   InputAdornment,
-  ListItemText,
-  MenuItem,
-  OutlinedInput,
-  Select,
-  type SelectChangeEvent,
+  Radio,
+  RadioGroup,
+  Stack,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
   useMediaQuery,
   useTheme,
@@ -26,12 +27,13 @@ import {
   Article as DocsIcon,
   Clear as ClearIcon,
   ExpandMore as ExpandMoreIcon,
-  FilterList as FilterIcon,
   Headphones as AudiobookIcon,
   History as HistoryIcon,
   MenuBook as BookIcon,
   Search as SearchIcon,
+  Tune as TuneIcon,
 } from "@mui/icons-material";
+import { BottomSheet } from "@/_shell";
 import {
   memo,
   type ReactNode,
@@ -42,10 +44,10 @@ import {
 } from "react";
 import type { Book, BookProgress, ReadingProgress } from "@/types";
 import {
+  setShelfSort,
   type ShelfSort,
   toggleGroupCollapsed,
   useCollapsedGroups,
-  useCompactCards,
   useShelfGroup,
   useShelfSort,
 } from "@/hooks";
@@ -105,14 +107,19 @@ function shelfEntries(books: Book[]): ShelfEntry[] {
   return out;
 }
 
-/** Filter dropdown rows, in display order, with their i18n label keys. An empty
- *  selection means "all kinds" (no narrowing), so there's no explicit "all" row. */
-const KIND_ORDER: Category[] = ["book", "audiobook", "docs"];
-const KIND_LABEL: Record<Category, string> = {
+/** The shelf kind filter — a SINGLE choice. "book" covers everything readable or
+ *  listenable: a text book, a text+audio book, AND an audio-only "audiobook" all
+ *  share ONE card, so audio is never split into its own filter (that just doubled
+ *  a card's identity); only a raw docs tree is separate. "all" = no narrowing. */
+type FilterKind = "all" | "book" | "docs";
+const FILTER_KIND_LABEL: Record<Exclude<FilterKind, "all">, string> = {
   book: "landing.filterBooks",
-  audiobook: "landing.filterAudiobooks",
   docs: "landing.filterDocs",
 };
+
+/** Bookshelf sort options, in display order (same set the old Settings row had,
+ *  now surfaced in the toolbar's Sort & Filter sheet). */
+const SHELF_SORTS: ShelfSort[] = ["updated", "read", "added", "name"];
 
 /** The curated front-of-shelf series order. Collections named here sort first,
  *  in this exact order; any other collection follows alphabetically, and the
@@ -199,75 +206,12 @@ function compactTint(slug: string): string {
   } 48% 42% / 0.08))`;
 }
 
-/** The kind glyph shown over a coverless card — also the audiobook's defining
- *  visual cue (headphones), so an audiobook reads as distinct from a book at a
- *  glance. */
+/** The kind glyph for a card: the audiobook's defining cue (headphones) vs a book
+ *  vs docs, so each kind reads at a glance. Used by the single-kind title badge. */
 function kindIcon(category: Category): typeof BookIcon {
   if (category === "audiobook") return AudiobookIcon;
   if (category === "docs") return DocsIcon;
   return BookIcon;
-}
-
-/** A book card's cover: the real cover image when the book has one (lazy-loaded,
- *  falling back to the synthesised gradient if it fails to load), else the
- *  gradient straight away. The kind icon + any badges ride on top in both
- *  cases. */
-function BookCover({
-  book,
-  category,
-  children,
-}: {
-  book: Book;
-  category: Category;
-  children: ReactNode;
-}): React.JSX.Element {
-  // Once the <img> errors we permanently fall back to the gradient for this
-  // card (avoids a broken-image flash on every re-render).
-  const [imgFailed, setImgFailed] = useState(false);
-  const showImage = book.cover && !imgFailed;
-  const KindIcon = kindIcon(category);
-  return (
-    <Box
-      sx={{
-        position: "relative",
-        height: 104,
-        // The gradient is always the backdrop: it shows through while the image
-        // loads and after a load error, so there's never a bare box.
-        background: coverGradient(book.slug),
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        overflow: "hidden",
-      }}
-    >
-      {showImage
-        ? (
-          <Box
-            component="img"
-            src={coverSrc(book.slug)}
-            alt=""
-            loading="lazy"
-            onError={() => {
-              setImgFailed(true);
-            }}
-            sx={{
-              position: "absolute",
-              inset: 0,
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-            }}
-          />
-        )
-        : (
-          // No image (or it failed): show the kind icon over the gradient.
-          <KindIcon
-            sx={{ fontSize: rem(52), color: "rgba(255,255,255,0.92)" }}
-          />
-        )}
-      {children}
-    </Box>
-  );
 }
 
 /** Cover badge for a book that ships BOTH renditions: a compact segmented switch
@@ -856,7 +800,6 @@ interface ShelfCardProps {
   hasText: boolean;
   hasAudio: boolean;
   progress: BookProgress | undefined;
-  compactCards: boolean;
   /** This book's audiobook audio is still being generated in the background — a
    *  subtle "generating" micro-badge; text stays fully usable. */
   generating?: boolean | undefined;
@@ -880,7 +823,6 @@ const ShelfCard = memo(function ShelfCard({
   hasText,
   hasAudio,
   progress: bp,
-  compactCards,
   generating,
   onOpen,
   t,
@@ -952,15 +894,13 @@ const ShelfCard = memo(function ShelfCard({
         borderRadius: 2,
         overflow: "hidden",
         position: "relative",
-        // Compact cards drop the cover band, so carry the book's
+        // Every card is compact (no cover band), so carry the book's
         // slug-keyed colour as a faint FROSTED wash tinting the whole
         // card — the same two-stop gradient as the cover, but
         // translucent and diffuse (磨砂玻璃), composited over the
         // card's paper surface. Distinguishes each book without the
         // 104px band or a hard colour bar.
-        ...(compactCards && {
-          backgroundImage: compactTint(b.slug),
-        }),
+        backgroundImage: compactTint(b.slug),
         // (No content-visibility:auto on the cards: it interacted badly with the
         // shelf reveal — flash/stall — and the card is memoized, so a plain render
         // is cheap enough to skip the optimization.)
@@ -977,78 +917,6 @@ const ShelfCard = memo(function ShelfCard({
       }}
     >
       <CardActionArea onClick={() => onOpen(b.slug)}>
-        {
-          /* Cover: the book's own image when it has one, else a
-        slug-keyed gradient + the kind icon. Top-left badge: a
-        book offering BOTH renditions gets a segmented switch
-        (📖 | 🎧) showing both formats + the current one, each
-        opening that rendition; otherwise a single kind badge
-        (Audiobook-only / Book / Docs). Progress is a labeled
-        meter row in the body. */
-        }
-        {!compactCards && (
-          <BookCover book={b} category={category}>
-            {hasText && hasAudio
-              ? (
-                <CoverRenditionSwitch
-                  slug={b.slug}
-                  activeKind={activeKind}
-                  onOpen={onOpen}
-                  bookLabel={t("landing.bookBadge")}
-                  audioLabel={t("landing.audiobookBadge")}
-                />
-              )
-              : (
-                // Single-format kind badge — ICON ONLY (no
-                // text): the glyph already names the kind and
-                // the big cover icon repeats it, so the label
-                // was redundant. PRIMARY colour (not neutral):
-                // a lone badge means that format is the active
-                // one, so it reads like the highlighted segment
-                // of the dual-format switch.
-                <Box
-                  aria-label={t(
-                    category === "docs"
-                      ? "landing.docsBadge"
-                      : hasAudio
-                      ? "landing.audiobookBadge"
-                      : "landing.bookBadge",
-                  )}
-                  sx={{
-                    position: "absolute",
-                    top: 8,
-                    left: 8,
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    px: 1,
-                    py: 0.5,
-                    borderRadius: 5,
-                    bgcolor: "primary.main",
-                    color: "primary.contrastText",
-                  }}
-                >
-                  {category === "docs"
-                    ? (
-                      <DocsIcon
-                        sx={{ fontSize: rem(17) }}
-                      />
-                    )
-                    : hasAudio
-                    ? (
-                      <AudiobookIcon
-                        sx={{ fontSize: rem(17) }}
-                      />
-                    )
-                    : (
-                      <BookIcon
-                        sx={{ fontSize: rem(17) }}
-                      />
-                    )}
-                </Box>
-              )}
-          </BookCover>
-        )}
         <Box sx={{ p: 1.75 }}>
           {
             /* Title row. In compact mode the cover band (and its
@@ -1072,31 +940,29 @@ const ShelfCard = memo(function ShelfCard({
             >
               {b.label}
             </Typography>
-            {compactCards && (
-              hasText && hasAudio
-                ? (
-                  <CoverRenditionSwitch
-                    slug={b.slug}
-                    activeKind={activeKind}
-                    onOpen={onOpen}
-                    bookLabel={t("landing.bookBadge")}
-                    audioLabel={t("landing.audiobookBadge")}
-                    inline
-                  />
-                )
-                : (
-                  <CompactKindBadge
-                    category={category}
-                    label={t(
-                      category === "docs"
-                        ? "landing.docsBadge"
-                        : category === "audiobook"
-                        ? "landing.audiobookBadge"
-                        : "landing.bookBadge",
-                    )}
-                  />
-                )
-            )}
+            {hasText && hasAudio
+              ? (
+                <CoverRenditionSwitch
+                  slug={b.slug}
+                  activeKind={activeKind}
+                  onOpen={onOpen}
+                  bookLabel={t("landing.bookBadge")}
+                  audioLabel={t("landing.audiobookBadge")}
+                  inline
+                />
+              )
+              : (
+                <CompactKindBadge
+                  category={category}
+                  label={t(
+                    category === "docs"
+                      ? "landing.docsBadge"
+                      : category === "audiobook"
+                      ? "landing.audiobookBadge"
+                      : "landing.bookBadge",
+                  )}
+                />
+              )}
           </Box>
           {b.description
             ? (
@@ -1190,7 +1056,9 @@ const ShelfCard = memo(function ShelfCard({
               })}
             </Typography>
           )}
-          {langs.length > 1 && (
+          {/* Show the language chip(s) even for a single edition — a Chinese-only
+              book still surfaces its 中文 chip, so language is always legible. */}
+          {langs.length >= 1 && (
             <Box
               sx={{
                 display: "flex",
@@ -1280,16 +1148,18 @@ export function Landing({
     () => new Set(syncStatus.books.filter((b) => b.pending > 0).map((b) => b.slug)),
     [syncStatus],
   );
-  // Compact shelf: drop each card's coloured cover band to pack more per screen.
-  const compactCards = useCompactCards();
   // Group-by-series: when "collection", the shelf splits into collapsible
   // per-series sections (each with a sticky frosted header); `collapsed` is the
   // set of currently-folded section names.
   const group = useShelfGroup();
   const collapsed = useCollapsedGroups();
   const [query, setQuery] = useState("");
-  // Multi-select kind filter; an empty selection means "all kinds".
-  const [kinds, setKinds] = useState<Category[]>([]);
+  // Single-choice kind filter ("all" = no narrowing). Audio-only books fall under
+  // "book" — they share the card, so they're never a separate filter.
+  const [kind, setKind] = useState<FilterKind>("all");
+  // The combined Sort & Filter sheet (one toolbar control for both the shelf order
+  // and the kind narrowing — the two list-organizing concerns in one place).
+  const [sfOpen, setSfOpen] = useState(false);
   // "library" = the category/masonry shelf; "history" = the dedicated reading-
   // history view (chronological, time-bucketed). Toggled from the toolbar clock.
   const [view, setView] = useState<"library" | "history">("library");
@@ -1327,18 +1197,20 @@ export function Landing({
     return shelfEntries(books).sort(cmp[sort]);
   }, [books, sort, progress, lang]);
 
-  // A card matches the "audiobook" kind if it has audio AT ALL (text+audio books
-  // included), so the filter surfaces everything listenable — not just
-  // audio-only books. Other kinds match the card's primary category.
-  const matchesKind = (e: ShelfEntry, kind: Category): boolean =>
-    kind === "audiobook" ? e.hasAudio : e.category === kind;
+  // "book" = anything readable/listenable (text book, text+audio book, OR an
+  // audio-only book — one shared card); "docs" = a raw docs tree. So the only real
+  // split is book-like vs docs.
+  const matchesKind = (e: ShelfEntry, k: Exclude<FilterKind, "all">): boolean =>
+    k === "docs" ? e.category === "docs" : e.category !== "docs";
 
-  // Per-kind totals for the dropdown, over the WHOLE shelf (not the search
-  // result), so each row reads as a stable map of what's available.
+  // Per-kind totals over the WHOLE shelf (not the search result) — used to decide
+  // whether the kind segments are even worth showing (a shelf that's all books
+  // needs no Books/Docs split).
   const counts = useMemo(() => {
-    const c: Record<Category, number> = { book: 0, audiobook: 0, docs: 0 };
+    const c = { book: 0, docs: 0 };
     for (const e of entries) {
-      for (const k of KIND_ORDER) if (matchesKind(e, k)) c[k] += 1;
+      if (matchesKind(e, "docs")) c.docs += 1;
+      else c.book += 1;
     }
     return c;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1348,9 +1220,7 @@ export function Landing({
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return entries.filter((e) => {
-      if (kinds.length > 0 && !kinds.some((k) => matchesKind(e, k))) {
-        return false;
-      }
+      if (kind !== "all" && !matchesKind(e, kind)) return false;
       if (
         q && !e.book.label.toLowerCase().includes(q) &&
         !e.book.slug.toLowerCase().includes(q)
@@ -1358,7 +1228,7 @@ export function Landing({
       return true;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries, kinds, query]);
+  }, [entries, kind, query]);
 
   // Masonry as N independent top-anchored flex columns, NOT CSS multicol.
   // Why: WebKit (Safari/iPad/iPhone) mis-positions the first card of a
@@ -1401,13 +1271,9 @@ export function Landing({
     [group, visible, t, lang],
   );
 
-  // Only offer a kind in the dropdown when the shelf actually has one.
-  const availableKinds = KIND_ORDER.filter((k) => counts[k] > 0);
-
-  const onKindsChange = (e: SelectChangeEvent<Category[]>): void => {
-    const v = e.target.value;
-    setKinds(typeof v === "string" ? (v.split(",") as Category[]) : v);
-  };
+  // The kind segments only make sense when the shelf has BOTH books and docs;
+  // otherwise All/Books/Docs would narrow to the same set.
+  const showKindFilter = counts.book > 0 && counts.docs > 0;
 
   // The shelf scroll container — ref'd for the back-to-top button + the
   // app-level status-bar tap (both scroll it to the top).
@@ -1497,7 +1363,6 @@ export function Landing({
       hasText={e.hasText}
       hasAudio={e.hasAudio}
       progress={progress[e.book.slug]}
-      compactCards={compactCards}
       generating={generatingSlugs.has(e.book.slug)}
       onOpen={onOpen}
       t={t}
@@ -1681,65 +1546,34 @@ export function Landing({
                 }}
                 sx={{ flexGrow: 1, minWidth: 0 }}
               />
-              {view === "library" && availableKinds.length > 0 && (
-                <FormControl
-                  size="small"
-                  sx={{ flexShrink: 0, width: { xs: 136, sm: 172 } }}
+              {view === "library" && (
+                // ONE control for both shelf order + kind narrowing — opens the
+                // Sort & Filter sheet. The pill shows the active sort at a glance
+                // (always set); a primary dot flags an active kind filter (the
+                // occasional state). Replaces the old two-dropdown clutter.
+                <Badge
+                  color="primary"
+                  variant="dot"
+                  invisible={kind === "all"}
+                  sx={{ flexShrink: 0 }}
                 >
-                  <Select
-                    multiple
-                    displayEmpty
-                    value={kinds}
-                    onChange={onKindsChange}
-                    aria-label={t("landing.filter")}
-                    input={
-                      <OutlinedInput
-                        startAdornment={
-                          <InputAdornment position="start">
-                            <FilterIcon fontSize="medium" />
-                          </InputAdornment>
-                        }
-                      />
-                    }
-                    // Empty selection reads as a muted "All kinds" placeholder;
-                    // otherwise the picked kinds, comma-joined (ellipsized by the
-                    // Select when they overflow the compact control).
-                    renderValue={(selected) =>
-                      selected.length === 0
-                        ? (
-                          <Box
-                            component="span"
-                            sx={{ color: "text.secondary" }}
-                          >
-                            {t("landing.filterAll")}
-                          </Box>
-                        )
-                        : (
-                          selected.map((k) => t(KIND_LABEL[k])).join(", ")
-                        )}
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<TuneIcon fontSize="small" />}
+                    onClick={() => setSfOpen(true)}
+                    aria-label={t("landing.sortFilter")}
+                    sx={{
+                      flexShrink: 0,
+                      textTransform: "none",
+                      color: "text.secondary",
+                      borderColor: "divider",
+                      whiteSpace: "nowrap",
+                    }}
                   >
-                    {availableKinds.map((k) => (
-                      <MenuItem key={k} value={k} dense>
-                        <Checkbox
-                          checked={kinds.includes(k)}
-                          size="small"
-                          sx={{ py: 0, pl: 0, pr: 1 }}
-                        />
-                        <ListItemText primary={t(KIND_LABEL[k])} />
-                        <Box
-                          component="span"
-                          sx={{
-                            ml: 3,
-                            color: "text.secondary",
-                            fontVariantNumeric: "tabular-nums",
-                          }}
-                        >
-                          {counts[k]}
-                        </Box>
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
+                    {t(`sort.${sort}`)}
+                  </Button>
+                </Badge>
               )}
             </>
           )}
@@ -1769,6 +1603,57 @@ export function Landing({
           </Box>
         </Box>
       </Box>
+
+      {/* Sort & Filter sheet — both shelf-organizing controls in one surface. */}
+      <BottomSheet
+        open={sfOpen}
+        onClose={() => setSfOpen(false)}
+        title={t("landing.sortFilter")}
+      >
+        <Stack spacing={3} sx={{ pb: 1 }}>
+          <Stack spacing={0.5}>
+            <Typography variant="overline" color="text.secondary">
+              {t("landing.sortBy")}
+            </Typography>
+            <RadioGroup
+              value={sort}
+              onChange={(e) => setShelfSort(e.target.value as ShelfSort)}
+            >
+              {SHELF_SORTS.map((s) => (
+                <FormControlLabel
+                  key={s}
+                  value={s}
+                  control={<Radio />}
+                  label={t(`sort.${s}`)}
+                />
+              ))}
+            </RadioGroup>
+          </Stack>
+          {showKindFilter && (
+            <Stack spacing={1}>
+              <Typography variant="overline" color="text.secondary">
+                {t("landing.kind")}
+              </Typography>
+              <ToggleButtonGroup
+                exclusive
+                fullWidth
+                size="small"
+                value={kind}
+                onChange={(_e, v: FilterKind | null) => v && setKind(v)}
+                aria-label={t("landing.filter")}
+              >
+                <ToggleButton value="all">{t("landing.kindAll")}</ToggleButton>
+                <ToggleButton value="book">
+                  {t(FILTER_KIND_LABEL.book)}
+                </ToggleButton>
+                <ToggleButton value="docs">
+                  {t(FILTER_KIND_LABEL.docs)}
+                </ToggleButton>
+              </ToggleButtonGroup>
+            </Stack>
+          )}
+        </Stack>
+      </BottomSheet>
 
       {
         /* ── Shelf (the scroll area) ──────────────────────────────────────────
