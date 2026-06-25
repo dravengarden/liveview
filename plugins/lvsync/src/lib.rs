@@ -66,6 +66,11 @@ pub struct LvState {
     by_url: RwLock<HashMap<String, Resource>>,
     /// Where the cached `/api/dag` JSON lives (offline-launch seed).
     manifest_file: PathBuf,
+    /// OTA web-bundle dir (`<data>/web-ota/`): the downloaded SPA that overrides the
+    /// embedded one, so the web hot-updates without an app reinstall. Empty until an
+    /// OTA download populates it; the `/app/` handler then falls back to the embedded
+    /// bundle, so a fresh install / offline always works.
+    web_dir: PathBuf,
 }
 
 impl LvState {
@@ -110,7 +115,18 @@ impl LvState {
             manifest: RwLock::new(manifest),
             by_url: RwLock::new(by_url),
             manifest_file,
+            web_dir: data_dir.join("web-ota"),
         })
+    }
+
+    /// An OTA web-bundle file by its bundle-relative path, or None when not present
+    /// (→ the `/app/` handler serves the embedded bundle). Path-traversal guarded.
+    async fn web_get(&self, rel: &str) -> Option<Vec<u8>> {
+        let rel = rel.trim_start_matches('/');
+        if rel.is_empty() || rel.contains("..") {
+            return None;
+        }
+        std::fs::read(self.web_dir.join(rel)).ok()
     }
 
     /// Re-pull `/api/dag` from the network; on success swap the manifest + index
@@ -352,6 +368,32 @@ fn sniff_content_type(body: &[u8]) -> &'static str {
     }
 }
 
+/// Response Content-Type for a served path: by EXTENSION for web-bundle assets
+/// (a JS module MUST be `text/javascript` to import over a custom scheme — there's
+/// no browser MIME-sniff fallback there), falling back to magic-byte sniffing for
+/// extensionless / dynamic content (e.g. /resolve covers).
+fn content_type_for(path: &str, body: &[u8]) -> &'static str {
+    if path.ends_with(".js") || path.ends_with(".mjs") {
+        "text/javascript"
+    } else if path.ends_with(".css") {
+        "text/css"
+    } else if path.ends_with(".html") {
+        "text/html"
+    } else if path.ends_with(".json") || path.ends_with(".webmanifest") {
+        "application/json"
+    } else if path.ends_with(".wasm") {
+        "application/wasm"
+    } else if path.ends_with(".woff2") {
+        "font/woff2"
+    } else if path.ends_with(".woff") {
+        "font/woff"
+    } else if path.ends_with(".svg") {
+        "image/svg+xml"
+    } else {
+        sniff_content_type(body)
+    }
+}
+
 /// Bytes already cached + total, for non-audio content: (cached, total, cb, tb).
 async fn stats_inner(state: &LvState) -> (u64, u64, u64, u64) {
     let resources: Vec<Resource> = {
@@ -472,6 +514,40 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             let path = request.uri().path().to_string();
             let query = request.uri().query().unwrap_or("").to_string();
             tauri::async_runtime::spawn(async move {
+                // ── OTA web bundle: `lvsync://localhost/app/<path>` ──────────────
+                // Serve the SPA itself from here so it can hot-update: the OTA store
+                // overlay (downloaded from the server) wins, else the EMBEDDED bundle
+                // (the app's own dist-app, via Tauri's asset resolver) — so a fresh
+                // install / offline always works. The app keeps the tauri://localhost
+                // origin (IPC intact); a bootstrap loads from /app/. index.html is
+                // no-store (a new bundle is never masked), hashed assets immutable.
+                if let Some(rel0) = path.strip_prefix("/app/") {
+                    let rel = if rel0.is_empty() { "index.html" } else { rel0 };
+                    let state = app.state::<LvState>();
+                    let body = state.web_get(rel).await.or_else(|| {
+                        app.asset_resolver().get(rel.to_string()).map(|a| a.bytes)
+                    });
+                    let (status, bytes) = match body {
+                        Some(b) => (200u16, b),
+                        None => (404u16, b"not found".to_vec()),
+                    };
+                    let cache = if rel == "index.html" {
+                        "no-store"
+                    } else {
+                        "public, max-age=31536000, immutable"
+                    };
+                    let resp = tauri::http::Response::builder()
+                        .status(status)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .header("Content-Type", content_type_for(rel, &bytes))
+                        .header("Cache-Control", cache)
+                        .body(std::borrow::Cow::<[u8]>::Owned(bytes))
+                        .unwrap_or_else(|_| {
+                            tauri::http::Response::new(std::borrow::Cow::Owned(Vec::new()))
+                        });
+                    responder.respond(resp);
+                    return;
+                }
                 let (status, body) = {
                     let state = app.state::<LvState>();
                     scheme_dispatch(&state, &path, &query).await
@@ -479,13 +555,10 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 let resp = tauri::http::Response::builder()
                     .status(status)
                     .header("Access-Control-Allow-Origin", "*")
-                    // Sniff the content type from magic bytes. Text/JSON content the
-                    // web reads via fetch().text() (type-agnostic), but an
-                    // `<img src="lvsync://…/resolve?u=/api/cover…">` only RENDERS when
-                    // the response carries an image/* type — a custom scheme gets no
-                    // browser MIME-sniffing fallback. So covers (and any image asset)
-                    // resolve offline-first through this same path.
-                    .header("Content-Type", sniff_content_type(&body))
+                    // Content-Type by path extension for web-bundle assets (a JS
+                    // module needs text/javascript to import over the scheme), else
+                    // magic-byte sniff for dynamic content (covers via /resolve).
+                    .header("Content-Type", content_type_for(&path, &body))
                     .body(std::borrow::Cow::<[u8]>::Owned(body))
                     .unwrap_or_else(|_| {
                         tauri::http::Response::new(std::borrow::Cow::Owned(Vec::new()))

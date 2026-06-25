@@ -204,6 +204,11 @@ function stripServiceWorker(): Plugin {
 export default defineConfig(({ mode }) => {
   const isApp = mode === "app";
   return {
+  // App build uses RELATIVE asset URLs so the same bundle works whether it's
+  // served from the embedded origin (tauri://localhost/) OR the OTA origin
+  // (lvsync://localhost/app/) — relative `./assets/…` resolve against the
+  // document/module URL in both. The PWA stays absolute (/) for its SW scope.
+  base: isApp ? "./" : "/",
   plugins: [
     react({
       babel: {
