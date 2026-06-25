@@ -5,6 +5,7 @@ import { I18nProvider } from "./i18n";
 import { AudioPlayerProvider } from "./audio/player";
 import { installHaptics } from "./_shell";
 import { BUNDLED, installApiShim } from "./apiBase";
+import { startSyncQueue } from "./syncQueue";
 import "./styles/index.css";
 
 // When bundled into the native shell (local origin), point relative /api/* fetches
@@ -12,6 +13,10 @@ import "./styles/index.css";
 // the native plugin (contentFetch). No-op on the remote origin / PWA. Install
 // FIRST, before any module fires a fetch.
 installApiShim();
+
+// Drain any cross-device writes (settings / progress) left pending from a prior
+// offline session. AFTER the shim so relative /api/* hits the remote origin.
+startSyncQueue();
 
 // Global haptic delegation: ONE listener set buzzes every MUI control (button /
 // toggle / card / chip / Select), custom `cursor:pointer` clickable, text input,

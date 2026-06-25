@@ -982,18 +982,29 @@ impl PgStore {
             .collect())
     }
 
-    pub async fn progress_upsert(&self, path: &str, scroll: f64) -> Result<(), sqlx::Error> {
-        sqlx::query(
+    /// Upsert one doc's scroll with last-write-wins on `ts` (client edit time;
+    /// `None` ⇒ `now`). Returns `true` iff the row was written — the conditional
+    /// `WHERE … < EXCLUDED.updated_at` makes a CONFLICT a no-op (0 rows) when the
+    /// stored value is newer, so a stale offline replay can't clobber a fresher
+    /// cross-device edit.
+    pub async fn progress_upsert(
+        &self,
+        path: &str,
+        scroll: f64,
+        ts: Option<i64>,
+    ) -> Result<bool, sqlx::Error> {
+        let r = sqlx::query(
             "INSERT INTO progress (path, scroll, updated_at) VALUES ($1, $2, $3)
              ON CONFLICT (path) DO UPDATE SET
-                 scroll = EXCLUDED.scroll, updated_at = EXCLUDED.updated_at",
+                 scroll = EXCLUDED.scroll, updated_at = EXCLUDED.updated_at
+             WHERE progress.updated_at <= EXCLUDED.updated_at",
         )
         .bind(path)
         .bind(scroll.clamp(0.0, 1.0))
-        .bind(now_millis())
+        .bind(ts.unwrap_or_else(now_millis))
         .execute(&self.pool)
-        .await
-        .map(|_| ())
+        .await?;
+        Ok(r.rows_affected() > 0)
     }
 
     pub async fn settings_all(&self) -> Result<Vec<(String, String)>, sqlx::Error> {
@@ -1002,18 +1013,27 @@ impl PgStore {
             .await
     }
 
-    pub async fn settings_set(&self, key: &str, value: &str) -> Result<(), sqlx::Error> {
-        sqlx::query(
+    /// Upsert one setting with last-write-wins on `ts` (see `progress_upsert`).
+    /// Returns `true` iff the row was written (so the caller broadcasts only a real
+    /// change, never a stale replay that lost the LWW comparison).
+    pub async fn settings_set(
+        &self,
+        key: &str,
+        value: &str,
+        ts: Option<i64>,
+    ) -> Result<bool, sqlx::Error> {
+        let r = sqlx::query(
             "INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, $3)
              ON CONFLICT (key) DO UPDATE SET
-                 value = EXCLUDED.value, updated_at = EXCLUDED.updated_at",
+                 value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+             WHERE settings.updated_at <= EXCLUDED.updated_at",
         )
         .bind(key)
         .bind(value)
-        .bind(now_millis())
+        .bind(ts.unwrap_or_else(now_millis))
         .execute(&self.pool)
-        .await
-        .map(|_| ())
+        .await?;
+        Ok(r.rows_affected() > 0)
     }
 }
 
@@ -1133,8 +1153,13 @@ mod tests {
     #[tokio::test]
     async fn progress_and_settings_roundtrip() {
         let Some(s) = store().await else { return };
-        s.progress_upsert("bk/01", 0.42).await.unwrap();
-        s.progress_upsert("bk/01", 0.55).await.unwrap(); // update wins
+        s.progress_upsert("bk/01", 0.42, Some(1000)).await.unwrap();
+        s.progress_upsert("bk/01", 0.55, Some(2000)).await.unwrap(); // newer ts wins
+        // A STALE replay (older ts) must NOT clobber the newer value — last-write-
+        // wins is what lets an offline device flush without overwriting a fresher
+        // edit made on another device meanwhile.
+        let stale = s.progress_upsert("bk/01", 0.10, Some(1500)).await.unwrap();
+        assert!(!stale, "an older-ts progress write must be rejected");
         let rows = s.progress_for_book("bk").await.unwrap();
         assert!(rows
             .iter()
@@ -1142,8 +1167,10 @@ mod tests {
         // A text + audio chapter for the same book must BOTH survive the
         // per-rendition dedup (the shelf shows reading and listening progress
         // side by side), while two text chapters collapse to the newest.
-        s.progress_upsert("bk/02", 0.30).await.unwrap();
-        s.progress_upsert("bk/00.spoken.md", 0.20).await.unwrap();
+        s.progress_upsert("bk/02", 0.30, None).await.unwrap();
+        s.progress_upsert("bk/00.spoken.md", 0.20, None)
+            .await
+            .unwrap();
         let recent = s.progress_recent_per_rendition().await.unwrap();
         assert!(recent.iter().any(|r| r.path == "bk/00.spoken.md"));
         assert_eq!(
@@ -1154,7 +1181,9 @@ mod tests {
             "the book's text chapters must dedup to one row",
         );
 
-        s.settings_set("ui.rate", "1.5").await.unwrap();
+        s.settings_set("ui.rate", "1.5", Some(2000)).await.unwrap();
+        let stale_set = s.settings_set("ui.rate", "1.0", Some(1000)).await.unwrap();
+        assert!(!stale_set, "an older-ts setting write must be rejected");
         let all = s.settings_all().await.unwrap();
         assert!(all.iter().any(|(k, v)| k == "ui.rate" && v == "1.5"));
     }

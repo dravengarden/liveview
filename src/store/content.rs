@@ -100,9 +100,18 @@ pub trait ContentStore: Send + Sync {
     // Orthogonal to content; the filesystem backend keeps these in memory.
     async fn progress_for_book(&self, slug: &str) -> Result<Vec<ProgressEntry>, String>;
     async fn progress_recent_per_rendition(&self) -> Result<Vec<ProgressEntry>, String>;
-    async fn progress_upsert(&self, path: &str, scroll: f64) -> Result<(), String>;
+    /// LWW upsert keyed on `ts` (client edit time, unix ms; `None` ⇒ `now`).
+    /// Returns `true` iff the write was applied (a stale replay losing the
+    /// last-write-wins comparison is a no-op → `false`).
+    async fn progress_upsert(
+        &self,
+        path: &str,
+        scroll: f64,
+        ts: Option<i64>,
+    ) -> Result<bool, String>;
     async fn settings_all(&self) -> Result<Vec<(String, String)>, String>;
-    async fn settings_set(&self, key: &str, value: &str) -> Result<(), String>;
+    /// LWW upsert (see `progress_upsert`); `true` iff applied.
+    async fn settings_set(&self, key: &str, value: &str, ts: Option<i64>) -> Result<bool, String>;
 
     /// Per-book + global audio-generation rollup for the status surface (the Sync
     /// sheet). The filesystem `preview` backend has no queue → empty.
@@ -217,16 +226,21 @@ impl ContentStore for PgStore {
             .await
             .map_err(|e| e.to_string())
     }
-    async fn progress_upsert(&self, path: &str, scroll: f64) -> Result<(), String> {
-        PgStore::progress_upsert(self, path, scroll)
+    async fn progress_upsert(
+        &self,
+        path: &str,
+        scroll: f64,
+        ts: Option<i64>,
+    ) -> Result<bool, String> {
+        PgStore::progress_upsert(self, path, scroll, ts)
             .await
             .map_err(|e| e.to_string())
     }
     async fn settings_all(&self) -> Result<Vec<(String, String)>, String> {
         PgStore::settings_all(self).await.map_err(|e| e.to_string())
     }
-    async fn settings_set(&self, key: &str, value: &str) -> Result<(), String> {
-        PgStore::settings_set(self, key, value)
+    async fn settings_set(&self, key: &str, value: &str, ts: Option<i64>) -> Result<bool, String> {
+        PgStore::settings_set(self, key, value, ts)
             .await
             .map_err(|e| e.to_string())
     }

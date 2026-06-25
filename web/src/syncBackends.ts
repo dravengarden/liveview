@@ -1,5 +1,6 @@
 import type { RemoteBackend } from "@/_sync/mod.ts";
 import { contentFetch } from "@/native-sync";
+import { enqueueMutation } from "@/syncQueue";
 import type { ProgressEntry } from "@/types";
 
 // RemoteBackend adapters over liveview's EXISTING server endpoints, for the
@@ -49,13 +50,12 @@ export function putServerSetting(key: string, value: string): Promise<void> {
   if (settingsCache !== null) {
     settingsCache = settingsCache.then((s) => ({ ...s, [key]: value }));
   }
-  return fetch("/api/settings", {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ key, value }),
-  }).then(() => {
-    // best-effort; the local mirror remains the offline fallback
-  });
+  // Route through the durable LWW queue instead of a raw fetch: the write is now
+  // collapsed-per-key, survives offline, and replays on reconnect without
+  // clobbering a fresher cross-device edit (server `ts` guard). Resolves
+  // immediately — the local mirror is the source of truth; delivery is async.
+  enqueueMutation("setting", key, value);
+  return Promise.resolve();
 }
 
 // ── Live server→client setting push (one-way WebSocket) ─────────────────────
@@ -164,13 +164,11 @@ export function progressBackend(path: string): RemoteBackend<number> {
         return null;
       }
     },
-    save: (scroll: number): Promise<void> =>
-      fetch("/api/progress", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ path, scroll }),
-      }).then(() => {
-        // best-effort: a lost progress write just means a slightly stale resume
-      }),
+    // Durable LWW queue (see putServerSetting): collapses rapid scroll writes to
+    // the final position, survives offline, replays on reconnect newest-wins.
+    save: (scroll: number): Promise<void> => {
+      enqueueMutation("progress", path, String(scroll));
+      return Promise.resolve();
+    },
   };
 }

@@ -1039,6 +1039,12 @@ struct ProgressUpdate {
     path: String,
     /// Scroll position as a 0..1 ratio of the document's scrollable height.
     scroll: f64,
+    /// Client edit time (unix ms). Drives last-write-wins: a stale offline replay
+    /// carries the OLD edit time, so the server keeps a newer value written by
+    /// another device meanwhile. Absent (legacy/PWA clients) ⇒ stamped `now`, which
+    /// always wins — same as the previous unconditional upsert.
+    #[serde(default)]
+    ts: Option<i64>,
 }
 
 /// Save one document's scroll position (debounced by the client).
@@ -1046,8 +1052,15 @@ async fn api_progress_put(
     State(state): State<SharedState>,
     Json(body): Json<ProgressUpdate>,
 ) -> impl IntoResponse {
-    match state.store.progress_upsert(&body.path, body.scroll).await {
-        Ok(()) => StatusCode::NO_CONTENT,
+    match state
+        .store
+        .progress_upsert(&body.path, body.scroll, body.ts)
+        .await
+    {
+        // 204 whether or not the LWW guard kept our value — the write was DELIVERED;
+        // the client drops it from its queue either way (a rejected stale write is
+        // superseded, not retried). Only the network-failure path retries.
+        Ok(_applied) => StatusCode::NO_CONTENT,
         Err(e) => {
             tracing::warn!(error = %e, "progress write failed");
             StatusCode::INTERNAL_SERVER_ERROR
@@ -1059,6 +1072,9 @@ async fn api_progress_put(
 struct SettingPut {
     key: String,
     value: String,
+    /// Client edit time (unix ms) — last-write-wins, see `ProgressUpdate::ts`.
+    #[serde(default)]
+    ts: Option<i64>,
 }
 
 /// Player settings (playback rate, sleep-timer, …) for cross-device sync.
@@ -1080,16 +1096,25 @@ async fn api_settings_put(
     State(state): State<SharedState>,
     Json(body): Json<SettingPut>,
 ) -> impl IntoResponse {
-    match state.store.settings_set(&body.key, &body.value).await {
-        Ok(()) => {
-            // Broadcast the change so other clients' mirrored stores re-reconcile
-            // live (cross-device), mirroring `broadcast_tree`. Clone before the
-            // response so the PUT's own return value is unaffected.
-            if let Ok(s) = serde_json::to_string(&WsMessage::SettingUpdate {
-                key: body.key.clone(),
-                value: body.value.clone(),
-            }) {
-                let _ = state.tx.send(s);
+    match state
+        .store
+        .settings_set(&body.key, &body.value, body.ts)
+        .await
+    {
+        // Broadcast ONLY when the LWW guard actually accepted our value — a stale
+        // replay that lost to a newer cross-device edit changed nothing, so pushing
+        // it would make peers re-reconcile to an older value. `applied=false` ⇒
+        // silent 204 (delivered, superseded).
+        Ok(applied) => {
+            if applied {
+                // Mirror `broadcast_tree`: clone before the response so the PUT's
+                // own return value is unaffected.
+                if let Ok(s) = serde_json::to_string(&WsMessage::SettingUpdate {
+                    key: body.key.clone(),
+                    value: body.value.clone(),
+                }) {
+                    let _ = state.tx.send(s);
+                }
             }
             StatusCode::NO_CONTENT
         }

@@ -262,14 +262,24 @@ impl ContentStore for FsStore {
     async fn progress_recent_per_rendition(&self) -> Result<Vec<ProgressEntry>, String> {
         Ok(vec![])
     }
-    async fn progress_upsert(&self, _path: &str, _scroll: f64) -> Result<(), String> {
-        Ok(())
+    async fn progress_upsert(
+        &self,
+        _path: &str,
+        _scroll: f64,
+        _ts: Option<i64>,
+    ) -> Result<bool, String> {
+        Ok(false) // preview keeps no user state
     }
     async fn settings_all(&self) -> Result<Vec<(String, String)>, String> {
         Ok(vec![])
     }
-    async fn settings_set(&self, _key: &str, _value: &str) -> Result<(), String> {
-        Ok(())
+    async fn settings_set(
+        &self,
+        _key: &str,
+        _value: &str,
+        _ts: Option<i64>,
+    ) -> Result<bool, String> {
+        Ok(false) // preview keeps no user state
     }
     async fn audio_task_rollup(&self) -> Result<Vec<AudioTaskRollup>, String> {
         Ok(Vec::new()) // preview has no task queue
