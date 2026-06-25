@@ -548,6 +548,12 @@ import WebKit
     if let cached = cachedFileURL(key) {
       item = AVPlayerItem(url: cached)
       playingFromCache = true
+    } else if netType() == "none" {
+      // OFFLINE + not downloaded: streaming would just stall forever (the web shows
+      // a spinner that never resolves). Fail FAST + proactively so the UI can show a
+      // disabled / "not downloaded" state instead of an endless loading icon.
+      emit("{type:'error',message:'offline-uncached'}")
+      return
     } else {
       item = AVPlayerItem(url: url)
       playingFromCache = false

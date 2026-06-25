@@ -766,7 +766,12 @@ export function AudioPlayerProvider(
           prevChapter();
           break;
         case "error":
+          // Clear the spinner + the playing state so the UI never sits on an
+          // endless loading icon (offline + not-downloaded streams used to stall
+          // forever). `error` (cleared on the next load) drives the disabled state.
           setError(ev.message);
+          setLoading(false);
+          setPlaying(false);
           break;
       }
     });

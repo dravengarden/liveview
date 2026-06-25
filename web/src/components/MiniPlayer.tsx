@@ -188,7 +188,7 @@ export function MiniPlayer(
             sx={{ width: 60, height: 60 }}
           >
             {loading
-              ? <CircularProgress size={30} />
+              ? <CircularProgress size={rem(39)} color="inherit" />
               : playing
               ? <Pause sx={{ fontSize: rem(39) }} />
               : <PlayArrow sx={{ fontSize: rem(39) }} />}

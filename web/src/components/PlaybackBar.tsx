@@ -164,7 +164,7 @@ export function PlaybackBar(
         sx={{ width: tap(48), height: tap(48) }}
       >
         {loading
-          ? <CircularProgress size={32} />
+          ? <CircularProgress size={rem(32)} color="inherit" />
           : playing
           ? <Pause sx={{ fontSize: rem(32) }} />
           : <PlayArrow sx={{ fontSize: rem(32) }} />}

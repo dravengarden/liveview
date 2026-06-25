@@ -46,6 +46,7 @@ export function PlaybackSheet({
     nowPlaying,
     playing,
     loading,
+    error,
     canPrev,
     canNext,
     togglePlay,
@@ -170,10 +171,16 @@ export function PlaybackSheet({
               bgcolor: "primary.main",
               color: "primary.contrastText",
               "&:hover": { bgcolor: "primary.dark" },
+              // Offline + not-downloaded (or a load failure): show a DISABLED look
+              // rather than a forever-spinning loader. Still tappable to retry — a
+              // fresh load clears `error` (and succeeds once online / downloaded).
+              ...(error && !loading
+                ? { opacity: 0.4, bgcolor: "action.disabledBackground" }
+                : {}),
             }}
           >
             {loading
-              ? <CircularProgress size={26} color="inherit" />
+              ? <CircularProgress size={rem(34)} color="inherit" />
               : playing
               ? <Pause sx={{ fontSize: rem(34) }} />
               : <PlayArrow sx={{ fontSize: rem(34) }} />}
