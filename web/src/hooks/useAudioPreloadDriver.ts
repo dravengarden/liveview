@@ -12,6 +12,7 @@ import {
   nativeAudioStats,
 } from "@/native-audio";
 import { contentFetch } from "@/native-sync";
+import { ingestDag } from "@/audioMediaIndex";
 
 // Mirror of OfflineSection's storage budget key (the Settings → Downloads
 // "Max storage" select writes it). Read live each tick so a change takes effect
@@ -57,6 +58,13 @@ export function useAudioPreloadDriver(): void {
           resources: { hash: string; kind: string; url: string; path: string }[];
         };
         if (cancelled) return;
+        // PERSIST the per-chapter audio + marks hashes to the durable localStorage
+        // index FIRST — this is the offline-playback fix. We're online here (the dag
+        // fetch succeeded), which is exactly when audio gets downloaded, so this
+        // guarantees "downloaded ⇒ hash available offline" without depending on the
+        // manifest still being in the url-cache. The player reads this index before
+        // the manifest (see audioHash.ts → chapterMedia).
+        ingestDag(dag.resources);
         audioRes = dag.resources
           .filter((r) => r.kind === "audio")
           .map((r) => ({ hash: r.hash, url: r.url }));

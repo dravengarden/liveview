@@ -18,6 +18,7 @@
 // throws.
 
 import { contentFetch } from "@/native-sync";
+import { getMedia, putMedia } from "@/audioMediaIndex";
 
 export interface ChapterMedia {
   /** Audio content hash — the offline cache key the native player shares. */
@@ -95,7 +96,21 @@ export async function chapterMedia(
   lang: string,
 ): Promise<ChapterMedia> {
   const rel = relOf(bookSlug, chapterPath);
-  return (await loadMap(bookSlug)).get(`${lang}/${rel}`) ?? EMPTY;
+  // 1) PERSISTENT INDEX FIRST — a synchronous localStorage read, offline-safe and
+  // network-free. Populated from /api/dag by the download driver while online, so
+  // a downloaded chapter ALWAYS has its hash here. This is the offline-playback
+  // fix: no dependency on the manifest being in the url-cache.
+  const persisted = getMedia(bookSlug, lang, rel);
+  if (persisted) return persisted;
+  // 2) Fall back to the manifest (e.g. an online book never warmed by the driver),
+  // and write any hit through to the index so the next (possibly offline) lookup
+  // is instant + self-sufficient.
+  const m = (await loadMap(bookSlug)).get(`${lang}/${rel}`);
+  if (m) {
+    putMedia(bookSlug, lang, rel, m);
+    return m;
+  }
+  return EMPTY;
 }
 
 /** Just the audio content hash (back-compat for the web `<audio>` path). */
