@@ -72,15 +72,9 @@ import WebKit
       if path.hasPrefix("/ping") {
         self.respond(conn, "ok"); return
       }
-      // /offline?on=1|0 — deterministic airplane mode for the native content layer
-      // (forces LvSyncController network fetches to fail) so the offline cache path
-      // can be tested in the simulator. DEBUG-only (the flag only exists in DEBUG).
-      if path.hasPrefix("/offline") {
-        let on = path.contains("on=1")
-        LvSyncController.forceOffline = on
-        self.respond(conn, "offline=\(on)")
-        return
-      }
+      // (Offline airplane-mode testing now lives in the Rust content plugin —
+      // `lvsync://localhost/offline?on=1` — since content moved off the Swift
+      // LvSyncController, which is retired.)
       // /aeval: run the body as an ASYNC function (callAsyncJavaScript) so it can
       // `await` — needed to test fetch/contentFetch (evaluateJavaScript returns the
       // unresolved Promise → "unsupported type"). Body must `return` its value.

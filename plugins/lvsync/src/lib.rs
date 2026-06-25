@@ -77,6 +77,13 @@ impl LvState {
         // platform (iOS/macOS/Android). Cross-compiles to aarch64-apple-ios via
         // rusqlite's bundled SQLite (verified).
         let store = SqliteBlobStore::open(data_dir.join("lvsync.sqlite"))?;
+        // Reclaim the RETIRED Swift content store: LvSyncController cached text under
+        // `<Application Support>/lvcontent` (a sibling of this plugin's data dir).
+        // The Swift content layer is gone (all content is Rust + SQLite now), so that
+        // dir is dead weight — delete it once. Cheap no-op after the first launch.
+        if let Some(parent) = data_dir.parent() {
+            let _ = std::fs::remove_dir_all(parent.join("lvcontent"));
+        }
         // verify OFF: a resource hash is a content key (rustfs / source blake3),
         // not blake3 of the SERVED bytes (rendered html) — trust the store key.
         // TIMEOUTS ARE CRITICAL: without them, an OFFLINE resolve miss makes reqwest
