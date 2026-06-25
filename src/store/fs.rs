@@ -107,6 +107,7 @@ impl ContentStore for FsStore {
                 label: b.label.clone(),
                 description: b.description.clone(),
                 collection: b.collection.clone(),
+                author: b.author.clone(),
                 cover_hash: self.covers.get(&b.slug).cloned(),
                 default_rendition: b.default_rendition.as_str().to_string(),
                 created_at: 0,

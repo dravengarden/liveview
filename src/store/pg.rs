@@ -54,6 +54,7 @@ pub struct BookRow {
     pub label: String,
     pub description: Option<String>,
     pub collection: Option<String>,
+    pub author: Option<String>,
     pub cover_hash: Option<String>,
     pub default_rendition: String,
     /// Deploy-time stamps (unix ms); 0 when never stamped. See `mark_book`.
@@ -204,16 +205,18 @@ impl PgStore {
         label: &str,
         description: Option<&str>,
         collection: Option<&str>,
+        author: Option<&str>,
         cover_hash: Option<&str>,
         default_rendition: &str,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO books (slug, label, description, collection, cover_hash, default_rendition)
-             VALUES ($1, $2, $3, $4, $5, $6)
+            "INSERT INTO books (slug, label, description, collection, author, cover_hash, default_rendition)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT (slug) DO UPDATE SET
                  label = EXCLUDED.label,
                  description = EXCLUDED.description,
                  collection = EXCLUDED.collection,
+                 author = EXCLUDED.author,
                  cover_hash = EXCLUDED.cover_hash,
                  default_rendition = EXCLUDED.default_rendition",
         )
@@ -221,6 +224,7 @@ impl PgStore {
         .bind(label)
         .bind(description)
         .bind(collection)
+        .bind(author)
         .bind(cover_hash)
         .bind(default_rendition)
         .execute(&self.pool)
@@ -325,7 +329,7 @@ impl PgStore {
 
     pub async fn list_books(&self) -> Result<Vec<BookRow>, sqlx::Error> {
         sqlx::query_as::<_, BookRow>(
-            "SELECT slug, label, description, collection, cover_hash, default_rendition, created_at, updated_at
+            "SELECT slug, label, description, collection, author, cover_hash, default_rendition, created_at, updated_at
              FROM books ORDER BY slug",
         )
         .fetch_all(&self.pool)

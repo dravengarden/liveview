@@ -92,6 +92,10 @@ export interface Book {
   /** The series/collection this book belongs to (e.g. "AI & Agents"), used by
    *  the shelf's optional group-by-series view. Null/empty ⇒ ungrouped. */
   collection?: string | null;
+  /** Optional credit line shown on the shelf card (book.toml `author`): the
+   *  authoring agent, or "<original author> · Claude Code 修订" for a converted/
+   *  translated book. Null/empty ⇒ no byline. */
+  author?: string | null;
   /** Whether a cover image is available at `/api/cover?book=<slug>`. */
   cover: boolean;
   /** Which rendition kind the book opens in. */

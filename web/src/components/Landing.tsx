@@ -756,6 +756,18 @@ const ShelfCard = memo(function ShelfCard({
                 />
               )}
           </Box>
+          {/* Author byline — the book's own credit line (agent name, or
+              "<original> · Claude Code 修订" for a converted/translated book).
+              Sits right under the title; absent ⇒ no line. */}
+          {b.author && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block", mt: 0.25, fontWeight: 500 }}
+            >
+              {b.author}
+            </Typography>
+          )}
           {b.description
             ? (
               <Typography

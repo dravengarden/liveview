@@ -1232,6 +1232,8 @@ struct BookInfo {
     description: Option<String>,
     /// Optional shelf grouping key (book.toml top-level `collection`).
     collection: Option<String>,
+    /// Optional credit line shown on the shelf card (book.toml top-level `author`).
+    author: Option<String>,
     /// Whether a cover image is available at `/api/cover?book=<slug>`.
     cover: bool,
     /// Which rendition the book opens in.
@@ -1279,6 +1281,7 @@ async fn api_books(State(state): State<SharedState>) -> impl IntoResponse {
                 slug: b.slug.clone(),
                 description: b.description.clone(),
                 collection: b.collection.clone(),
+                author: b.author.clone(),
                 cover: b.cover_hash.is_some(),
                 default_rendition: b.default_rendition.as_str().to_string(),
                 renditions: b

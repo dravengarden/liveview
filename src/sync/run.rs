@@ -155,6 +155,7 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 &book.label,
                 book.description.as_deref(),
                 book.collection.as_deref(),
+                book.author.as_deref(),
                 cover_hash.as_deref(),
                 book.default_rendition.as_str(),
             )

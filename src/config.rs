@@ -168,6 +168,11 @@ pub struct BookManifest {
     /// Optional shelf grouping key — books sharing a value belong to the same
     /// collection. Top-level, sibling of `slug`/`title`/`tags`.
     pub collection: Option<String>,
+    /// Optional credit line shown on the shelf card. Free text so the book
+    /// carries its own attribution: an agent-authored book writes the agent
+    /// ("Claude Code"); a translated/converted book keeps the original author
+    /// and appends the reviser ("Ernest P. Chan · Claude Code 修订").
+    pub author: Option<String>,
 }
 
 /// One `[renditions.<kind>]` entry.
@@ -294,6 +299,8 @@ pub struct BookState {
     pub description: Option<String>,
     /// Optional shelf grouping key from the manifest's top-level `collection`.
     pub collection: Option<String>,
+    /// Optional credit line from the manifest's top-level `author`.
+    pub author: Option<String>,
     /// Resolved absolute path to the cover image, when one exists.
     pub cover: Option<PathBuf>,
     /// Which rendition opens first.
@@ -548,6 +555,7 @@ impl Config {
                 slug,
                 description: b.description,
                 collection: None,
+                author: None,
                 cover: None,
                 default_rendition: RenditionKind::Text,
                 renditions: vec![RenditionState {
@@ -796,6 +804,7 @@ fn load_book_manifest(
         slug,
         description: None,
         collection: manifest.collection.clone(),
+        author: manifest.author.clone(),
         cover,
         default_rendition,
         renditions,
@@ -904,6 +913,7 @@ pub fn implicit_resolved(dir: &Path) -> Result<Resolved, String> {
             slug,
             description: None,
             collection: None,
+            author: None,
             cover: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![RenditionState {
