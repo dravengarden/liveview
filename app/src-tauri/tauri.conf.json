@@ -12,6 +12,7 @@
     "windows": [
       {
         "title": "LiveView",
+        "url": "lvsync://localhost/app/index.html",
         "width": 1100,
         "height": 800,
         "minWidth": 380,

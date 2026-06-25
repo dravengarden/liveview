@@ -1,0 +1,17 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "app-origin",
+  "description": "The SPA now loads from the plugin-served OTA origin lvsync://localhost/app/ (so the web hot-updates without an app reinstall). That origin needs its OWN core:default for the IPC layer plus the haptics + opener grants — a capability is matched per origin, and the local 'default' capability covers tauri://localhost, not this custom scheme. Same grants as default/remote-haptics, scoped to the lvsync app origin.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["lvsync://localhost", "lvsync://localhost/*"]
+  },
+  "permissions": [
+    "core:default",
+    "opener:allow-open-url",
+    "haptics:allow-impact-feedback",
+    "haptics:allow-notification-feedback",
+    "haptics:allow-selection-feedback",
+    "haptics:allow-vibrate"
+  ]
+}
