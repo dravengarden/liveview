@@ -6,7 +6,12 @@ import {
   nativeSyncAvailable,
   offlineWifiOnly,
 } from "@/native-sync";
-import { nativeAudioPreload, nativeAudioSetCap, nativeAudioStats } from "@/native-audio";
+import {
+  nativeAudioPreload,
+  nativeAudioSetCap,
+  nativeAudioStats,
+  nativeAudioUnpin,
+} from "@/native-audio";
 import { contentFetch } from "@/native-sync";
 
 // Mirror of OfflineSection's storage budget key (the Settings → Downloads
@@ -37,6 +42,10 @@ export function useAudioPreloadDriver(): void {
     if (!nativeSyncAvailable()) return undefined;
     let cancelled = false;
     let audioRes: { hash: string; url: string }[] = [];
+    // Hash set of the CURRENT manifest's audio, for orphan GC. Stays empty until
+    // the dag loads, which gates the GC so it can never run against an empty
+    // manifest (= delete everything).
+    let audioManifest = new Set<string>();
     let timer: ReturnType<typeof globalThis.setInterval> | undefined;
 
     nativeAudioSetCap(maxBytes());
@@ -56,6 +65,7 @@ export function useAudioPreloadDriver(): void {
         audioRes = dag.resources
           .filter((r) => r.kind === "audio")
           .map((r) => ({ hash: r.hash, url: r.url }));
+        audioManifest = new Set(audioRes.map((r) => r.hash));
         // Warm every book's /api/manifest into the cache (cache-first → cheap when
         // already cached). The native audio player keys its offline store by each
         // chapter's content HASH, which the web reads from this manifest (audioHash
@@ -103,6 +113,18 @@ export function useAudioPreloadDriver(): void {
       // big download); the content store (nativeCacheStats) is Rust + not net-aware.
       if (offlineWifiOnly() && a.net !== "wifi") return;
       const cached = new Set(a.cached);
+      // GC ORPHANS: audio on disk whose hash is no longer in the manifest — a later
+      // corpus sync removed or re-keyed those chapters (the .spoken content changed
+      // → new hash → the old blob is dead). They inflated the Downloads count PAST
+      // the total ("3391/3388") and waste space, and a pinned book's orphans never
+      // LRU-evict. Delete them. Guarded on a loaded manifest (audioRes.length > 0) so
+      // we never wipe everything before the dag arrives; the set comparison is the
+      // SAME hash equality the download dedup above trusts, and an over-deletion just
+      // re-downloads from REMOTE — low blast radius.
+      if (audioManifest.size > 0) {
+        const orphans = a.cached.filter((h) => !audioManifest.has(h));
+        if (orphans.length > 0) nativeAudioUnpin(orphans);
+      }
       const items = audioRes
         .filter((r) => !cached.has(r.hash))
         .slice(0, 300)

@@ -142,7 +142,15 @@ export function OfflineSection(): React.JSX.Element | null {
   // Done = the native O(1) cached count (SQLite aggregate); total = the server's
   // audio_count. No more diffing the full cached-key array against the manifest.
   const audioTotalCount = sizes?.audioCount ?? 0;
-  const audioDoneCount = audio?.cachedCount ?? 0;
+  // Clamp to the manifest total: the native O(1) count can transiently exceed it
+  // when ORPHAN audio (chapters a later corpus sync removed/re-keyed) is still on
+  // disk — that showed the nonsensical "3391/3388". The preload driver GCs those
+  // orphans against the manifest, so this converges to the real count; the clamp
+  // just guarantees the panel never displays more-cached-than-exists in the gap.
+  const rawDoneCount = audio?.cachedCount ?? 0;
+  const audioDoneCount = audioTotalCount > 0
+    ? Math.min(rawDoneCount, audioTotalCount)
+    : rawDoneCount;
 
   // NOTE: the auto-preload FEED loop now lives at app level
   // (useAudioPreloadDriver), so the download runs whenever the app is open — not
