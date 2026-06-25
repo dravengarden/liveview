@@ -49,7 +49,15 @@ export function installApiShim(): void {
       : input.url;
     if (url.startsWith("/api/")) {
       url = REMOTE + url;
-      return orig(url, init);
+      // Offline-first safety net: cap every shimmed /api request (writes included)
+      // with a timeout so an unreachable REMOTE fails FAST instead of hanging the
+      // connection forever (which froze background writes/reads offline). Don't
+      // clobber a caller-supplied signal; guard for older WebKit without timeout().
+      const signal = init?.signal ??
+        (typeof AbortSignal.timeout === "function"
+          ? AbortSignal.timeout(15_000)
+          : null);
+      return orig(url, { ...init, signal });
     }
     return orig(input, init);
   };

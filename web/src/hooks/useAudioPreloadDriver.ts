@@ -47,7 +47,9 @@ export function useAudioPreloadDriver(): void {
     // native cache keys we diff against `nativeAudioStats().cached`.
     void (async () => {
       try {
-        const dag = (await (await fetch(`${REMOTE}/api/dag`)).json()) as {
+        // contentFetch: cache-first + timed (offline-safe). A raw network fetch of
+        // the 4 MB dag here hung the audio driver offline.
+        const dag = (await (await contentFetch("/api/dag")).json()) as {
           resources: { hash: string; kind: string; url: string; path: string }[];
         };
         if (cancelled) return;

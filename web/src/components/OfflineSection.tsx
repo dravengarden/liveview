@@ -16,6 +16,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type CacheStats,
+  contentFetch,
   ensureAutoSync,
   nativeCacheStats,
   nativeSyncAvailable,
@@ -27,7 +28,6 @@ import {
   nativeAudioSetCap,
   nativeAudioStats,
 } from "@/native-audio";
-import { REMOTE } from "@/apiBase";
 import { useI18n } from "@/i18n";
 
 function gb(bytes: number): string {
@@ -108,7 +108,7 @@ export function OfflineSection(): React.JSX.Element | null {
         // Cheap precomputed totals (tiny JSON), NOT the 4 MB dag. Network-first so
         // a deploy's new totals show; offline this throws and the gauge falls back
         // to the cached byte estimate + native count.
-        const s = (await (await fetch(`${REMOTE}/api/sizes`)).json()) as {
+        const s = (await (await contentFetch("/api/sizes")).json()) as {
           audio_bytes: number;
           audio_count: number;
           text_bytes: number;

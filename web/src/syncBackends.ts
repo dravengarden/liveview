@@ -149,7 +149,9 @@ export function progressBackend(path: string): RemoteBackend<number> {
   return {
     load: async (): Promise<number | null> => {
       try {
-        const res = await fetch(
+        // contentFetch: offline-safe (cache-first + timed). A raw fetch here would
+        // hang the mirroredStore reconcile offline.
+        const res = await contentFetch(
           `/api/progress?book=${encodeURIComponent(slug)}`,
         );
         if (!res.ok) {

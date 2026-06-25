@@ -70,23 +70,6 @@ import type {
   TreeNode,
 } from "@/types";
 
-function findReadme(nodes: TreeNode[]): string | null {
-  for (const node of nodes) {
-    if (!node.is_dir && node.name.toLowerCase() === "readme.md") {
-      return node.path;
-    }
-  }
-  for (const node of nodes) {
-    if (node.is_dir && node.children.length > 0) {
-      const found = findReadme(node.children);
-      if (found !== null) {
-        return found;
-      }
-    }
-  }
-  return null;
-}
-
 function hasFilePath(nodes: TreeNode[], target: string): boolean {
   for (const node of nodes) {
     if (!node.is_dir && node.path === target) return true;
@@ -964,32 +947,8 @@ export function App(): React.JSX.Element {
     [currentPath, openFile, rendition, activeSlug, saveBookPref],
   );
 
-  // The entry chapter of a rendition: resume the last-read chapter if it still
-  // exists in that rendition's spine, else its README, else its first doc.
-  const entryChapter = useCallback(
-    async (slug: string, spine: TreeNode[]): Promise<string | null> => {
-      const root = spine.find((n) => n.path === slug);
-      // CRITICAL: if the slug isn't in this spine (a STALE / cross-rendition
-      // cached tree — e.g. offline with a tree synced before this book existed),
-      // DO NOT widen the scope to the whole corpus. findReadme(spine) would then
-      // return the FIRST corpus README — i.e. tapping "The Strategy Factory"
-      // opened "Draven Harness Garden". Always scope to the REQUESTED book; with
-      // no subtree, fall straight to its own README path so openFile fetches the
-      // right book (cached or live), never a different one.
-      if (!root) return `${slug}/README.md`;
-      const scope = [root];
-      // Resume the newest read chapter THAT EXISTS IN THIS rendition's spine —
-      // NOT the globally-newest row. Text + audio share one per-book progress
-      // table with distinct chapter paths, so after listening, the newest row is
-      // an audio chapter the text spine can't resolve; picking rows[0] then reset
-      // the reader to the README and threw away the text reading position. Scan
-      // newest-first for the first row whose path is in scope instead.
-      const rows = await loadBookRows(slug);
-      const resume = rows.find((r) => hasFilePath(scope, r.path))?.path ?? null;
-      return resume ?? findReadme(scope) ?? findFirstFile(scope);
-    },
-    [loadBookRows],
-  );
+  // (entryChapter removed — book entry is now resolved offline-first directly in
+  // enterBook from already-loaded recent progress, never via a network read.)
 
   // Open a book's AUDIO rendition INLINE (a normal NavShell page with the audio
   // spine in the sidebar and the read-along in the content area — not a popup).
@@ -1090,46 +1049,32 @@ export function App(): React.JSX.Element {
         openAudiobook(slug, undefined, replace);
         return;
       }
+      // OFFLINE-FIRST: NAVIGATE IMMEDIATELY — NEVER await the network before showing
+      // the reader. The old flow awaited the spine + a network-first progress read
+      // (entryChapter → /api/progress) BEFORE navigating, so a card tap froze with no
+      // navigation whenever a read hung (offline / unreachable). A tap into a book
+      // must only set the route + render cache-first; nothing on this path may block
+      // on the network. Best-guess the entry chapter SYNCHRONOUSLY from already-loaded
+      // recent progress (the resume), else the book's README. openFile sets
+      // currentPath first, then loadFile renders it cache-first (or a calm offline
+      // placeholder) — zero network on the critical path.
+      const resume = recentProgress.find(
+        (e) => e.path.startsWith(`${slug}/`) && !e.path.includes(".spoken"),
+      )?.path;
+      renditionRef.current = r.kind;
+      void openFile(resume ?? `${slug}/README.md`, initialLang, r.kind, replace);
+      // Warm THIS rendition's spine (sidebar/TOC) in the BACKGROUND — cache-first and
+      // strictly non-blocking; it must never gate navigation. prefetchTrees already
+      // warms both spines on load; this just refreshes the in-state tree on entry.
       void (async () => {
-        // Resolve the rendition's spine through the CACHE (contentFetch), NOT a
-        // raw network fetch — the raw fetch bypassed the offline store, so a card
-        // tap did nothing offline AND never populated the cache. Cache-first =
-        // instant + offline-safe (prefetchTrees + the root-watcher keep it warm /
-        // fresh). The in-state `tree` may hold another rendition's spine (we just
-        // left an audio book), so we always re-resolve on entry.
         try {
           const res = await contentFetch(
             `/api/tree?rendition=${encodeURIComponent(r.kind)}`,
           );
-          let spine = (await res.json()) as TreeNode[];
-          // If the cache-first spine predates this book (stale tree → the slug is
-          // absent), refetch FRESH so we open the real entry chapter instead of the
-          // README fallback. Offline (fresh throws) keeps the cached spine; the
-          // slug-scoped fallback in entryChapter still opens the RIGHT book.
-          if (!spine.some((n) => n.path === slug)) {
-            try {
-              spine = (await (
-                await contentFetch(
-                  `/api/tree?rendition=${encodeURIComponent(r.kind)}`,
-                  { fresh: true },
-                )
-              ).json()) as TreeNode[];
-            } catch {
-              // offline + stale cache — keep what we have; entryChapter handles it.
-            }
-          }
-          setTree(spine);
-          renditionRef.current = r.kind;
-          const entry = await entryChapter(slug, spine);
-          if (entry) {
-            void openFile(entry, initialLang, r.kind, replace);
-          }
-        } catch (e) {
-          // Offline + the spine isn't cached (or a transient error): DON'T leave
-          // the tap dead. Enter the book anyway at its README so the reader shows
-          // cached content or the calm offline placeholder — never nothing.
-          console.error("Failed to enter book:", e);
-          void openFile(`${slug}/README.md`, initialLang, r.kind, replace);
+          const spine = (await res.json()) as TreeNode[];
+          if (spine.some((n) => n.path === slug)) setTree(spine);
+        } catch {
+          // offline + uncached spine — the reader still works from the entry above.
         }
       })();
     },
@@ -1137,10 +1082,10 @@ export function App(): React.JSX.Element {
       books,
       bookPrefs,
       defaultRendition,
-      entryChapter,
       openFile,
       pickInitialLang,
       openAudiobook,
+      recentProgress,
     ],
   );
 

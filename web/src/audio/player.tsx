@@ -588,7 +588,9 @@ export function AudioPlayerProvider(
       prefetchedFrom.current = np.chapterPath;
       const next = queueRef.current[queueIndexRef.current + 1];
       if (next) {
-        void fetch(`/api/marks?${query(next.path, np.lang, np.rendition)}`)
+        // contentFetch so the warm-up actually populates the offline cache (a raw
+        // fetch on the shell bypasses the native store → next chapter not cached).
+        void contentFetch(`/api/marks?${query(next.path, np.lang, np.rendition)}`)
           .catch(() => {});
       }
     }

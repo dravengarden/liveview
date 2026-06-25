@@ -9,7 +9,7 @@
 
 import { setPrefetching } from "@/syncStore";
 import { nativeAudioAvailable } from "@/native-audio";
-import { contentFetch } from "@/native-sync";
+import { contentFetch, nativeSyncAvailable } from "@/native-sync";
 
 /** Books already swept this session (cheap dedup; the SW holds the real cache). */
 const sweptText = new Set<string>();
@@ -92,6 +92,10 @@ const splitId = (id: string): [string, string, string] | null => {
  * failed chapter is skipped, never thrown.
  */
 export async function prefetchBookText(slug: string): Promise<void> {
+  // Native shell: the Rust plugin (sync_all + resolve-on-open) is the offline
+  // cacher — these raw-fetch sweeps go to REMOTE WITHOUT populating the native
+  // store, so they're pointless (and can hang) here. PWA only (SW caches them).
+  if (nativeSyncAvailable()) return;
   if (sweptText.has(slug) || !navigator.onLine) return;
   sweptText.add(slug);
   inFlight++;
@@ -141,6 +145,9 @@ export async function prefetchBookText(slug: string): Promise<void> {
  * background) or fill in as they generate.
  */
 export async function prefetchBookAudio(slug: string): Promise<void> {
+  // Native shell: audio offline is the AVPlayer's own cache (native-audio +
+  // useAudioPreloadDriver); this raw-fetch sweep doesn't populate it. PWA only.
+  if (nativeSyncAvailable()) return;
   if (sweptAudio.has(slug) || !navigator.onLine) return;
   sweptAudio.add(slug);
   inFlight++;
