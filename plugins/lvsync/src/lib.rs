@@ -33,6 +33,22 @@ const REMOTE: &str = "https://liveview.hawk.thundersparrow.top";
 /// resolves still serve hits; only network misses are forced to fail fast.
 static FORCE_OFFLINE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// AUTO fast-fail window (unix-ms; 0 = online). After a real connect/timeout
+/// failure we treat the network as down until this instant, so a BURST of
+/// network-first reads (e.g. opening the audiobook fires several) pays the connect
+/// timeout AT MOST ONCE instead of once per request — the rest fail instantly.
+/// Cleared the moment any fetch succeeds. This is the reliable backstop for when
+/// the web's connectivity signal (navigator.onLine / NWPathMonitor poll) hasn't
+/// flipped the FORCE_OFFLINE flag yet.
+static OFFLINE_UNTIL_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// reqwest-backed network fetcher. Manifest URLs are origin-relative
 /// (`/api/...`); absolute URLs (rare) pass through unchanged.
 struct HttpFetcher {
@@ -42,19 +58,37 @@ struct HttpFetcher {
 #[async_trait]
 impl Fetcher for HttpFetcher {
     async fn fetch(&self, url: &str) -> Result<Vec<u8>, String> {
-        if FORCE_OFFLINE.load(std::sync::atomic::Ordering::Relaxed) {
+        use std::sync::atomic::Ordering::Relaxed;
+        if FORCE_OFFLINE.load(Relaxed) {
             return Err("forced offline".into());
+        }
+        // Within the auto fast-fail window (a recent connect failure) → fail instantly,
+        // no network attempt. Collapses a burst of offline misses to one timeout.
+        if OFFLINE_UNTIL_MS.load(Relaxed) > now_ms() {
+            return Err("offline (recent failure)".into());
         }
         let full = if url.starts_with("http") {
             url.to_string()
         } else {
             format!("{REMOTE}{url}")
         };
-        let r = self.client.get(&full).send().await.map_err(|e| e.to_string())?;
-        if !r.status().is_success() {
-            return Err(format!("{full} -> {}", r.status()));
+        match self.client.get(&full).send().await {
+            Ok(r) => {
+                OFFLINE_UNTIL_MS.store(0, Relaxed); // a response ⇒ network is up
+                if !r.status().is_success() {
+                    return Err(format!("{full} -> {}", r.status()));
+                }
+                Ok(r.bytes().await.map_err(|e| e.to_string())?.to_vec())
+            }
+            Err(e) => {
+                // A connect/timeout failure = offline → open the fast-fail window so
+                // the rest of this screen's reads don't each wait the connect timeout.
+                if e.is_connect() || e.is_timeout() {
+                    OFFLINE_UNTIL_MS.store(now_ms() + 5000, Relaxed);
+                }
+                Err(e.to_string())
+            }
         }
-        Ok(r.bytes().await.map_err(|e| e.to_string())?.to_vec())
     }
 }
 
@@ -113,7 +147,10 @@ impl LvState {
         // enters the book at a cached page or the offline placeholder immediately.
         // (Cached resources are store-first and never hit the network at all.)
         let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(4))
+            // 1.5s (was 4s): the floor on how long the FIRST offline miss blocks
+            // before the auto fast-fail window (OFFLINE_UNTIL_MS) makes the rest
+            // instant. A real connect on the tunnel completes well under this.
+            .connect_timeout(Duration::from_millis(1500))
             .timeout(Duration::from_secs(30))
             .build()
             .unwrap_or_default();
@@ -524,8 +561,12 @@ async fn sync_all(state: State<'_, LvState>) -> Result<u64, String> {
     // cached resources resolve instantly (store hit); only the missing few hit the
     // network, now up to 24 in flight, so a full fill completes in seconds.
     use futures_util::StreamExt as _;
-    let done = futures_util::stream::iter(resources.iter())
-        .map(|r| async move { if state.engine.resolve(r).await.is_ok() { r.bytes } else { 0 } })
+    // Capture a Copy reference to the engine (moving `state` per-call would be E0507)
+    // and move OWNED `Resource`s into each future (borrowing the iterator item trips
+    // a higher-ranked-lifetime error with buffer_unordered).
+    let engine = &state.engine;
+    let done = futures_util::stream::iter(resources.into_iter())
+        .map(|r| async move { if engine.resolve(&r).await.is_ok() { r.bytes } else { 0 } })
         .buffer_unordered(24)
         .fold(0u64, |acc, b| async move { acc.saturating_add(b) })
         .await;

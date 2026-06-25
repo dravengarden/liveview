@@ -58,12 +58,13 @@ export function useProgress(): UseProgress {
   const loadBookRows = useCallback(
     async (slug: string): Promise<ProgressEntry[]> => {
       try {
-        // fresh: network-first then cache fallback (native shell), so resume +
-        // reading meters reflect live progress online but still work offline from
-        // the last-known rows. Plain fetch on web (the SW covers its offline read).
+        // cacheFirst: the audiobook switch AWAITS this (to pick the resume chapter),
+        // so a network-first read here is what made the offline jump lag — it ate the
+        // connect timeout. Serve the last-known rows from cache instantly; the live
+        // progress is also tracked locally, so slightly-stale resume is fine.
         const res = await contentFetch(
           `/api/progress?book=${encodeURIComponent(slug)}`,
-          { fresh: true },
+          { cacheFirst: true },
         );
         if (!res.ok) return [];
         const rows = (await res.json()) as ProgressEntry[];

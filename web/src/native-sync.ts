@@ -12,6 +12,8 @@
 // Off the shell (PWA / browser) the scheme is absent → every helper falls back to a
 // normal `fetch` (the service worker handles offline there).
 
+import { nativeAudioStats } from "@/native-audio";
+
 const SCHEME = "lvsync://localhost";
 
 /** True only inside the native shell (where the lvsync:// plugin is registered). */
@@ -121,14 +123,41 @@ function setNativeOffline(on: boolean): void {
   }
 }
 
-/** Keep the native fast-fail flag in sync with connectivity: set it now from
- *  navigator.onLine and on every online/offline transition. Call once at startup
- *  (BEFORE the first content fetch) so an offline cold launch is fast immediately. */
+/** Keep the native fast-fail flag in sync with connectivity so offline navigation
+ *  never eats the per-request connect timeout.
+ *
+ *  TWO signals, because `navigator.onLine` is UNRELIABLE in WKWebView (it often
+ *  stays `true` in airplane mode, so it alone never flips the flag — that was why
+ *  the audiobook jump stayed laggy):
+ *   - navigator.onLine + online/offline events: instant WHEN they fire.
+ *   - a 2s poll of the native NWPathMonitor (`nativeAudioStats().net === "none"`):
+ *     the RELIABLE signal — the OS path monitor knows airplane mode for sure.
+ *  Plus the plugin's own OFFLINE_UNTIL backstop catches anything these miss. */
 export function startOfflineFlagSync(): void {
   if (!nativeSyncAvailable()) return;
-  setNativeOffline(!navigator.onLine);
-  globalThis.addEventListener("online", () => setNativeOffline(false));
-  globalThis.addEventListener("offline", () => setNativeOffline(true));
+  let last: boolean | null = null;
+  const apply = (offline: boolean): void => {
+    if (offline === last) return;
+    last = offline;
+    setNativeOffline(offline);
+  };
+  apply(!navigator.onLine);
+  globalThis.addEventListener("online", () => apply(false));
+  globalThis.addEventListener("offline", () => apply(true));
+  // Reliable poll: the native net state from NWPathMonitor (via the audio layer).
+  let inFlight = false;
+  globalThis.setInterval(() => {
+    if (inFlight) return;
+    inFlight = true;
+    void nativeAudioStats()
+      .then((a) => {
+        if (a) apply(a.net === "none");
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        inFlight = false;
+      });
+  }, 2000);
 }
 
 /** Re-pull /api/dag → refresh the native content manifest. MUST run on every app
