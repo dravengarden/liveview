@@ -123,7 +123,7 @@ mod embedded_assets {
             .get_file("app-bundle/index.html")
             .and_then(|f| f.contents_utf8())
             .and_then(super::entry_bundle)
-            .unwrap_or("0");
+            .unwrap_or_else(|| "0".to_string());
         let body = serde_json::json!({ "version": version, "files": app_bundle_paths() });
         ([(header::CACHE_CONTROL, "no-cache")], axum::Json(body)).into_response()
     }
