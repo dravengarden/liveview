@@ -26,11 +26,16 @@ export function nativeSyncAvailable(): boolean {
  *  is accepted for API compatibility but no longer needed. */
 export async function contentFetch(
   url: string,
-  _opts?: { fresh?: boolean },
+  opts?: { fresh?: boolean; cacheFirst?: boolean },
 ): Promise<Response> {
   if (!nativeSyncAvailable()) return fetch(url);
   try {
-    const r = await fetch(`${SCHEME}/resolve?u=${encodeURIComponent(url)}`);
+    // cacheFirst: serve the cached copy WITHOUT a network round-trip for a
+    // deploy-stable map on a hot path (e.g. audioHash's /api/manifest, which the
+    // audio switch awaits — a network-first stall there hangs playback even though
+    // the bytes are local). The url-keyed path is network-first otherwise.
+    const cf = opts?.cacheFirst ? "&cf=1" : "";
+    const r = await fetch(`${SCHEME}/resolve?u=${encodeURIComponent(url)}${cf}`);
     if (r.status === 200) return new Response(await r.arrayBuffer(), { status: 200 });
     return new Response(null, { status: 504, statusText: "offline" });
   } catch {

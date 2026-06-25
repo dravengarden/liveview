@@ -378,13 +378,26 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
                 return (400, b"missing u".to_vec());
             };
             let url = decode_all(&raw);
+            // cf=1 ⇒ CACHE-FIRST for a url-keyed read. The url-keyed path is
+            // network-first by default (right for live reads), but a DEPLOY-STABLE
+            // map like /api/manifest/<slug> is on the audio-playback HOT PATH:
+            // audioHash AWAITS it before the native player loads, so a network-first
+            // fetch that stalls = the audio switch hangs on "loading" even though the
+            // manifest (and the audio blob) are already on disk. With cf=1 we serve
+            // the cached copy instantly and only hit the network on a true miss —
+            // STORAGE-FIRST, as offline-first demands. The download driver still
+            // refreshes these manifests network-first on launch.
+            let cache_first = query.split('&').any(|kv| kv == "cf=1");
             let res = state.by_url.read().await.get(&url).cloned();
             let bytes = match res {
                 Some(r) => state.engine.resolve(&r).await,
                 None => {
                     let key =
                         format!("{}{}", lv_sync::URL_KEY_PREFIX, lv_sync::hash_hex(url.as_bytes()));
-                    state.engine.fetch_keyed(&key, &url).await
+                    match if cache_first { state.engine.store().get(&key).await } else { None } {
+                        Some(b) => Ok(b),
+                        None => state.engine.fetch_keyed(&key, &url).await,
+                    }
                 }
             };
             match bytes {

@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import type { Mark, SpokenContent } from "@/types";
-import { audioHash } from "@/audioHash";
+import { chapterMedia } from "@/audioHash";
 import { contentFetch } from "@/native-sync";
 import { REMOTE } from "@/apiBase";
 import {
@@ -360,9 +360,18 @@ export function AudioPlayerProvider(
     posStore.set({ path, t });
   }, []);
 
-  // Load a chapter into the element: fetch sentences (instant) then marks
-  // (triggers server synth — slow on first play), point <audio> at the cached
-  // MP3, restore the saved position, and optionally play.
+  // Load a chapter for playback. STORAGE-FIRST + AUDIO-FIRST: resolve the content
+  // hashes from the cached manifest, start the audio from the LOCAL cache
+  // immediately, and load the read-along data (sentences + marks) AFTER — purely
+  // for highlighting, so its absence or slowness can never stall the audio. Every
+  // read is cache-first; nothing on this path blocks playback on the network.
+  //
+  // (The old path awaited /api/spoken THEN /api/marks — network-first, and it threw
+  // if either failed — BEFORE even pointing the player at the audio. /api/marks?…
+  // is not a cached resource, so offline it 504'd and killed playback entirely,
+  // even though the audio + marks blobs were all on disk: "下完所有数据后切音频一直
+  // loading" / 0:00. Marks are now resolved by their HASH → /api/blob/<hash>, the
+  // form that's actually cached.)
   const loadTrack = useCallback(
     (np: NowPlaying, q: Track[], qi: number, autoplay: boolean) => {
       const audio = audioRef.current;
@@ -385,104 +394,99 @@ export function AudioPlayerProvider(
       persistSession(np, q, qi);
 
       const q1 = query(np.chapterPath, np.lang, np.rendition);
+      // The book's last chapter gets a spoken "全书完" tail baked into its audio
+      // server-side. `q` is the full book spine, so the last index is the book end.
+      // Only the audio src carries the flag — read-along data stays clean.
+      const isBookEnd = qi === q.length - 1;
+      const saved = Number(localStorage.getItem(posKey(np.chapterPath, np.lang)) ?? "");
+      const position = Number.isFinite(saved) && saved > 0 ? saved : 0;
+      // Show the saved scrubber position up front (a PAUSED resume reads right away,
+      // before the first tick); the sentence highlight follows once marks load.
+      if (position > 0) setCurrentTime(position);
+
       void (async () => {
+        // chapterMedia is cache-first + never throws (empty on miss). One manifest
+        // read yields BOTH the audio hash (offline cache key) and the marks blob
+        // hash (read-along timings).
+        const media = await chapterMedia(np.bookSlug, np.chapterPath, np.lang);
+        if (loadSeq.current !== seq) return;
+
+        // ── 1) AUDIO — play from local cache immediately. ────────────────────
         try {
-          const sres = await contentFetch(`/api/spoken?${q1}`);
-          if (!sres.ok) throw new Error(`spoken: ${sres.status}`);
-          const sdata = (await sres.json()) as SpokenContent;
-          if (loadSeq.current !== seq) return;
-          setSentences(sdata.sentences);
-
-          const mres = await contentFetch(`/api/marks?${q1}`);
-          if (!mres.ok) throw new Error(`marks: ${mres.status}`);
-          const mdata = (await mres.json()) as Mark[];
-          if (loadSeq.current !== seq) return;
-          marksRef.current = mdata;
-
-          // The book's last chapter gets a spoken "全书完" tail baked into its
-          // audio server-side (so it plays on the lock screen, unlike a
-          // client-side cue). `q` is the full book spine, so the last index is
-          // genuinely the end of the book. Only the audio src carries the flag —
-          // spoken/marks stay clean, so the read-along isn't affected.
-          const isBookEnd = qi === q.length - 1;
-          const saved = Number(
-            localStorage.getItem(posKey(np.chapterPath, np.lang)) ?? "",
-          );
-          const position = Number.isFinite(saved) && saved > 0 ? saved : 0;
-          // Restore the VISUAL position (scrubber + spoken-sentence index) up
-          // front, so a PAUSED resume shows the read-along where you left off
-          // instead of a blank page until the first tick — for BOTH engines.
-          if (position > 0) {
-            setCurrentTime(position);
-            setCurrentIdx(markIndex(marksRef.current, position * 1000));
-          }
-
           if (nativeAudioAvailable()) {
-            // NATIVE engine: hand it the ABSOLUTE url (the native URLSession can't
-            // resolve a relative path) + metadata; it seeks to `position`, then
-            // plays if autoplay. It owns the AVAudioSession + lock-screen tile,
-            // and caches the audio (keyed by `hash`) for offline.
-            // The native AVPlayer (URLSession) CANNOT resolve a relative path — it
-            // always needs an ABSOLUTE url, in BOTH shell modes: bundled (local
-            // origin) AND remote-loaded (where same-origin relative would work for
-            // web fetches but not for native). Always point at the real server.
-            // (remoteUrl("") returned "" on the remote origin → a relative
-            // "/api/audio" the native player couldn't load → 0:00 / no playback.)
+            // The native AVPlayer (URLSession) needs an ABSOLUTE url in both shell
+            // modes; it plays the cached file keyed by `hash` (offline-instant) and
+            // only streams `url` on a true cache miss. /api/audio always serves the
+            // compressed Opus variant, matching the download → one shared key.
             const origin = REMOTE;
-            // Content hash for the offline cache key (best-effort — native falls
-            // back to URL-keying when absent). May await a small manifest fetch.
-            const hash = await audioHash(np.bookSlug, np.chapterPath, np.lang);
-            if (loadSeq.current !== seq) return;
             nativeAudioLoad({
-              // /api/audio always serves the compressed (Opus) variant now (MP3
-              // fully sunset), matching the offline download, so streamed +
-              // downloaded share one cache key.
               url: `${origin}/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`,
-              ...(hash !== undefined ? { hash } : {}),
+              ...(media.audioHash ? { hash: media.audioHash } : {}),
               position,
               rate: rateRef.current,
               title: np.chapterLabel,
               artist: np.bookLabel,
               album: np.bookLabel,
-              artworkUrl:
-                `${origin}/api/artwork?book=${encodeURIComponent(np.bookSlug)}`,
+              artworkUrl: `${origin}/api/artwork?book=${encodeURIComponent(np.bookSlug)}`,
             });
             if (autoplay) nativeAudioPlay();
           } else if (audio) {
-            // Audiobook: prefer the immutable content-addressed blob so playback is
-            // served from the persistent lv-blobs cache — offline-stable ACROSS
-            // deploys, and a re-render (new hash) never serves stale bytes. Falls
-            // back to /api/audio for: not-yet-baked chapters (on-demand synth), the
-            // bookend chapter (the server bakes the "全书完" tail into THAT
-            // response, which a raw blob lacks), and text read-aloud (rendition=
-            // text, synth-on-demand — audioHash only maps the audio rendition).
-            const ah = np.rendition === "audio" && !isBookEnd
-              ? await audioHash(np.bookSlug, np.chapterPath, np.lang)
-              : undefined;
-            if (loadSeq.current !== seq) return;
+            // Web <audio>: prefer the immutable content-addressed blob (served from
+            // the persistent cache, offline-stable across deploys). The bookend +
+            // not-yet-baked + text read-aloud cases have no stable blob → /api/audio.
+            const ah = np.rendition === "audio" && !isBookEnd ? media.audioHash : undefined;
             audio.src = ah
               ? `/api/blob/${ah}`
               : `/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`;
-            // load() resets playbackRate from defaultPlaybackRate — set both so
-            // the chosen rate survives (also re-applied on loadedmetadata).
             audio.defaultPlaybackRate = rateRef.current;
             audio.playbackRate = rateRef.current;
             audio.load();
             if (position > 0) audio.currentTime = position;
             if (autoplay) {
-              playAudio(
-                audio,
-                (e) => setError(e instanceof Error ? e.message : String(e)),
-              );
+              playAudio(audio, (e) => setError(e instanceof Error ? e.message : String(e)));
             }
           }
-          setLoading(false);
         } catch (e) {
-          if (loadSeq.current === seq) {
-            setError(e instanceof Error ? e.message : String(e));
-            setLoading(false);
-          }
+          if (loadSeq.current === seq) setError(e instanceof Error ? e.message : String(e));
         }
+        // Audio is dispatched — the UI is no longer "loading" regardless of the
+        // read-along fetches below (the native engine reports its own buffering via
+        // the waiting/canplay events).
+        if (loadSeq.current === seq) setLoading(false);
+
+        // ── 2) READ-ALONG (sentences + marks) — best-effort, NON-FATAL. ──────
+        // Drives the karaoke highlight only; cache-first, and a failure just means
+        // no highlighting — the audio keeps playing. Run concurrently.
+        void (async () => {
+          try {
+            const sres = await contentFetch(`/api/spoken?${q1}`, { cacheFirst: true });
+            if (loadSeq.current === seq && sres.ok) {
+              const sdata = (await sres.json()) as SpokenContent;
+              if (loadSeq.current === seq) setSentences(sdata.sentences);
+            }
+          } catch {
+            // highlighting degrades; audio unaffected
+          }
+        })();
+        void (async () => {
+          try {
+            // Resolve marks by their content HASH → /api/blob/<hash> (the cached
+            // form). Fall back to the live /api/marks?… (cache-first) only when the
+            // manifest had no marks hash (e.g. a never-warmed book online).
+            const mres = media.marksHash
+              ? await contentFetch(`/api/blob/${media.marksHash}`)
+              : await contentFetch(`/api/marks?${q1}`, { cacheFirst: true });
+            if (loadSeq.current === seq && mres.ok) {
+              const mdata = (await mres.json()) as Mark[];
+              if (loadSeq.current === seq) {
+                marksRef.current = mdata;
+                if (position > 0) setCurrentIdx(markIndex(mdata, position * 1000));
+              }
+            }
+          } catch {
+            // no highlight timing; audio unaffected
+          }
+        })();
       })();
     },
     [persistSession],
