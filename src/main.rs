@@ -779,17 +779,25 @@ async fn api_dag(State(state): State<SharedState>) -> impl IntoResponse {
                 "path": doc, "hash": c.content_hash, "kind": "text",
                 "bytes": c.html_bytes.unwrap_or(0), "url": format!("/api/file?{q}"),
             }));
-            // Read-along extras exist for the text rendition (derived from the
-            // displayed markdown). Keyed off content_hash so they're stable per
-            // source; they're tiny, so bytes=0 (audio dominates the % anyway).
+            // Read-along extras, keyed off content_hash so they're stable per
+            // source; tiny, so bytes=0 (audio dominates the % anyway).
+            //
+            // `spoken` (the sentence transcript) backs the read-along for BOTH the
+            // text read-aloud AND the AUDIOBOOK page, so cache it for EVERY
+            // rendition. It was text-only before — so navigating offline to an
+            // un-played audiobook chapter left /api/spoken?rendition=audio uncached
+            // (504) and the AudiobookPlayer showed a blank skeleton forever. The
+            // native text-sync pulls every non-audio dag resource, so listing it
+            // here is all it takes to make the transcript available offline.
+            resources.push(serde_json::json!({
+                "path": format!("{doc}#spoken"), "hash": format!("{}:spoken", c.content_hash),
+                "kind": "spoken", "bytes": 0, "url": format!("/api/spoken?{q}"),
+            }));
+            // `units` (word-level tap-to-seek) is a text-read-aloud feature only.
             if c.rendition == "text" {
                 resources.push(serde_json::json!({
                     "path": format!("{doc}#units"), "hash": format!("{}:units", c.content_hash),
                     "kind": "units", "bytes": 0, "url": format!("/api/units?{q}"),
-                }));
-                resources.push(serde_json::json!({
-                    "path": format!("{doc}#spoken"), "hash": format!("{}:spoken", c.content_hash),
-                    "kind": "spoken", "bytes": 0, "url": format!("/api/spoken?{q}"),
                 }));
             }
         }
