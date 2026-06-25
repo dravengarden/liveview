@@ -60,6 +60,13 @@ impl Fetcher for HttpFetcher {
 
 /// Managed state: the engine (store + fetcher) + the current manifest (hot-swapped
 /// on refresh) + a `url → Resource` index for O(1) command lookups.
+/// The OTA web-bundle manifest served at `/app-dist/manifest.json`.
+#[derive(serde::Deserialize)]
+struct WebManifest {
+    version: String,
+    files: Vec<String>,
+}
+
 pub struct LvState {
     engine: Engine<SqliteBlobStore, HttpFetcher>,
     manifest: RwLock<Manifest>,
@@ -110,12 +117,23 @@ impl LvState {
             .and_then(|s| Manifest::from_json(&s).ok())
             .unwrap_or_default();
         let by_url = index(&manifest);
+        // Apply-on-next-launch OTA: if the previous run finished downloading a new
+        // web bundle into `web-ota.staged`, swap it into `web-ota` NOW — synchronously,
+        // BEFORE the window loads — so this launch serves the new bundle and a swap
+        // never disturbs an already-running session (a mid-session dir swap could 404
+        // a lazily-imported chunk). web_ota_update() only ever writes the staged dir.
+        let web_dir = data_dir.join("web-ota");
+        let staged = data_dir.join("web-ota.staged");
+        if staged.join("index.html").is_file() {
+            let _ = std::fs::remove_dir_all(&web_dir);
+            let _ = std::fs::rename(&staged, &web_dir);
+        }
         Ok(Self {
             engine,
             manifest: RwLock::new(manifest),
             by_url: RwLock::new(by_url),
             manifest_file,
-            web_dir: data_dir.join("web-ota"),
+            web_dir,
         })
     }
 
@@ -127,6 +145,77 @@ impl LvState {
             return None;
         }
         std::fs::read(self.web_dir.join(rel)).ok()
+    }
+
+    /// OTA: fetch the server's web-bundle version; if it differs from what's applied,
+    /// download the whole bundle into `web-ota.staged` (a complete, atomic stage that
+    /// `new()` swaps in on the NEXT launch). Best-effort + never throws: a failure
+    /// leaves the current bundle untouched, and the `/app/` handler keeps serving it
+    /// (or the embedded fallback). Runs in the background after the window has loaded,
+    /// so it never disturbs the running session.
+    async fn web_ota_update(&self) {
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(4))
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap_or_default();
+        let manifest: WebManifest = match client
+            .get(format!("{REMOTE}/app-dist/manifest.json"))
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+        {
+            Ok(r) => match r.json().await {
+                Ok(m) => m,
+                Err(_) => return,
+            },
+            Err(_) => return,
+        };
+        if manifest.version.is_empty() || manifest.files.is_empty() {
+            return;
+        }
+        // Already up to date? (applied version stamp == server version AND a bundle
+        // is actually present). Avoids re-downloading every launch.
+        let applied = std::fs::read_to_string(self.web_dir.join(".version")).unwrap_or_default();
+        if applied.trim() == manifest.version && self.web_dir.join("index.html").is_file() {
+            return;
+        }
+        let Some(data) = self.web_dir.parent() else { return };
+        let staged = data.join("web-ota.staged");
+        let tmp = data.join("web-ota.staged.tmp");
+        let _ = std::fs::remove_dir_all(&tmp);
+        if std::fs::create_dir_all(&tmp).is_err() {
+            return;
+        }
+        for f in &manifest.files {
+            if f.contains("..") {
+                continue;
+            }
+            let bytes = match client
+                .get(format!("{REMOTE}/app-dist/{f}"))
+                .send()
+                .await
+                .and_then(|r| r.error_for_status())
+            {
+                Ok(r) => match r.bytes().await {
+                    Ok(b) => b,
+                    Err(_) => return, // abort: leave the staged tmp incomplete (ignored)
+                },
+                Err(_) => return,
+            };
+            let dest = tmp.join(f);
+            if let Some(p) = dest.parent() {
+                let _ = std::fs::create_dir_all(p);
+            }
+            if std::fs::write(&dest, &bytes).is_err() {
+                return;
+            }
+        }
+        // Stamp the version into the completed tmp, then atomically promote it to the
+        // staged dir (new() applies staged → web-ota on the next launch).
+        let _ = std::fs::write(tmp.join(".version"), &manifest.version);
+        let _ = std::fs::remove_dir_all(&staged);
+        let _ = std::fs::rename(&tmp, &staged);
     }
 
     /// Re-pull `/api/dag` from the network; on success swap the manifest + index
@@ -485,6 +574,9 @@ fn setup_state<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     tauri::async_runtime::spawn(async move {
         let state = handle.state::<LvState>();
         let _ = state.refresh().await;
+        // OTA the web bundle into the staged dir for next launch (apply-on-next-
+        // launch; new() swaps it in). Background, after the window has loaded.
+        state.web_ota_update().await;
     });
     Ok(())
 }

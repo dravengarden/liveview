@@ -87,6 +87,52 @@ mod embedded_assets {
         serve_file(&path)
     }
 
+    // ── OTA web bundle (the iOS/macOS app's no-SW `dist-app`, staged into
+    // `dist/app-bundle/` by the web build) ──────────────────────────────────
+    // The shell's plugin downloads this on launch when the version changes, so the
+    // web hot-updates WITHOUT an app reinstall.
+
+    /// Walk the embedded `app-bundle/` tree → bundle-relative file paths.
+    fn app_bundle_paths() -> Vec<String> {
+        fn walk(dir: &Dir, out: &mut Vec<String>) {
+            for e in dir.entries() {
+                match e {
+                    include_dir::DirEntry::File(f) => {
+                        if let Some(rel) =
+                            f.path().to_str().and_then(|p| p.strip_prefix("app-bundle/"))
+                        {
+                            out.push(rel.to_string());
+                        }
+                    }
+                    include_dir::DirEntry::Dir(d) => walk(d, out),
+                }
+            }
+        }
+        let mut out = Vec::new();
+        if let Some(d) = DIST_DIR.get_dir("app-bundle") {
+            walk(d, &mut out);
+        }
+        out
+    }
+
+    /// `GET /app-dist/manifest.json` — the OTA bundle's `version` (the content-hashed
+    /// entry name, so it changes every web build) + the full file list. The plugin
+    /// compares `version` to its stored copy and downloads each file when it differs.
+    pub async fn app_dist_manifest() -> impl IntoResponse {
+        let version = DIST_DIR
+            .get_file("app-bundle/index.html")
+            .and_then(|f| f.contents_utf8())
+            .and_then(super::entry_bundle)
+            .unwrap_or("0");
+        let body = serde_json::json!({ "version": version, "files": app_bundle_paths() });
+        ([(header::CACHE_CONTROL, "no-cache")], axum::Json(body)).into_response()
+    }
+
+    /// `GET /app-dist/<path>` — one OTA bundle file from the embedded `app-bundle/`.
+    pub async fn serve_app_dist(Path(path): Path<String>) -> impl IntoResponse {
+        serve_file(&format!("app-bundle/{path}"))
+    }
+
     pub async fn serve_index() -> impl IntoResponse {
         match index_html() {
             // `no-cache`: the navigation entry point must revalidate so a deploy's
@@ -864,6 +910,9 @@ fn build_app(state: SharedState) -> Router {
     #[cfg(feature = "embedded")]
     {
         api_router
+            // OTA web bundle for the native shell (more specific than /{*path}).
+            .route("/app-dist/manifest.json", get(embedded_assets::app_dist_manifest))
+            .route("/app-dist/{*path}", get(embedded_assets::serve_app_dist))
             .route("/", get(embedded_assets::serve_index))
             .route("/assets/{*path}", get(embedded_assets::serve_assets))
             .route("/{*path}", get(embedded_assets::serve_root))

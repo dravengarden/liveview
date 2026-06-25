@@ -1,6 +1,6 @@
 {
   "nodeModulesDir": "auto",
   "tasks": {
-    "build": "deno run -A ./node_modules/vite/bin/vite.js build"
+    "build": "deno run -A ./node_modules/vite/bin/vite.js build && deno run -A ./node_modules/vite/bin/vite.js build --mode app && rm -rf dist/app-bundle && cp -r dist-app dist/app-bundle"
   }
 }
