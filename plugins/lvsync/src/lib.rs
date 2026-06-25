@@ -153,10 +153,10 @@ impl LvState {
     /// leaves the current bundle untouched, and the `/app/` handler keeps serving it
     /// (or the embedded fallback). Runs in the background after the window has loaded,
     /// so it never disturbs the running session.
-    async fn web_ota_update(&self) {
+    async fn web_ota_update(&self) -> String {
         let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(4))
-            .timeout(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(120))
             .build()
             .unwrap_or_default();
         let manifest: WebManifest = match client
@@ -165,30 +165,41 @@ impl LvState {
             .await
             .and_then(|r| r.error_for_status())
         {
-            Ok(r) => match r.json().await {
-                Ok(m) => m,
-                Err(_) => return,
+            // reqwest is built without the `json` feature here; parse via serde_json.
+            Ok(r) => match r.text().await {
+                Ok(t) => match serde_json::from_str::<WebManifest>(&t) {
+                    Ok(m) => m,
+                    Err(e) => return format!("manifest-parse-err: {e}"),
+                },
+                Err(e) => return format!("manifest-read-err: {e}"),
             },
-            Err(_) => return,
+            Err(e) => return format!("manifest-fetch-err: {e}"),
         };
         if manifest.version.is_empty() || manifest.files.is_empty() {
-            return;
+            return "manifest-empty".into();
         }
-        // Already up to date? (applied version stamp == server version AND a bundle
-        // is actually present). Avoids re-downloading every launch.
+        // Already up to date? (applied stamp == server version AND a bundle present).
         let applied = std::fs::read_to_string(self.web_dir.join(".version")).unwrap_or_default();
         if applied.trim() == manifest.version && self.web_dir.join("index.html").is_file() {
-            return;
+            return format!("up-to-date: {}", manifest.version);
         }
-        let Some(data) = self.web_dir.parent() else { return };
+        let Some(data) = self.web_dir.parent() else { return "no-parent".into() };
         let staged = data.join("web-ota.staged");
         let tmp = data.join("web-ota.staged.tmp");
         let _ = std::fs::remove_dir_all(&tmp);
-        if std::fs::create_dir_all(&tmp).is_err() {
-            return;
+        if let Err(e) = std::fs::create_dir_all(&tmp) {
+            return format!("mkdir-err: {e}");
         }
+        // Skip large, STABLE font files: they keep the same filenames across builds,
+        // so the per-file `/app/` fallback serves them from the embedded bundle. This
+        // keeps the OTA download tiny (the changed JS/CSS/index, ~hundreds of KB) and
+        // reliable — re-downloading ~10MB of fonts every update was both wasteful and
+        // the most likely thing to time out / drop and abort the whole bundle.
+        let is_font =
+            |f: &str| [".woff2", ".woff", ".ttf", ".otf", ".eot"].iter().any(|e| f.ends_with(e));
+        let mut got = 0usize;
         for f in &manifest.files {
-            if f.contains("..") {
+            if f.contains("..") || is_font(f) {
                 continue;
             }
             let bytes = match client
@@ -199,23 +210,27 @@ impl LvState {
             {
                 Ok(r) => match r.bytes().await {
                     Ok(b) => b,
-                    Err(_) => return, // abort: leave the staged tmp incomplete (ignored)
+                    Err(e) => return format!("download-body-err {f}: {e}"),
                 },
-                Err(_) => return,
+                Err(e) => return format!("download-err {f}: {e}"),
             };
             let dest = tmp.join(f);
             if let Some(p) = dest.parent() {
                 let _ = std::fs::create_dir_all(p);
             }
-            if std::fs::write(&dest, &bytes).is_err() {
-                return;
+            if let Err(e) = std::fs::write(&dest, &bytes) {
+                return format!("write-err {f}: {e}");
             }
+            got += 1;
         }
-        // Stamp the version into the completed tmp, then atomically promote it to the
-        // staged dir (new() applies staged → web-ota on the next launch).
+        // Stamp the completed tmp, then atomically promote it to the staged dir
+        // (new() applies staged → web-ota on the next launch).
         let _ = std::fs::write(tmp.join(".version"), &manifest.version);
         let _ = std::fs::remove_dir_all(&staged);
-        let _ = std::fs::rename(&tmp, &staged);
+        if let Err(e) = std::fs::rename(&tmp, &staged) {
+            return format!("promote-err: {e}");
+        }
+        format!("staged {} files, version {}", got, manifest.version)
     }
 
     /// Re-pull `/api/dag` from the network; on success swap the manifest + index
@@ -545,6 +560,13 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
             let on = query.contains("on=1");
             FORCE_OFFLINE.store(on, std::sync::atomic::Ordering::Relaxed);
             (200, format!("offline={on}").into_bytes())
+        }
+        "/ota-run" => {
+            // Debug: run the web OTA update synchronously + report the outcome (the
+            // background launch path is fire-and-forget). Staged bundle applies next
+            // launch via LvState::new.
+            let msg = state.web_ota_update().await;
+            (200, msg.into_bytes())
         }
         "/sync_all" => {
             let resources: Vec<Resource> = {
