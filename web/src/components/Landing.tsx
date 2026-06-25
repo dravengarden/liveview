@@ -1,5 +1,4 @@
 import { rem } from "@/px";
-import { coverSrc } from "@/native-sync";
 import {
   Badge,
   Box,
@@ -28,7 +27,6 @@ import {
   Clear as ClearIcon,
   ExpandMore as ExpandMoreIcon,
   Headphones as AudiobookIcon,
-  History as HistoryIcon,
   MenuBook as BookIcon,
   Search as SearchIcon,
   Tune as TuneIcon,
@@ -44,7 +42,9 @@ import {
 } from "react";
 import type { Book, BookProgress, ReadingProgress } from "@/types";
 import {
+  setShelfGroup,
   setShelfSort,
+  type ShelfGroup,
   type ShelfSort,
   toggleGroupCollapsed,
   useCollapsedGroups,
@@ -120,6 +120,10 @@ const FILTER_KIND_LABEL: Record<Exclude<FilterKind, "all">, string> = {
 /** Bookshelf sort options, in display order (same set the old Settings row had,
  *  now surfaced in the toolbar's Sort & Filter sheet). */
 const SHELF_SORTS: ShelfSort[] = ["updated", "read", "added", "name"];
+
+/** Bookshelf grouping options, in display order (moved out of Settings into the
+ *  Sort & Filter sheet — grouping is a shelf-organizing control, same surface). */
+const SHELF_GROUPS: ShelfGroup[] = ["none", "collection"];
 
 /** The curated front-of-shelf series order. Collections named here sort first,
  *  in this exact order; any other collection follows alphabetically, and the
@@ -451,225 +455,6 @@ function ProgressMeter(
   );
 }
 
-// ── Reading history (the dedicated "History" view) ──────────────────────────
-
-/** One opened (book, rendition) session — a row in the history list. */
-interface HistoryEntry {
-  book: Book;
-  kind: "text" | "audio";
-  rp: ReadingProgress;
-}
-
-const HISTORY_BUCKETS = [
-  "today",
-  "yesterday",
-  "thisWeek",
-  "thisMonth",
-  "earlier",
-] as const;
-type HistoryBucket = (typeof HISTORY_BUCKETS)[number];
-
-/** Which time bucket a timestamp falls in, relative to local midnight of `now`. */
-function historyBucketOf(ms: number, now: number): HistoryBucket {
-  const midnight = new Date(now);
-  midnight.setHours(0, 0, 0, 0);
-  const today = midnight.getTime();
-  const DAY = 86_400_000;
-  if (ms >= today) return "today";
-  if (ms >= today - DAY) return "yesterday";
-  if (ms >= today - 6 * DAY) return "thisWeek";
-  if (ms >= today - 29 * DAY) return "thisMonth";
-  return "earlier";
-}
-
-/** One history row: a small cover thumbnail (with a progress sliver), the book +
- *  chapter you were on, and a meta line (rendition · % · when). Tapping resumes
- *  that exact rendition at its saved chapter + scroll. */
-function HistoryRow(
-  { entry: { book, kind, rp }, onOpen, now }: {
-    entry: HistoryEntry;
-    onOpen: (slug: string, renditionKind?: string) => void;
-    now: number;
-  },
-): React.JSX.Element {
-  const { lang } = useI18n();
-  const [imgFailed, setImgFailed] = useState(false);
-  const pct = Math.round(Math.min(1, Math.max(0, rp.fraction)) * 100);
-  const rel = fmtRelative(rp.updatedAt, now, lang);
-  const Icon = kind === "audio" ? AudiobookIcon : BookIcon;
-  const showImage = book.cover && !imgFailed;
-  return (
-    <CardActionArea
-      onClick={() => onOpen(book.slug, kind)}
-      sx={{
-        borderRadius: 2,
-        p: 1,
-        display: "flex",
-        gap: 1.5,
-        alignItems: "center",
-      }}
-    >
-      <Box
-        sx={{
-          position: "relative",
-          width: 52,
-          height: 52,
-          flexShrink: 0,
-          borderRadius: 1.5,
-          overflow: "hidden",
-          background: coverGradient(book.slug),
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        {showImage
-          ? (
-            <Box
-              component="img"
-              src={coverSrc(book.slug)}
-              alt=""
-              loading="lazy"
-              onError={() => setImgFailed(true)}
-              sx={{
-                position: "absolute",
-                inset: 0,
-                width: "100%",
-                height: "100%",
-                objectFit: "cover",
-              }}
-            />
-          )
-          : (
-            <Icon sx={{ fontSize: rem(26), color: "rgba(255,255,255,0.92)" }} />
-          )}
-        {/* Progress sliver along the thumbnail's bottom edge. */}
-        <Box
-          sx={{
-            position: "absolute",
-            left: 0,
-            bottom: 0,
-            height: 3,
-            width: `${pct}%`,
-            bgcolor: "primary.main",
-            opacity: 0.95,
-          }}
-        />
-      </Box>
-      <Box sx={{ minWidth: 0, flex: 1 }}>
-        <Typography variant="subtitle2" noWrap sx={{ fontWeight: 700 }}>
-          {book.label}
-        </Typography>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          noWrap
-          sx={{ display: "block" }}
-        >
-          {rp.chapterLabel}
-        </Typography>
-        <Box
-          sx={{
-            display: "flex",
-            alignItems: "center",
-            gap: 0.5,
-            mt: 0.25,
-            color: "text.secondary",
-          }}
-        >
-          <Icon sx={{ fontSize: rem(14) }} />
-          <Typography
-            variant="caption"
-            sx={{ fontVariantNumeric: "tabular-nums" }}
-          >
-            {pct}%
-          </Typography>
-          {rel && <Typography variant="caption">· {rel}</Typography>}
-        </Box>
-      </Box>
-    </CardActionArea>
-  );
-}
-
-/** The dedicated reading-history view: every (book, rendition) you've opened,
- *  newest first, in time buckets, each row resuming exactly where you left off.
- *  Honours the toolbar search (filters by book name). */
-function HistoryView(
-  { books, progress, query, onOpen, now }: {
-    books: Book[];
-    progress: Record<string, BookProgress>;
-    query: string;
-    onOpen: (slug: string, renditionKind?: string) => void;
-    now: number;
-  },
-): React.JSX.Element {
-  const { t } = useI18n();
-  const entries = useMemo(() => {
-    const bySlug = new Map(books.map((b) => [b.slug, b]));
-    const out: HistoryEntry[] = [];
-    for (const [slug, bp] of Object.entries(progress)) {
-      const book = bySlug.get(slug);
-      if (!book) continue;
-      if (bp.text) out.push({ book, kind: "text", rp: bp.text });
-      if (bp.audio) out.push({ book, kind: "audio", rp: bp.audio });
-    }
-    const q = query.trim().toLowerCase();
-    const filtered = q
-      ? out.filter((e) =>
-        e.book.label.toLowerCase().includes(q) ||
-        e.book.slug.toLowerCase().includes(q)
-      )
-      : out;
-    filtered.sort((a, z) => z.rp.updatedAt - a.rp.updatedAt);
-    return filtered;
-  }, [books, progress, query]);
-
-  if (entries.length === 0) {
-    return (
-      <Typography color="text.secondary" sx={{ mt: 2 }}>
-        {t("history.empty")}
-      </Typography>
-    );
-  }
-
-  // Walk the already-sorted list into contiguous time buckets.
-  const groups: { bucket: HistoryBucket; items: HistoryEntry[] }[] = [];
-  for (const e of entries) {
-    const bucket = historyBucketOf(e.rp.updatedAt, now);
-    const last = groups[groups.length - 1];
-    if (last && last.bucket === bucket) last.items.push(e);
-    else groups.push({ bucket, items: [e] });
-  }
-
-  return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 1.5 }}>
-      {groups.map((g) => (
-        <Box key={g.bucket}>
-          <Typography
-            variant="overline"
-            sx={{
-              color: "text.secondary",
-              px: 1,
-              display: "block",
-              letterSpacing: 0.5,
-            }}
-          >
-            {t(`history.${g.bucket}`)}
-          </Typography>
-          {g.items.map((e) => (
-            <HistoryRow
-              key={`${e.book.slug}:${e.kind}`}
-              entry={e}
-              onOpen={onOpen}
-              now={now}
-            />
-          ))}
-        </Box>
-      ))}
-    </Box>
-  );
-}
-
 // Pull-to-refresh was removed (offline-first): the shelf is network-first +
 // live-updated over the WS (TreeUpdate) and re-pulls recent progress on open and
 // on book-close, so a manual pull was redundant. See docs/offline-first.md.
@@ -875,7 +660,14 @@ const ShelfCard = memo(function ShelfCard({
     lang,
   );
   const createdStr = fmtDate(b.created_at, lang);
+  // When the book was last READ (the most-recent rendition's progress stamp),
+  // shown relative. Leads the stamps line — it's the fact you scan for, and it
+  // replaces the dedicated reading-history widget (sort by "Read" + this stamp).
+  const readRel = resume && resume.updatedAt
+    ? fmtRelative(resume.updatedAt, nowMinute, lang)
+    : null;
   const stamps = [
+    readRel && t("landing.readRel", { time: readRel }),
     changedRel &&
     t(
       changedAfterAdd
@@ -1160,9 +952,6 @@ export function Landing({
   // The combined Sort & Filter sheet (one toolbar control for both the shelf order
   // and the kind narrowing — the two list-organizing concerns in one place).
   const [sfOpen, setSfOpen] = useState(false);
-  // "library" = the category/masonry shelf; "history" = the dedicated reading-
-  // history view (chronological, time-bucketed). Toggled from the toolbar clock.
-  const [view, setView] = useState<"library" | "history">("library");
 
   // Bucket the clock to the MINUTE so the memoized ShelfCard's props are
   // stable across renders within a minute (the relative "updated" stamp only
@@ -1546,38 +1335,38 @@ export function Landing({
                 }}
                 sx={{ flexGrow: 1, minWidth: 0 }}
               />
-              {view === "library" && (
-                // ONE control for both shelf order + kind narrowing — opens the
-                // Sort & Filter sheet. The pill shows the active sort at a glance
-                // (always set); a primary dot flags an active kind filter (the
-                // occasional state). Replaces the old two-dropdown clutter.
-                <Badge
-                  color="primary"
-                  variant="dot"
-                  invisible={kind === "all"}
-                  sx={{ flexShrink: 0 }}
+              {/* ONE control for both shelf order + kind narrowing — opens the
+                  Sort & Filter sheet. The pill shows the active sort at a glance
+                  (always set); a primary dot flags an active kind filter (the
+                  occasional state). Replaces the old two-dropdown clutter. */}
+              <Badge
+                color="primary"
+                variant="dot"
+                invisible={kind === "all"}
+                sx={{ flexShrink: 0 }}
+              >
+                <Button
+                  size="small"
+                  variant="outlined"
+                  startIcon={<TuneIcon fontSize="small" />}
+                  onClick={() => setSfOpen(true)}
+                  aria-label={t("landing.sortFilter")}
+                  sx={{
+                    flexShrink: 0,
+                    textTransform: "none",
+                    color: "text.secondary",
+                    borderColor: "divider",
+                    whiteSpace: "nowrap",
+                  }}
                 >
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    startIcon={<TuneIcon fontSize="small" />}
-                    onClick={() => setSfOpen(true)}
-                    aria-label={t("landing.sortFilter")}
-                    sx={{
-                      flexShrink: 0,
-                      textTransform: "none",
-                      color: "text.secondary",
-                      borderColor: "divider",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {t(`sort.${sort}`)}
-                  </Button>
-                </Badge>
-              )}
+                  {t(`sort.${sort}`)}
+                </Button>
+              </Badge>
             </>
           )}
-          {/* History toggle + settings (gear / launcher), pinned at the row's end. */}
+          {/* Settings (gear / launcher), pinned at the row's end. The reading-
+              history widget was removed — sort by "Read" surfaces the same thing,
+              and each card now carries its own last-read stamp. */}
           <Box
             sx={{
               flexShrink: 0,
@@ -1586,19 +1375,6 @@ export function Landing({
               gap: 0.5,
             }}
           >
-            {books.length > 0 && (
-              <IconButton
-                aria-label={t("history.title")}
-                aria-pressed={view === "history"}
-                onClick={() =>
-                  setView((v) => (v === "history" ? "library" : "history"))}
-                sx={{
-                  color: view === "history" ? "primary.main" : "text.secondary",
-                }}
-              >
-                <HistoryIcon />
-              </IconButton>
-            )}
             {settingsSlot}
           </Box>
         </Box>
@@ -1652,6 +1428,25 @@ export function Landing({
               </ToggleButtonGroup>
             </Stack>
           )}
+          {/* Group — moved here from Settings: organizing the shelf belongs with
+              sort + filter, not in app preferences. */}
+          <Stack spacing={1}>
+            <Typography variant="overline" color="text.secondary">
+              {t("landing.group")}
+            </Typography>
+            <ToggleButtonGroup
+              exclusive
+              fullWidth
+              size="small"
+              value={group}
+              onChange={(_e, v: ShelfGroup | null) => v && setShelfGroup(v)}
+              aria-label={t("settings.group")}
+            >
+              {SHELF_GROUPS.map((g) => (
+                <ToggleButton key={g} value={g}>{t(`group.${g}`)}</ToggleButton>
+              ))}
+            </ToggleButtonGroup>
+          </Stack>
         </Stack>
       </BottomSheet>
 
@@ -1717,18 +1512,6 @@ export function Landing({
                 <Typography color="text.secondary">
                   {t("landing.noMounts")}
                 </Typography>
-              )
-              : view === "history"
-              ? (
-                // Dedicated reading-history view: chronological, time-bucketed,
-                // each row resuming its rendition where you left off.
-                <HistoryView
-                  books={books}
-                  progress={progress}
-                  query={query}
-                  onOpen={onOpen}
-                  now={nowMinute}
-                />
               )
               : visible.length === 0
               ? (

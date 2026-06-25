@@ -18,11 +18,6 @@ import { useState } from "react";
 import { SettingsSheet } from "../_shell";
 import type { MenuBarSettings, Theme, ThemeMode, ThemeVariant } from "@/types";
 import { THEME_VARIANTS, VARIANT_OPTIONS } from "@/types";
-import {
-  setShelfGroup,
-  type ShelfGroup,
-  useShelfGroup,
-} from "@/hooks";
 import { FONT_PRESETS } from "@/fonts";
 import { useI18n } from "@/i18n";
 import { OfflineSection } from "./OfflineSection";
@@ -59,8 +54,22 @@ const BUILD_ID = ((): string => {
   }
 })();
 
-// Bookshelf group-by options, in display order (labels via `group.<key>`).
-const SHELF_GROUPS: ShelfGroup[] = ["none", "collection"];
+// The build moment, stamped into the bundle by vite (`define: __BUILD_TIME__`,
+// ISO-8601 UTC). Shown next to the hash so "which version" reads as a real date
+// (年月日时分秒), formatted in the device's local time. Empty in `vite dev`.
+declare const __BUILD_TIME__: string | undefined;
+const BUILD_TIME = ((): string => {
+  try {
+    const iso = typeof __BUILD_TIME__ === "string" ? __BUILD_TIME__ : "";
+    if (!iso) return "";
+    const d = new Date(iso);
+    const p = (n: number): string => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+      `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  } catch {
+    return "";
+  }
+})();
 
 // Discrete presets for the reading-layout dropdowns — a slider was fiddly on
 // touch and a number field would pop the keyboard; a small set taps cleanly.
@@ -173,7 +182,6 @@ export function SettingsButton({
   onFontScaleChange,
 }: SettingsButtonProps): React.JSX.Element {
   const { t, lang, setLang } = useI18n();
-  const shelfGroup = useShelfGroup();
   // The font picker is collapsed by default — its 7 preview cards would
   // otherwise dominate the sheet. Collapsed shows just the current face,
   // previewed in itself; expanding drops the full list, and picking a face
@@ -494,29 +502,9 @@ export function SettingsButton({
           />
         </Stack>
 
-        {/* ── Library: bookshelf grouping (sort + kind filter live in the shelf's
-            own Sort & Filter control now; compact is the only card style). */}
-        <Stack spacing={1.5}>
-          <Typography variant="overline" color="text.secondary">
-            {t("settings.layout")}
-          </Typography>
-          <Row
-            label={t("settings.group")}
-            desc={t("settings.groupDesc")}
-            control={
-              <Select
-                size="small"
-                value={shelfGroup}
-                onChange={(e) => setShelfGroup(e.target.value as ShelfGroup)}
-                sx={{ minWidth: 132 }}
-              >
-                {SHELF_GROUPS.map((g) => (
-                  <MenuItem key={g} value={g}>{t(`group.${g}`)}</MenuItem>
-                ))}
-              </Select>
-            }
-          />
-        </Stack>
+        {/* Bookshelf grouping (and sort + kind filter) now live in the shelf's
+            own Sort & Filter control — organizing the shelf belongs there, not in
+            app preferences. */}
 
         {/* ── Interface language ─────────────────────────────────────────── */}
         <Stack spacing={1}>
@@ -546,6 +534,7 @@ export function SettingsButton({
           </Typography>
           <Typography variant="caption" color="text.disabled">
             build {BUILD_ID}
+            {BUILD_TIME && ` · ${BUILD_TIME}`}
           </Typography>
         </Stack>
         </Stack>

@@ -220,7 +220,15 @@ export default defineConfig(({ mode }) => {
     assertSingletons(),
     ...(isApp ? [stripServiceWorker()] : [stampServiceWorker()]),
   ],
-  define: isApp ? { __TARGET__: JSON.stringify("app") } : {},
+  // __BUILD_TIME__: the build moment (ISO-8601 UTC), stamped at config eval so
+  // Settings → About can show a human "version time" alongside the bundle hash.
+  // Real wall-clock in the nix build sandbox (no faketime), so it reflects when
+  // this bundle was actually produced. Changes every build — that's intended for
+  // a version stamp.
+  define: {
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+    ...(isApp ? { __TARGET__: JSON.stringify("app") } : {}),
+  },
   resolve: {
     // forceSingletons() (a resolveId plugin, above) pins the React-context-bearing
     // packages to the app's single copy so the symlinked _shell SDK shares the app's
