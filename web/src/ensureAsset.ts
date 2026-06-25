@@ -10,6 +10,21 @@
 const scripts = new Map<string, Promise<void>>();
 const styles = new Map<string, Promise<void>>();
 
+/** Resolve a bundled `public/` asset (mermaid, KaTeX, highlight.js) against the
+ *  app's base URL.
+ *
+ *  Why this exists: the web build serves from origin root (base "/"), so a
+ *  ROOT-ABSOLUTE "/mermaid.min.js" is correct there. But the native shell serves
+ *  the SPA from `lvsync://localhost/app/` (base "./"), where "/mermaid.min.js"
+ *  resolves to the SCHEME ROOT — which the plugin doesn't serve, so mermaid,
+ *  math, and code highlighting all silently 404 ("diagram failed to load", raw
+ *  LaTeX, unhighlighted code). Prefixing `import.meta.env.BASE_URL` ("/" on web,
+ *  "./" in the shell) keeps it under `/app/`. Routing is hash-based, so
+ *  document.baseURI stays the index URL and "./" resolves predictably. */
+export function publicAsset(path: string): string {
+  return `${import.meta.env.BASE_URL}${path.replace(/^\//, "")}`;
+}
+
 /** Inject a <script src> once; resolves when it has executed. */
 export function ensureScript(src: string): Promise<void> {
   let p = scripts.get(src);

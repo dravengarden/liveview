@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from "react";
 import { Box, Typography, CircularProgress } from "@mui/material";
 import type { Theme } from "@/types";
-import { ensureScript, ensureStyle } from "@/ensureAsset";
+import { ensureScript, ensureStyle, publicAsset } from "@/ensureAsset";
 
 // katex type is declared in MarkdownViewer.tsx
 
@@ -25,7 +25,10 @@ export function LatexViewer({ content, theme }: LatexViewerProps): React.JSX.Ele
       return;
     }
     let cancelled = false;
-    void Promise.all([ensureScript("/katex/katex.min.js"), ensureStyle("/katex/katex.min.css")])
+    void Promise.all([
+      ensureScript(publicAsset("/katex/katex.min.js")),
+      ensureStyle(publicAsset("/katex/katex.min.css")),
+    ])
       .then(() => {
         if (!cancelled) setKatexReady(true);
       })

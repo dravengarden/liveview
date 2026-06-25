@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Box, Typography, Chip, Stack } from "@mui/material";
 import { Code as CodeIcon } from "@mui/icons-material";
-import { ensureScript } from "@/ensureAsset";
+import { ensureScript, publicAsset } from "@/ensureAsset";
 
 declare global {
   interface Window {
@@ -23,7 +23,7 @@ export function TypstViewer({ content, path }: TypstViewerProps): React.JSX.Elem
     const el = codeRef.current;
     if (!el) return;
     // highlight.js is loaded on demand (no longer eager in index.html).
-    void ensureScript("/highlight.min.js")
+    void ensureScript(publicAsset("/highlight.min.js"))
       .then(() => {
         el.removeAttribute("data-highlighted");
         window.hljs?.highlightElement(el);

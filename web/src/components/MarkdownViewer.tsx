@@ -6,7 +6,7 @@ import { ScrollToTopButton } from "./ScrollToTopButton";
 import { PlaybackBar } from "./PlaybackBar";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { useInPlaceHighlight } from "@/hooks/useInPlaceHighlight";
-import { ensureScript, ensureStyle } from "@/ensureAsset";
+import { ensureScript, ensureStyle, publicAsset } from "@/ensureAsset";
 
 declare global {
   interface Window {
@@ -279,7 +279,7 @@ export function MarkdownViewer({
         }
       });
       if ([...codeBlocks].some((b) => !b.dataset["highlighted"])) {
-        void ensureScript("/highlight.min.js")
+        void ensureScript(publicAsset("/highlight.min.js"))
           .then(() => {
             containerRef.current?.querySelectorAll<HTMLElement>("pre code")
               .forEach((block) => {
@@ -323,7 +323,7 @@ export function MarkdownViewer({
         pending.push({ holder, code });
       });
       if (pending.length > 0) {
-        void ensureScript("/mermaid.min.js")
+        void ensureScript(publicAsset("/mermaid.min.js"))
           .then(() => {
             if (!window.mermaid) return;
             window.mermaid.initialize(mermaidConfig(isDarkScheme()));
@@ -365,8 +365,8 @@ export function MarkdownViewer({
     );
     if (mathEls.length > 0) {
       void Promise.all([
-        ensureScript("/katex/katex.min.js"),
-        ensureStyle("/katex/katex.min.css"),
+        ensureScript(publicAsset("/katex/katex.min.js")),
+        ensureStyle(publicAsset("/katex/katex.min.css")),
       ])
         .then(() => {
           const c = containerRef.current;
