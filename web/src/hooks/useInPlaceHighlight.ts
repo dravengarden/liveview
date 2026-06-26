@@ -494,7 +494,17 @@ export function useInPlaceHighlight(
   const locatedRef = useRef<Map<number, Located>>(new Map());
   const locatedForRef = useRef<Unit[] | null>(null);
   const ensureLocated = useCallback((body: HTMLElement): Map<number, Located> => {
-    if (locatedForRef.current !== units) {
+    // Rebuild when `units` changed OR the cached map is STALE — its located ranges
+    // point at a DETACHED DOM. The latter is the auto-advance bug: the new chapter's
+    // markdown commits asynchronously (view-transition + diagramTick), so the
+    // rAF-based invalidation can re-locate against the OLD DOM (or before the swap)
+    // and then never refresh — the highlight range stays bound to the previous
+    // chapter's now-removed nodes ("播放到新 section 没有高亮", range detached).
+    // Checking whether a sample located node is still connected self-heals
+    // regardless of render timing.
+    const sample: Located | undefined = locatedRef.current.values().next().value;
+    const stale = !!sample && sample.map[0]?.node.isConnected === false;
+    if (locatedForRef.current !== units || stale) {
       // Number top-level blocks in document order — the same order spoken_units
       // assigns `blk`. Idempotent.
       const blocks = body.children;
