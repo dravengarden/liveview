@@ -860,13 +860,16 @@ export function App(): React.JSX.Element {
         );
         if (!res.ok) {
           console.error("Failed to fetch file:", path, res.status);
-          // A 404 means the PATH itself doesn't resolve — most often the
-          // `<slug>/README.md` entry guess for a book with no README (authored
-          // books open at `00-introduction.md`), or a stale cross-book resume
-          // path. Self-heal to the book's real first spine chapter instead of
-          // dead-ending on "Couldn't load this page". Online-only (a 404 needs a
-          // server reply) and cache-first, so offline behaviour is unchanged.
-          if (res.status === 404) {
+          // A failed path is most often the `<slug>/README.md` entry guess for a
+          // book with no README (authored books open at `00-introduction.md`), or
+          // a stale cross-book resume path. Self-heal to the book's real first
+          // spine chapter instead of dead-ending on "Couldn't load this page".
+          // Trigger on 404 (web/real-fetch) AND 504 — the native shell's lvsync
+          // proxy (native-sync.ts contentFetch) collapses a remote 404 into 504,
+          // so a missing path looks like 504 in the app. Gate on navigator.onLine
+          // so a genuine offline 504 still surfaces the offline notice; resolve-
+          // FirstChapter itself 504s offline → returns null → no false recovery.
+          if (navigator.onLine && (res.status === 404 || res.status === 504)) {
             const slug = path.split("/")[0] ?? "";
             const first = await resolveFirstChapter(slug, reqRendition);
             if (first && first !== path) {
