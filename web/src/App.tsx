@@ -230,6 +230,41 @@ interface UntranslatedNotice {
   shown: string;
 }
 
+/** First non-dir leaf under a tree node (depth-first), or null. */
+function firstLeafPath(node: TreeNode): string | null {
+  if (!node.is_dir) return node.path;
+  for (const child of node.children ?? []) {
+    const p = firstLeafPath(child);
+    if (p) return p;
+  }
+  return null;
+}
+
+/**
+ * The real first spine chapter of `slug` for a rendition, from the cached tree.
+ * Used to self-heal a dead entry path: a brand-new book with no reading progress
+ * falls back to `<slug>/README.md` (which authored books — `00-introduction.md`
+ * spine, no README — don't have), and a cross-book resume can carry the previous
+ * book's path; either 404s. `/api/tree` is cache-first (prefetchTrees warms it),
+ * so this stays offline-safe — and a 404 only happens online anyway.
+ */
+async function resolveFirstChapter(
+  slug: string,
+  rendition: string,
+): Promise<string | null> {
+  try {
+    const res = await contentFetch(
+      `/api/tree?rendition=${encodeURIComponent(rendition)}`,
+    );
+    if (!res.ok) return null;
+    const forest = (await res.json()) as TreeNode[];
+    const book = forest.find((n) => n.path === slug);
+    return book ? firstLeafPath(book) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function App(): React.JSX.Element {
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [books, setBooks] = useState<Book[]>([]);
@@ -270,6 +305,11 @@ export function App(): React.JSX.Element {
   // (the shown edition may differ from `lang` when falling back).
   const currentPathRef = useRef<string | null>(null);
   const contentLangRef = useRef<string>("");
+  // Latest `openFile`, held in a ref so `loadFile` (deps []) can re-enter it for
+  // the 404 self-heal without a useCallback dependency cycle.
+  const openFileRef = useRef<
+    ((p: string, l: string, r: string, replace?: boolean) => void) | null
+  >(null);
   // The rendition whose spine `tree` currently holds. Live tree updates (which
   // arrive as the default text spine) must not clobber a non-text spine.
   const renditionRef = useRef<string>("text");
@@ -820,6 +860,20 @@ export function App(): React.JSX.Element {
         );
         if (!res.ok) {
           console.error("Failed to fetch file:", path, res.status);
+          // A 404 means the PATH itself doesn't resolve — most often the
+          // `<slug>/README.md` entry guess for a book with no README (authored
+          // books open at `00-introduction.md`), or a stale cross-book resume
+          // path. Self-heal to the book's real first spine chapter instead of
+          // dead-ending on "Couldn't load this page". Online-only (a 404 needs a
+          // server reply) and cache-first, so offline behaviour is unchanged.
+          if (res.status === 404) {
+            const slug = path.split("/")[0] ?? "";
+            const first = await resolveFirstChapter(slug, reqRendition);
+            if (first && first !== path) {
+              void openFileRef.current?.(first, reqLang, reqRendition, true);
+              return;
+            }
+          }
           // Don't leave the previous chapter silently up — surface it. Offline +
           // uncached is the common cause on a lazy (web) install; otherwise a
           // genuine load failure.
@@ -908,6 +962,9 @@ export function App(): React.JSX.Element {
     },
     [books, loadFile],
   );
+  // Keep the ref pointing at the latest openFile so loadFile's 404 self-heal can
+  // re-enter it (see openFileRef declaration).
+  openFileRef.current = openFile;
 
   // Sidebar / TOC navigation, within the current edition + mode. Logical-layer
   // history: the shelf is layer 0 and "reading" is a single layer-1 entry above
