@@ -1,6 +1,6 @@
 import { rem } from "@/px";
 import { nativeNavPop, nativeNavPush, nativeNavReady } from "@/native-nav";
-import { contentFetch, ensureAutoSync } from "@/native-sync";
+import { contentFetch, ensureAutoSync, nativeRefreshManifest } from "@/native-sync";
 import {
   useCallback,
   useEffect,
@@ -665,9 +665,48 @@ export function App(): React.JSX.Element {
     })();
   }, []);
 
-  // Live shelf refresh: a newly-deployed book changes the Merkle deploy root, so
-  // poll /api/root (tiny) on an interval + on foreground; when it changes, re-fetch
-  // the book list FRESH so a new book appears without a manual reload.
+  // Refresh the shelf to a NEW deploy. The KEY native-shell subtlety: the offline
+  // content manifest (`by_url`) is served STORE-FIRST and only refreshed on
+  // cold-launch/foreground, so `/api/books` resolves to the STALE deploy until we
+  // refresh the manifest FIRST — that's the "deploy 了新书得关掉 liveview 再打开"
+  // bug. `nativeRefreshManifest()` re-pulls the manifest to the new root (no-op
+  // off the native shell — the browser/PWA always hits the network). Only THEN do
+  // the FRESH re-fetches resolve to the new content. Then re-warm BOTH spines +
+  // re-seed the shelf tree so the new/changed book opens and meters correctly.
+  const refreshShelf = useCallback(async (): Promise<void> => {
+    await nativeRefreshManifest();
+    try {
+      const list = (await (await contentFetch("/api/books", { fresh: true })).json()) as Book[];
+      setBooks(list);
+    } catch {
+      /* offline / transient — the cached shelf stands */
+    }
+    const [bareTree] = await Promise.all([
+      // The bare key is what the bookshelf seeds `tree` from; the rendition keys
+      // are what the open-book entry paths read. ALL three must be revalidated, or
+      // one stays stale across a deploy.
+      contentFetch("/api/tree", { fresh: true }).catch(() => undefined),
+      contentFetch("/api/tree?rendition=text", { fresh: true }).catch(() => undefined),
+      contentFetch("/api/tree?rendition=audio", { fresh: true }).catch(() => undefined),
+    ]);
+    // Re-seed the live `tree` so the shelf's reading-progress meters index against
+    // the NEW spine. ONLY on the shelf (`currentPath === null`) — inside a book
+    // `tree` holds that book's (possibly audio) spine and must not be clobbered;
+    // returning to the shelf re-seeds from the now-fresh cache.
+    if (currentPathRef.current === null && bareTree) {
+      try {
+        setTree((await bareTree.json()) as TreeNode[]);
+      } catch {
+        /* malformed — keep the prior tree, next deploy retries */
+      }
+    }
+  }, []);
+
+  // Live shelf refresh (fallback path): a newly-deployed book changes the Merkle
+  // deploy root, so poll /api/root (tiny, network-first) on an interval + on
+  // foreground; when it changes, refresh the shelf. The PRIMARY path is the
+  // server's WS `TreeUpdate` broadcast (handleTreeUpdate below), which fires the
+  // instant a sync lands — this poll just catches a missed WS message.
   useEffect(() => {
     let lastRoot: string | null = null;
     let cancelled = false;
@@ -684,36 +723,7 @@ export function App(): React.JSX.Element {
         }
         if (root !== lastRoot) {
           lastRoot = root;
-          // Deploy changed → revalidate the LIVE lists from the network (the only
-          // place we force `fresh`). Refresh the shelf AND re-warm BOTH spines into
-          // the cache, so opening the new/changed book reads its NEW spine from the
-          // (now cache-first) open path. Each updates its own cache entry.
-          const list = (await (await contentFetch("/api/books", { fresh: true })).json()) as Book[];
-          if (!cancelled) setBooks(list);
-          const [bareTree] = await Promise.all([
-            // The bare key is what the bookshelf seeds `tree` from (line ~1337);
-            // the rendition keys are what the open-book entry paths read. ALL
-            // three must be revalidated, or one stays stale across a deploy.
-            contentFetch("/api/tree", { fresh: true }).catch(() => undefined),
-            contentFetch("/api/tree?rendition=text", { fresh: true }).catch(() => undefined),
-            contentFetch("/api/tree?rendition=audio", { fresh: true }).catch(() => undefined),
-          ]);
-          // Re-seed the live `tree` so the shelf's reading-progress meters index
-          // against the NEW spine. Why: the meters resolve each book's chapter to
-          // a spine position; a newly-synced or re-synced book changes the root
-          // but NOT the cache-first `tree` state, so its chapter isn't found →
-          // `fraction` falls back to raw in-chapter scroll (a freshly-opened late
-          // chapter reads 0%) and the "continue" line shows the raw filename
-          // instead of the title. ONLY on the shelf (`currentPath === null`) —
-          // inside a book `tree` holds that book's (possibly audio) spine and must
-          // not be clobbered; returning to the shelf re-seeds from the now-fresh cache.
-          if (!cancelled && currentPathRef.current === null && bareTree) {
-            try {
-              setTree((await bareTree.json()) as TreeNode[]);
-            } catch {
-              /* malformed/cancelled — keep the prior tree, next deploy retries */
-            }
-          }
+          if (!cancelled) await refreshShelf();
         }
       } catch {
         // offline / transient — retry on the next tick or foreground.
@@ -729,7 +739,7 @@ export function App(): React.JSX.Element {
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, []);
+  }, [refreshShelf]);
 
 
   // Refresh the landing's reading-progress whenever the bookshelf is shown
@@ -837,7 +847,14 @@ export function App(): React.JSX.Element {
     if (renditionRef.current === "text") {
       setTree(newTree);
     }
-  }, []);
+    // A TreeUpdate is the server's post-`sync` broadcast — the corpus just changed
+    // (new or edited book). This is the PRIMARY live-refresh path: refresh the
+    // shelf immediately so a newly-deployed book appears WITHOUT restarting the
+    // app (the "得关掉 liveview 再打开才能看到" bug). On the native shell this also
+    // re-pulls the offline manifest first, so the FRESH /api/books resolves to the
+    // new deploy instead of the stale store. Fire-and-forget.
+    void refreshShelf();
+  }, [refreshShelf]);
 
   useWebSocket({
     onContentUpdate: handleContentUpdate,
