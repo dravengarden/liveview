@@ -1149,6 +1149,7 @@ export function AudioPlayerProvider(
     if (a) a.currentTime = sec;
   }, []);
   const skip = useCallback((delta: number) => {
+    logEvent("audio_seek", { delta, book: nowPlayingRef.current?.bookSlug });
     if (nativeAudioAvailable()) {
       const dur = durationRef.current;
       const t = Math.min(
@@ -1182,6 +1183,7 @@ export function AudioPlayerProvider(
     playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
   const setRate = useCallback((r: number) => {
+    logEvent("rate_change", { rate: r });
     setRateState(r);
     rateRef.current = r;
     // localStorage stays the synchronous local seed for instant first paint;
