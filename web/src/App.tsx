@@ -268,6 +268,13 @@ async function resolveFirstChapter(
 
 export function App(): React.JSX.Element {
   const [tree, setTree] = useState<TreeNode[]>([]);
+  // Full AUDIO forest (all books), held ONLY for the shelf's listening meter so it
+  // reflects whole-book audio position. `tree` can't serve this: on the shelf it's
+  // the TEXT spine, and `.spoken.md` chapters are filtered out of the text spine
+  // (tree.rs), so an audio resume row isn't found there — the meter then collapses
+  // to raw in-chapter scroll (the "11% looks wrong" bug: 11% through the CURRENT
+  // chapter, not through the book). Cheap (one whole-forest fetch, cache-first).
+  const [audioTree, setAudioTree] = useState<TreeNode[]>([]);
   const [books, setBooks] = useState<Book[]>([]);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   // The reading location saved on this device, read ONCE at first render — before
@@ -667,6 +674,18 @@ export function App(): React.JSX.Element {
         // offline — entering a book fetches its spine first; uncached, the tap
         // would do nothing. Cheap (2 fetches), runs on every load (lazy + eager).
         void prefetchTrees();
+        // Load the full audio forest for the shelf's listening meter (see audioTree).
+        // Cache-first so it's instant offline; refreshShelf re-seeds it on deploy.
+        void (async () => {
+          try {
+            const at = (await (
+              await contentFetch("/api/tree?rendition=audio")
+            ).json()) as TreeNode[];
+            setAudioTree(at);
+          } catch {
+            /* offline / transient — the cached meter stands */
+          }
+        })();
         // EAGER (native shell): pre-load the WHOLE library into the offline
         // caches so every book reads + plays with no network — the native app's
         // "almost no loading" promise. No-op on web/PWA (lazy = warm-on-open).
@@ -700,7 +719,7 @@ export function App(): React.JSX.Element {
     } catch {
       /* offline / transient — the cached shelf stands */
     }
-    const [bareTree] = await Promise.all([
+    const [bareTree, , audioForest] = await Promise.all([
       // The bare key is what the bookshelf seeds `tree` from; the rendition keys
       // are what the open-book entry paths read. ALL three must be revalidated, or
       // one stays stale across a deploy.
@@ -717,6 +736,15 @@ export function App(): React.JSX.Element {
         setTree((await bareTree.json()) as TreeNode[]);
       } catch {
         /* malformed — keep the prior tree, next deploy retries */
+      }
+    }
+    // Re-seed the audio forest too, so the shelf's listening meter indexes the NEW
+    // audio spine (reuses the fresh fetch above — no extra round-trip).
+    if (currentPathRef.current === null && audioForest) {
+      try {
+        setAudioTree((await audioForest.json()) as TreeNode[]);
+      } catch {
+        /* malformed — keep the prior audio forest, next deploy retries */
       }
     }
   }, []);
@@ -802,6 +830,7 @@ export function App(): React.JSX.Element {
     const slugs = new Set(recentProgress.map((r) => r.path.split("/")[0] ?? ""));
     const nodeByPath = new Map<string, TreeNode>();
     const leavesBySlug = new Map<string, ReturnType<typeof flattenTracks>>();
+    const audioLeavesBySlug = new Map<string, ReturnType<typeof flattenTracks>>();
     const indexNode = (n: TreeNode): void => {
       nodeByPath.set(n.path, n);
       n.children?.forEach(indexNode);
@@ -810,6 +839,15 @@ export function App(): React.JSX.Element {
       if (!slugs.has(top.path)) continue; // only books with recent progress
       indexNode(top);
       leavesBySlug.set(top.path, flattenTracks(top.children, uiLang));
+    }
+    // Audio leaves come from the SEPARATE audio forest — `.spoken.md` chapters are
+    // filtered out of the text spine, so the listening meter must index against the
+    // audio spine (or it collapses to raw in-chapter scroll). Indexing these nodes
+    // also gives an audio resume row a real chapter title (not the raw filename).
+    for (const top of audioTree) {
+      if (!slugs.has(top.path)) continue;
+      indexNode(top);
+      audioLeavesBySlug.set(top.path, flattenTracks(top.children, uiLang));
     }
     const out: Record<string, BookProgress> = {};
     const at: Record<string, { text: number; audio: number }> = {};
@@ -829,10 +867,11 @@ export function App(): React.JSX.Element {
         r.path.split("/").pop() ||
         r.path;
       // Book-level progress: where this chapter sits in the book's ordered spine,
-      // plus its in-chapter scroll, over the chapter count. (Audio resume paths
-      // (.spoken.md) aren't in the text spine → idx < 0 → scroll fallback.)
+      // plus its in-chapter scroll, over the chapter count. Text rows index the
+      // text spine; audio (.spoken.md) rows index the audio spine — each collapses
+      // to raw scroll only if its spine is missing (offline before it loads).
       const scroll = Math.min(1, Math.max(0, r.scroll));
-      const leaves = leavesBySlug.get(slug) ?? [];
+      const leaves = (kind === "audio" ? audioLeavesBySlug : leavesBySlug).get(slug) ?? [];
       const idx = leaves.findIndex((l) => l.path === r.path);
       const fraction = leaves.length > 0 && idx >= 0
         ? (idx + scroll) / leaves.length
@@ -846,7 +885,7 @@ export function App(): React.JSX.Element {
       };
     }
     return out;
-  }, [recentProgress, tree, uiLang]);
+  }, [recentProgress, tree, audioTree, uiLang]);
 
   const handleContentUpdate = useCallback(
     (path: string, msgLang: string, fileType: FileType, content: string) => {
