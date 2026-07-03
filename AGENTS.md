@@ -93,3 +93,68 @@ shared across all the portal apps, not just liveview).
 
 Authoring books that this reader serves: see the **books** project's AGENTS.md
 (the check + fix + chart-review delivery gate).
+
+## APM / Observability (client operation + perf telemetry)
+
+The **native shell** captures client operation / perf / error events, buffers them
+in an offline-durable SQLite outbox, and batch-flushes them to the server when the
+network is good; the server forwards each to the host **VictoriaLogs**, where you
+debug "what happened / how it performed" with LogsQL. **Native-only** — off the
+shell (PWA / browser) every hook is a no-op (that surface is effectively always
+online; a lost analytics event isn't worth a buffer).
+
+**Data flow** (capture → buffer → flush → store → debug):
+
+```
+web/src/apm.ts logEvent()          plugins/lvsync /apm/*         src/main.rs
+  player.tsx / App.tsx / errors  →  SqliteBlobStore.apm_*    →   POST /api/ingest  →  VictoriaLogs
+  (native SQLite outbox: lvsync.sqlite `apm_events`)             (bearer auth,          :6302 /insert/jsonline
+   flush gate = online + NWPathMonitor, at-least-once)           forwards NDJSON)       → vmui / LogsQL
+```
+
+- **Capture** — `logEvent(type, fields)` in `web/src/apm.ts`; wired at the choke
+  points: `audio/player.tsx` (`audio_open` / `audio_play` / `audio_pause` /
+  `audio_ended`), `App.tsx` `openFile` (`open_chapter`), and app-wide uncaught
+  `error` / `unhandledrejection`. Add new call sites here; keep perf numbers scalar
+  (e.g. `dur_ms`) so they stay queryable, not buried in a nested object.
+- **Buffer** — the Rust `SqliteBlobStore` (`lv-sync/src/sqlite.rs`) gains an
+  `apm_events(event_id PK, ts, body)` table + `apm_log/apm_drain/apm_ack/apm_prune`.
+  Schema-DUMB: the web owns the event JSON; the store only lifts `event_id` (dedup)
+  + `client_ts` (prune order). Reached from `plugins/lvsync/src/lib.rs`
+  `scheme_dispatch` via `/apm/log`, `/apm/drain`, `/apm/ack` (a row is deleted only
+  on server ack; a 5000-row cap is the offline-forever safety valve).
+- **Flush** — `flushApm()` drains in batches and POSTs to `/api/ingest`, acking only
+  on a 200 (**at-least-once**; `event_id` dedups a re-send). Gated on connectivity,
+  reusing the audio layer's `NWPathMonitor` signal; triggers mirror `syncQueue`
+  (online / visibility / 30 s interval).
+- **Server → VL** — `api_ingest` (`src/main.rs`) stamps `received_at` + `_msg` and
+  forwards the batch as jsonline to VL. Returns 200 only when VL accepts (a VL
+  hiccup → 502 → the client keeps the events). `event_type` + `device_id` are the VL
+  **stream** fields; `client_ts` is the log **time** (so an offline-buffered event
+  lands at when it HAPPENED). No pg table — VL is the store, its 14-day retention IS
+  the cleanup (no cron).
+- **Auth** — bearer token: server reads `LIVEVIEW_APM_TOKEN[_FILE]`
+  (`/etc/liveview/secrets/apm-token`, NixOS unit); client bakes the same value in via
+  Vite `VITE_APM_TOKEN`. **Both absent ⇒ open** (dev/LAN): the server logs a warning
+  and accepts unauthenticated, so nothing breaks until you provision both.
+
+**Debug in vmui** (`http://192.168.0.96:6302/select/vmui/`, LogsQL):
+
+```logsql
+# All client events from the liveview APM stream, newest first
+event_type:* | sort by (_time desc) | limit 200
+
+# One reading session's timeline (grab session_id from any row)
+session_id:"<id>" | sort by (client_ts)
+
+# Per-device error rate over the last day
+event_type:error | stats by (device_id) count()
+
+# Audio open→first-play latency p95 (once you log a dur_ms on the event)
+event_type:audio_play | stats quantile(0.95, dur_ms) p95, count() n
+```
+
+Since VL already carries `liveview.service`'s own journald (`_SYSTEMD_UNIT`),
+client APM events and server logs are queryable **side by side** in one place.
+Enabling numeric MetricsQL dashboards (VictoriaMetrics) is a future add — LogsQL
+`stats quantile(...)` covers perf today.

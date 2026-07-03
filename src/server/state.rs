@@ -6,6 +6,20 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use crate::server::catalog::Catalog;
 use crate::store::content::{BlobStore, ContentStore};
 
+/// APM ingest sink: forwards batched client events (POST /api/ingest) to the host
+/// VictoriaLogs as jsonline, where they're queried/debugged with LogsQL. `None`
+/// when no VL is configured (e.g. `liveview preview`) — /api/ingest then no-ops.
+#[derive(Clone)]
+pub struct ApmSink {
+    pub client: reqwest::Client,
+    /// Full VictoriaLogs `/insert/jsonline` URL, incl. `_msg`/`_time`/`_stream`
+    /// query params.
+    pub vl_url: String,
+    /// Shared secret the client must present as `Authorization: Bearer <token>`.
+    /// `None` = auth disabled (dev/local): the endpoint accepts unauthenticated.
+    pub token: Option<String>,
+}
+
 /// Server state for the reader, abstracted over its content backend: postgres +
 /// rustfs (deployed) or the filesystem (`liveview preview`). The in-memory
 /// catalog (books → renditions → editions) is reloaded after each `liveview
@@ -35,6 +49,8 @@ pub struct AppState {
     /// are tiny and bounded by chapters ever read aloud. (The audiobook path keeps
     /// its own simpler lazy fallback — untouched.)
     pub audio_synth_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// APM ingest forwarder (client events → VictoriaLogs). `None` in preview.
+    pub apm: Option<ApmSink>,
 }
 
 pub type SharedState = std::sync::Arc<AppState>;

@@ -7,6 +7,7 @@ import { installHaptics } from "./_shell";
 import { BUNDLED, installApiShim } from "./apiBase";
 import { startOfflineFlagSync } from "./native-sync";
 import { startSyncQueue } from "./syncQueue";
+import { startApm } from "./apm";
 import { startOtaUpdater } from "./otaUpdater";
 import "./styles/index.css";
 
@@ -24,6 +25,12 @@ startOfflineFlagSync();
 // Drain any cross-device writes (settings / progress) left pending from a prior
 // offline session. AFTER the shim so relative /api/* hits the remote origin.
 startSyncQueue();
+
+// Client APM: buffer operation/perf/error events in the native SQLite outbox and
+// batch-flush them to the server (→ VictoriaLogs) when the network is good. Native
+// shell only; installs app-wide error capture. AFTER the shim so /api/ingest hits
+// the remote origin.
+startApm();
 
 // App-bundle hot-update: check the server for a newer web bundle (incremental,
 // content-addressed) and reload into it when ready. Native shell only.

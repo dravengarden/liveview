@@ -46,6 +46,7 @@ import {
   useWebSocket,
 } from "@/hooks";
 import { useI18n } from "@/i18n";
+import { logEvent } from "@/apm";
 import {
   prefetchAllBooks,
   prefetchBookAudio,
@@ -966,6 +967,12 @@ export function App(): React.JSX.Element {
     ) => {
       const slug = path.split("/")[0] ?? "";
       const book = books.find((b) => b.slug === slug);
+      logEvent("open_chapter", {
+        book: slug,
+        chapter: path,
+        lang: langArg,
+        rendition: renditionArg,
+      });
       // ALWAYS pin the lang in the URL (never omit it when it equals the book
       // default). The restore path re-derives a missing lang from the UI language
       // (pickInitialLang), which differs from `default_lang` — so omitting the

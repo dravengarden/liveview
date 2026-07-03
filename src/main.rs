@@ -9,16 +9,16 @@ mod sync;
 use axum::{
     body::Body,
     extract::{Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
-    routing::get,
+    routing::{get, post},
     Extension, Router,
 };
 use clap::Parser;
 use cli::{Cli, Command};
 use config::{auto_discover, implicit_resolved, Config, RenditionKind, Resolved};
 use server::catalog::Catalog;
-use server::state::{AppState, SharedState};
+use server::state::{ApmSink, AppState, SharedState};
 use shared::{FileContent, FileType, TreeNode, WsMessage};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -471,6 +471,36 @@ fn store_config_from_env() -> Result<StoreConfig, String> {
     })
 }
 
+/// Build the APM ingest sink from the env the systemd unit sets. Always returns a
+/// sink on the deployed path (VL defaults to the host's loopback jsonline endpoint);
+/// auth is enabled only when `LIVEVIEW_APM_TOKEN[_FILE]` is present, so a dev/local
+/// server without a token accepts unauthenticated. `event_type` + `device_id` are the
+/// VL stream fields (bounded cardinality); `client_ts` is the event time (so an
+/// offline-buffered event lands at when it HAPPENED, not when it was flushed).
+fn build_apm_sink() -> Option<ApmSink> {
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let base = env("LIVEVIEW_APM_VL_URL")
+        .unwrap_or_else(|| "http://127.0.0.1:6302/insert/jsonline".to_string());
+    let vl_url =
+        format!("{base}?_msg_field=_msg&_time_field=client_ts&_stream_fields=device_id,event_type");
+    let token = match env("LIVEVIEW_APM_TOKEN_FILE") {
+        Some(f) => match std::fs::read_to_string(&f) {
+            Ok(s) => Some(s.trim().to_string()).filter(|s| !s.is_empty()),
+            Err(e) => {
+                tracing::warn!(error = %e, file = %f, "apm token file unreadable; auth disabled");
+                None
+            }
+        },
+        None => env("LIVEVIEW_APM_TOKEN"),
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| tracing::warn!(error = %e, "apm http client build failed"))
+        .ok()?;
+    Some(ApmSink { client, vl_url, token })
+}
+
 /// Listen for `liveview sync`'s `NOTIFY liveview_reload`; on each, reload the
 /// catalog and broadcast the new sidebar tree so open readers refresh. Survives
 /// connection drops (reconnect loop) so a postgres restart doesn't kill it.
@@ -580,6 +610,7 @@ async fn run(cli: Cli, server: config::ServerCfg) {
         tts_voice,
         book_end_cue: Default::default(),
         audio_synth_locks: Default::default(),
+        apm: build_apm_sink(),
     });
 
     // Reload the catalog + nudge clients when `liveview sync` issues NOTIFY.
@@ -619,6 +650,8 @@ async fn run_preview(args: cli::PreviewArgs) -> Result<(), String> {
         tts_voice: env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string()),
         book_end_cue: Default::default(),
         audio_synth_locks: Default::default(),
+        // No VL to forward to in local preview — /api/ingest no-ops (accept + drop).
+        apm: None,
     });
 
     let app = build_app(state);
@@ -907,6 +940,76 @@ async fn api_sizes(State(state): State<SharedState>) -> impl IntoResponse {
     .into_response()
 }
 
+/// Batched client APM events → VictoriaLogs. The native app buffers operation /
+/// perf / error events offline and POSTs them here in batches when the network is
+/// good; we stamp each with `received_at` + a `_msg` summary and forward the batch
+/// as jsonline to the host VL, where it's queried/debugged with LogsQL. Auth: a
+/// shared bearer token when configured (else open, for dev). We return 200 ONLY
+/// when VL accepted the batch — a VL hiccup returns 502 so the client keeps the
+/// events and retries (at-least-once; `event_id` dedups a re-send at query time).
+async fn api_ingest(
+    State(state): State<SharedState>,
+    headers: HeaderMap,
+    Json(mut events): Json<Vec<serde_json::Map<String, serde_json::Value>>>,
+) -> impl IntoResponse {
+    let Some(apm) = state.apm.as_ref() else {
+        // No VL configured (preview) — accept + drop so a dev client doesn't spin.
+        return StatusCode::OK;
+    };
+    // Bearer auth when a token is configured; open otherwise (dev/local).
+    if let Some(want) = apm.token.as_deref() {
+        let got = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .unwrap_or("");
+        if got != want {
+            return StatusCode::UNAUTHORIZED;
+        }
+    }
+    if events.is_empty() {
+        return StatusCode::OK;
+    }
+    // Cap a single batch so a misbehaving client can't blow up the forward.
+    events.truncate(1000);
+    let received_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    // NDJSON: one enriched event object per line.
+    let mut body = String::new();
+    for ev in &mut events {
+        if !ev.contains_key("received_at") {
+            ev.insert("received_at".to_string(), serde_json::json!(received_at));
+        }
+        // VL's default message column: the event type, for readable log rows.
+        let msg = ev.get("event_type").and_then(|v| v.as_str()).unwrap_or("event").to_string();
+        ev.insert("_msg".to_string(), serde_json::json!(msg));
+        if let Ok(line) = serde_json::to_string(ev) {
+            body.push_str(&line);
+            body.push('\n');
+        }
+    }
+    match apm
+        .client
+        .post(&apm.vl_url)
+        .header("content-type", "application/x-ndjson")
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => StatusCode::OK,
+        Ok(r) => {
+            tracing::warn!(status = %r.status(), "apm forward to VictoriaLogs rejected");
+            StatusCode::BAD_GATEWAY
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "apm forward to VictoriaLogs failed");
+            StatusCode::BAD_GATEWAY
+        }
+    }
+}
+
 fn build_app(state: SharedState) -> Router {
     let api_router = Router::new()
         .route("/api/books", get(api_books))
@@ -936,6 +1039,8 @@ fn build_app(state: SharedState) -> Router {
         // a top-level /version would fall into the cache-first bucket and serve
         // a stale build id right after a deploy, defeating the whole check.
         .route("/api/version", get(version))
+        // Batched client APM events → forwarded to VictoriaLogs (see api_ingest).
+        .route("/api/ingest", post(api_ingest))
         .route("/ws", get(server::ws::ws_handler))
         .with_state(state.clone())
         // CORS for the BUNDLED native app. The iOS/macOS Tauri shell now loads the
@@ -2231,5 +2336,94 @@ async fn api_raw(
     match blob_response(&state, &hash, "public, max-age=3600").await {
         Some(resp) => resp,
         None => (StatusCode::NOT_FOUND, "File not found").into_response(),
+    }
+}
+
+#[cfg(test)]
+mod apm_tests {
+    use super::*;
+    use crate::store::fs::FsStore;
+
+    /// Minimal AppState over an empty in-memory FsStore (no pg/rustfs, no audio
+    /// worker) with the given APM sink — enough to exercise `api_ingest` directly.
+    async fn state_with(apm: Option<ApmSink>) -> SharedState {
+        let fs = Arc::new(FsStore::new(Vec::new()));
+        let store: Arc<dyn crate::store::content::ContentStore> = fs.clone();
+        let obj: Arc<dyn crate::store::content::BlobStore> = fs;
+        let catalog = Catalog::load(store.as_ref()).await.unwrap();
+        let (tx, _rx) = broadcast::channel::<String>(8);
+        Arc::new(AppState {
+            tx,
+            store,
+            obj,
+            catalog: RwLock::new(catalog),
+            tts_cmd: "edge-tts".into(),
+            tts_voice: "x".into(),
+            book_end_cue: Default::default(),
+            audio_synth_locks: Default::default(),
+            apm,
+        })
+    }
+
+    fn one_event(device: &str, ty: &str) -> Vec<serde_json::Map<String, serde_json::Value>> {
+        let mut m = serde_json::Map::new();
+        m.insert("event_type".into(), serde_json::json!(ty));
+        m.insert("device_id".into(), serde_json::json!(device));
+        m.insert("client_ts".into(), serde_json::json!(1_783_000_000_000i64));
+        vec![m]
+    }
+
+    fn sink(vl_url: &str, token: Option<&str>) -> ApmSink {
+        ApmSink {
+            client: reqwest::Client::builder().build().unwrap(),
+            vl_url: vl_url.to_string(),
+            token: token.map(str::to_string),
+        }
+    }
+
+    /// Auth is enforced BEFORE any forward — a missing/wrong bearer is 401 and never
+    /// touches VL (so this needs no network).
+    #[tokio::test]
+    async fn ingest_rejects_missing_or_wrong_token() {
+        let st = state_with(Some(sink("http://127.0.0.1:1/unused", Some("s3cr3t")))).await;
+
+        let missing = api_ingest(State(st.clone()), HeaderMap::new(), Json(one_event("d", "x")))
+            .await
+            .into_response();
+        assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+
+        let mut wrong = HeaderMap::new();
+        wrong.insert(header::AUTHORIZATION, "Bearer nope".parse().unwrap());
+        let bad = api_ingest(State(st.clone()), wrong, Json(one_event("d", "x")))
+            .await
+            .into_response();
+        assert_eq!(bad.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// With no token configured the endpoint is open (dev/LAN); an empty batch is a
+    /// no-op 200 without any forward.
+    #[tokio::test]
+    async fn ingest_open_when_no_token_and_empty_is_ok() {
+        let st = state_with(Some(sink("http://127.0.0.1:1/unused", None))).await;
+        let empty: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
+        let r = api_ingest(State(st), HeaderMap::new(), Json(empty)).await.into_response();
+        assert_eq!(r.status(), StatusCode::OK);
+    }
+
+    /// Live end-to-end: a good-token batch is forwarded to the real host VictoriaLogs
+    /// and accepted (200). Needs VL up on :6302 → `#[ignore]`d in normal runs; run with
+    /// `cargo test --ignored ingest_forwards_to_live_vl`.
+    #[tokio::test]
+    #[ignore = "needs a live VictoriaLogs on 127.0.0.1:6302"]
+    async fn ingest_forwards_to_live_vl() {
+        let vl = "http://127.0.0.1:6302/insert/jsonline\
+                  ?_msg_field=_msg&_time_field=client_ts&_stream_fields=device_id,event_type";
+        let st = state_with(Some(sink(vl, Some("s3cr3t")))).await;
+        let mut h = HeaderMap::new();
+        h.insert(header::AUTHORIZATION, "Bearer s3cr3t".parse().unwrap());
+        let r = api_ingest(State(st), h, Json(one_event("apmtest-integ", "audio_play")))
+            .await
+            .into_response();
+        assert_eq!(r.status(), StatusCode::OK);
     }
 }

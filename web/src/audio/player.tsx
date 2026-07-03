@@ -30,6 +30,7 @@ import {
   onNativeAudioEvent,
 } from "@/native-audio";
 import { useI18n } from "@/i18n";
+import { logEvent } from "@/apm";
 import { loadServerSetting } from "@/syncBackends";
 import {
   type AudioPos,
@@ -630,6 +631,7 @@ export function AudioPlayerProvider(
   const handleEnded = useCallback(() => {
     const np = nowPlayingRef.current;
     if (np) {
+      logEvent("audio_ended", { book: np.bookSlug, chapter: np.chapterPath });
       localStorage.removeItem(posKey(np.chapterPath, np.lang));
       persistPos(np.chapterPath, 0);
       void posStore.flush();
@@ -1101,19 +1103,35 @@ export function AudioPlayerProvider(
       // since those happen during an active listen. The reader's read-aloud
       // button passes autoplay=true so one tap starts speaking immediately (the
       // tap is the user gesture iOS needs).
+      logEvent("audio_open", {
+        book: np.bookSlug,
+        chapter: np.chapterPath,
+        rendition: np.rendition,
+        autoplay,
+      });
       loadTrack({ ...np, chapterLabel: label }, q, qi >= 0 ? qi : 0, autoplay);
     },
     [loadTrack],
   );
 
   const togglePlay = useCallback(() => {
+    const np = nowPlayingRef.current;
     if (nativeAudioAvailable()) {
+      const willPlay = !playingRef.current;
+      logEvent(willPlay ? "audio_play" : "audio_pause", {
+        book: np?.bookSlug,
+        chapter: np?.chapterPath,
+      });
       if (playingRef.current) nativeAudioPause();
       else nativeAudioPlay();
       return;
     }
     const a = audioRef.current;
     if (!a) return;
+    logEvent(a.paused ? "audio_play" : "audio_pause", {
+      book: np?.bookSlug,
+      chapter: np?.chapterPath,
+    });
     if (a.paused) {
       playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
     } else a.pause();

@@ -27,6 +27,11 @@ use tokio::sync::RwLock;
 /// The remote liveview origin (same as the loader's REMOTE / tauri.conf devUrl).
 const REMOTE: &str = "https://liveview.hawk.thundersparrow.top";
 
+/// Safety cap on the APM outbox: a device that never gets a flushable network
+/// can't grow the buffer without bound. Normal operation acks + deletes rows, so
+/// this only bites offline-forever. ~5k tiny event rows ≈ low single-digit MB.
+const APM_MAX_ROWS: i64 = 5000;
+
 /// Debug airplane mode: when set, the fetcher fails immediately so the OFFLINE
 /// cache path can be exercised in the simulator (which has no per-app network
 /// switch). Toggled via the `lvsync://localhost/offline?on=1` scheme. Cache-first
@@ -751,6 +756,58 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
                 }
             }
             (200, format!("{done}").into_bytes())
+        }
+        // ── APM outbox: the web logs client events here (offline-durable in the
+        // SqliteBlobStore), then flushes them to the server when the network is
+        // good. The store is schema-dumb — the web owns the event JSON shape; this
+        // only lifts out `event_id` (dedup/ack) + `client_ts` (prune order).
+        "/apm/log" => {
+            let Some(raw) = query_get(query, "e") else {
+                return (400, b"missing e".to_vec());
+            };
+            let body = decode_all(&raw);
+            let (id, ts) = match serde_json::from_str::<serde_json::Value>(&body) {
+                Ok(v) => (
+                    v.get("event_id").and_then(|x| x.as_str()).map(str::to_string),
+                    v.get("client_ts").and_then(serde_json::Value::as_i64).unwrap_or_else(|| now_ms() as i64),
+                ),
+                Err(_) => (None, now_ms() as i64),
+            };
+            let Some(id) = id else {
+                return (400, b"missing event_id".to_vec());
+            };
+            let store = state.engine.store();
+            store.apm_log(&id, ts, &body);
+            store.apm_prune(APM_MAX_ROWS);
+            (200, b"ok".to_vec())
+        }
+        "/apm/drain" => {
+            let limit = query_get(query, "limit")
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(50)
+                .clamp(1, 500);
+            // Each stored body is already a JSON object; splice them into an array
+            // without re-parsing (the web POSTs this verbatim to /api/ingest).
+            let bodies = state.engine.store().apm_drain(limit);
+            let mut out = String::with_capacity(bodies.iter().map(|b| b.len() + 1).sum::<usize>() + 2);
+            out.push('[');
+            for (i, b) in bodies.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(b);
+            }
+            out.push(']');
+            (200, out.into_bytes())
+        }
+        "/apm/ack" => {
+            let ids: Vec<String> = query_get(query, "ids")
+                .map(|s| {
+                    decode_all(&s).split(',').filter(|x| !x.is_empty()).map(str::to_string).collect()
+                })
+                .unwrap_or_default();
+            state.engine.store().apm_ack(&ids);
+            (200, b"ok".to_vec())
         }
         _ => (404, b"not found".to_vec()),
     }

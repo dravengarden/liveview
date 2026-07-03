@@ -52,6 +52,12 @@ blake3 = "1"
 aws-sdk-s3 = "1"
 aws-smithy-runtime-api = "1"
 
+# Minimal HTTP client for the APM ingest → VictoriaLogs forwarder (POST NDJSON to
+# the host VL on loopback). default-features=false: no TLS/http2/proxy — the target
+# is plain http://127.0.0.1:6302, so the base HTTP/1 client is all we need, and it
+# keeps the dep light.
+reqwest = { version = "0.12", default-features = false }
+
 # Embedded assets
 include_dir = { version = "0.7", optional = true }
 
