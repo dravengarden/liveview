@@ -1088,7 +1088,7 @@ mod tests {
     async fn book_rendition_edition_roundtrip() {
         let Some(s) = store().await else { return };
         s.delete_book("t-book").await.unwrap();
-        s.upsert_book("t-book", "T Book", Some("blurb"), None, None, "text")
+        s.upsert_book("t-book", "T Book", Some("blurb"), None, None, None, "text")
             .await
             .unwrap();
         s.upsert_rendition("t-book", "text", "阅读", "zh", None, true, 0)
@@ -1098,7 +1098,7 @@ mod tests {
             .await
             .unwrap();
         // Re-upsert (idempotent) then cascade-delete.
-        s.upsert_book("t-book", "T Book v2", None, None, None, "text")
+        s.upsert_book("t-book", "T Book v2", None, None, None, None, "text")
             .await
             .unwrap();
         s.delete_book("t-book").await.unwrap();

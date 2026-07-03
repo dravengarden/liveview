@@ -361,6 +361,7 @@ mod tests {
             slug: slug.to_string(),
             description: None,
             collection: None,
+            author: None,
             cover: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![RenditionState {
@@ -478,6 +479,7 @@ mod tests {
             slug: "book".to_string(),
             description: None,
             collection: None,
+            author: None,
             cover: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![RenditionState {
@@ -653,6 +655,7 @@ mod tests {
             slug: "eth".to_string(),
             description: None,
             collection: None,
+            author: None,
             cover: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![
