@@ -133,10 +133,23 @@ function setNativeOffline(on: boolean): void {
  *   - a 2s poll of the native NWPathMonitor (`nativeAudioStats().net === "none"`):
  *     the RELIABLE signal — the OS path monitor knows airplane mode for sure.
  *  Plus the plugin's own OFFLINE_UNTIL backstop catches anything these miss. */
+/** Last-known RELIABLE offline state, kept fresh by startOfflineFlagSync's
+ *  NWPathMonitor poll. Read this instead of `navigator.onLine`, which is unreliable
+ *  in WKWebView (commonly stays `true` in airplane mode). */
+let knownOffline = false;
+
+/** Whether the device is (reliably) offline. On the shell this is the NWPathMonitor-
+ *  derived flag; off-shell it falls back to `navigator.onLine` (reliable there). */
+export function isLikelyOffline(): boolean {
+  if (nativeSyncAvailable()) return knownOffline;
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
 export function startOfflineFlagSync(): void {
   if (!nativeSyncAvailable()) return;
   let last: boolean | null = null;
   const apply = (offline: boolean): void => {
+    knownOffline = offline; // reliable signal for the reader path (isLikelyOffline)
     if (offline === last) return;
     last = offline;
     setNativeOffline(offline);

@@ -1,6 +1,6 @@
 import { rem } from "@/px";
 import { nativeNavPop, nativeNavPush, nativeNavReady } from "@/native-nav";
-import { contentFetch, ensureAutoSync, nativeRefreshManifest } from "@/native-sync";
+import { contentFetch, ensureAutoSync, isLikelyOffline, nativeRefreshManifest } from "@/native-sync";
 import {
   useCallback,
   useEffect,
@@ -579,9 +579,13 @@ export function App(): React.JSX.Element {
   const chapterLabel = useMemo(() => {
     if (!currentPath) return "";
     const node = findNode(tree, currentPath);
-    return (node && ((uiLang && node.titles?.[uiLang]) || node.name)) ||
-      currentPath.split("/").pop() || "";
-  }, [currentPath, tree, uiLang]);
+    const resolved = node && ((uiLang && node.titles?.[uiLang]) || node.name);
+    // No spine node — e.g. offline with a stale `tree` that predates a freshly-added
+    // book, opened at its `<slug>/README.md` entry guess. The raw filename
+    // ("README.md") is worse than useless; fall back to the book title so the bar
+    // still says WHERE you are. Only if even that's empty do we show the filename.
+    return resolved || bookLabel || currentPath.split("/").pop() || "";
+  }, [currentPath, tree, uiLang, bookLabel]);
   // The renditions the active book offers, and the one currently active. The
   // language switcher shows the *active rendition's* languages (each rendition
   // carries its own lang list).
@@ -898,10 +902,13 @@ export function App(): React.JSX.Element {
           // spine chapter instead of dead-ending on "Couldn't load this page".
           // Trigger on 404 (web/real-fetch) AND 504 — the native shell's lvsync
           // proxy (native-sync.ts contentFetch) collapses a remote 404 into 504,
-          // so a missing path looks like 504 in the app. Gate on navigator.onLine
-          // so a genuine offline 504 still surfaces the offline notice; resolve-
-          // FirstChapter itself 504s offline → returns null → no false recovery.
-          if (navigator.onLine && (res.status === 404 || res.status === 504)) {
+          // so a missing path looks like 504 in the app. Gate on RELIABLE offline
+          // detection (isLikelyOffline, NWPathMonitor-derived) — NOT navigator.onLine,
+          // which stays `true` in WKWebView airplane mode, so a genuine offline 504
+          // would otherwise churn the self-heal (resolveFirstChapter also 504s → null)
+          // and land on "failed" instead of the calm offline notice.
+          const offline = isLikelyOffline();
+          if (!offline && (res.status === 404 || res.status === 504)) {
             const slug = path.split("/")[0] ?? "";
             const first = await resolveFirstChapter(slug, reqRendition);
             if (first && first !== path) {
@@ -910,9 +917,9 @@ export function App(): React.JSX.Element {
             }
           }
           // Don't leave the previous chapter silently up — surface it. Offline +
-          // uncached is the common cause on a lazy (web) install; otherwise a
-          // genuine load failure.
-          setFileError(navigator.onLine ? "failed" : "offline");
+          // uncached (a book not yet downloaded) shows the calm offline notice;
+          // otherwise a genuine load failure with a retry.
+          setFileError(offline ? "offline" : "failed");
           return;
         }
         const data = (await res.json()) as FileContent;
