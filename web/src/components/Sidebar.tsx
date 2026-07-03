@@ -19,6 +19,7 @@ import {
   ExpandMore as ExpandMoreIcon,
   Folder as FolderIcon,
   FolderOpen as FolderOpenIcon,
+  GraphicEq as PlayingIcon,
   MyLocation as LocateIcon,
   UnfoldLess as CollapseAllIcon,
   UnfoldMore as ExpandAllIcon,
@@ -71,6 +72,9 @@ interface TreeItemProps {
   /** "book" mode hides file icons and the root folder; see {@link Sidebar}. */
   bookMode: boolean;
   currentPath: string | null;
+  /** The chapter the audio engine is playing (this book), marked distinctly and
+   *  treated as selected — see {@link Sidebar}. Null when nothing plays here. */
+  playingPath: string | null;
   currentLang: string | undefined;
   expandedPaths: Set<string>;
   onSelect: (path: string) => void;
@@ -82,13 +86,18 @@ function TreeItem({
   level,
   bookMode,
   currentPath,
+  playingPath,
   currentLang,
   expandedPaths,
   onSelect,
   onToggle,
 }: TreeItemProps): React.JSX.Element {
   const isExpanded = expandedPaths.has(node.path);
-  const isSelected = currentPath === node.path;
+  const isPlaying = playingPath === node.path;
+  // Highlight the VIEWED chapter, plus the PLAYING one — which is what the
+  // read-along reader shows, and can differ from `currentPath` once the
+  // engine→view sync lapses (see Sidebar `playingPath`).
+  const isSelected = currentPath === node.path || isPlaying;
   // Book-spine chapters carry per-language titles; show the current edition's,
   // falling back to `name` (the default edition's title) for untranslated
   // chapters and for plain file-tree nodes that have no `titles`.
@@ -150,6 +159,16 @@ function TreeItem({
           disableTypography
           primary={<TruncatedLabel text={label} />}
         />
+        {
+          /* Now-playing marker: the audiobook reader is a window onto the engine,
+            so the list must show WHICH chapter is playing even when `currentPath`
+            (the viewed chapter) has drifted off it. */
+        }
+        {isPlaying && (
+          <ListItemIcon sx={{ minWidth: 0, ml: 1 }}>
+            <PlayingIcon fontSize="small" color="primary" />
+          </ListItemIcon>
+        )}
       </ListItemButton>
       {node.is_dir && node.children.length > 0 && (
         <Collapse in={isExpanded} timeout="auto" unmountOnExit>
@@ -161,6 +180,7 @@ function TreeItem({
                 level={level + 1}
                 bookMode={bookMode}
                 currentPath={currentPath}
+                playingPath={playingPath}
                 currentLang={currentLang}
                 expandedPaths={expandedPaths}
                 onSelect={onSelect}
@@ -216,6 +236,10 @@ function findParentPaths(nodes: TreeNode[], targetPath: string): string[] {
 interface SidebarProps {
   tree: TreeNode[];
   currentPath: string | null;
+  /** The chapter the audio engine is playing in the open book (null when none).
+   *  The list marks it distinctly and treats it as selected, so it reflects what
+   *  the read-along reader shows even when `currentPath` has drifted off it. */
+  playingPath?: string | null;
   /** "book" mode (book.toml-driven) renders a clean titled spine — no file
    *  icons, root folder already dropped upstream. "docs" mode renders the raw
    *  filesystem tree with folder/file icons. */
@@ -248,6 +272,7 @@ function fmtDate(ms: number | undefined, lang: string): string | null {
 export function Sidebar({
   tree,
   currentPath,
+  playingPath = null,
   bookMode = false,
   langs = [],
   currentLang,
@@ -264,14 +289,17 @@ export function Sidebar({
   );
   const listContainerRef = useRef<HTMLDivElement>(null);
   const prevCurrentPathRef = useRef<string | null>(null);
+  // What the list highlights + reveals: the playing chapter when audio is going
+  // (the reader is a window onto the engine), else the viewed chapter.
+  const focusPath = playingPath ?? currentPath;
 
-  // Auto-expand parent directories only when currentPath actually changes
+  // Auto-expand parent directories only when the focused chapter changes
   useEffect(() => {
     if (
-      currentPath && currentPath !== prevCurrentPathRef.current &&
+      focusPath && focusPath !== prevCurrentPathRef.current &&
       tree.length > 0
     ) {
-      const parentPaths = findParentPaths(tree, currentPath);
+      const parentPaths = findParentPaths(tree, focusPath);
       if (parentPaths.length > 0) {
         setExpandedPaths((prev) => {
           const next = new Set(prev);
@@ -282,8 +310,8 @@ export function Sidebar({
         });
       }
     }
-    prevCurrentPathRef.current = currentPath;
-  }, [currentPath, tree]);
+    prevCurrentPathRef.current = focusPath;
+  }, [focusPath, tree]);
 
   const isAllExpanded = allDirPaths.length > 0 &&
     allDirPaths.every((p) => expandedPaths.has(p));
@@ -309,10 +337,10 @@ export function Sidebar({
   }, [isAllExpanded, allDirPaths]);
 
   const handleRevealCurrentFile = useCallback(() => {
-    if (!currentPath || !listContainerRef.current) return;
+    if (!focusPath || !listContainerRef.current) return;
 
     // Expand parent directories
-    const parentPaths = findParentPaths(tree, currentPath);
+    const parentPaths = findParentPaths(tree, focusPath);
     if (parentPaths.length > 0) {
       setExpandedPaths((prev) => {
         const next = new Set(prev);
@@ -326,13 +354,13 @@ export function Sidebar({
     // Scroll to the element after a short delay to allow expansion animation
     setTimeout(() => {
       const element = listContainerRef.current?.querySelector(
-        `[data-path="${CSS.escape(currentPath)}"]`,
+        `[data-path="${CSS.escape(focusPath)}"]`,
       );
       if (element) {
         element.scrollIntoView({ behavior: "smooth", block: "center" });
       }
     }, 100);
-  }, [currentPath, tree]);
+  }, [focusPath, tree]);
 
   return (
     <Box
@@ -375,7 +403,7 @@ export function Sidebar({
             <span>
               <IconButton
                 onClick={handleRevealCurrentFile}
-                disabled={!currentPath}
+                disabled={!focusPath}
               >
                 <LocateIcon />
               </IconButton>
@@ -450,6 +478,7 @@ export function Sidebar({
               level={0}
               bookMode={bookMode}
               currentPath={currentPath}
+              playingPath={playingPath}
               currentLang={currentLang}
               expandedPaths={expandedPaths}
               onSelect={onSelect}

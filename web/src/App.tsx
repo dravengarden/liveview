@@ -590,6 +590,20 @@ export function App(): React.JSX.Element {
     bookRenditions[0] ??
     null;
   const bookLangs = activeRendition?.langs ?? [];
+  // The chapter the ENGINE is actually playing in THIS book — the sidebar's
+  // now-playing marker. The audiobook reader is "a window onto the engine"
+  // (AudiobookPlayer renders `nowPlaying.chapterPath`), but the list highlight
+  // has historically tracked `currentPath` (the VIEWED chapter). Those two only
+  // stay coupled via the guarded engine→view effect, which stops carrying
+  // `currentPath` forward the moment you fall out of sync (auto-advance while
+  // backgrounded, navigating away and back). Then the reader shows the playing
+  // chapter while the list highlights a stale/absent `currentPath`. Marking the
+  // engine's chapter directly keeps the list honest regardless of that sync.
+  const playingPath = nowPlaying != null &&
+      nowPlaying.bookSlug === activeSlug &&
+      nowPlaying.rendition === activeRendition?.kind
+    ? nowPlaying.chapterPath
+    : null;
 
   // Is the shared <PlaybackBar> transport currently mounted over the reader? It
   // is on the audio rendition page (AudiobookPlayer always shows it) AND while
@@ -1893,6 +1907,7 @@ export function App(): React.JSX.Element {
                 <Sidebar
                   tree={activeTree}
                   currentPath={currentPath}
+                  playingPath={playingPath}
                   bookMode={bookMode}
                   langs={bookLangs}
                   currentLang={lang}
