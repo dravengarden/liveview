@@ -372,6 +372,7 @@ async fn run_sync(args: cli::SyncArgs) -> Result<(), String> {
         put = report.put,
         enqueued = report.enqueued,
         skipped = report.skipped,
+        stale_audio = report.stale_audio,
         deleted = report.deleted,
         orphans_gc = report.orphans_gc,
         check_warnings = report.check_warnings,
@@ -380,11 +381,12 @@ async fn run_sync(args: cli::SyncArgs) -> Result<(), String> {
     );
     let root_short = &report.root[..report.root.len().min(12)];
     println!(
-        "sync: {} books, {} put, {} audio queued, {} skipped, {} deleted, {} gc'd, {} check warnings, root {root_short}",
+        "sync: {} books, {} put, {} audio queued, {} skipped, {} stale-audio re-baked, {} deleted, {} gc'd, {} check warnings, root {root_short}",
         report.books,
         report.put,
         report.enqueued,
         report.skipped,
+        report.stale_audio,
         report.deleted,
         report.orphans_gc,
         report.check_warnings

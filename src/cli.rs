@@ -278,8 +278,12 @@ pub struct SyncArgs {
     /// renders empty forever. `--repair` plans against an empty deployed DAG
     /// (every leaf becomes a candidate) and re-applies ONLY the leaves whose
     /// content row is actually missing; unchanged, present content is still
-    /// skipped, so it's cheap and safe to run anytime. (Audio is not
-    /// regenerated — a restored audio chapter's mp3 is rebuilt on first play.)
+    /// skipped, so it's cheap and safe to run anytime. Also reconciles STALE
+    /// audio: for each already-baked audio leaf it checks the baked marks count
+    /// against the current text's segment count and, on a mismatch (a chapter
+    /// edited after its bake, so the read-along highlight tracks the wrong
+    /// paragraph), drops the stale mp3/marks and re-enqueues the chapter for the
+    /// worker to re-synthesize.
     #[arg(long, default_value_t = false)]
     pub repair: bool,
 

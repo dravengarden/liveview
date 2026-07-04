@@ -423,15 +423,28 @@ impl PgStore {
                  html = EXCLUDED.html,
                  markdown = EXCLUDED.markdown,
                  asset_hash = EXCLUDED.asset_hash,
-                 -- Preserve existing audio when a re-render carries none (the
+                 -- Keep prior mp3/marks across a re-render that carries none (the
                  -- apply pass always sets these NULL; the audio worker fills them
-                 -- later). COALESCE keeps the prior mp3/marks so a re-render — esp.
-                 -- a content change that DIDN'T touch the spoken prose (e.g. only a
-                 -- mermaid label) — doesn't blank read-aloud until a needless
-                 -- re-synth. A genuinely changed audio leaf is re-enqueued and the
-                 -- worker overwrites these.
-                 audio_hash = COALESCE(EXCLUDED.audio_hash, chapters.audio_hash),
-                 marks_hash = COALESCE(EXCLUDED.marks_hash, chapters.marks_hash),
+                 -- later) — BUT ONLY when the content is unchanged (a pure
+                 -- render_version bump). When `content_hash` actually moves, the old
+                 -- mp3/marks describe the PREVIOUS text: preserving them decouples
+                 -- audio_hash from content_hash, so the worker both-hashes-set-means-
+                 -- done guard early-returns on a STALE bake and the marks freeze at
+                 -- the old sentence segmentation while /api/spoken re-derives the new
+                 -- one, and the read-along highlight lands on the wrong paragraph. So
+                 -- on a genuine content change, drop them (take EXCLUDED NULL) to force
+                 -- the re-enqueued worker to actually re-synthesize. Invariant:
+                 -- audio_hash/marks_hash are non-NULL ⇒ baked from THIS content_hash.
+                 audio_hash = CASE
+                     WHEN chapters.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                     THEN EXCLUDED.audio_hash
+                     ELSE COALESCE(EXCLUDED.audio_hash, chapters.audio_hash)
+                 END,
+                 marks_hash = CASE
+                     WHEN chapters.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                     THEN EXCLUDED.marks_hash
+                     ELSE COALESCE(EXCLUDED.marks_hash, chapters.marks_hash)
+                 END,
                  content_hash = EXCLUDED.content_hash,
                  render_version = EXCLUDED.render_version",
         )
@@ -495,6 +508,30 @@ impl PgStore {
         .bind(rel_path)
         .bind(audio_hash)
         .bind(marks_hash)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+    }
+
+    /// Drop a chapter's mp3/marks hashes (→ NULL) so the audio worker's
+    /// "both hashes set → done" guard no longer short-circuits and it re-bakes.
+    /// Used by `--repair`'s stale-marks reconciliation: a row whose baked marks no
+    /// longer match its current text must forget the stale bake before re-enqueue.
+    pub async fn clear_chapter_audio(
+        &self,
+        book_slug: &str,
+        rendition: &str,
+        lang: &str,
+        rel_path: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE chapters SET audio_hash = NULL, marks_hash = NULL
+             WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4",
+        )
+        .bind(book_slug)
+        .bind(rendition)
+        .bind(lang)
+        .bind(rel_path)
         .execute(&self.pool)
         .await
         .map(|_| ())
