@@ -44,54 +44,70 @@ export function useAudioPreloadDriver(): void {
     let cancelled = false;
     let audioRes: { hash: string; url: string }[] = [];
     let timer: ReturnType<typeof globalThis.setInterval> | undefined;
+    // Per-session guard so each book's /api/manifest is warmed at most once.
+    const warmedManifests = new Set<string>();
+    // Reentrancy guard: refreshWorkingSet fires from mount, the pump (when the set
+    // is empty) AND every foreground, so it must not overlap itself.
+    let refreshing = false;
 
     nativeAudioSetCap(maxBytes());
 
-    // Manifest once per launch — FRESH (not the offline cache): a URL-scheme
-    // change doesn't move the Merkle root, so a cached dag would keep us pulling
-    // the wrong/old audio. Filter to the audio resources; their hashes are the
-    // native cache keys we diff against `nativeAudioStats().cached`.
-    void (async () => {
+    // (Re)build the audio working set from /api/dag. MUST be repeatable, NOT a
+    // once-at-mount IIFE — the old code built `audioRes` exactly once at launch, so
+    //  (a) a flaky/offline cold launch left it EMPTY for the whole session: every
+    //      pump no-op'd and the audio fill was dead until an app relaunch; and
+    //  (b) a frozen set never learned about audio BAKED server-side after launch,
+    //      so a long session parked at whatever % was baked at launch time (the
+    //      "stuck at 87%, 5.5/20GB, not WiFi-waiting" report — the server kept
+    //      baking past 3591 but the client's set never grew to see it).
+    // Re-run on foreground + whenever the set is empty so a recovered network and
+    // newly-baked chapters both self-heal without a relaunch.
+    const refreshWorkingSet = async (): Promise<void> => {
+      if (cancelled || refreshing) return;
+      refreshing = true;
       try {
-        // Refresh the native content manifest FIRST (on mount / cold launch), so
-        // newly-added corpus resources (e.g. audio `spoken` transcripts) are known
-        // before the sync runs. Foreground refresh is wired below.
+        // Refresh the native content manifest FIRST so newly-added corpus resources
+        // (e.g. audio `spoken` transcripts) are known before we read the dag.
         await nativeRefreshManifest();
-        // contentFetch: cache-first + timed (offline-safe). A raw network fetch of
-        // the 4 MB dag here hung the audio driver offline.
+        // contentFetch: network-first when online (picks up newly-baked audio),
+        // cache fallback offline + timed (a raw fetch of the ~4 MB dag hung offline).
         const dag = (await (await contentFetch("/api/dag")).json()) as {
           resources: { hash: string; kind: string; url: string; path: string }[];
         };
         if (cancelled) return;
         // PERSIST the per-chapter audio + marks hashes to the durable localStorage
-        // index FIRST — this is the offline-playback fix. We're online here (the dag
-        // fetch succeeded), which is exactly when audio gets downloaded, so this
-        // guarantees "downloaded ⇒ hash available offline" without depending on the
-        // manifest still being in the url-cache. The player reads this index before
-        // the manifest (see audioHash.ts → chapterMedia).
+        // index FIRST — the offline-playback fix. We're online here (the dag fetch
+        // succeeded), which is exactly when audio gets downloaded, so this guarantees
+        // "downloaded ⇒ hash available offline" without depending on the manifest
+        // still being in the url-cache. (player reads this index before the manifest.)
         ingestDag(dag.resources);
+        // Reassigned ONLY after a successful fetch+parse, so a failed refresh keeps
+        // the prior good set instead of clobbering it to [].
         audioRes = dag.resources
           .filter((r) => r.kind === "audio")
           .map((r) => ({ hash: r.hash, url: r.url }));
-        // Warm every book's /api/manifest into the cache (cache-first → cheap when
-        // already cached). The native audio player keys its offline store by each
-        // chapter's content HASH, which the web reads from this manifest (audioHash
-        // → contentFetch). Without it cached, offline playback can't resolve the
-        // hash → it looks under a URL key → the hash-keyed downloaded file isn't
-        // found → no offline play. Warming all manifests makes EVERY downloaded
-        // book playable offline, not only ones played online once.
+        // Warm each book's /api/manifest into the cache ONCE per session (cache-first
+        // → cheap). The native player keys its offline store by each chapter's content
+        // HASH, read from this manifest; without it cached, offline playback can't
+        // resolve the hash → no offline play. Warming makes EVERY downloaded book
+        // playable offline, not only ones played online once.
         const slugs = [
           ...new Set(dag.resources.map((r) => r.path.split("/")[0] ?? "")),
-        ].filter((s) => s.length > 0);
+        ].filter((s) => s.length > 0 && !warmedManifests.has(s));
         for (const slug of slugs) {
           if (cancelled) break;
+          warmedManifests.add(slug);
           await contentFetch(`/api/manifest/${encodeURIComponent(slug)}`)
             .catch(() => undefined);
         }
       } catch {
-        /* offline → nothing to drive until a later launch */
+        /* offline / transient — retried on the next foreground or empty-set pump */
+      } finally {
+        refreshing = false;
       }
-    })();
+    };
+
+    void refreshWorkingSet();
 
     const pump = async (): Promise<void> => {
       if (cancelled) return;
@@ -109,7 +125,14 @@ export function useAudioPreloadDriver(): void {
       } catch {
         /* stats unavailable → skip this round */
       }
-      if (cancelled || audioRes.length === 0) return;
+      if (cancelled) return;
+      if (audioRes.length === 0) {
+        // Set not built yet (offline/flaky cold launch) — rebuild it so a recovered
+        // network self-heals the fill without an app relaunch. `refreshing` guards
+        // overlap; a still-offline retry is a cheap cached miss.
+        void refreshWorkingSet();
+        return;
+      }
       // Re-read the budget each round so a Settings change applies live.
       nativeAudioSetCap(maxBytes());
       // WiFi-only heuristic: don't auto-fill the bulk audio on cellular when the
@@ -138,14 +161,13 @@ export function useAudioPreloadDriver(): void {
     void pump();
     timer = globalThis.setInterval(() => void pump(), 3000);
 
-    // Refresh the native content manifest on EVERY foreground (not just cold
-    // launch). A warm-resumed device would otherwise never learn about corpus
-    // resources added since its last cold launch (e.g. the audio `spoken`
-    // transcripts) → they'd stay blank offline. After the manifest grows, the
-    // 3s pump above downloads whatever's newly listed.
+    // Rebuild the working set on EVERY foreground (not just cold launch): it
+    // re-reads /api/dag (refreshing the manifest first), so audio baked server-side
+    // since launch enters the fill and a warm-resumed device isn't frozen at its
+    // launch-time %. Then pump downloads whatever's newly listed.
     const onVisible = (): void => {
       if (globalThis.document?.visibilityState === "visible") {
-        void nativeRefreshManifest().then(() => {
+        void refreshWorkingSet().then(() => {
           if (!cancelled) void pump();
         });
       }
