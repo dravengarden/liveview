@@ -6,3 +6,4 @@ export { JsonViewer } from "./JsonViewer";
 export { ExcalidrawViewer } from "./ExcalidrawViewer";
 export { LatexViewer } from "./LatexViewer";
 export { TypstViewer } from "./TypstViewer";
+export { InteractiveViewViewer } from "./InteractiveViewViewer";

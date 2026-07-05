@@ -28,6 +28,13 @@ pub enum FileType {
     Excalidraw,
     Latex,
     Typst,
+    /// An Interactive View document (`*.interactive-view.json`): declarative
+    /// charts + Block-Kit-style widgets over a Pluto-style reactive signal
+    /// graph. A superset-tagged `.json` file, so it is recognised by its
+    /// **double extension** in `from_path`, not by `from_extension` (which only
+    /// ever sees the final `json`). See `docs/design/interactive-view.md`.
+    #[serde(rename = "interactive-view")]
+    InteractiveView,
     Unknown,
 }
 
@@ -49,6 +56,18 @@ impl FileType {
     }
 
     pub fn from_path(path: &str) -> Self {
+        // Interactive View is a double-extension type (`*.interactive-view.json`):
+        // `Path::extension()` returns only `json`, so classify it by suffix here,
+        // *before* the single-extension fallback would call it a plain `.json`.
+        if path
+            .rsplit('/')
+            .next()
+            .unwrap_or(path)
+            .to_lowercase()
+            .ends_with(".interactive-view.json")
+        {
+            return FileType::InteractiveView;
+        }
         std::path::Path::new(path)
             .extension()
             .and_then(|ext| ext.to_str())

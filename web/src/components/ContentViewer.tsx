@@ -33,6 +33,11 @@ const LatexViewer = lazy(() =>
 const TypstViewer = lazy(() =>
   import("./viewers/TypstViewer").then((m) => ({ default: m.TypstViewer }))
 );
+const InteractiveViewViewer = lazy(() =>
+  import("./viewers/InteractiveViewViewer").then((m) => ({
+    default: m.InteractiveViewViewer,
+  }))
+);
 
 interface ContentViewerProps {
   content: string | null;
@@ -213,6 +218,10 @@ export function ContentViewer({
 
     case "typst":
       node = <TypstViewer content={content} path={currentPath} />;
+      break;
+
+    case "interactive-view":
+      node = <InteractiveViewViewer content={content} theme={theme} />;
       break;
 
     default:

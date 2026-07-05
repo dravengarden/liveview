@@ -13,6 +13,7 @@
 
 pub mod diagnostic;
 pub mod excalidraw;
+pub mod interactive_view;
 pub mod json;
 pub mod markdown;
 pub mod math;
@@ -75,6 +76,11 @@ fn validators_for(file_type: &FileType) -> Vec<Box<dyn Validator>> {
         FileType::Json => vec![Box::new(json::JsonValidator)],
         // `.excalidraw`: valid JSON + the load-bearing schema fields.
         FileType::Excalidraw => vec![Box::new(excalidraw::ExcalidrawValidator)],
+        // `*.interactive-view.json`: the full soundness pass — parse + signals +
+        // references + reactive DAG + widget/layout bounds. checker == renderer.
+        FileType::InteractiveView => {
+            vec![Box::new(interactive_view::InteractiveViewValidator)]
+        }
         // CSV and HTML get no validator: the reader's CSV parser is a lenient
         // hand-rolled split (almost nothing is "malformed"), and raw HTML is
         // rendered by the browser, which tolerates ill-formed markup — neither

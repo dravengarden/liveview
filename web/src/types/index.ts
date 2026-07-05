@@ -19,6 +19,7 @@ export type FileType =
   | "excalidraw"
   | "latex"
   | "typst"
+  | "interactive-view"
   | "unknown";
 
 export interface FileContent {

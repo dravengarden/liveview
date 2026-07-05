@@ -46,6 +46,25 @@ order = [
 ]
 
 # ───────────────────────────────────────────────────────────────────────
+# Book — Interactive View demos. `*.interactive-view.json` documents render
+# client-side via the reactive kernel (widgets ⇄ signals ⇄ text/charts). This
+# book sets its own `includes` for the double extension; the Demo Docs book
+# above keeps the default includes and ignores these files.
+# ───────────────────────────────────────────────────────────────────────
+[[book]]
+label       = "Interactive Views"
+slug        = "interactive"
+source      = "interactive"
+description = "Interactive View demo — every widget, reactive signals, live metrics."
+includes    = ["**/*.interactive-view.json", "**/*.md"]
+
+[book.layout]
+order = [
+    "metrics-report.interactive-view.json",
+    "all-widgets.interactive-view.json",
+]
+
+# ───────────────────────────────────────────────────────────────────────
 # Book 2 — a multi-language book. Two editions sharing one structure; the
 # sidebar shows a language switcher (English / 中文).
 # ───────────────────────────────────────────────────────────────────────

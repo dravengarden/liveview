@@ -54,6 +54,7 @@ fn file_type_str(ft: &FileType) -> &'static str {
         FileType::Excalidraw => "excalidraw",
         FileType::Latex => "latex",
         FileType::Typst => "typst",
+        FileType::InteractiveView => "interactive-view",
         FileType::Unknown => "unknown",
     }
 }

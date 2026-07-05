@@ -1,6 +1,7 @@
 mod check;
 mod cli;
 mod config;
+mod interactive_view;
 mod server;
 mod shared;
 mod store;
