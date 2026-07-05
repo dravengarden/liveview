@@ -67,6 +67,10 @@ fn validators_for(file_type: &FileType) -> Vec<Box<dyn Validator>> {
             // Inline `<svg>` blocks are embedded raw in markdown (67 corpus
             // files); validate they're well-formed XML.
             Box::new(svg::SvgValidator),
+            // ` ```interactive-view ` fences — the full soundness check per fence
+            // (checker == renderer), so a bad reactive report in a book chapter
+            // fails the sync gate instead of silently degrading in the reader.
+            Box::new(interactive_view::InteractiveViewFenceValidator),
         ],
         // `.typ` files: validate that the source parses as well-formed typst
         // (the reader highlights them; a future renderer would compile them).

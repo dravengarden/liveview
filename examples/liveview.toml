@@ -46,22 +46,23 @@ order = [
 ]
 
 # ───────────────────────────────────────────────────────────────────────
-# Book — Interactive View demos. `*.interactive-view.json` documents render
-# client-side via the reactive kernel (widgets ⇄ signals ⇄ text/charts). This
-# book sets its own `includes` for the double extension; the Demo Docs book
-# above keeps the default includes and ignores these files.
+# Book — Interactive View demos. A plain markdown book whose chapters embed
+# ` ```interactive-view ` fences: each renders client-side via the reactive
+# kernel (widgets ⇄ signals ⇄ text/charts), interleaved with normal prose and a
+# real H1 chapter title. (Standalone `*.interactive-view.json` documents render
+# the same way via the same viewer, but the demo is authored as markdown.)
 # ───────────────────────────────────────────────────────────────────────
 [[book]]
 label       = "Interactive Views"
 slug        = "interactive"
 source      = "interactive"
-description = "Interactive View demo — every widget, reactive signals, live metrics."
-includes    = ["**/*.interactive-view.json", "**/*.md"]
+description = "Interactive View demo — reactive widgets + live metrics, embedded in markdown."
+includes    = ["**/*.md"]
 
 [book.layout]
 order = [
-    "metrics-report.interactive-view.json",
-    "all-widgets.interactive-view.json",
+    "metrics-report.md",
+    "all-widgets.md",
 ]
 
 # ───────────────────────────────────────────────────────────────────────

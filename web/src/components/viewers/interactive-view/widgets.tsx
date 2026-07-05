@@ -30,7 +30,7 @@ import {
 } from "@mui/material";
 import { Add as AddIcon, Remove as RemoveIcon } from "@mui/icons-material";
 import type { Opt, Widget, WidgetType } from "./types";
-import { Kernel, useKernelVersion } from "./kernel";
+import type { Kernel } from "./kernel";
 
 function assertNever(x: never): never {
   throw new Error(`unhandled widget: ${JSON.stringify(x)}`);
@@ -66,7 +66,6 @@ interface Ctl<K extends WidgetType> {
 }
 
 function SliderWidget({ w, signal, kernel }: Ctl<"slider">): JSX.Element {
-  useKernelVersion(kernel);
   const value = num(kernel.get(signal), w.min);
   return (
     <Field label={w.label}>
@@ -84,7 +83,6 @@ function SliderWidget({ w, signal, kernel }: Ctl<"slider">): JSX.Element {
 }
 
 function RangeSliderWidget({ w, signal, kernel }: Ctl<"rangeSlider">): JSX.Element {
-  useKernelVersion(kernel);
   const raw = kernel.get(signal);
   const arr = Array.isArray(raw) ? (raw as unknown[]) : [];
   const value: number[] = [num(arr[0], w.min), num(arr[1], w.max)];
@@ -106,7 +104,6 @@ function RangeSliderWidget({ w, signal, kernel }: Ctl<"rangeSlider">): JSX.Eleme
 }
 
 function NumberInputWidget({ w, signal, kernel }: Ctl<"numberInput">): JSX.Element {
-  useKernelVersion(kernel);
   const value = num(kernel.get(signal), 0);
   const bounds = {
     ...(w.min !== undefined ? { min: w.min } : {}),
@@ -130,7 +127,6 @@ function NumberInputWidget({ w, signal, kernel }: Ctl<"numberInput">): JSX.Eleme
 }
 
 function StepperWidget({ w, signal, kernel }: Ctl<"stepper">): JSX.Element {
-  useKernelVersion(kernel);
   const value = Math.round(num(kernel.get(signal), 0));
   const clamp = (n: number): number => {
     let out = n;
@@ -156,7 +152,6 @@ function StepperWidget({ w, signal, kernel }: Ctl<"stepper">): JSX.Element {
 }
 
 function ToggleWidget({ w, signal, kernel }: Ctl<"toggle">): JSX.Element {
-  useKernelVersion(kernel);
   const checked = kernel.get(signal) === true;
   return (
     <FormControlLabel
@@ -169,7 +164,6 @@ function ToggleWidget({ w, signal, kernel }: Ctl<"toggle">): JSX.Element {
 }
 
 function SegmentedWidget({ w, signal, kernel }: Ctl<"segmented">): JSX.Element {
-  useKernelVersion(kernel);
   const current = keyOf(kernel.get(signal));
   return (
     <Field label={w.label}>
@@ -194,7 +188,6 @@ function SegmentedWidget({ w, signal, kernel }: Ctl<"segmented">): JSX.Element {
 }
 
 function RadioGroupWidget({ w, signal, kernel }: Ctl<"radioGroup">): JSX.Element {
-  useKernelVersion(kernel);
   const current = keyOf(kernel.get(signal));
   return (
     <Field label={w.label}>
@@ -214,7 +207,6 @@ function RadioGroupWidget({ w, signal, kernel }: Ctl<"radioGroup">): JSX.Element
 }
 
 function SelectWidget({ w, signal, kernel }: Ctl<"select">): JSX.Element {
-  useKernelVersion(kernel);
   const current = keyOf(kernel.get(signal));
   return (
     <Field label={w.label}>
@@ -248,7 +240,6 @@ function valuesFor(options: Opt[], keys: string[]): unknown[] {
 }
 
 function MultiSelectWidget({ w, signal, kernel }: Ctl<"multiSelect">): JSX.Element {
-  useKernelVersion(kernel);
   const raw = kernel.get(signal);
   const selected = (Array.isArray(raw) ? raw : []).map((v) => keyOf(v));
   return (
@@ -275,7 +266,6 @@ function MultiSelectWidget({ w, signal, kernel }: Ctl<"multiSelect">): JSX.Eleme
 }
 
 function CheckboxGroupWidget({ w, signal, kernel }: Ctl<"checkboxGroup">): JSX.Element {
-  useKernelVersion(kernel);
   const raw = kernel.get(signal);
   const selected = new Set((Array.isArray(raw) ? raw : []).map((v) => keyOf(v)));
   const toggle = (o: Opt, on: boolean): void => {
@@ -300,7 +290,6 @@ function CheckboxGroupWidget({ w, signal, kernel }: Ctl<"checkboxGroup">): JSX.E
 }
 
 function TextInputWidget({ w, signal, kernel }: Ctl<"textInput">): JSX.Element {
-  useKernelVersion(kernel);
   const value = String(kernel.get(signal) ?? "");
   const htmlInput = { ...(w.maxLength !== undefined ? { maxLength: w.maxLength } : {}) };
   return (
@@ -311,7 +300,6 @@ function TextInputWidget({ w, signal, kernel }: Ctl<"textInput">): JSX.Element {
 }
 
 function DatePickerWidget({ w, signal, kernel }: Ctl<"datePicker">): JSX.Element {
-  useKernelVersion(kernel);
   const value = String(kernel.get(signal) ?? "");
   const htmlInput = {
     ...(w.min !== undefined ? { min: w.min } : {}),
@@ -325,7 +313,6 @@ function DatePickerWidget({ w, signal, kernel }: Ctl<"datePicker">): JSX.Element
 }
 
 function DateRangeWidget({ w, signal, kernel }: Ctl<"dateRange">): JSX.Element {
-  useKernelVersion(kernel);
   const raw = kernel.get(signal);
   const arr = Array.isArray(raw) ? (raw as unknown[]) : [];
   const lo = String(arr[0] ?? "");

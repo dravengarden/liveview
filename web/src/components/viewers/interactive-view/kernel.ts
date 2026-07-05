@@ -1,120 +1,125 @@
-// The reactive kernel — the single source of mutable state (Pluto-style
-// signals). Widgets `set` a signal; `derived` signals recompute via the total
-// evaluator (`expr.ts`) whenever their inputs change; blocks `get` and subscribe.
+// The reactive kernel — Pluto-style signals, but with REACT owning the mutable
+// state. A widget calls `set`; that dispatches a React state update; the whole
+// interactive-view subtree re-renders with a FRESH kernel object (new identity)
+// carrying the new values, so every block/metric that reads `get` re-reads the
+// current value. There is deliberately no external store + manual subscription
+// here: that design let a widget's write and a tile's read observe different
+// snapshots (a re-render could commit a stale value). By threading the state
+// through React (props), the value a component reads during a render is always
+// the value committed for that render — reactivity is coherent by construction.
 //
 // The Rust checker guarantees the signal/derived graph is a DAG, so a bounded
-// number of re-evaluation passes converges (no scheduler, no cycle handling
-// needed). We recompute all derived cells to a fixpoint on every `set` — the
-// catalog is small, so this is cheap and always terminates.
+// number of re-evaluation passes converges (no scheduler, no cycle handling).
+// We recompute all derived cells to a fixpoint whenever a base signal changes —
+// the catalog is small, so this is cheap and always terminates.
 
-import { useSyncExternalStore } from "react";
+import { useMemo, useState } from "react";
 import type { Document } from "./types";
 import { evalDerived, isUnavailable, parseExpr, UNAVAILABLE, type Ast, type EvalDataset, type EvalEnv } from "./expr";
+
+/** The read/write surface the blocks + widgets use. A fresh `Kernel` object is
+ *  produced on every state change (so passing it as a prop re-renders readers);
+ *  `set`/`reset` dispatch React state updates. */
+export interface Kernel {
+  get(name: string): unknown;
+  set(name: string, value: unknown): void;
+  reset(names: string[]): void;
+}
 
 interface DerivedCell {
   name: string;
   ast: Ast | null;
 }
 
-export class Kernel {
-  private readonly values = new Map<string, unknown>();
-  private readonly initials = new Map<string, unknown>();
-  private readonly derived: DerivedCell[] = [];
-  private readonly datasets: Record<string, EvalDataset> = {};
-  private readonly listeners = new Set<() => void>();
-  private version = 0;
+// The static shape of a document: datasets, the derived-cell ASTs, and the
+// initial values of the base (widget/selection) signals. Parsed once per doc.
+interface Spec {
+  datasets: Record<string, EvalDataset>;
+  derived: DerivedCell[];
+  initialBase: Record<string, unknown>;
+}
 
-  constructor(doc: Document) {
-    // Datasets: inline `values` load eagerly; a `source`-backed dataset is
-    // unavailable in Phase 1 (rows: null) — every dependent derived becomes
-    // UNAVAILABLE, exactly the resilience contract (§9).
-    const data = doc.data ?? {};
-    for (const name of Object.keys(data)) {
-      const d = data[name];
-      if (!d) continue;
-      const rows = Array.isArray(d.values) ? (d.values as Record<string, unknown>[]) : null;
-      this.datasets[name] = { columns: d.columns, rows };
+function buildSpec(doc: Document): Spec {
+  const datasets: Record<string, EvalDataset> = {};
+  const data = doc.data ?? {};
+  for (const name of Object.keys(data)) {
+    const d = data[name];
+    if (!d) continue;
+    // Inline `values` load eagerly; a `source`-backed dataset is unavailable in
+    // Phase 1 (rows: null) — every dependent derived becomes UNAVAILABLE, which
+    // is exactly the resilience contract (§9).
+    const rows = Array.isArray(d.values) ? (d.values as Record<string, unknown>[]) : null;
+    datasets[name] = { columns: d.columns, rows };
+  }
+
+  const derived: DerivedCell[] = [];
+  const initialBase: Record<string, unknown> = {};
+  const signals = doc.signals ?? {};
+  for (const name of Object.keys(signals)) {
+    const sig = signals[name];
+    if (!sig) continue;
+    if (typeof sig.derived === "string") {
+      derived.push({ name, ast: parseExpr(sig.derived) });
+      continue;
     }
+    // A widget/selection signal: seed from `init` (or a type-appropriate empty,
+    // so widgets are controlled from the first render). The initial is what a
+    // `button` reset snaps back to.
+    initialBase[name] = sig.init === undefined ? emptyFor(sig.type) : sig.init;
+  }
+  return { datasets, derived, initialBase };
+}
 
-    const signals = doc.signals ?? {};
-    for (const name of Object.keys(signals)) {
-      const sig = signals[name];
-      if (!sig) continue;
-      if (typeof sig.derived === "string") {
-        this.derived.push({ name, ast: parseExpr(sig.derived) });
-        this.values.set(name, UNAVAILABLE);
-        continue;
+// Merge base signals with the derived cells recomputed to a fixpoint (≤ N passes
+// for N cells, since the graph is a DAG). Each pass reads a snapshot of the
+// previous pass's values; a cell reading a not-yet-final dependency settles on
+// the next pass. Pure — same inputs, same output (memoized on `[spec, base]`).
+function computeValues(spec: Spec, base: Record<string, unknown>): Record<string, unknown> {
+  const values: Record<string, unknown> = { ...base };
+  for (const cell of spec.derived) values[cell.name] = UNAVAILABLE;
+
+  const maxPasses = spec.derived.length + 1;
+  for (let pass = 0; pass < maxPasses; pass++) {
+    let changed = false;
+    const env: EvalEnv = { signals: { ...values }, datasets: spec.datasets };
+    for (const cell of spec.derived) {
+      const next = cell.ast === null ? UNAVAILABLE : evalDerived(cell.ast, env);
+      if (!sameScalar(values[cell.name], next)) {
+        values[cell.name] = next;
+        changed = true;
       }
-      // A widget/selection signal: seed from `init` (or a type-appropriate
-      // empty). The initial is remembered for `button` reset.
-      const init = sig.init === undefined ? emptyFor(sig.type) : sig.init;
-      this.values.set(name, init);
-      this.initials.set(name, init);
     }
-    this.recompute();
+    if (!changed) break;
   }
+  return values;
+}
 
-  /** Current value of a signal (UNAVAILABLE for an unresolved derived cell). */
-  get = (name: string): unknown => {
-    return this.values.has(name) ? this.values.get(name) : UNAVAILABLE;
-  };
+/** Build the reactive kernel for a document. React owns the base-signal state;
+ *  derived values are recomputed from it. Call ONCE per mounted document — the
+ *  caller keys the subtree on `content`, so a content change remounts and this
+ *  re-seeds cleanly from the new `init`s (no in-render reset). */
+export function useKernel(doc: Document): Kernel {
+  const spec = useMemo(() => buildSpec(doc), [doc]);
+  const [base, setBase] = useState<Record<string, unknown>>(() => spec.initialBase);
+  const values = useMemo(() => computeValues(spec, base), [spec, base]);
 
-  /** Write a widget/selection signal, then recompute derived cells + notify. */
-  set = (name: string, value: unknown): void => {
-    this.values.set(name, value);
-    this.recompute();
-    this.bump();
-  };
-
-  /** Snap the named signals back to their `init` (a `button`'s reset action). */
-  reset = (names: string[]): void => {
-    for (const name of names) {
-      if (this.initials.has(name)) this.values.set(name, this.initials.get(name));
-    }
-    this.recompute();
-    this.bump();
-  };
-
-  /** The evaluator env — a snapshot of every signal value + dataset. */
-  env(): EvalEnv {
-    const sig: Record<string, unknown> = {};
-    for (const [k, v] of this.values) sig[k] = v;
-    return { signals: sig, datasets: this.datasets };
-  }
-
-  subscribe = (cb: () => void): (() => void) => {
-    this.listeners.add(cb);
-    return () => {
-      this.listeners.delete(cb);
-    };
-  };
-
-  getVersion = (): number => this.version;
-
-  private bump(): void {
-    this.version += 1;
-    for (const cb of this.listeners) cb();
-  }
-
-  // Re-evaluate every derived cell to a fixpoint (≤ N passes for N cells, since
-  // the graph is a DAG). Uses the current env; a cell that reads a not-yet-final
-  // dependency settles on the next pass.
-  private recompute(): void {
-    const maxPasses = this.derived.length + 1;
-    for (let pass = 0; pass < maxPasses; pass++) {
-      let changed = false;
-      const env = this.env();
-      for (const cell of this.derived) {
-        const next = cell.ast === null ? UNAVAILABLE : evalDerived(cell.ast, env);
-        const prev = this.values.get(cell.name);
-        if (!sameScalar(prev, next)) {
-          this.values.set(cell.name, next);
-          changed = true;
-        }
-      }
-      if (!changed) break;
-    }
-  }
+  // A NEW kernel object whenever `values` changes: passed down as a prop, its
+  // changed identity re-renders every reader, which then reads the fresh value.
+  return useMemo<Kernel>(
+    () => ({
+      get: (name) => (Object.hasOwn(values, name) ? values[name] : UNAVAILABLE),
+      set: (name, value) => setBase((b) => ({ ...b, [name]: value })),
+      reset: (names) =>
+        setBase((b) => {
+          const next = { ...b };
+          for (const n of names) {
+            if (Object.hasOwn(spec.initialBase, n)) next[n] = spec.initialBase[n];
+          }
+          return next;
+        }),
+    }),
+    [values, spec],
+  );
 }
 
 function sameScalar(a: unknown, b: unknown): boolean {
@@ -140,10 +145,4 @@ function emptyFor(type: string): unknown {
     default:
       return "";
   }
-}
-
-/** Subscribe a component to kernel changes; returns the current version so React
- *  re-renders (and re-reads `kernel.get`) whenever any signal changes. */
-export function useKernelVersion(kernel: Kernel): number {
-  return useSyncExternalStore(kernel.subscribe, kernel.getVersion, kernel.getVersion);
 }

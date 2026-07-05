@@ -24,10 +24,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use comrak::nodes::NodeValue;
+use comrak::{parse_document, Arena};
+
 use crate::check::diagnostic::{Diagnostic, Severity};
 use crate::check::{CheckCtx, CheckFile, Validator};
 use crate::interactive_view::expr::{self, ExprEnv};
 use crate::interactive_view::model::{Block, Document, SignalType, Widget};
+use crate::server::renderer;
 
 pub struct InteractiveViewValidator;
 
@@ -47,35 +51,81 @@ const MAX_INLINE_DATA_BYTES: usize = 32 * 1024;
 
 impl Validator for InteractiveViewValidator {
     fn check(&self, file: &CheckFile, _ctx: &CheckCtx) -> Vec<Diagnostic> {
-        let doc = match Document::parse(&file.source) {
-            Ok(d) => d,
-            Err(e) => {
-                return vec![diag(
-                    file,
-                    e.line() as u32,
-                    e.column() as u32,
-                    Severity::Error,
-                    "interactive-view/parse-error",
-                    clean(&e.to_string()),
-                    Some("must be a well-formed Interactive View document — see docs/design/interactive-view.md".into()),
-                )]
-            }
-        };
-        let mut c = Checker {
-            file,
-            source: &file.source,
-            diags: Vec::new(),
-            signals: BTreeMap::new(),
-            datasets: BTreeMap::new(),
-            chart_ids: BTreeSet::new(),
-        };
-        c.run(&doc);
-        c.diags
+        check_doc(&file.rel, &file.source, 0)
     }
 }
 
+/// Validates ` ```interactive-view ` fences embedded in markdown — the primary
+/// way the type is used (a reactive report inline in a book/doc chapter, so it
+/// gets a real chapter title). Registered alongside the other markdown
+/// validators; walks the same comrak AST the renderer emits (checker ==
+/// renderer) and runs the full document check per fence, offset to the fence's
+/// line in the `.md`.
+pub struct InteractiveViewFenceValidator;
+
+impl Validator for InteractiveViewFenceValidator {
+    fn check(&self, file: &CheckFile, _ctx: &CheckCtx) -> Vec<Diagnostic> {
+        let arena = Arena::new();
+        let root = parse_document(&arena, &file.source, &renderer::markdown_options());
+        let mut diags = Vec::new();
+        for node in root.descendants() {
+            let data = node.data.borrow();
+            let NodeValue::CodeBlock(cb) = &data.value else {
+                continue;
+            };
+            if cb.info.split_whitespace().next() != Some("interactive-view") {
+                continue;
+            }
+            // The fence opener sits on `start.line`; the JSON body starts on the
+            // next line, so that is the offset added to each diagnostic's line.
+            let offset = data.sourcepos.start.line as u32;
+            diags.extend(check_doc(&file.rel, &cb.literal, offset));
+        }
+        diags
+    }
+}
+
+/// Check one Interactive View document `source`, reporting diagnostics against
+/// `rel`. `line_offset` (0 for a standalone file) is added to every diagnostic
+/// line so an ` ```interactive-view ` fence embedded in markdown points at the
+/// right line in the `.md`. This is the single entry both the standalone file
+/// validator and the markdown-fence validator share (checker == renderer: the
+/// same IR + checks whether the doc is a whole file or a fence).
+pub fn check_doc(rel: &str, source: &str, line_offset: u32) -> Vec<Diagnostic> {
+    let doc = match Document::parse(source) {
+        Ok(d) => d,
+        Err(e) => {
+            return vec![diag(
+                rel,
+                e.line() as u32 + line_offset,
+                e.column() as u32,
+                Severity::Error,
+                "interactive-view/parse-error",
+                clean(&e.to_string()),
+                Some("must be a well-formed Interactive View document — see docs/design/interactive-view.md".into()),
+            )]
+        }
+    };
+    let mut c = Checker {
+        rel,
+        source,
+        diags: Vec::new(),
+        signals: BTreeMap::new(),
+        datasets: BTreeMap::new(),
+        chart_ids: BTreeSet::new(),
+    };
+    c.run(&doc);
+    if line_offset > 0 {
+        for d in &mut c.diags {
+            d.line += line_offset;
+            d.end_line += line_offset;
+        }
+    }
+    c.diags
+}
+
 struct Checker<'a> {
-    file: &'a CheckFile,
+    rel: &'a str,
     source: &'a str,
     diags: Vec<Diagnostic>,
     signals: BTreeMap<String, SignalType>,
@@ -546,7 +596,7 @@ impl<'a> Checker<'a> {
 
     fn err(&mut self, rule: &str, msg: String, hint: Option<String>, at: (u32, u32)) {
         self.diags.push(diag(
-            self.file,
+            self.rel,
             at.0,
             at.1,
             Severity::Error,
@@ -557,7 +607,7 @@ impl<'a> Checker<'a> {
     }
     fn warn(&mut self, rule: &str, msg: String, hint: Option<String>, at: (u32, u32)) {
         self.diags.push(diag(
-            self.file,
+            self.rel,
             at.0,
             at.1,
             Severity::Warning,
@@ -586,7 +636,7 @@ impl<'a> Checker<'a> {
 
 #[allow(clippy::too_many_arguments)]
 fn diag(
-    file: &CheckFile,
+    rel: &str,
     line: u32,
     col: u32,
     severity: Severity,
@@ -595,7 +645,7 @@ fn diag(
     hint: Option<String>,
 ) -> Diagnostic {
     Diagnostic {
-        file: file.rel.clone(),
+        file: rel.to_string(),
         line: line.max(1),
         col: col.max(1),
         end_line: line.max(1),

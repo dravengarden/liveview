@@ -102,6 +102,10 @@ fn is_text(ft: &FileType) -> bool {
             | FileType::Excalidraw
             | FileType::Latex
             | FileType::Typst
+            // A standalone `*.interactive-view.json` is a text document the client
+            // renders (like json/html); it must be stored as rendered text, not a
+            // binary blob, or `/api/file` serves empty content.
+            | FileType::InteractiveView
     )
 }
 

@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Box } from "@mui/material";
 import { READING_COLUMN_MAX } from "@/types";
 import { ImageLightbox } from "../_shell";
 import { ScrollToTopButton } from "./ScrollToTopButton";
 import { PlaybackBar } from "./PlaybackBar";
+import { InteractiveViewInline } from "./viewers/InteractiveViewViewer";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { useInPlaceHighlight } from "@/hooks/useInPlaceHighlight";
 import { ensureScript, ensureStyle, publicAsset } from "@/ensureAsset";
@@ -211,6 +213,37 @@ function onTapToOpen(el: HTMLElement, open: () => void): () => void {
   };
 }
 
+/** Decode the HTML entities comrak escapes inside a code block, recovering the
+ *  raw JSON of an ` ```interactive-view ` fence. */
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+/** Rewrite server-rendered markdown html so each ` ```interactive-view ` fence
+ *  (comrak emits `<pre lang="interactive-view"><code>…escaped JSON…</code></pre>`)
+ *  becomes an empty placeholder `<div data-iv-slot="i">`, and return the fence
+ *  JSON payloads. The caller renders `processedHtml` as ONE node (keeping the
+ *  single-node structure prose read-along relies on) and React-**portals** each
+ *  interactive view into its placeholder. A portal keeps the view inside React's
+ *  tree (so it inherits the theme and its updates commit reliably) while its DOM
+ *  lives at a stable anchor the imperative markdown passes never touch. */
+function splitForPortals(html: string | null): { processedHtml: string; fences: string[] } {
+  if (!html) return { processedHtml: "", fences: [] };
+  const re = /<pre[^>]*\blang="interactive-view"[^>]*>([\s\S]*?)<\/pre>/g;
+  const fences: string[] = [];
+  const processedHtml = html.replace(re, (_full, inner: string) => {
+    const code = /<code[^>]*>([\s\S]*?)<\/code>/.exec(inner);
+    fences.push(decodeEntities(code ? (code[1] ?? "") : inner));
+    return `<div data-iv-slot="${fences.length - 1}" class="lv-interactive-view"></div>`;
+  });
+  return { processedHtml, fences };
+}
+
 export function MarkdownViewer({
   html,
   currentPath,
@@ -240,6 +273,17 @@ export function MarkdownViewer({
   // diagrams aren't in the DOM yet when the gallery effect first wires click
   // handlers — re-running the effect on this tick picks them up once they are.
   const [diagramTick, setDiagramTick] = useState(0);
+
+  // ` ```interactive-view ` fences are split out of the server-rendered html and
+  // rendered as real React children (see the render body) — so React owns their
+  // lifecycle and they inherit the app's MUI theme context. This is what makes
+  // the type "just markdown": any book/doc chapter embeds a reactive report
+  // inline, with a real chapter title from the `.md`'s H1.
+  // Interactive-view fences → placeholder divs + their JSON payloads (memoized on
+  // `html` so payloads keep a stable identity). Each is portalled into its
+  // placeholder after the html commits; `slots` holds the resolved anchor nodes.
+  const { processedHtml, fences } = useMemo(() => splitForPortals(html), [html]);
+  const [slots, setSlots] = useState<(HTMLElement | null)[]>([]);
 
   // Keep the screen awake while a chapter is open — a reader may not touch the
   // screen for minutes. Released automatically when no doc is shown.
@@ -356,6 +400,13 @@ export function MarkdownViewer({
       }
     }
 
+    // Interactive View fences are NOT hydrated here — they are split out of the
+    // html and rendered as real React children (see `segments` below), so React
+    // owns their lifecycle + theme context (imperatively mounting a root inside
+    // this dangerouslySetInnerHTML container is fragile — it gets wiped on
+    // re-render). This pass only touches the imperative libs (highlight/mermaid/
+    // katex).
+
     // KaTeX math (comrak emits <span data-math-style>…</span> + code.language-math).
     // Self-hosted + loaded ON DEMAND — only when the chapter has math. No CDN
     // (jsdelivr is slow/blocked behind the GFW + dead offline); assets live in
@@ -417,6 +468,14 @@ export function MarkdownViewer({
   useEffect(() => {
     processContent();
   }, [html, processContent]);
+
+  // Resolve the interactive-view placeholder anchors after the html commits, so
+  // the portals below can target them. Re-runs when the html (hence the
+  // placeholders) changes.
+  useEffect(() => {
+    const c = containerRef.current;
+    setSlots(fences.map((_, i) => c?.querySelector<HTMLElement>(`[data-iv-slot="${i}"]`) ?? null));
+  }, [processedHtml, fences]);
 
   // Two reactions to root-level changes, both watching documentElement:
   //
@@ -930,11 +989,20 @@ export function MarkdownViewer({
             },
           }}
         >
+          {/* One node (fence placeholders included) — keeps the structure the
+              read-along highlight + sourcepos anchors depend on. */}
           <Box
             className="markdown-body"
             sx={innerSx}
-            dangerouslySetInnerHTML={{ __html: html }}
+            dangerouslySetInnerHTML={{ __html: processedHtml }}
           />
+          {/* Portal each interactive view into its placeholder: it stays in
+              React's tree (theme + reliable commits) while its DOM anchor sits
+              in the injected html, untouched by the imperative markdown passes. */}
+          {fences.map((json, i) => {
+            const node = slots[i];
+            return node ? createPortal(<InteractiveViewInline content={json} />, node, String(i)) : null;
+          })}
           {/* Prev/next chapter pager — same centred reading column as the text
               above, so it lines up; scrolls with the content. */}
           {footer && (

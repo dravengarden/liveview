@@ -8,7 +8,7 @@ import { Component, type JSX, type ReactNode, useState } from "react";
 import { Alert, Box, Tab, Tabs, Typography } from "@mui/material";
 import type { AlertColor } from "@mui/material";
 import type { Block, CalloutKind, Metric, Signal } from "./types";
-import { Kernel, useKernelVersion } from "./kernel";
+import type { Kernel } from "./kernel";
 import { evalMetric, interpolate } from "./interpolate";
 import { renderWidget } from "./widgets";
 
@@ -123,7 +123,6 @@ function MarkdownText({ md }: { md: string }): JSX.Element {
 // ── leaf components that subscribe to the kernel ──────────────────────────────
 
 function SectionBlock({ md, kernel }: { md: string; kernel: Kernel }): JSX.Element {
-  useKernelVersion(kernel);
   return (
     <Box sx={{ my: 1 }}>
       <MarkdownText md={interpolate(md, kernel)} />
@@ -139,7 +138,6 @@ const CALLOUT_SEVERITY: Record<CalloutKind, AlertColor> = {
 };
 
 function CalloutBlock({ kind, md, kernel }: { kind: CalloutKind; md: string; kernel: Kernel }): JSX.Element {
-  useKernelVersion(kernel);
   return (
     <Alert severity={CALLOUT_SEVERITY[kind]} sx={{ my: 1 }}>
       <MarkdownText md={interpolate(md, kernel)} />
@@ -148,7 +146,6 @@ function CalloutBlock({ kind, md, kernel }: { kind: CalloutKind; md: string; ker
 }
 
 function MetricTile({ metric, kernel }: { metric: Metric; kernel: Kernel }): JSX.Element {
-  useKernelVersion(kernel);
   const value = evalMetric(metric.value, metric.format, kernel);
   return (
     <Box sx={{ p: 2, borderRadius: 1, border: 1, borderColor: "divider", bgcolor: "background.paper" }}>
