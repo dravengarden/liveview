@@ -349,7 +349,11 @@ pub enum Block {
         #[serde(default)]
         id: Option<String>,
         data: String,
-        mark: ChartMark,
+        // Boxed: `ChartMark` is much larger than the other block variants
+        // (candlestick carries five fields), so boxing keeps `Block` compact
+        // (clippy::large_enum_variant). Deref-coerces to `&ChartMark` at the
+        // checker call site, so nothing downstream changes.
+        mark: Box<ChartMark>,
         #[serde(default)]
         overlays: Vec<Overlay>,
         #[serde(default)]
@@ -512,6 +516,36 @@ pub enum ChartMark {
         #[serde(default)]
         bins: Option<u32>,
     },
+    /// OHLC candlestick (a stock / DeFi-token price chart), with optional
+    /// moving-average / indicator lines (`ma`, extra numeric columns drawn on
+    /// top). Up/down candles are theme-coloured (success/error).
+    Candlestick {
+        x: ChartField,
+        open: ChartField,
+        high: ChartField,
+        low: ChartField,
+        close: ChartField,
+        #[serde(default)]
+        ma: Vec<ChartField>,
+    },
+    /// Trade volume bars, the companion pane under a candlestick. When `open` +
+    /// `close` are given each bar is coloured by candle direction (up/down).
+    Volume {
+        x: ChartField,
+        value: ChartField,
+        #[serde(default)]
+        open: Option<ChartField>,
+        #[serde(default)]
+        close: Option<ChartField>,
+    },
+    /// Order-book / AMM depth: cumulative bid & ask liquidity by price level
+    /// (the renderer cumulates each side outward from the mid). A DeFi/exchange
+    /// staple. `bid`/`ask` are per-level sizes at each `price`.
+    Depth {
+        price: ChartField,
+        bid: ChartField,
+        ask: ChartField,
+    },
 }
 
 impl ChartMark {
@@ -525,6 +559,9 @@ impl ChartMark {
             ChartMark::Pie { .. } => "pie",
             ChartMark::Scatter { .. } => "scatter",
             ChartMark::Histogram { .. } => "histogram",
+            ChartMark::Candlestick { .. } => "candlestick",
+            ChartMark::Volume { .. } => "volume",
+            ChartMark::Depth { .. } => "depth",
         }
     }
 }

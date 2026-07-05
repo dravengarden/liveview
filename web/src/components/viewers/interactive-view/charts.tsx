@@ -23,6 +23,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  ComposedChart,
   Legend,
   Line,
   LineChart,
@@ -173,21 +174,23 @@ function overlayElements(overlays: Overlay[] | undefined, kernel: Kernel, theme:
   // forbids passing `undefined` to recharts' label prop).
   const lbl = (text: string | undefined): { label: { value: string; position: "insideTopRight"; fill: string; fontSize: number } } | Record<string, never> =>
     text ? { label: { value: text, position: "insideTopRight", fill: theme.palette.text.secondary, fontSize: 11 } } : {};
+  // extendDomain: a signal-driven line/band set beyond the current data range
+  // rescales the axis to stay visible (the point of a reactive threshold/alert).
   overlays.forEach((ov, i) => {
     if (ov.overlay === "hLine") {
       const y = readAxis(kernel, ov.value);
-      if (y !== null) out.push(<ReferenceLine key={`o${i}`} y={y} stroke={line} strokeDasharray="4 3" {...lbl(ov.label)} />);
+      if (y !== null) out.push(<ReferenceLine key={`o${i}`} y={y} stroke={line} strokeDasharray="4 3" ifOverflow="extendDomain" {...lbl(ov.label)} />);
     } else if (ov.overlay === "vLine") {
       const x = readAxis(kernel, ov.value);
-      if (x !== null) out.push(<ReferenceLine key={`o${i}`} x={x} stroke={line} strokeDasharray="4 3" {...lbl(ov.label)} />);
+      if (x !== null) out.push(<ReferenceLine key={`o${i}`} x={x} stroke={line} strokeDasharray="4 3" ifOverflow="extendDomain" {...lbl(ov.label)} />);
     } else if (ov.overlay === "hBand") {
       const y1 = readAxis(kernel, ov.from);
       const y2 = readAxis(kernel, ov.to);
-      if (y1 !== null && y2 !== null) out.push(<ReferenceArea key={`o${i}`} y1={y1} y2={y2} fill={band} fillOpacity={0.12} {...lbl(ov.label)} />);
+      if (y1 !== null && y2 !== null) out.push(<ReferenceArea key={`o${i}`} y1={y1} y2={y2} fill={band} fillOpacity={0.12} ifOverflow="extendDomain" {...lbl(ov.label)} />);
     } else {
       const x1 = readAxis(kernel, ov.from);
       const x2 = readAxis(kernel, ov.to);
-      if (x1 !== null && x2 !== null) out.push(<ReferenceArea key={`o${i}`} x1={x1} x2={x2} fill={band} fillOpacity={0.12} {...lbl(ov.label)} />);
+      if (x1 !== null && x2 !== null) out.push(<ReferenceArea key={`o${i}`} x1={x1} x2={x2} fill={band} fillOpacity={0.12} ifOverflow="extendDomain" {...lbl(ov.label)} />);
     }
   });
   return out;
@@ -213,6 +216,65 @@ function histogram(values: number[], bins: number): { bin: string; count: number
     buckets[idx] = (buckets[idx] ?? 0) + 1;
   }
   return buckets.map((count, i) => ({ bin: `${fmtEdge(min + i * width)}–${fmtEdge(min + (i + 1) * width)}`, count }));
+}
+
+// ── candlestick custom shape ──────────────────────────────────────────────────
+
+interface CandleShapeProps {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  payload?: Record<string, unknown>;
+}
+
+/** A recharts `Bar` custom shape drawing an OHLC candle. The bar's value is the
+ *  `[low, high]` range, so recharts hands us `y` = pixel(high) and `height` =
+ *  the pixel span down to `low`; we linearly interpolate the open/close pixels
+ *  inside that span (a linear y-axis) and colour up/down from the theme. */
+function makeCandle(cfg: { open: string; high: string; low: string; close: string; up: string; down: string }) {
+  return function Candle(props: CandleShapeProps): JSX.Element | null {
+    const { x, y, width, height, payload } = props;
+    if (x == null || y == null || width == null || height == null || !payload) return null;
+    const high = Number(payload[cfg.high]);
+    const low = Number(payload[cfg.low]);
+    const open = Number(payload[cfg.open]);
+    const close = Number(payload[cfg.close]);
+    if (![high, low, open, close].every((n) => Number.isFinite(n))) return null;
+    const span = high - low;
+    const pix = (v: number): number => (span === 0 ? y : y + ((high - v) / span) * height);
+    const cx = x + width / 2;
+    const color = close >= open ? cfg.up : cfg.down;
+    const openY = pix(open);
+    const closeY = pix(close);
+    const bodyTop = Math.min(openY, closeY);
+    const bodyH = Math.max(1, Math.abs(closeY - openY));
+    const bodyW = Math.max(1, width * 0.6);
+    return (
+      <g>
+        <line x1={cx} x2={cx} y1={y} y2={y + height} stroke={color} strokeWidth={1} />
+        <rect x={cx - bodyW / 2} y={bodyTop} width={bodyW} height={bodyH} fill={color} stroke={color} />
+      </g>
+    );
+  };
+}
+
+/** Cumulate order-book sizes outward from the mid: asks sum up from the lowest
+ *  price, bids sum down from the highest — the classic depth "valley". */
+function depthData(rows: Record<string, unknown>[], priceCol: string, bidCol: string, askCol: string): Record<string, unknown>[] {
+  const sorted = [...rows].sort((a, b) => Number(a[priceCol]) - Number(b[priceCol]));
+  let ask = 0;
+  const out = sorted.map((r) => {
+    ask += Math.max(0, Number(r[askCol]) || 0);
+    return { ...r, _ask: ask } as Record<string, unknown>;
+  });
+  let bid = 0;
+  for (let i = out.length - 1; i >= 0; i--) {
+    bid += Math.max(0, Number(out[i]?.[bidCol]) || 0);
+    const row = out[i];
+    if (row) row["_bid"] = bid;
+  }
+  return out;
 }
 
 // ── the chart dispatch (exhaustive) ───────────────────────────────────────────
@@ -409,6 +471,94 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
               <Tooltip {...tip} cursor={{ fill: theme.palette.action.hover }} />
               <Bar dataKey="count" name={labelOf(mark.value)} fill={colorAt(colors, 0)} isAnimationActive={false} />
             </BarChart>
+          </ResponsiveContainer>
+        </ChartFrame>
+      );
+    }
+
+    case "candlestick": {
+      const lows = numColumn(rows, mark.low.column);
+      const highs = numColumn(rows, mark.high.column);
+      const lo = lows.length ? Math.min(...lows) : 0;
+      const hi = highs.length ? Math.max(...highs) : 1;
+      const pad = (hi - lo) * 0.05 || 1;
+      const Candle = makeCandle({
+        open: mark.open.column,
+        high: mark.high.column,
+        low: mark.low.column,
+        close: mark.close.column,
+        up: theme.palette.success.main,
+        down: theme.palette.error.main,
+      });
+      const candleData = rows.map((r) => ({ ...r, _hl: [Number(r[mark.low.column]), Number(r[mark.high.column])] }));
+      const mas = mark.ma ?? [];
+      return (
+        <ChartFrame title={block.title}>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={candleData} margin={{ top: 8, right: 16, bottom: 4, left: 4 }}>
+              <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
+              <XAxis dataKey={mark.x.column} type={numericX(mark.x.column) ? "number" : "category"} stroke={stroke} tick={AXIS_TICK} />
+              <YAxis stroke={stroke} tick={AXIS_TICK} width={48} domain={[lo - pad, hi + pad]} allowDataOverflow />
+              <Tooltip {...tip} />
+              {mas.length > 0 ? <Legend wrapperStyle={LEGEND_STYLE} /> : null}
+              <Bar dataKey="_hl" shape={Candle} legendType="none" isAnimationActive={false} />
+              {mas.map((m, i) => (
+                <Line key={m.column} type="monotone" dataKey={m.column} name={labelOf(m)} stroke={colorAt(colors, i)} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+              ))}
+              {overlayElements(block.overlays, kernel, theme)}
+            </ComposedChart>
+          </ResponsiveContainer>
+        </ChartFrame>
+      );
+    }
+
+    case "volume": {
+      const openCol = mark.open?.column;
+      const closeCol = mark.close?.column;
+      const directional = openCol !== undefined && closeCol !== undefined;
+      const up = theme.palette.success.main;
+      const down = theme.palette.error.main;
+      return (
+        <ChartFrame title={block.title}>
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={rows} margin={{ top: 8, right: 16, bottom: 4, left: 4 }}>
+              <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
+              <XAxis dataKey={mark.x.column} type={numericX(mark.x.column) ? "number" : "category"} stroke={stroke} tick={AXIS_TICK} />
+              <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
+              <Tooltip {...tip} cursor={{ fill: theme.palette.action.hover }} />
+              <Bar dataKey={mark.value.column} name={labelOf(mark.value)} isAnimationActive={false}>
+                {rows.map((r, i) => {
+                  const fill = directional
+                    ? Number(r[closeCol]) >= Number(r[openCol])
+                      ? up
+                      : down
+                    : colorAt(colors, 0);
+                  return <Cell key={i} fill={fill} />;
+                })}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartFrame>
+      );
+    }
+
+    case "depth": {
+      const data = depthData(rows, mark.price.column, mark.bid.column, mark.ask.column);
+      const up = theme.palette.success.main;
+      const down = theme.palette.error.main;
+      return (
+        <ChartFrame title={block.title}>
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={data} margin={{ top: 8, right: 16, bottom: 4, left: 4 }}>
+              <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
+              <XAxis type="number" dataKey={mark.price.column} name={labelOf(mark.price)} stroke={stroke} tick={AXIS_TICK} domain={["dataMin", "dataMax"]} />
+              <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
+              <Tooltip {...tip} />
+              <Legend wrapperStyle={LEGEND_STYLE} />
+              <Area type="stepBefore" dataKey="_bid" name="Bids" stroke={up} fill={up} fillOpacity={0.25} isAnimationActive={false} connectNulls />
+              <Area type="stepAfter" dataKey="_ask" name="Asks" stroke={down} fill={down} fillOpacity={0.25} isAnimationActive={false} connectNulls />
+              {overlayElements(block.overlays, kernel, theme)}
+            </AreaChart>
           </ResponsiveContainer>
         </ChartFrame>
       );

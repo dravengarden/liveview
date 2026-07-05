@@ -84,7 +84,18 @@ export type ChartMark =
   | { chart: "barHorizontal"; category: ChartField; value: ChartField }
   | { chart: "pie"; category: ChartField; value: ChartField; donut?: boolean }
   | { chart: "scatter"; x: ChartField; y: ChartField; size?: ChartField; series?: ChartField }
-  | { chart: "histogram"; value: ChartField; bins?: number };
+  | { chart: "histogram"; value: ChartField; bins?: number }
+  | {
+      chart: "candlestick";
+      x: ChartField;
+      open: ChartField;
+      high: ChartField;
+      low: ChartField;
+      close: ChartField;
+      ma?: ChartField[];
+    }
+  | { chart: "volume"; x: ChartField; value: ChartField; open?: ChartField; close?: ChartField }
+  | { chart: "depth"; price: ChartField; bid: ChartField; ask: ChartField };
 
 /** The discriminant strings of {@link ChartMark}. */
 export type ChartKind = ChartMark["chart"];

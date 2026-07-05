@@ -527,6 +527,43 @@ impl<'a> Checker<'a> {
                     );
                 }
             }
+            ChartMark::Candlestick {
+                x,
+                open,
+                high,
+                low,
+                close,
+                ma,
+            } => {
+                self.check_field(&cols, data, kind, "x", x, col_ordered, "temporal, numeric, or categorical");
+                self.check_field(&cols, data, kind, "open", open, col_numeric, "numeric");
+                self.check_field(&cols, data, kind, "high", high, col_numeric, "numeric");
+                self.check_field(&cols, data, kind, "low", low, col_numeric, "numeric");
+                self.check_field(&cols, data, kind, "close", close, col_numeric, "numeric");
+                for m in ma {
+                    self.check_field(&cols, data, kind, "ma", m, col_numeric, "numeric");
+                }
+            }
+            ChartMark::Volume {
+                x,
+                value,
+                open,
+                close,
+            } => {
+                self.check_field(&cols, data, kind, "x", x, col_ordered, "temporal, numeric, or categorical");
+                self.check_field(&cols, data, kind, "value", value, col_numeric, "numeric");
+                if let Some(o) = open {
+                    self.check_field(&cols, data, kind, "open", o, col_numeric, "numeric");
+                }
+                if let Some(c) = close {
+                    self.check_field(&cols, data, kind, "close", c, col_numeric, "numeric");
+                }
+            }
+            ChartMark::Depth { price, bid, ask } => {
+                self.check_field(&cols, data, kind, "price", price, col_numeric, "numeric");
+                self.check_field(&cols, data, kind, "bid", bid, col_numeric, "numeric");
+                self.check_field(&cols, data, kind, "ask", ask, col_numeric, "numeric");
+            }
         }
 
         self.check_overlays(&cols, mark, overlays);
@@ -598,20 +635,24 @@ impl<'a> Checker<'a> {
         if overlays.is_empty() {
             return;
         }
-        // Only continuous-cartesian marks carry overlays (bar/pie/barHorizontal
-        // have a categorical axis; histogram is binned).
+        // Only continuous-value marks carry overlays. Bar/pie/barHorizontal have
+        // a categorical axis and histogram is binned; volume is a companion pane.
         let supports = matches!(
             mark,
-            ChartMark::Line { .. } | ChartMark::Area { .. } | ChartMark::Scatter { .. }
+            ChartMark::Line { .. }
+                | ChartMark::Area { .. }
+                | ChartMark::Scatter { .. }
+                | ChartMark::Candlestick { .. }
+                | ChartMark::Depth { .. }
         );
         if !supports {
             self.err(
                 "interactive-view/overlay-unsupported",
                 format!(
-                    "{} chart does not support overlays; use line/area/scatter",
+                    "{} chart does not support overlays; use line/area/scatter/candlestick/depth",
                     mark.kind_tag()
                 ),
-                Some("reference lines/bands need a continuous x-axis".into()),
+                Some("reference lines/bands need a continuous value axis".into()),
                 (1, 1),
             );
             return;
@@ -622,10 +663,13 @@ impl<'a> Checker<'a> {
         // axis is numeric-continuous for every supported mark. Every overlay
         // position is therefore numeric.
         let x_numeric = match mark {
-            ChartMark::Line { x, .. } | ChartMark::Area { x, .. } => {
+            ChartMark::Line { x, .. }
+            | ChartMark::Area { x, .. }
+            | ChartMark::Candlestick { x, .. } => {
                 matches!(cols.get(&x.column), Some(ColumnType::Number | ColumnType::Integer))
             }
-            ChartMark::Scatter { .. } => true,
+            // scatter x and depth's price axis are validated numeric.
+            ChartMark::Scatter { .. } | ChartMark::Depth { .. } => true,
             _ => false,
         };
 
@@ -1359,6 +1403,50 @@ mod tests {
             rules(&d).contains(&"interactive-view/overlay-unsupported"),
             "{d:?}"
         );
+    }
+
+    #[test]
+    fn candlestick_valid_with_ma_and_alert_passes() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"ohlc":{"columns":{"t":"integer","open":"number","high":"number",
+                 "low":"number","close":"number","ma":"number"},"values":[]}},
+               "signals":{"alert":{"type":"number","init":100,
+                 "widget":{"type":"slider","min":0,"max":200}}},
+               "view":[{"block":"chart","data":"ohlc",
+                 "mark":{"chart":"candlestick","x":{"column":"t"},"open":{"column":"open"},
+                   "high":{"column":"high"},"low":{"column":"low"},"close":{"column":"close"},
+                   "ma":[{"column":"ma","label":"MA20"}]},
+                 "overlays":[{"overlay":"hLine","value":"alert","label":"alert"}]}]}"#,
+        );
+        assert!(d.is_empty(), "unexpected: {d:?}");
+    }
+
+    #[test]
+    fn candlestick_non_numeric_ohlc_rejected() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"ohlc":{"columns":{"t":"integer","open":"string","high":"number",
+                 "low":"number","close":"number"},"values":[]}},
+               "view":[{"block":"chart","data":"ohlc",
+                 "mark":{"chart":"candlestick","x":{"column":"t"},"open":{"column":"open"},
+                   "high":{"column":"high"},"low":{"column":"low"},"close":{"column":"close"}}}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/chart-type-mismatch"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn depth_valid_passes() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"book":{"columns":{"price":"number","bid":"number","ask":"number"},"values":[]}},
+               "view":[{"block":"chart","data":"book",
+                 "mark":{"chart":"depth","price":{"column":"price"},"bid":{"column":"bid"},"ask":{"column":"ask"}}}]}"#,
+        );
+        assert!(d.is_empty(), "unexpected: {d:?}");
     }
 
     #[test]
