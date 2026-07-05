@@ -48,7 +48,7 @@ pub fn render_file(source: &str, file_type: &FileType) -> String {
         | FileType::Latex
         | FileType::Typst
         // Interactive View is rendered entirely client-side (reactive kernel +
-        // vendored vega); the server serves the raw JSON spec verbatim.
+        // chart renderer); the server serves the raw JSON document verbatim.
         | FileType::InteractiveView => source.to_string(),
         // Binary types should not reach here
         FileType::Image | FileType::Pdf | FileType::Unknown => source.to_string(),

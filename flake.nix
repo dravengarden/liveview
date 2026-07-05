@@ -56,7 +56,7 @@
         version = "0.1.0";
         src = lib.cleanSource ./.;
         installArgs = "--allow-scripts";
-        depsHash = "sha256-i5d3UsRxVMST59WfirpTf/RcJenTFOeau0z9Hd9U2GQ=";
+        depsHash = "sha256-2EvsaHNmzSUqmwbvIpRW4aasEkg0SxUTdlXPLo8F+s0=";
       };
 
       # ── liveview: axum daemon, embeds the SPA via include_dir! ────────

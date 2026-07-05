@@ -62,6 +62,7 @@ includes    = ["**/*.md"]
 [book.layout]
 order = [
     "metrics-report.md",
+    "charts.md",
     "all-widgets.md",
 ]
 

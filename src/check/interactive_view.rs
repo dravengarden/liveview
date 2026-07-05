@@ -18,9 +18,12 @@
 //!   V3     layout nesting ≤ 4
 //!   V4     content bounded (label/option lengths)
 //!
-//! Chart *internals* (Vega-Lite field/mark/param semantics, the real
-//! `vl.compile`) are Phase 2 — this pass validates the chart's *wiring*
-//! (`data` resolves, `id` unique, selection targets exist) only.
+//! Charts are a closed mark catalog (`ChartMark`), not raw Vega-Lite, so they
+//! validate like every other block: `data` resolves, each encoding column
+//! exists with a channel-appropriate type, series are non-empty, and reactive
+//! overlays reference a signal whose scalar kind matches the axis. Colours are
+//! theme-assigned (no author colour field), so a compiling chart renders — the
+//! same "checker == renderer" contract the widgets/blocks hold.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,7 +33,9 @@ use comrak::{parse_document, Arena};
 use crate::check::diagnostic::{Diagnostic, Severity};
 use crate::check::{CheckCtx, CheckFile, Validator};
 use crate::interactive_view::expr::{self, ExprEnv};
-use crate::interactive_view::model::{Block, Document, SignalType, Widget};
+use crate::interactive_view::model::{
+    Block, ChartField, ChartMark, ColumnType, Document, Overlay, SignalType, Widget,
+};
 use crate::server::renderer;
 
 pub struct InteractiveViewValidator;
@@ -315,17 +320,13 @@ impl<'a> Checker<'a> {
                 }
             }
             Block::Callout { md, .. } => self.check_interpolations(md),
-            Block::Chart { id, data, .. } => {
-                if !self.datasets.contains_key(data) {
-                    self.err(
-                        "interactive-view/unknown-dataset",
-                        format!("chart references unknown dataset `{data}`"),
-                        None,
-                        self.locate(data),
-                    );
-                }
-                let _ = id; // param-name resolution is Phase 2 (real vl.compile)
-            }
+            Block::Chart {
+                data,
+                mark,
+                overlays,
+                title,
+                ..
+            } => self.check_chart(data, mark, overlays, title.as_deref()),
             Block::Table { data, columns } => {
                 if !self.datasets.contains_key(data) {
                     self.err(
@@ -402,6 +403,288 @@ impl<'a> Checker<'a> {
             );
         }
         self.check_interpolations(&m.value);
+    }
+
+    /// Chart soundness: `data` resolves, every encoding column exists with a
+    /// type the channel accepts, series are non-empty, and each reactive overlay
+    /// references a real signal whose scalar kind matches the axis it sits on.
+    /// Colours are theme-assigned (no author colour field), so there is nothing
+    /// pixel-level left to get wrong — a compiling chart renders.
+    fn check_chart(
+        &mut self,
+        data: &str,
+        mark: &ChartMark,
+        overlays: &[Overlay],
+        title: Option<&str>,
+    ) {
+        if let Some(t) = title {
+            if t.chars().count() > MAX_LABEL_LEN {
+                self.warn(
+                    "interactive-view/label-long",
+                    format!("chart title exceeds {MAX_LABEL_LEN} chars"),
+                    None,
+                    self.locate(t),
+                );
+            }
+        }
+
+        // Clone the schema so column reads don't borrow `self` while diagnostics
+        // push into it (same pattern the table check uses).
+        let cols = match self.datasets.get(data) {
+            Some(c) => c.clone(),
+            None => {
+                self.err(
+                    "interactive-view/unknown-dataset",
+                    format!("chart references unknown dataset `{data}`"),
+                    None,
+                    self.locate(data),
+                );
+                return;
+            }
+        };
+
+        let kind = mark.kind_tag();
+        match mark {
+            ChartMark::Line { x, y, .. } | ChartMark::Area { x, y, .. } => {
+                self.check_field(&cols, data, kind, "x", x, col_ordered, "temporal, numeric, or categorical");
+                self.require_series(kind, y);
+                for s in y {
+                    self.check_field(&cols, data, kind, "y", s, col_numeric, "numeric");
+                }
+            }
+            ChartMark::Bar { x, y, .. } => {
+                self.check_field(
+                    &cols,
+                    data,
+                    kind,
+                    "x",
+                    x,
+                    col_category,
+                    "categorical (string/temporal/integer/boolean)",
+                );
+                self.require_series(kind, y);
+                for s in y {
+                    self.check_field(&cols, data, kind, "y", s, col_numeric, "numeric");
+                }
+            }
+            ChartMark::BarHorizontal { category, value } => {
+                self.check_field(
+                    &cols,
+                    data,
+                    kind,
+                    "category",
+                    category,
+                    col_category,
+                    "categorical (string/temporal/integer/boolean)",
+                );
+                self.check_field(&cols, data, kind, "value", value, col_numeric, "numeric");
+            }
+            ChartMark::Pie {
+                category, value, ..
+            } => {
+                self.check_field(
+                    &cols,
+                    data,
+                    kind,
+                    "category",
+                    category,
+                    col_category,
+                    "categorical (string/temporal/integer/boolean)",
+                );
+                self.check_field(&cols, data, kind, "value", value, col_numeric, "numeric");
+            }
+            ChartMark::Scatter {
+                x,
+                y,
+                size,
+                series,
+            } => {
+                self.check_field(&cols, data, kind, "x", x, col_numeric, "numeric");
+                self.check_field(&cols, data, kind, "y", y, col_numeric, "numeric");
+                if let Some(s) = size {
+                    self.check_field(&cols, data, kind, "size", s, col_numeric, "numeric");
+                }
+                if let Some(s) = series {
+                    self.check_field(
+                        &cols,
+                        data,
+                        kind,
+                        "series",
+                        s,
+                        col_category,
+                        "categorical (string/temporal/integer/boolean)",
+                    );
+                }
+            }
+            ChartMark::Histogram { value, bins } => {
+                self.check_field(&cols, data, kind, "value", value, col_numeric, "numeric");
+                if matches!(bins, Some(0)) {
+                    self.err(
+                        "interactive-view/chart-bins",
+                        format!("{kind} chart `bins` must be > 0"),
+                        None,
+                        self.locate(&value.column),
+                    );
+                }
+            }
+        }
+
+        self.check_overlays(&cols, mark, overlays);
+    }
+
+    /// A chart channel's column must exist and satisfy the channel's type
+    /// predicate. Returns the resolved column type (for callers that care).
+    #[allow(clippy::too_many_arguments)]
+    fn check_field(
+        &mut self,
+        cols: &BTreeMap<String, ColumnType>,
+        data: &str,
+        kind: &str,
+        channel: &str,
+        field: &ChartField,
+        ok: fn(ColumnType) -> bool,
+        expected: &str,
+    ) -> Option<ColumnType> {
+        match cols.get(&field.column) {
+            None => {
+                self.err(
+                    "interactive-view/unknown-column",
+                    format!(
+                        "{kind} chart {channel} column `{}` is not in dataset `{data}`",
+                        field.column
+                    ),
+                    None,
+                    self.locate(&field.column),
+                );
+                None
+            }
+            Some(&t) if !ok(t) => {
+                self.err(
+                    "interactive-view/chart-type-mismatch",
+                    format!(
+                        "{kind} chart {channel} column `{}` is {} but must be {expected}",
+                        field.column,
+                        col_label(t)
+                    ),
+                    None,
+                    self.locate(&field.column),
+                );
+                Some(t)
+            }
+            Some(&t) => Some(t),
+        }
+    }
+
+    fn require_series(&mut self, kind: &str, y: &[ChartField]) {
+        if y.is_empty() {
+            self.err(
+                "interactive-view/chart-empty-series",
+                format!("{kind} chart needs at least one `y` series"),
+                None,
+                (1, 1),
+            );
+        }
+    }
+
+    /// Reactive overlays: only continuous-cartesian marks carry them; each
+    /// `value`/`from`/`to` must resolve to a signal whose scalar kind matches the
+    /// axis (Y always numeric; X = the mark's x-axis kind).
+    fn check_overlays(
+        &mut self,
+        cols: &BTreeMap<String, ColumnType>,
+        mark: &ChartMark,
+        overlays: &[Overlay],
+    ) {
+        if overlays.is_empty() {
+            return;
+        }
+        // Only continuous-cartesian marks carry overlays (bar/pie/barHorizontal
+        // have a categorical axis; histogram is binned).
+        let supports = matches!(
+            mark,
+            ChartMark::Line { .. } | ChartMark::Area { .. } | ChartMark::Scatter { .. }
+        );
+        if !supports {
+            self.err(
+                "interactive-view/overlay-unsupported",
+                format!(
+                    "{} chart does not support overlays; use line/area/scatter",
+                    mark.kind_tag()
+                ),
+                Some("reference lines/bands need a continuous x-axis".into()),
+                (1, 1),
+            );
+            return;
+        }
+        // The renderer draws a numeric x as a continuous axis but a temporal x as
+        // categorical, so an x-axis rule/band (vLine/vBand) can only align on a
+        // numeric x. A y-axis rule/band (hLine/hBand) is always fine — the value
+        // axis is numeric-continuous for every supported mark. Every overlay
+        // position is therefore numeric.
+        let x_numeric = match mark {
+            ChartMark::Line { x, .. } | ChartMark::Area { x, .. } => {
+                matches!(cols.get(&x.column), Some(ColumnType::Number | ColumnType::Integer))
+            }
+            ChartMark::Scatter { .. } => true,
+            _ => false,
+        };
+
+        for ov in overlays {
+            if !ov.is_vertical_axis() && !x_numeric {
+                self.err(
+                    "interactive-view/overlay-x-not-numeric",
+                    format!(
+                        "{} overlay needs a numeric x-axis; this chart's x is temporal/categorical",
+                        ov.overlay_tag()
+                    ),
+                    Some("use a numeric x column, or a horizontal (hLine/hBand) overlay".into()),
+                    (1, 1),
+                );
+                continue;
+            }
+            let refs: [&str; 2] = match ov {
+                Overlay::HLine { value, .. } | Overlay::VLine { value, .. } => [value, ""],
+                Overlay::HBand { from, to, .. } | Overlay::VBand { from, to, .. } => [from, to],
+            };
+            for r in refs {
+                if r.is_empty() {
+                    continue;
+                }
+                self.check_overlay_ref(ov.overlay_tag(), r, AxisKind::Numeric);
+            }
+        }
+    }
+
+    fn check_overlay_ref(&mut self, tag: &str, acc: &str, want: AxisKind) {
+        let (name, indexed) = parse_accessor(acc);
+        let Some(&ty) = self.signals.get(&name) else {
+            self.err(
+                "interactive-view/unknown-signal",
+                format!("{tag} overlay references unknown signal `{name}`"),
+                None,
+                self.locate(acc),
+            );
+            return;
+        };
+        match axis_scalar_kind(ty, indexed) {
+            Err(msg) => self.err(
+                "interactive-view/overlay-type-mismatch",
+                format!("{tag} overlay ref `{acc}`: {msg}"),
+                None,
+                self.locate(acc),
+            ),
+            Ok(got) if got != want => self.err(
+                "interactive-view/overlay-type-mismatch",
+                format!(
+                    "{tag} overlay ref `{acc}` is {} but the axis is {}",
+                    got.label(),
+                    want.label()
+                ),
+                None,
+                self.locate(acc),
+            ),
+            Ok(_) => {}
+        }
     }
 
     fn check_input(&mut self, signal: Option<&str>, widget: Option<&Widget>) {
@@ -691,6 +974,81 @@ fn type_compatible(out: SignalType, want: SignalType) -> bool {
     )
 }
 
+// ── chart channel type predicates ────────────────────────────────────────────
+
+fn col_numeric(t: ColumnType) -> bool {
+    matches!(t, ColumnType::Number | ColumnType::Integer)
+}
+/// A line/area x-axis: continuous (number/temporal) or a categorical axis
+/// (string/integer) laid out in the dataset's row order. Not boolean.
+fn col_ordered(t: ColumnType) -> bool {
+    matches!(
+        t,
+        ColumnType::Number | ColumnType::Integer | ColumnType::Temporal | ColumnType::String
+    )
+}
+/// A discrete/categorical channel (bar x, pie/scatter grouping).
+fn col_category(t: ColumnType) -> bool {
+    matches!(
+        t,
+        ColumnType::String | ColumnType::Boolean | ColumnType::Integer | ColumnType::Temporal
+    )
+}
+
+fn col_label(t: ColumnType) -> &'static str {
+    match t {
+        ColumnType::Number => "number",
+        ColumnType::Integer => "integer",
+        ColumnType::String => "string",
+        ColumnType::Boolean => "boolean",
+        ColumnType::Temporal => "temporal",
+    }
+}
+
+/// The scalar kind of an axis — what an overlay reference must produce.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AxisKind {
+    Numeric,
+    Temporal,
+}
+impl AxisKind {
+    fn label(self) -> &'static str {
+        match self {
+            AxisKind::Numeric => "numeric",
+            AxisKind::Temporal => "temporal",
+        }
+    }
+}
+
+/// Split an overlay accessor into `(signal_name, is_indexed)` — `band[0]` →
+/// `("band", true)`, `sharpe` → `("sharpe", false)`.
+fn parse_accessor(acc: &str) -> (String, bool) {
+    match acc.find('[') {
+        Some(i) => (acc[..i].trim().to_string(), true),
+        None => (acc.trim().to_string(), false),
+    }
+}
+
+/// The scalar axis kind a signal accessor yields, or why it can't be a rule/band
+/// position. An interval signal must be indexed (`x[0]`/`x[1]`); a scalar must not.
+fn axis_scalar_kind(ty: SignalType, indexed: bool) -> Result<AxisKind, String> {
+    match (ty, indexed) {
+        (SignalType::Number | SignalType::Integer, false) => Ok(AxisKind::Numeric),
+        (SignalType::Temporal, false) => Ok(AxisKind::Temporal),
+        (SignalType::IntervalNumber, true) => Ok(AxisKind::Numeric),
+        (SignalType::IntervalTemporal, true) => Ok(AxisKind::Temporal),
+        (SignalType::IntervalNumber | SignalType::IntervalTemporal, false) => Err(format!(
+            "`{}` is an interval; index an endpoint (name[0] / name[1])",
+            ty.label()
+        )),
+        (_, true) => Err(format!("`{}` cannot be indexed", ty.label())),
+        (other, false) => Err(format!(
+            "`{}` is not a numeric/temporal position",
+            other.label()
+        )),
+    }
+}
+
 fn widget_label(w: &Widget) -> Option<&str> {
     match w {
         Widget::Slider { label, .. }
@@ -912,5 +1270,109 @@ mod tests {
             rules(&d).contains(&"interactive-view/columns-no-collapse"),
             "{d:?}"
         );
+    }
+
+    #[test]
+    fn line_chart_valid_passes() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"day":"temporal","close":"number"},
+                 "values":[{"day":"2024-01-01","close":10},{"day":"2024-01-02","close":11}]}},
+               "view":[{"block":"chart","data":"px",
+                 "mark":{"chart":"line","x":{"column":"day"},"y":[{"column":"close"}]}}]}"#,
+        );
+        assert!(d.is_empty(), "unexpected: {d:?}");
+    }
+
+    #[test]
+    fn chart_unknown_column_rejected() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"day":"temporal","close":"number"},"values":[]}},
+               "view":[{"block":"chart","data":"px",
+                 "mark":{"chart":"line","x":{"column":"day"},"y":[{"column":"nope"}]}}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/unknown-column"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn chart_channel_type_mismatch_rejected() {
+        // pie value must be numeric; `name` is a string.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"seg":{"columns":{"name":"string"},"values":[]}},
+               "view":[{"block":"chart","data":"seg",
+                 "mark":{"chart":"pie","category":{"column":"name"},"value":{"column":"name"}}}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/chart-type-mismatch"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn reactive_overlay_valid_passes() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"day":"temporal","close":"number"},"values":[]}},
+               "signals":{"th":{"type":"number","init":10,
+                 "widget":{"type":"slider","min":0,"max":100}}},
+               "view":[{"block":"chart","data":"px",
+                 "mark":{"chart":"line","x":{"column":"day"},"y":[{"column":"close"}]},
+                 "overlays":[{"overlay":"hLine","value":"th","label":"threshold"}]}]}"#,
+        );
+        assert!(d.is_empty(), "unexpected: {d:?}");
+    }
+
+    #[test]
+    fn overlay_axis_type_mismatch_rejected() {
+        // a temporal signal cannot position a horizontal (numeric Y) rule.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"day":"temporal","close":"number"},"values":[]}},
+               "signals":{"d":{"type":"temporal","init":"2024-01-01",
+                 "widget":{"type":"datePicker"}}},
+               "view":[{"block":"chart","data":"px",
+                 "mark":{"chart":"line","x":{"column":"day"},"y":[{"column":"close"}]},
+                 "overlays":[{"overlay":"hLine","value":"d"}]}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/overlay-type-mismatch"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn overlay_on_pie_rejected() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"seg":{"columns":{"name":"string","v":"number"},"values":[]}},
+               "signals":{"th":{"type":"number","init":1,"widget":{"type":"slider","min":0,"max":9}}},
+               "view":[{"block":"chart","data":"seg",
+                 "mark":{"chart":"pie","category":{"column":"name"},"value":{"column":"v"}},
+                 "overlays":[{"overlay":"hLine","value":"th"}]}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/overlay-unsupported"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn range_slider_vband_valid_passes() {
+        // a range-slider interval shades a vertical band via indexed endpoints.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"t":"number","v":"number"},"values":[]}},
+               "signals":{"band":{"type":"interval<number>","init":[2,8],
+                 "widget":{"type":"rangeSlider","min":0,"max":10}}},
+               "view":[{"block":"chart","data":"px",
+                 "mark":{"chart":"line","x":{"column":"t"},"y":[{"column":"v"}]},
+                 "overlays":[{"overlay":"vBand","from":"band[0]","to":"band[1]"}]}]}"#,
+        );
+        assert!(d.is_empty(), "unexpected: {d:?}");
     }
 }

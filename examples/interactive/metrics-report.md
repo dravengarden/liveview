@@ -39,9 +39,9 @@ reactive document embedded right in this chapter.
     ] },
     { "block": "input", "signal": "rf" },
     { "block": "input", "signal": "horizon" },
-    { "block": "chart", "id": "perf", "data": "returns",
-      "vega": { "mark": { "type": "bar" }, "encoding": {
-        "x": { "field": "day", "type": "ordinal" }, "y": { "field": "ret", "type": "quantitative" } } } }
+    { "block": "chart", "id": "perf", "data": "returns", "title": "Daily returns",
+      "mark": { "chart": "line", "x": { "column": "day" },
+        "y": [ { "column": "ret", "label": "Daily return" } ] } }
   ]
 }
 ```

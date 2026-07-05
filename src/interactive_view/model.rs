@@ -341,13 +341,19 @@ pub enum Block {
         kind: CalloutKind,
         md: String,
     },
-    /// A Vega-Lite chart (Phase 2 renders it; the AST models it now). `vega`
-    /// stays a raw value until the profile subset is modelled.
+    /// A chart: one closed `mark` over a dataset, plus optional reactive
+    /// `overlays` (reference lines/bands driven by signals). Series colours are
+    /// theme-assigned — there is no author colour/CSS field — so every chart is
+    /// light/dark-adaptive and visually sound by construction (V1).
     Chart {
         #[serde(default)]
         id: Option<String>,
         data: String,
-        vega: serde_json::Value,
+        mark: ChartMark,
+        #[serde(default)]
+        overlays: Vec<Overlay>,
+        #[serde(default)]
+        title: Option<String>,
     },
     /// A data table over a dataset (Phase 3).
     Table {
@@ -435,4 +441,142 @@ pub enum CalloutKind {
 pub struct Tab {
     pub title: String,
     pub children: Vec<Block>,
+}
+
+// ── charts (closed mark catalog) ─────────────────────────────────────────────
+
+/// An encoding channel bound to a dataset column, with an optional display
+/// label (defaults to the column name). There is intentionally no colour/format
+/// field — colours come from the theme palette, so charts stay sound (V1).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChartField {
+    pub column: String,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// The v1 chart catalog — the analytical marks (trend / comparison / composition
+/// / correlation / distribution). Adding a mark = one variant here + one checker
+/// arm + one web component; `#[serde(tag = "chart")]` keys each on its `chart`
+/// string. Every numeric axis is auto-scaled; every category axis auto-binned.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "chart", rename_all = "camelCase")]
+pub enum ChartMark {
+    /// Multi-series line over an ordered x (temporal/number). Trends over time.
+    Line {
+        x: ChartField,
+        y: Vec<ChartField>,
+        #[serde(default)]
+        curved: bool,
+    },
+    /// Filled line; `stacked` sums the series into bands. Composition over x.
+    Area {
+        x: ChartField,
+        y: Vec<ChartField>,
+        #[serde(default)]
+        stacked: bool,
+    },
+    /// Vertical bars over a categorical/temporal x; `stacked` else grouped.
+    Bar {
+        x: ChartField,
+        y: Vec<ChartField>,
+        #[serde(default)]
+        stacked: bool,
+    },
+    /// Horizontal bars — the category sits on the y-axis. Rankings / top-N.
+    BarHorizontal {
+        category: ChartField,
+        value: ChartField,
+    },
+    /// Pie/donut composition of one categorical field by one numeric value.
+    Pie {
+        category: ChartField,
+        value: ChartField,
+        #[serde(default)]
+        donut: bool,
+    },
+    /// Scatter of two numeric fields; optional numeric `size` and categorical
+    /// `series` (colour groups). Correlation.
+    Scatter {
+        x: ChartField,
+        y: ChartField,
+        #[serde(default)]
+        size: Option<ChartField>,
+        #[serde(default)]
+        series: Option<ChartField>,
+    },
+    /// Histogram of one numeric field into `bins` equal-width buckets (default
+    /// binning when omitted). Distribution.
+    Histogram {
+        value: ChartField,
+        #[serde(default)]
+        bins: Option<u32>,
+    },
+}
+
+impl ChartMark {
+    /// The `chart` tag, for diagnostics.
+    pub fn kind_tag(&self) -> &'static str {
+        match self {
+            ChartMark::Line { .. } => "line",
+            ChartMark::Area { .. } => "area",
+            ChartMark::Bar { .. } => "bar",
+            ChartMark::BarHorizontal { .. } => "barHorizontal",
+            ChartMark::Pie { .. } => "pie",
+            ChartMark::Scatter { .. } => "scatter",
+            ChartMark::Histogram { .. } => "histogram",
+        }
+    }
+}
+
+/// A reactive overlay drawn on top of a chart: a reference line or shaded band
+/// whose position tracks a signal (so a slider moves a threshold line, a
+/// range-slider shades a region — the widget⇄chart co-action). Each `value` /
+/// `from` / `to` is a **signal accessor**: a signal name, or `name[0]` / `name[1]`
+/// for an interval signal's endpoints. Checked against the referenced axis type.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "overlay", rename_all = "camelCase")]
+pub enum Overlay {
+    /// Horizontal reference line at `y = value` (a numeric signal).
+    HLine {
+        value: String,
+        #[serde(default)]
+        label: Option<String>,
+    },
+    /// Vertical reference line at `x = value` (a signal of the x-axis type).
+    VLine {
+        value: String,
+        #[serde(default)]
+        label: Option<String>,
+    },
+    /// Shaded horizontal band over `y ∈ [from, to]` (numeric signals).
+    HBand {
+        from: String,
+        to: String,
+        #[serde(default)]
+        label: Option<String>,
+    },
+    /// Shaded vertical band over `x ∈ [from, to]` (x-axis-type signals) — e.g.
+    /// a selected date/interval range from a range-slider.
+    VBand {
+        from: String,
+        to: String,
+        #[serde(default)]
+        label: Option<String>,
+    },
+}
+
+impl Overlay {
+    pub fn overlay_tag(&self) -> &'static str {
+        match self {
+            Overlay::HLine { .. } => "hLine",
+            Overlay::VLine { .. } => "vLine",
+            Overlay::HBand { .. } => "hBand",
+            Overlay::VBand { .. } => "vBand",
+        }
+    }
+    /// `true` when the overlay lies on the Y (numeric) axis; `false` on the X axis.
+    pub fn is_vertical_axis(&self) -> bool {
+        matches!(self, Overlay::HLine { .. } | Overlay::HBand { .. })
+    }
 }

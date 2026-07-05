@@ -67,6 +67,36 @@ export interface SelectionSource {
   select: string;
 }
 
+/** An encoding channel bound to a dataset column, with an optional display
+ *  label. No colour/format — colours come from the theme palette (V1). */
+export interface ChartField {
+  column: string;
+  label?: string;
+}
+
+/** The v1 chart catalog — `#[serde(tag = "chart", rename_all = "camelCase")]`.
+ *  Trend (line/area), comparison (bar/barHorizontal), composition (pie),
+ *  correlation (scatter), distribution (histogram). */
+export type ChartMark =
+  | { chart: "line"; x: ChartField; y: ChartField[]; curved?: boolean }
+  | { chart: "area"; x: ChartField; y: ChartField[]; stacked?: boolean }
+  | { chart: "bar"; x: ChartField; y: ChartField[]; stacked?: boolean }
+  | { chart: "barHorizontal"; category: ChartField; value: ChartField }
+  | { chart: "pie"; category: ChartField; value: ChartField; donut?: boolean }
+  | { chart: "scatter"; x: ChartField; y: ChartField; size?: ChartField; series?: ChartField }
+  | { chart: "histogram"; value: ChartField; bins?: number };
+
+/** The discriminant strings of {@link ChartMark}. */
+export type ChartKind = ChartMark["chart"];
+
+/** A reactive overlay — a reference line/band whose position tracks a signal
+ *  (`value`/`from`/`to` are signal accessors: `name` or `name[0]`/`name[1]`). */
+export type Overlay =
+  | { overlay: "hLine"; value: string; label?: string }
+  | { overlay: "vLine"; value: string; label?: string }
+  | { overlay: "hBand"; from: string; to: string; label?: string }
+  | { overlay: "vBand"; from: string; to: string; label?: string };
+
 /** A reactive signal: a `type` plus exactly one source (`widget` | `from` |
  *  `derived`), all optional in the shape (the Rust checker enforces "exactly
  *  one"). */
@@ -109,7 +139,7 @@ export type Block =
   | ({ block: "metric" } & Metric)
   | { block: "metricGroup"; items: Metric[] }
   | { block: "callout"; kind?: CalloutKind; md: string }
-  | { block: "chart"; id?: string; data: string; vega: unknown }
+  | { block: "chart"; id?: string; data: string; mark: ChartMark; overlays?: Overlay[]; title?: string }
   | { block: "table"; data: string; columns?: string[] }
   | { block: "input"; signal?: string | null; widget?: Widget }
   | { block: "stack"; children: Block[] }

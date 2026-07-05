@@ -24,6 +24,9 @@ export interface Kernel {
   get(name: string): unknown;
   set(name: string, value: unknown): void;
   reset(names: string[]): void;
+  /** A named dataset's schema + rows (`rows: null` ⇒ unavailable). Static in
+   *  Phase 2 — charts read it directly; reactivity comes from overlays. */
+  data(name: string): EvalDataset | null;
 }
 
 interface DerivedCell {
@@ -108,6 +111,7 @@ export function useKernel(doc: Document): Kernel {
   return useMemo<Kernel>(
     () => ({
       get: (name) => (Object.hasOwn(values, name) ? values[name] : UNAVAILABLE),
+      data: (name) => spec.datasets[name] ?? null,
       set: (name, value) => setBase((b) => ({ ...b, [name]: value })),
       reset: (names) =>
         setBase((b) => {

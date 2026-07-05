@@ -4,13 +4,34 @@
 // the page (§9 runtime resilience). Layout blocks preserve the fit invariant:
 // `stack` is full-width, `metricGroup`/`columns` reflow to one column on narrow.
 
-import { Component, type JSX, type ReactNode, useState } from "react";
-import { Alert, Box, Tab, Tabs, Typography } from "@mui/material";
+import { Component, lazy, Suspense, type JSX, type ReactNode, useState } from "react";
+import {
+  Alert,
+  Box,
+  CircularProgress,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Tab,
+  Tabs,
+  Typography,
+} from "@mui/material";
 import type { AlertColor } from "@mui/material";
 import type { Block, CalloutKind, Metric, Signal } from "./types";
 import type { Kernel } from "./kernel";
+import { isUnavailable } from "./expr";
 import { evalMetric, interpolate } from "./interpolate";
 import { renderWidget } from "./widgets";
+
+// recharts is heavy — code-split it so only chapters with a chart pull the chunk.
+const ChartBlock = lazy(() => import("./charts"));
+
+/** Max table rows rendered inline (a report table is a preview, not a data dump);
+ *  a larger dataset is truncated with a note rather than freezing the reader. */
+const MAX_TABLE_ROWS = 100;
 
 interface BlockCtx {
   signals: Record<string, Signal>;
@@ -174,29 +195,66 @@ function TabsBlock({ items, ctx, depth }: { items: { title: string; children: Bl
   );
 }
 
-function ChartPlaceholder({ label }: { label: string }): JSX.Element {
+/** The fallback while the recharts chunk loads (chart height reserved so the
+ *  page doesn't jump when it swaps in). */
+function ChartLoading(): JSX.Element {
   return (
-    <Box
-      sx={{
-        my: 1,
-        p: 3,
-        minHeight: "8rem",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        borderRadius: 1,
-        border: 1,
-        borderStyle: "dashed",
-        borderColor: "divider",
-        bgcolor: "background.paper",
-      }}
-    >
-      <Typography variant="body2" color="text.secondary">
-        {label}
-      </Typography>
+    <Box sx={{ my: 1, height: 300, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 1, bgcolor: "background.paper" }}>
+      <CircularProgress size={28} />
     </Box>
   );
+}
+
+/** A dataset table. Columns default to the dataset's declared schema order; a
+ *  large dataset is truncated to a preview (never a freeze). Unavailable data
+ *  (a `source` blob not loaded in Phase 2) shows a graceful empty tile. */
+function TableBlock({ block, kernel }: { block: Extract<Block, { block: "table" }>; kernel: Kernel }): JSX.Element {
+  const ds = kernel.data(block.data);
+  const rows = ds?.rows ?? null;
+  const cols = block.columns ?? (ds ? Object.keys(ds.columns) : []);
+  if (!ds || !rows) {
+    return <FallbackTile msg="This table's data is unavailable." />;
+  }
+  const shown = rows.slice(0, MAX_TABLE_ROWS);
+  const truncated = rows.length - shown.length;
+  return (
+    <Box sx={{ my: 1 }}>
+      <TableContainer sx={{ border: 1, borderColor: "divider", borderRadius: 1 }}>
+        <Table size="small" stickyHeader>
+          <TableHead>
+            <TableRow>
+              {cols.map((c) => (
+                <TableCell key={c} sx={{ fontWeight: 600, bgcolor: "background.paper" }}>
+                  {c}
+                </TableCell>
+              ))}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {shown.map((r, i) => (
+              <TableRow key={i} hover>
+                {cols.map((c) => (
+                  <TableCell key={c}>{cellText(r[c])}</TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+      {truncated > 0 ? (
+        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+          + {truncated} more row{truncated === 1 ? "" : "s"}
+        </Typography>
+      ) : null}
+    </Box>
+  );
+}
+
+function cellText(v: unknown): string {
+  if (v === undefined || v === null || isUnavailable(v)) return "—";
+  if (typeof v === "number") return Number.isFinite(v) ? String(v) : "—";
+  if (typeof v === "boolean") return v ? "true" : "false";
+  return String(v);
 }
 
 // ── the block dispatch (exhaustive) ───────────────────────────────────────────
@@ -219,9 +277,13 @@ function blockBody(block: Block, ctx: BlockCtx, depth: number): JSX.Element {
     case "callout":
       return <CalloutBlock kind={block.kind ?? "note"} md={block.md} kernel={kernel} />;
     case "chart":
-      return <ChartPlaceholder label={`Chart of “${block.data}” — Phase 2`} />;
+      return (
+        <Suspense fallback={<ChartLoading />}>
+          <ChartBlock block={block} kernel={kernel} />
+        </Suspense>
+      );
     case "table":
-      return <ChartPlaceholder label={`Table of “${block.data}” — Phase 3`} />;
+      return <TableBlock block={block} kernel={kernel} />;
     case "input": {
       const declared = block.signal ? signals[block.signal] : undefined;
       const widget = block.widget ?? declared?.widget;
