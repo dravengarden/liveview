@@ -51,6 +51,9 @@ impl Document {
 /// content path, big data) or inline `values` (tiny data, byte-budgeted).
 #[derive(Debug, Clone, Deserialize)]
 pub struct DataSet {
+    /// Declared schema. Ignored (inferred instead) for a `derived` dataset — its
+    /// columns come from the transform, so the checker overwrites this.
+    #[serde(default)]
     pub columns: BTreeMap<String, ColumnType>,
     /// Absolute *content* path (`/`-rooted, no `.`/`..`), never a host FS path.
     #[serde(default)]
@@ -59,6 +62,13 @@ pub struct DataSet {
     /// small byte budget; large data must use `source`.
     #[serde(default)]
     pub values: Option<Vec<serde_json::Value>>,
+    /// A total expression yielding a *dataset* — `filter(base, pred)` over other
+    /// datasets & signals. The reactive kernel recomputes it whenever a
+    /// referenced signal changes, so charts/tables reading it cross-filter live.
+    /// Its output schema is inferred by the checker (a filter preserves schema);
+    /// exactly one of `source` / `values` / `derived` may be set.
+    #[serde(default)]
+    pub derived: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

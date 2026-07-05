@@ -1,6 +1,11 @@
 # Design: Interactive View — sound, mobile-first interactive charts & widgets
 
-Status: **proposed** (design). Greenfield content type; no code yet.
+Status: **SHIPPED.** This file is the original design *rationale*; some of it is
+historical (charts are a **closed mark catalog**, not Vega-Lite; the reactive
+graph now spans signals **and derived datasets**; selection & cross-filter are
+wired). **To author, read [interactive-view-authoring.md](interactive-view-authoring.md)**
+— the shipped catalog, linkage, and soundness contract. Keep this doc for the
+"why".
 
 Goal in one line: let a book describe **reports and technical-metric
 explanations as interactive, linked components** — declarative JSON charts

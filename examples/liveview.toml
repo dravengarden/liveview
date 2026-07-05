@@ -63,6 +63,7 @@ includes    = ["**/*.md"]
 order = [
     "metrics-report.md",
     "charts.md",
+    "linked.md",
     "trading.md",
     "all-widgets.md",
 ]

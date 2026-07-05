@@ -34,7 +34,8 @@ use crate::check::diagnostic::{Diagnostic, Severity};
 use crate::check::{CheckCtx, CheckFile, Validator};
 use crate::interactive_view::expr::{self, ExprEnv};
 use crate::interactive_view::model::{
-    Block, ChartField, ChartMark, ColumnType, Document, Overlay, SignalType, Widget,
+    Block, ChartField, ChartMark, ColumnType, Document, Overlay, SelectionSource, SignalType,
+    Widget,
 };
 use crate::server::renderer;
 
@@ -117,7 +118,7 @@ pub fn check_doc(rel: &str, source: &str, line_offset: u32) -> Vec<Diagnostic> {
         diags: Vec::new(),
         signals: BTreeMap::new(),
         datasets: BTreeMap::new(),
-        chart_ids: BTreeSet::new(),
+        chart_meta: BTreeMap::new(),
     };
     c.run(&doc);
     if line_offset > 0 {
@@ -135,7 +136,17 @@ struct Checker<'a> {
     diags: Vec<Diagnostic>,
     signals: BTreeMap<String, SignalType>,
     datasets: BTreeMap<String, BTreeMap<String, crate::interactive_view::model::ColumnType>>,
-    chart_ids: BTreeSet<String>,
+    /// Chart `id` → its selection metadata (dataset + mark kind), so a signal's
+    /// `from` (click-to-select) can be validated against the target chart.
+    chart_meta: BTreeMap<String, ChartSel>,
+}
+
+/// What a selectable chart exposes to a `from` signal: the dataset its rows come
+/// from (whose column types validate the emitted value) and its mark kind (only
+/// the categorical marks — bar/barHorizontal/pie — are clickable selectors).
+struct ChartSel {
+    data: String,
+    kind: &'static str,
 }
 
 impl<'a> Checker<'a> {
@@ -152,50 +163,153 @@ impl<'a> Checker<'a> {
             );
         }
 
-        // ── datasets first (signals & charts reference them) ──
-        for (name, ds) in &doc.data {
-            self.datasets.insert(name.clone(), ds.columns.clone());
-            match (&ds.source, &ds.values) {
-                (Some(src), None) => self.check_data_source(name, src),
-                (None, Some(values)) => {
-                    let bytes = serde_json::to_string(values).map(|s| s.len()).unwrap_or(0);
-                    if bytes > MAX_INLINE_DATA_BYTES {
-                        self.err(
-                            "interactive-view/inline-data-too-large",
-                            format!(
-                                "dataset `{name}` inlines {bytes} bytes (> {MAX_INLINE_DATA_BYTES}); move it to a `source` rustfs blob"
-                            ),
-                            Some("large data must be a content-addressed `source`, not inline".into()),
-                            self.locate(name),
-                        );
-                    }
-                }
-                (Some(_), Some(_)) => self.err(
-                    "interactive-view/data-ambiguous-source",
-                    format!("dataset `{name}` has both `source` and `values`; pick one"),
-                    None,
-                    self.locate(name),
-                ),
-                (None, None) => self.err(
-                    "interactive-view/data-empty",
-                    format!("dataset `{name}` has neither `source` nor `values`"),
-                    None,
-                    self.locate(name),
-                ),
-            }
-        }
-
-        // ── signal symbol table + per-signal source check ──
+        // ── signal symbol table first (derived datasets type against signal
+        //    types; charts/interpolations resolve against it) ──
         for (name, sig) in &doc.signals {
             self.signals.insert(name.clone(), sig.ty);
         }
 
-        // ── first view pass: gather chart ids (selection targets) ──
-        Self::collect_chart_ids(&doc.view, &mut self.chart_ids);
-
-        // ── signals: S2 one-source, S4/S6 typing, S9 widget bounds ──
-        // (collect derived edges for the S7 DAG as we go)
+        // The unified reactive DAG (S7): a node is a derived signal (`sig:x`) or a
+        // derived dataset (`data:x`); its edges are the signals/datasets it reads.
+        // Widget/selection signals are external INPUTS, never derivations, so they
+        // can't form an evaluation cycle and are not nodes here.
         let mut edges: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+        // ── datasets: register static (source/values) schemas + validate;
+        //    collect derived datasets to resolve once every static schema is in ──
+        let mut pending: Vec<(&String, &str)> = Vec::new();
+        for (name, ds) in &doc.data {
+            if self.signals.contains_key(name) {
+                self.err(
+                    "interactive-view/name-collision",
+                    format!("`{name}` names both a signal and a dataset; names must be distinct"),
+                    Some("an expression can't tell which one `{name}` means".into()),
+                    self.locate(name),
+                );
+            }
+            let sources = [
+                ds.source.is_some(),
+                ds.values.is_some(),
+                ds.derived.is_some(),
+            ];
+            match sources.iter().filter(|b| **b).count() {
+                0 => {
+                    self.err(
+                        "interactive-view/data-empty",
+                        format!("dataset `{name}` has no `source`, `values`, or `derived`"),
+                        None,
+                        self.locate(name),
+                    );
+                    continue;
+                }
+                1 => {}
+                _ => {
+                    self.err(
+                        "interactive-view/data-ambiguous-source",
+                        format!(
+                            "dataset `{name}` has more than one of `source`/`values`/`derived`; pick one"
+                        ),
+                        None,
+                        self.locate(name),
+                    );
+                    continue;
+                }
+            }
+            if let Some(src) = &ds.source {
+                self.datasets.insert(name.clone(), ds.columns.clone());
+                self.require_columns(name, &ds.columns);
+                self.check_data_source(name, src);
+            } else if let Some(values) = &ds.values {
+                self.datasets.insert(name.clone(), ds.columns.clone());
+                self.require_columns(name, &ds.columns);
+                let bytes = serde_json::to_string(values).map(|s| s.len()).unwrap_or(0);
+                if bytes > MAX_INLINE_DATA_BYTES {
+                    self.err(
+                        "interactive-view/inline-data-too-large",
+                        format!(
+                            "dataset `{name}` inlines {bytes} bytes (> {MAX_INLINE_DATA_BYTES}); move it to a `source` rustfs blob"
+                        ),
+                        Some("large data must be a content-addressed `source`, not inline".into()),
+                        self.locate(name),
+                    );
+                }
+            } else if let Some(expr_src) = &ds.derived {
+                pending.push((name, expr_src.as_str()));
+            }
+        }
+
+        // ── resolve derived-dataset schemas to a fixpoint. `self.datasets` only
+        //    ever holds fully-typed schemas, so a derived dataset built on another
+        //    just retries until its input resolves (a DAG converges in ≤ N passes).
+        //    A dataset that never resolves references an unknown name or forms a
+        //    cycle — reported after the loop. ──
+        let mut last_err: BTreeMap<String, String> = BTreeMap::new();
+        while !pending.is_empty() {
+            let mut progressed = false;
+            let mut still = Vec::new();
+            for (name, src) in pending.drain(..) {
+                let res = {
+                    let env = ExprEnv {
+                        signals: &self.signals,
+                        datasets: &self.datasets,
+                    };
+                    expr::check(src, &env)
+                };
+                match res {
+                    Ok(res) => match res.dataset_columns {
+                        Some(cols) => {
+                            self.datasets.insert(name.clone(), cols);
+                            let mut deps = BTreeSet::new();
+                            for s in &res.signal_refs {
+                                deps.insert(format!("sig:{s}"));
+                            }
+                            for d in &res.dataset_refs {
+                                deps.insert(format!("data:{d}"));
+                            }
+                            edges.insert(format!("data:{name}"), deps);
+                            progressed = true;
+                        }
+                        None => {
+                            self.err(
+                                "interactive-view/derived-data-not-dataset",
+                                format!(
+                                    "derived dataset `{name}` must be a dataset expression (e.g. `filter(base, …)`), but yields {}",
+                                    res.ty_desc
+                                ),
+                                Some("a derived dataset filters/transforms another dataset".into()),
+                                self.locate(name),
+                            );
+                            progressed = true;
+                        }
+                    },
+                    Err(e) => {
+                        last_err.insert(name.clone(), e.message);
+                        still.push((name, src));
+                    }
+                }
+            }
+            pending = still;
+            if !progressed {
+                break;
+            }
+        }
+        for (name, _) in &pending {
+            let why = last_err
+                .get(*name)
+                .cloned()
+                .unwrap_or_else(|| "unresolved".to_string());
+            self.err(
+                "interactive-view/derived-data-error",
+                format!("derived dataset `{name}`: {why}"),
+                Some("it references an unknown dataset/signal or forms a dependency cycle".into()),
+                self.locate(name),
+            );
+        }
+
+        // ── gather chart ids + selection metadata (selection targets) ──
+        Self::collect_chart_meta(&doc.view, &mut self.chart_meta);
+
+        // ── signals: S2 one-source, S4/S6 typing, selection & widget bounds ──
         for (name, sig) in &doc.signals {
             let sources = [
                 sig.widget.is_some(),
@@ -223,24 +337,17 @@ impl<'a> Checker<'a> {
                 self.check_widget(name, w, Some(sig.ty));
             }
             if let Some(from) = &sig.from {
-                if !self.chart_ids.contains(&from.chart) {
-                    self.err(
-                        "interactive-view/unknown-chart",
-                        format!(
-                            "signal `{name}` reads a selection from unknown chart `{}`",
-                            from.chart
-                        ),
-                        None,
-                        self.locate(name),
-                    );
-                }
+                self.check_selection(name, sig.ty, from);
             }
             if let Some(src) = &sig.derived {
-                let env = ExprEnv {
-                    signals: &self.signals,
-                    datasets: &self.datasets,
+                let res = {
+                    let env = ExprEnv {
+                        signals: &self.signals,
+                        datasets: &self.datasets,
+                    };
+                    expr::check(src, &env)
                 };
-                match expr::check(src, &env) {
+                match res {
                     Ok(res) => {
                         let want = scalar_label(sig.ty);
                         if Some(res.ty_desc.as_str()) != want {
@@ -260,7 +367,14 @@ impl<'a> Checker<'a> {
                                 self.locate(name),
                             );
                         }
-                        edges.insert(name.clone(), res.signal_refs);
+                        let mut deps = BTreeSet::new();
+                        for s in &res.signal_refs {
+                            deps.insert(format!("sig:{s}"));
+                        }
+                        for d in &res.dataset_refs {
+                            deps.insert(format!("data:{d}"));
+                        }
+                        edges.insert(format!("sig:{name}"), deps);
                     }
                     Err(e) => self.err(
                         "interactive-view/derived-error",
@@ -272,41 +386,128 @@ impl<'a> Checker<'a> {
             }
         }
 
-        // ── S7: the reactive signal graph must be a DAG ──
+        // ── S7: the unified reactive graph (signals ∪ datasets) must be a DAG ──
         if let Some(cycle) = find_cycle(&edges) {
+            let pretty: Vec<String> = cycle.iter().map(|n| prettify_node(n)).collect();
+            let first = strip_node(&cycle[0]);
             self.err(
                 "interactive-view/reactive-cycle",
-                format!("reactive dependency cycle: {}", cycle.join(" → ")),
+                format!("reactive dependency cycle: {}", pretty.join(" → ")),
                 Some(
-                    "derived signals must not depend on themselves, directly or transitively"
+                    "derived signals/datasets must not depend on themselves, directly or transitively"
                         .into(),
                 ),
-                self.locate(&cycle[0]),
+                self.locate(first),
             );
         }
 
-        // ── second view pass: block validation (S3/S5, V2/V3/V4) ──
+        // ── final view pass: block validation (S3/S5, V2/V3/V4) ──
         for b in &doc.view {
             self.check_block(doc, b, 1);
         }
     }
 
-    fn collect_chart_ids(blocks: &[Block], out: &mut BTreeSet<String>) {
+    /// Gather every chart `id` and, for the categorical marks, the metadata a
+    /// `from` (click-to-select) signal validates against.
+    fn collect_chart_meta(blocks: &[Block], out: &mut BTreeMap<String, ChartSel>) {
         for b in blocks {
             match b {
-                Block::Chart { id: Some(id), .. } => {
-                    out.insert(id.clone());
+                Block::Chart {
+                    id: Some(id),
+                    data,
+                    mark,
+                    ..
+                } => {
+                    out.insert(
+                        id.clone(),
+                        ChartSel {
+                            data: data.clone(),
+                            kind: mark.kind_tag(),
+                        },
+                    );
                 }
                 Block::Stack { children } | Block::Columns { children, .. } => {
-                    Self::collect_chart_ids(children, out)
+                    Self::collect_chart_meta(children, out)
                 }
                 Block::Tabs { items } => {
                     for t in items {
-                        Self::collect_chart_ids(&t.children, out)
+                        Self::collect_chart_meta(&t.children, out)
                     }
                 }
                 _ => {}
             }
+        }
+    }
+
+    /// A `from` signal (chart click-to-select): the target chart must exist, be a
+    /// categorical mark (bar/barHorizontal/pie — the clickable selectors), and the
+    /// emitted column must exist with a type matching the signal's.
+    fn check_selection(&mut self, owner: &str, ty: SignalType, from: &SelectionSource) {
+        let Some(sel) = self.chart_meta.get(&from.chart) else {
+            self.err(
+                "interactive-view/unknown-chart",
+                format!(
+                    "signal `{owner}` reads a selection from unknown chart `{}`",
+                    from.chart
+                ),
+                Some("give the target chart an `id` matching `from.chart`".into()),
+                self.locate(owner),
+            );
+            return;
+        };
+        if !matches!(sel.kind, "bar" | "barHorizontal" | "pie") {
+            self.err(
+                "interactive-view/selection-unsupported",
+                format!(
+                    "signal `{owner}` selects from a {} chart; only bar/barHorizontal/pie charts are clickable selectors",
+                    sel.kind
+                ),
+                Some("click-to-select needs a categorical mark".into()),
+                self.locate(owner),
+            );
+            return;
+        }
+        let (data, select) = (sel.data.clone(), from.select.clone());
+        let col_ty = self.datasets.get(&data).and_then(|c| c.get(&select)).copied();
+        match col_ty {
+            None => self.err(
+                "interactive-view/unknown-column",
+                format!(
+                    "signal `{owner}` selects column `{select}` not in chart `{}`'s dataset `{data}`",
+                    from.chart
+                ),
+                None,
+                self.locate(&select),
+            ),
+            Some(ct) if !selection_type_compatible(ct, ty) => self.err(
+                "interactive-view/selection-type-mismatch",
+                format!(
+                    "signal `{owner}` is {} but selects a {} column `{select}`",
+                    ty.label(),
+                    col_label(ct)
+                ),
+                Some(
+                    "the selected column's type must match the signal (a category is string/enum)"
+                        .into(),
+                ),
+                self.locate(owner),
+            ),
+            Some(_) => {}
+        }
+    }
+
+    fn require_columns(
+        &mut self,
+        name: &str,
+        cols: &BTreeMap<String, crate::interactive_view::model::ColumnType>,
+    ) {
+        if cols.is_empty() {
+            self.err(
+                "interactive-view/data-no-columns",
+                format!("dataset `{name}` declares no columns"),
+                None,
+                self.locate(name),
+            );
         }
     }
 
@@ -1006,6 +1207,34 @@ fn scalar_label(ty: SignalType) -> Option<&'static str> {
     }
 }
 
+/// Whether a chart-selected column's type can feed a `from` signal of `ty`. The
+/// click writes the raw cell value into the signal, so the kinds must line up (a
+/// clicked category is a string → an `enum`/`string` signal).
+fn selection_type_compatible(ct: ColumnType, ty: SignalType) -> bool {
+    match ct {
+        ColumnType::String => matches!(ty, SignalType::String | SignalType::Enum),
+        ColumnType::Temporal => matches!(ty, SignalType::Temporal),
+        ColumnType::Integer => matches!(ty, SignalType::Integer | SignalType::Number),
+        ColumnType::Number => matches!(ty, SignalType::Number),
+        ColumnType::Boolean => matches!(ty, SignalType::Boolean),
+    }
+}
+
+/// A DAG node key (`sig:x` / `data:x`) rendered for a human. A dataset node is
+/// tagged so a cycle path reads `region → dataset filtered → region`.
+fn prettify_node(node: &str) -> String {
+    match node.split_once(':') {
+        Some(("data", n)) => format!("dataset {n}"),
+        Some((_, n)) => n.to_string(),
+        None => node.to_string(),
+    }
+}
+
+/// The bare name behind a DAG node key (`sig:region` → `region`), for `locate`.
+fn strip_node(node: &str) -> &str {
+    node.split_once(':').map(|(_, n)| n).unwrap_or(node)
+}
+
 /// Whether a widget output type satisfies a declared signal type (S4).
 fn type_compatible(out: SignalType, want: SignalType) -> bool {
     if out == want {
@@ -1447,6 +1676,140 @@ mod tests {
                  "mark":{"chart":"depth","price":{"column":"price"},"bid":{"column":"bid"},"ask":{"column":"ask"}}}]}"#,
         );
         assert!(d.is_empty(), "unexpected: {d:?}");
+    }
+
+    #[test]
+    fn derived_dataset_cross_filter_passes() {
+        // A global selector feeds a derived dataset that a chart reads — the
+        // canonical "one signal filters every chart" linkage.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{
+                 "sales":{"columns":{"region":"string","amount":"number"},
+                   "values":[{"region":"North","amount":10},{"region":"South","amount":5}]},
+                 "filtered":{"derived":"filter(sales, region == sel)"}},
+               "signals":{"sel":{"type":"enum","init":"North",
+                 "widget":{"type":"select","options":[
+                   {"label":"North","value":"North"},{"label":"South","value":"South"}]}}},
+               "view":[{"block":"chart","data":"filtered",
+                 "mark":{"chart":"bar","x":{"column":"region"},"y":[{"column":"amount"}]}}]}"#,
+        );
+        assert!(d.is_empty(), "unexpected: {d:?}");
+    }
+
+    #[test]
+    fn derived_dataset_bad_column_rejected() {
+        // A chart on a derived dataset validates against its INFERRED schema.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{
+                 "sales":{"columns":{"region":"string","amount":"number"},"values":[]},
+                 "filtered":{"derived":"filter(sales, amount > 0)"}},
+               "view":[{"block":"chart","data":"filtered",
+                 "mark":{"chart":"bar","x":{"column":"region"},"y":[{"column":"nope"}]}}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/unknown-column"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn derived_dataset_not_a_dataset_rejected() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"sales":{"columns":{"amount":"number"},"values":[]},
+                 "bad":{"derived":"mean(sales.amount)"}},"view":[]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/derived-data-not-dataset"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn mixed_signal_dataset_cycle_rejected() {
+        // signal s = count(d); dataset d = filter(base, x > s) — a cross-linkage
+        // cycle spanning a signal and a dataset. Caught by the unified DAG.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"base":{"columns":{"x":"number"},"values":[]},
+                 "d":{"derived":"filter(base, x > s)"}},
+               "signals":{"s":{"type":"number","derived":"count(d)"}},"view":[]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/reactive-cycle"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn dataset_dataset_cycle_rejected() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"a":{"derived":"filter(b, x > 0)"},
+                 "b":{"derived":"filter(a, x > 0)"}},"view":[]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/derived-data-error"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn name_collision_rejected() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"x":{"columns":{"v":"number"},"values":[]}},
+               "signals":{"x":{"type":"number","init":0,
+                 "widget":{"type":"slider","min":0,"max":1}}},"view":[]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/name-collision"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn chart_selection_valid_passes() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"sales":{"columns":{"region":"string","amount":"number"},"values":[]}},
+               "signals":{"sel":{"type":"string","from":{"chart":"bars","select":"region"}}},
+               "view":[{"block":"chart","id":"bars","data":"sales",
+                 "mark":{"chart":"bar","x":{"column":"region"},"y":[{"column":"amount"}]}}]}"#,
+        );
+        assert!(d.is_empty(), "unexpected: {d:?}");
+    }
+
+    #[test]
+    fn chart_selection_type_mismatch_rejected() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"sales":{"columns":{"region":"string","amount":"number"},"values":[]}},
+               "signals":{"sel":{"type":"number","from":{"chart":"bars","select":"region"}}},
+               "view":[{"block":"chart","id":"bars","data":"sales",
+                 "mark":{"chart":"bar","x":{"column":"region"},"y":[{"column":"amount"}]}}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/selection-type-mismatch"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn chart_selection_unsupported_mark_rejected() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"t":"number","v":"number"},"values":[]}},
+               "signals":{"sel":{"type":"number","from":{"chart":"ln","select":"t"}}},
+               "view":[{"block":"chart","id":"ln","data":"px",
+                 "mark":{"chart":"line","x":{"column":"t"},"y":[{"column":"v"}]}}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/selection-unsupported"),
+            "{d:?}"
+        );
     }
 
     #[test]

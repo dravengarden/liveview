@@ -21,12 +21,14 @@ export type SignalType =
   | "interval<temporal>"
   | "array<enum>";
 
-/** A named dataset: a declared column schema plus rows via `source` (big data,
- *  Phase 3) or inline `values` (tiny data). */
+/** A named dataset: rows via `source` (big data), inline `values` (tiny data),
+ *  or `derived` (a `filter(...)` transform of other datasets/signals, recomputed
+ *  reactively). A derived dataset's `columns` are inferred, so it omits them. */
 export interface DataSet {
-  columns: Record<string, ColumnType>;
+  columns?: Record<string, ColumnType>;
   source?: string;
   values?: unknown[];
+  derived?: string;
 }
 
 /** One choice in a `segmented`/`select`/… widget. `value` is a raw JSON value

@@ -662,3 +662,16 @@ export function evalDerived(ast: Ast, env: EvalEnv): Scalar | Unavailable {
   if (typeof v === "string" || typeof v === "boolean") return v;
   return UNAVAILABLE;
 }
+
+/** Evaluate a parsed derived expression to a DATASET (the shape a `derived`
+ *  dataset holds — e.g. `filter(sales, region == sel)`). A non-dataset result or
+ *  an absent input collapses to an unavailable dataset (`rows: null`), so a chart
+ *  reading it shows "no data" rather than crashing (the checker already proved
+ *  the expression yields a dataset; this is the total interpretation). */
+export function evalDatasetExpr(ast: Ast, env: EvalEnv): EvalDataset {
+  const v = evalNode(ast, env, null);
+  if (isDs(v)) {
+    return { columns: v.columns, rows: v.rows === null ? null : v.rows.slice() };
+  }
+  return { columns: {}, rows: null };
+}

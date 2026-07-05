@@ -98,6 +98,10 @@ pub struct ExprResult {
     pub ty_desc: String,
     pub signal_refs: BTreeSet<String>,
     pub dataset_refs: BTreeSet<String>,
+    /// When the expression evaluates to a *dataset* (e.g. `filter(sales, …)`),
+    /// its inferred output schema — so a `derived` dataset can be registered and
+    /// its columns validated downstream. `None` for a scalar-valued expression.
+    pub dataset_columns: Option<BTreeMap<String, ColumnType>>,
 }
 
 /// A type/parse error, with a human message. (The expression is embedded in
@@ -132,6 +136,9 @@ pub fn check(src: &str, env: &ExprEnv) -> Result<ExprResult, ExprError> {
     };
     let ty = tc.check(&ast, None)?;
     refs.ty_desc = ty.describe();
+    if let Ty::Dataset(cols) = &ty {
+        refs.dataset_columns = Some(cols.clone());
+    }
     Ok(refs)
 }
 
