@@ -13,9 +13,11 @@
 //   • Overlays (reference lines/bands) read signals via the kernel, so they move
 //     reactively as widgets change — the checker guarantees the refs resolve.
 
-import { useState, type JSX, type ReactNode } from "react";
+import { type JSX, type ReactNode, useState } from "react";
 import { Box, Typography, useTheme } from "@mui/material";
 import type { Theme } from "@mui/material";
+import { renderWidget } from "./widgets";
+import { evalMetric } from "./interpolate";
 import {
   Area,
   AreaChart,
@@ -39,7 +41,14 @@ import {
   YAxis,
   ZAxis,
 } from "recharts";
-import type { Block, ChartField, Overlay } from "./types";
+import type {
+  Block,
+  ChartControl,
+  ChartField,
+  Metric,
+  Overlay,
+  Signal,
+} from "./types";
 import type { Kernel } from "./kernel";
 import { isUnavailable } from "./expr";
 
@@ -59,13 +68,14 @@ const CHART_HEIGHT = 300;
 //     size-measurement + viewport-clamp math (translate.js returns position[key]
 //     verbatim), so the tapped readout always lands cleanly top-left in-plot.
 // Mouse pointers keep the empty object → default hover-follow. No author knob.
-const COARSE_POINTER =
-  typeof window !== "undefined" &&
+const COARSE_POINTER = typeof window !== "undefined" &&
   typeof window.matchMedia === "function" &&
   window.matchMedia("(pointer: coarse)").matches;
-const TOOLTIP_PIN: { position: { x: number; y: number }; trigger: "click" } | Record<string, never> = COARSE_POINTER
-  ? { position: { x: 8, y: 8 }, trigger: "click" }
-  : {};
+const TOOLTIP_PIN:
+  | { position: { x: number; y: number }; trigger: "click" }
+  | Record<string, never> = COARSE_POINTER
+    ? { position: { x: 8, y: 8 }, trigger: "click" }
+    : {};
 
 /** The categorical series palette, drawn from the theme so it tracks light/dark
  *  and any theme change — authors never pick a colour. */
@@ -102,6 +112,27 @@ function numColumn(rows: Record<string, unknown>[], col: string): number[] {
   return out;
 }
 
+// A data-fit numeric domain (with headroom) for a value axis. recharts' default
+// y-domain is `[0, 'auto']`, which forces zero into view — so a tightly-clustered
+// high-value series (e.g. prices around 100) collapses into a flat ribbon at the
+// top of the plot and its structure (crossings, swings) becomes invisible. We
+// instead fit the axis to the data extent ±8% headroom. Because the returned
+// domain already contains all data and recharts keeps `allowDataOverflow` off,
+// a reactive overlay (a threshold line/band with `ifOverflow="extendDomain"`)
+// still pushes the axis outward to stay visible. Used for line & scatter (bar
+// keeps a zero baseline — a bar's length must be read from zero).
+function fitDomain(values: number[]): [number, number] | ["auto", "auto"] {
+  if (values.length === 0) return ["auto", "auto"];
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  if (lo === hi) {
+    const p = Math.abs(lo) * 0.05 || 1;
+    return [lo - p, hi + p];
+  }
+  const pad = (hi - lo) * 0.08;
+  return [lo - pad, hi + pad];
+}
+
 /** Read an overlay signal accessor (`name` or `name[0]`) to a raw axis value
  *  (number or temporal string), or null when unavailable — so a not-yet-set or
  *  UNAVAILABLE signal simply hides the overlay rather than drawing garbage. */
@@ -129,17 +160,177 @@ function ChartFrame({
 }): JSX.Element {
   return (
     <Box sx={{ my: 1 }}>
-      {title ? (
-        <Typography variant="subtitle2" sx={{ mb: 1, color: "text.secondary" }}>
-          {title}
-        </Typography>
-      ) : null}
-      <Box sx={{ width: "100%", height: CHART_HEIGHT, cursor: selectable ? "pointer" : "default" }}>{children}</Box>
+      {title
+        ? (
+          <Typography
+            variant="subtitle2"
+            sx={{ mb: 1, color: "text.secondary" }}
+          >
+            {title}
+          </Typography>
+        )
+        : null}
+      <Box
+        sx={{
+          width: "100%",
+          height: CHART_HEIGHT,
+          cursor: selectable ? "pointer" : "default",
+        }}
+      >
+        {children}
+      </Box>
     </Box>
   );
 }
 
-function ChartEmpty({ title, msg }: { title?: string | undefined; msg: string }): JSX.Element {
+// ── chart panel: controls + plot + readouts as ONE card ───────────────────────
+
+/** One docked readout — a compact KPI chip (label over value), a denser take on
+ *  the `metric` tile so several fit inline under a plot. */
+function ReadoutChip(
+  { metric, kernel }: { metric: Metric; kernel: Kernel },
+): JSX.Element {
+  const value = evalMetric(metric.value, metric.format, kernel);
+  return (
+    <Box sx={{ minWidth: "5.5rem", flex: "0 1 auto" }}>
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ display: "block", lineHeight: 1.3 }}
+      >
+        {metric.label}
+      </Typography>
+      <Typography
+        variant="subtitle2"
+        sx={{ fontWeight: 700, lineHeight: 1.3, wordBreak: "break-word" }}
+      >
+        {value}
+      </Typography>
+    </Box>
+  );
+}
+
+/** Resolve a docked control to its widget (standalone `widget`, or the widget
+ *  declared on the referenced `signal`) and render it. Mirrors the `input`
+ *  block's resolution so a chart control behaves identically — just docked. */
+function DockedControl({
+  control,
+  signals,
+  kernel,
+}: {
+  control: ChartControl;
+  signals: Record<string, Signal>;
+  kernel: Kernel;
+}): JSX.Element | null {
+  const declared = control.signal ? signals[control.signal] : undefined;
+  const widget = control.widget ?? declared?.widget;
+  if (!widget) return null;
+  return <>{renderWidget(widget, control.signal ?? null, kernel)}</>;
+}
+
+// Responsive layout, sound by construction (no visual review):
+//   • The panel lives inside the reader's CONTENT COLUMN, whose width is ~358px
+//     (iPhone), ~788px (iPad portrait), ~900px (desktop) — NOT the viewport. So
+//     MUI `xs/md` breakpoints (which key off the viewport) would mislay it (an
+//     iPad at 820px viewport would collapse to one column though its 788px
+//     column fits two). We therefore reflow with CONTAINER-RELATIVE `flexWrap`
+//     off a fixed basis: it reads the real column width and can't overflow.
+//   • CONTROL_BASIS 260px → iPhone stacks every control full-width (2×260+gap >
+//     358), iPad fits 2–3 across, desktop 3, so the toolbar is never a lone
+//     slider stranded across 900px nor a cramped row on a phone. `minWidth:0`
+//     lets a long-labelled control shrink instead of forcing a scrollbar.
+//   • Readout chips size to content (`0 1 auto`) with a floor, wrapping the same
+//     way; `wordBreak` on the value keeps a big number inside the chip.
+const CONTROL_BASIS = "260px";
+
+/** Wrap a chart in a unified card WHEN it declares docked `controls`/`readouts`
+ *  — a compact controls toolbar above the plot and a readout chip strip below,
+ *  so the tunable and its visual effect read as one unit. A chart with neither
+ *  renders frameless, exactly as before (no corpus-wide restyle). */
+function ChartPanel({
+  block,
+  signals,
+  kernel,
+  children,
+}: {
+  block: ChartBlockT;
+  signals: Record<string, Signal>;
+  kernel: Kernel;
+  children: ReactNode;
+}): JSX.Element {
+  const controls = block.controls ?? [];
+  const readouts = block.readouts ?? [];
+  if (controls.length === 0 && readouts.length === 0) return <>{children}</>;
+  return (
+    <Box
+      sx={{
+        my: 1,
+        border: 1,
+        borderColor: "divider",
+        borderRadius: 2,
+        bgcolor: "background.paper",
+        overflow: "hidden",
+      }}
+    >
+      {controls.length > 0
+        ? (
+          <Box
+            sx={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "flex-end",
+              gap: 2,
+              px: 2,
+              pt: 1.5,
+              pb: 1,
+              borderBottom: 1,
+              borderColor: "divider",
+            }}
+          >
+            {controls.map((c, i) => (
+              <Box
+                key={i}
+                sx={{
+                  flex: `1 1 ${CONTROL_BASIS}`,
+                  minWidth: 0,
+                  maxWidth: "100%",
+                }}
+              >
+                <DockedControl control={c} signals={signals} kernel={kernel} />
+              </Box>
+            ))}
+          </Box>
+        )
+        : null}
+      <Box sx={{ px: 1 }}>{children}</Box>
+      {readouts.length > 0
+        ? (
+          <Box
+            sx={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 2.5,
+              rowGap: 1,
+              px: 2,
+              py: 1.25,
+              borderTop: 1,
+              borderColor: "divider",
+              bgcolor: "action.hover",
+            }}
+          >
+            {readouts.map((m, i) => (
+              <ReadoutChip key={i} metric={m} kernel={kernel} />
+            ))}
+          </Box>
+        )
+        : null}
+    </Box>
+  );
+}
+
+function ChartEmpty(
+  { title, msg }: { title?: string | undefined; msg: string },
+): JSX.Element {
   return (
     <Box
       sx={{
@@ -193,32 +384,100 @@ const LEGEND_STYLE = { fontSize: 12 } as const;
 
 /** Reference lines/bands as recharts children. Colours from the theme; a null
  *  (unavailable) signal simply omits the overlay. */
-function overlayElements(overlays: Overlay[] | undefined, kernel: Kernel, theme: Theme): ReactNode[] {
+function overlayElements(
+  overlays: Overlay[] | undefined,
+  kernel: Kernel,
+  theme: Theme,
+): ReactNode[] {
   if (!overlays) return [];
   const line = theme.palette.warning.main;
   const band = theme.palette.primary.main;
   const out: ReactNode[] = [];
   // Only include `label` when the overlay names one (exactOptionalPropertyTypes
   // forbids passing `undefined` to recharts' label prop).
-  const lbl = (text: string | undefined): { label: { value: string; position: "insideTopRight"; fill: string; fontSize: number } } | Record<string, never> =>
-    text ? { label: { value: text, position: "insideTopRight", fill: theme.palette.text.secondary, fontSize: 11 } } : {};
+  const lbl = (
+    text: string | undefined,
+  ): {
+    label: {
+      value: string;
+      position: "insideTopRight";
+      fill: string;
+      fontSize: number;
+    };
+  } | Record<string, never> =>
+    text
+      ? {
+        label: {
+          value: text,
+          position: "insideTopRight",
+          fill: theme.palette.text.secondary,
+          fontSize: 11,
+        },
+      }
+      : {};
   // extendDomain: a signal-driven line/band set beyond the current data range
   // rescales the axis to stay visible (the point of a reactive threshold/alert).
   overlays.forEach((ov, i) => {
     if (ov.overlay === "hLine") {
       const y = readAxis(kernel, ov.value);
-      if (y !== null) out.push(<ReferenceLine key={`o${i}`} y={y} stroke={line} strokeDasharray="4 3" ifOverflow="extendDomain" {...lbl(ov.label)} />);
+      if (y !== null) {
+        out.push(
+          <ReferenceLine
+            key={`o${i}`}
+            y={y}
+            stroke={line}
+            strokeDasharray="4 3"
+            ifOverflow="extendDomain"
+            {...lbl(ov.label)}
+          />,
+        );
+      }
     } else if (ov.overlay === "vLine") {
       const x = readAxis(kernel, ov.value);
-      if (x !== null) out.push(<ReferenceLine key={`o${i}`} x={x} stroke={line} strokeDasharray="4 3" ifOverflow="extendDomain" {...lbl(ov.label)} />);
+      if (x !== null) {
+        out.push(
+          <ReferenceLine
+            key={`o${i}`}
+            x={x}
+            stroke={line}
+            strokeDasharray="4 3"
+            ifOverflow="extendDomain"
+            {...lbl(ov.label)}
+          />,
+        );
+      }
     } else if (ov.overlay === "hBand") {
       const y1 = readAxis(kernel, ov.from);
       const y2 = readAxis(kernel, ov.to);
-      if (y1 !== null && y2 !== null) out.push(<ReferenceArea key={`o${i}`} y1={y1} y2={y2} fill={band} fillOpacity={0.12} ifOverflow="extendDomain" {...lbl(ov.label)} />);
+      if (y1 !== null && y2 !== null) {
+        out.push(
+          <ReferenceArea
+            key={`o${i}`}
+            y1={y1}
+            y2={y2}
+            fill={band}
+            fillOpacity={0.12}
+            ifOverflow="extendDomain"
+            {...lbl(ov.label)}
+          />,
+        );
+      }
     } else {
       const x1 = readAxis(kernel, ov.from);
       const x2 = readAxis(kernel, ov.to);
-      if (x1 !== null && x2 !== null) out.push(<ReferenceArea key={`o${i}`} x1={x1} x2={x2} fill={band} fillOpacity={0.12} ifOverflow="extendDomain" {...lbl(ov.label)} />);
+      if (x1 !== null && x2 !== null) {
+        out.push(
+          <ReferenceArea
+            key={`o${i}`}
+            x1={x1}
+            x2={x2}
+            fill={band}
+            fillOpacity={0.12}
+            ifOverflow="extendDomain"
+            {...lbl(ov.label)}
+          />,
+        );
+      }
     }
   });
   return out;
@@ -227,10 +486,15 @@ function overlayElements(overlays: Overlay[] | undefined, kernel: Kernel, theme:
 // ── histogram binning ─────────────────────────────────────────────────────────
 
 function fmtEdge(n: number): string {
-  return Math.abs(n) >= 1000 || Number.isInteger(n) ? String(Math.round(n)) : n.toFixed(2);
+  return Math.abs(n) >= 1000 || Number.isInteger(n)
+    ? String(Math.round(n))
+    : n.toFixed(2);
 }
 
-function histogram(values: number[], bins: number): { bin: string; count: number }[] {
+function histogram(
+  values: number[],
+  bins: number,
+): { bin: string; count: number }[] {
   if (values.length === 0) return [];
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -243,7 +507,10 @@ function histogram(values: number[], bins: number): { bin: string; count: number
     if (idx < 0) idx = 0;
     buckets[idx] = (buckets[idx] ?? 0) + 1;
   }
-  return buckets.map((count, i) => ({ bin: `${fmtEdge(min + i * width)}–${fmtEdge(min + (i + 1) * width)}`, count }));
+  return buckets.map((count, i) => ({
+    bin: `${fmtEdge(min + i * width)}–${fmtEdge(min + (i + 1) * width)}`,
+    count,
+  }));
 }
 
 // ── candlestick custom shape ──────────────────────────────────────────────────
@@ -260,17 +527,30 @@ interface CandleShapeProps {
  *  `[low, high]` range, so recharts hands us `y` = pixel(high) and `height` =
  *  the pixel span down to `low`; we linearly interpolate the open/close pixels
  *  inside that span (a linear y-axis) and colour up/down from the theme. */
-function makeCandle(cfg: { open: string; high: string; low: string; close: string; up: string; down: string }) {
+function makeCandle(
+  cfg: {
+    open: string;
+    high: string;
+    low: string;
+    close: string;
+    up: string;
+    down: string;
+  },
+) {
   return function Candle(props: CandleShapeProps): JSX.Element | null {
     const { x, y, width, height, payload } = props;
-    if (x == null || y == null || width == null || height == null || !payload) return null;
+    if (x == null || y == null || width == null || height == null || !payload) {
+      return null;
+    }
     const high = Number(payload[cfg.high]);
     const low = Number(payload[cfg.low]);
     const open = Number(payload[cfg.open]);
     const close = Number(payload[cfg.close]);
     if (![high, low, open, close].every((n) => Number.isFinite(n))) return null;
     const span = high - low;
-    const pix = (v: number): number => (span === 0 ? y : y + ((high - v) / span) * height);
+    const pix = (
+      v: number,
+    ): number => (span === 0 ? y : y + ((high - v) / span) * height);
     const cx = x + width / 2;
     const color = close >= open ? cfg.up : cfg.down;
     const openY = pix(open);
@@ -280,8 +560,22 @@ function makeCandle(cfg: { open: string; high: string; low: string; close: strin
     const bodyW = Math.max(1, width * 0.6);
     return (
       <g>
-        <line x1={cx} x2={cx} y1={y} y2={y + height} stroke={color} strokeWidth={1} />
-        <rect x={cx - bodyW / 2} y={bodyTop} width={bodyW} height={bodyH} fill={color} stroke={color} />
+        <line
+          x1={cx}
+          x2={cx}
+          y1={y}
+          y2={y + height}
+          stroke={color}
+          strokeWidth={1}
+        />
+        <rect
+          x={cx - bodyW / 2}
+          y={bodyTop}
+          width={bodyW}
+          height={bodyH}
+          fill={color}
+          stroke={color}
+        />
       </g>
     );
   };
@@ -289,8 +583,15 @@ function makeCandle(cfg: { open: string; high: string; low: string; close: strin
 
 /** Cumulate order-book sizes outward from the mid: asks sum up from the lowest
  *  price, bids sum down from the highest — the classic depth "valley". */
-function depthData(rows: Record<string, unknown>[], priceCol: string, bidCol: string, askCol: string): Record<string, unknown>[] {
-  const sorted = [...rows].sort((a, b) => Number(a[priceCol]) - Number(b[priceCol]));
+function depthData(
+  rows: Record<string, unknown>[],
+  priceCol: string,
+  bidCol: string,
+  askCol: string,
+): Record<string, unknown>[] {
+  const sorted = [...rows].sort((a, b) =>
+    Number(a[priceCol]) - Number(b[priceCol])
+  );
   let ask = 0;
   const out = sorted.map((r) => {
     ask += Math.max(0, Number(r[askCol]) || 0);
@@ -307,7 +608,15 @@ function depthData(rows: Record<string, unknown>[], priceCol: string, bidCol: st
 
 // ── the chart dispatch (exhaustive) ───────────────────────────────────────────
 
-export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kernel: Kernel }): JSX.Element {
+export default function ChartBlock({
+  block,
+  kernel,
+  signals,
+}: {
+  block: ChartBlockT;
+  kernel: Kernel;
+  signals: Record<string, Signal>;
+}): JSX.Element {
   const theme = useTheme();
   // Legend-click isolation: clicking a series in the legend focuses it (others
   // dim); click again to restore. Pure local UI state — no signal, no author
@@ -316,10 +625,16 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
   const legendClick = (o: { dataKey?: unknown; value?: unknown }): void => {
     // Line/area/bar legends carry the series `dataKey` (a column); a scatter
     // legend carries the group `value` (a name). Isolate by whichever is a string.
-    const k = typeof o.dataKey === "string" ? o.dataKey : typeof o.value === "string" ? o.value : null;
+    const k = typeof o.dataKey === "string"
+      ? o.dataKey
+      : typeof o.value === "string"
+      ? o.value
+      : null;
     setActiveSeries((cur) => (cur === k ? null : k));
   };
-  const seriesOpacity = (col: string): number => (activeSeries !== null && activeSeries !== col ? 0.16 : 1);
+  const seriesOpacity = (
+    col: string,
+  ): number => (activeSeries !== null && activeSeries !== col ? 0.16 : 1);
 
   const ds = kernel.data(block.data);
   const rows = ds?.rows ?? null;
@@ -329,18 +644,31 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
   // The current value also highlights the picked category here.
   const sel = block.id ? kernel.selection(block.id) : null;
   const rawSelected = sel ? kernel.get(sel.signal) : undefined;
-  const selectedValue = rawSelected != null && !isUnavailable(rawSelected) && rawSelected !== "" ? rawSelected : null;
-  const catOpacity = (v: unknown): number => (selectedValue === null || String(v) === String(selectedValue) ? 1 : 0.28);
+  const selectedValue =
+    rawSelected != null && !isUnavailable(rawSelected) && rawSelected !== ""
+      ? rawSelected
+      : null;
+  const catOpacity = (
+    v: unknown,
+  ): number => (selectedValue === null || String(v) === String(selectedValue)
+    ? 1
+    : 0.28);
   // Emit the bound column from a clicked datum. recharts' Bar/Cell click hands
   // the datum directly (its `payload` is the row) — reliable even for a
   // synthetic click, unlike the chart-level `activeIndex` (only set on hover).
   const onPickDatum = (d: { payload?: Record<string, unknown> }): void => {
     const row = d.payload;
-    if (sel && row && Object.hasOwn(row, sel.column)) kernel.set(sel.signal, row[sel.column]);
+    if (sel && row && Object.hasOwn(row, sel.column)) {
+      kernel.set(sel.signal, row[sel.column]);
+    }
   };
 
   if (!rows || rows.length === 0) {
-    return <ChartEmpty title={block.title} msg="no data available" />;
+    return (
+      <ChartPanel block={block} signals={signals} kernel={kernel}>
+        <ChartEmpty title={block.title} msg="no data available" />
+      </ChartPanel>
+    );
   }
   const colors = palette(theme);
   const stroke = axisStroke(theme);
@@ -351,326 +679,566 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
     return t === "number" || t === "integer";
   };
 
-  switch (mark.chart) {
-    case "line":
-      return (
-        <ChartFrame title={block.title}>
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={rows} margin={{ top: 8, right: 16, bottom: 4, left: 4 }}>
-              <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
-              <XAxis dataKey={mark.x.column} type={numericX(mark.x.column) ? "number" : "category"} stroke={stroke} tick={AXIS_TICK} />
-              <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
-              <Tooltip {...tip} {...TOOLTIP_PIN} />
-              {mark.y.length > 1 ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} /> : null}
-              {mark.y.map((s, i) => (
-                <Line
-                  key={s.column}
-                  type={mark.curved ? "monotone" : "linear"}
-                  dataKey={s.column}
-                  name={labelOf(s)}
-                  stroke={colorAt(colors, i)}
-                  strokeWidth={2}
-                  strokeOpacity={seriesOpacity(s.column)}
-                  dot={false}
-                  activeDot={{ r: 5, strokeWidth: 2 }}
-                  isAnimationActive={false}
+  // The plot itself — wrapped by ChartPanel so any docked controls/readouts
+  // frame it as one card (frameless when it declares none).
+  const renderChart = (): JSX.Element => {
+    switch (mark.chart) {
+      case "line":
+        return (
+          <ChartFrame title={block.title}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart
+                data={rows}
+                margin={{ top: 8, right: 16, bottom: 4, left: 4 }}
+              >
+                <CartesianGrid
+                  stroke={theme.palette.divider}
+                  strokeDasharray="3 3"
                 />
-              ))}
-              {overlayElements(block.overlays, kernel, theme)}
-            </LineChart>
-          </ResponsiveContainer>
-        </ChartFrame>
-      );
-
-    case "area":
-      return (
-        <ChartFrame title={block.title}>
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={rows} margin={{ top: 8, right: 16, bottom: 4, left: 4 }}>
-              <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
-              <XAxis dataKey={mark.x.column} type={numericX(mark.x.column) ? "number" : "category"} stroke={stroke} tick={AXIS_TICK} />
-              <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
-              <Tooltip {...tip} {...TOOLTIP_PIN} />
-              {mark.y.length > 1 ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} /> : null}
-              {mark.y.map((s, i) => {
-                const c = colorAt(colors, i);
-                const op = seriesOpacity(s.column);
-                return (
-                  <Area
+                <XAxis
+                  dataKey={mark.x.column}
+                  type={numericX(mark.x.column) ? "number" : "category"}
+                  stroke={stroke}
+                  tick={AXIS_TICK}
+                />
+                <YAxis
+                  stroke={stroke}
+                  tick={AXIS_TICK}
+                  width={44}
+                  domain={fitDomain(
+                    mark.y.flatMap((s) => numColumn(rows, s.column)),
+                  )}
+                />
+                <Tooltip {...tip} {...TOOLTIP_PIN} />
+                {mark.y.length > 1
+                  ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} />
+                  : null}
+                {mark.y.map((s, i) => (
+                  <Line
                     key={s.column}
-                    type="monotone"
+                    type={mark.curved ? "monotone" : "linear"}
                     dataKey={s.column}
                     name={labelOf(s)}
-                    {...(mark.stacked ? { stackId: "stack" } : {})}
-                    stroke={c}
-                    fill={c}
-                    fillOpacity={0.25 * op}
-                    strokeOpacity={op}
+                    stroke={colorAt(colors, i)}
                     strokeWidth={2}
+                    strokeOpacity={seriesOpacity(s.column)}
+                    dot={false}
                     activeDot={{ r: 5, strokeWidth: 2 }}
                     isAnimationActive={false}
                   />
-                );
-              })}
-              {overlayElements(block.overlays, kernel, theme)}
-            </AreaChart>
-          </ResponsiveContainer>
-        </ChartFrame>
-      );
+                ))}
+                {overlayElements(block.overlays, kernel, theme)}
+              </LineChart>
+            </ResponsiveContainer>
+          </ChartFrame>
+        );
 
-    case "bar": {
-      const xCol = mark.x.column;
-      return (
-        <ChartFrame title={block.title} selectable={!!sel}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={rows} margin={{ top: 8, right: 16, bottom: 4, left: 4 }}>
-              <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
-              <XAxis dataKey={xCol} stroke={stroke} tick={AXIS_TICK} />
-              <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
-              <Tooltip {...tip} {...TOOLTIP_PIN} cursor={{ fill: theme.palette.action.hover }} />
-              {mark.y.length > 1 ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} /> : null}
-              {mark.y.map((s, i) => (
+      case "area":
+        return (
+          <ChartFrame title={block.title}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart
+                data={rows}
+                margin={{ top: 8, right: 16, bottom: 4, left: 4 }}
+              >
+                <CartesianGrid
+                  stroke={theme.palette.divider}
+                  strokeDasharray="3 3"
+                />
+                <XAxis
+                  dataKey={mark.x.column}
+                  type={numericX(mark.x.column) ? "number" : "category"}
+                  stroke={stroke}
+                  tick={AXIS_TICK}
+                />
+                <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
+                <Tooltip {...tip} {...TOOLTIP_PIN} />
+                {mark.y.length > 1
+                  ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} />
+                  : null}
+                {mark.y.map((s, i) => {
+                  const c = colorAt(colors, i);
+                  const op = seriesOpacity(s.column);
+                  return (
+                    <Area
+                      key={s.column}
+                      type="monotone"
+                      dataKey={s.column}
+                      name={labelOf(s)}
+                      {...(mark.stacked ? { stackId: "stack" } : {})}
+                      stroke={c}
+                      fill={c}
+                      fillOpacity={0.25 * op}
+                      strokeOpacity={op}
+                      strokeWidth={2}
+                      activeDot={{ r: 5, strokeWidth: 2 }}
+                      isAnimationActive={false}
+                    />
+                  );
+                })}
+                {overlayElements(block.overlays, kernel, theme)}
+              </AreaChart>
+            </ResponsiveContainer>
+          </ChartFrame>
+        );
+
+      case "bar": {
+        const xCol = mark.x.column;
+        return (
+          <ChartFrame title={block.title} selectable={!!sel}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={rows}
+                margin={{ top: 8, right: 16, bottom: 4, left: 4 }}
+              >
+                <CartesianGrid
+                  stroke={theme.palette.divider}
+                  strokeDasharray="3 3"
+                />
+                <XAxis dataKey={xCol} stroke={stroke} tick={AXIS_TICK} />
+                <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
+                <Tooltip
+                  {...tip}
+                  {...TOOLTIP_PIN}
+                  cursor={{ fill: theme.palette.action.hover }}
+                />
+                {mark.y.length > 1
+                  ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} />
+                  : null}
+                {mark.y.map((s, i) => (
+                  <Bar
+                    key={s.column}
+                    dataKey={s.column}
+                    name={labelOf(s)}
+                    {...(mark.stacked ? { stackId: "stack" } : {})}
+                    fill={colorAt(colors, i)}
+                    fillOpacity={seriesOpacity(s.column)}
+                    isAnimationActive={false}
+                    {...(sel ? { onClick: onPickDatum } : {})}
+                  >
+                    {sel
+                      ? rows.map((r, ri) => (
+                        <Cell
+                          key={ri}
+                          fillOpacity={seriesOpacity(s.column) *
+                            catOpacity(r[xCol])}
+                        />
+                      ))
+                      : null}
+                  </Bar>
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartFrame>
+        );
+      }
+
+      case "barHorizontal": {
+        const catCol = mark.category.column;
+        return (
+          <ChartFrame title={block.title} selectable={!!sel}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={rows}
+                layout="vertical"
+                margin={{ top: 8, right: 16, bottom: 4, left: 8 }}
+              >
+                <CartesianGrid
+                  stroke={theme.palette.divider}
+                  strokeDasharray="3 3"
+                />
+                <XAxis type="number" stroke={stroke} tick={AXIS_TICK} />
+                <YAxis
+                  type="category"
+                  dataKey={catCol}
+                  stroke={stroke}
+                  tick={AXIS_TICK}
+                  width={96}
+                />
+                <Tooltip
+                  {...tip}
+                  {...TOOLTIP_PIN}
+                  cursor={{ fill: theme.palette.action.hover }}
+                />
                 <Bar
-                  key={s.column}
-                  dataKey={s.column}
-                  name={labelOf(s)}
-                  {...(mark.stacked ? { stackId: "stack" } : {})}
-                  fill={colorAt(colors, i)}
-                  fillOpacity={seriesOpacity(s.column)}
+                  dataKey={mark.value.column}
+                  name={labelOf(mark.value)}
+                  fill={colorAt(colors, 0)}
                   isAnimationActive={false}
                   {...(sel ? { onClick: onPickDatum } : {})}
                 >
-                  {sel
-                    ? rows.map((r, ri) => (
-                        <Cell key={ri} fillOpacity={seriesOpacity(s.column) * catOpacity(r[xCol])} />
-                      ))
-                    : null}
+                  {rows.map((r, i) => (
+                    <Cell
+                      key={i}
+                      fill={colorAt(colors, i)}
+                      fillOpacity={catOpacity(r[catCol])}
+                    />
+                  ))}
                 </Bar>
-              ))}
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartFrame>
-      );
-    }
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartFrame>
+        );
+      }
 
-    case "barHorizontal": {
-      const catCol = mark.category.column;
-      return (
-        <ChartFrame title={block.title} selectable={!!sel}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={rows} layout="vertical" margin={{ top: 8, right: 16, bottom: 4, left: 8 }}>
-              <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
-              <XAxis type="number" stroke={stroke} tick={AXIS_TICK} />
-              <YAxis type="category" dataKey={catCol} stroke={stroke} tick={AXIS_TICK} width={96} />
-              <Tooltip {...tip} {...TOOLTIP_PIN} cursor={{ fill: theme.palette.action.hover }} />
-              <Bar
-                dataKey={mark.value.column}
-                name={labelOf(mark.value)}
-                fill={colorAt(colors, 0)}
-                isAnimationActive={false}
-                {...(sel ? { onClick: onPickDatum } : {})}
-              >
-                {rows.map((r, i) => (
-                  <Cell key={i} fill={colorAt(colors, i)} fillOpacity={catOpacity(r[catCol])} />
+      case "pie": {
+        const pieData = rows
+          .map((r) => ({
+            name: String(r[mark.category.column]),
+            value: Number(r[mark.value.column]),
+            row: r,
+          }))
+          .filter((d) => Number.isFinite(d.value));
+        const pieClick = (
+          d: {
+            payload?: { row?: Record<string, unknown> };
+            row?: Record<string, unknown>;
+          },
+        ): void => {
+          const row = d.payload?.row ?? d.row;
+          if (sel && row && Object.hasOwn(row, sel.column)) {
+            kernel.set(sel.signal, row[sel.column]);
+          }
+        };
+        return (
+          <ChartFrame title={block.title} selectable={!!sel}>
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={pieData}
+                  dataKey="value"
+                  nameKey="name"
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={mark.donut ? "55%" : 0}
+                  outerRadius="80%"
+                  stroke={theme.palette.background.paper}
+                  isAnimationActive={false}
+                  onClick={pieClick}
+                  label={(e: { name?: string }) => e.name ?? ""}
+                >
+                  {pieData.map((d, i) => (
+                    <Cell
+                      key={i}
+                      fill={colorAt(colors, i)}
+                      fillOpacity={catOpacity(d.name)}
+                    />
+                  ))}
+                </Pie>
+                <Tooltip {...tip} {...TOOLTIP_PIN} />
+                <Legend wrapperStyle={LEGEND_STYLE} />
+              </PieChart>
+            </ResponsiveContainer>
+          </ChartFrame>
+        );
+      }
+
+      case "scatter": {
+        const size = mark.size;
+        const series = mark.series;
+        const groups: { name: string; data: Record<string, unknown>[] }[] =
+          series
+            ? groupBy(rows, series.column)
+            : [{ name: labelOf(mark.y), data: rows }];
+        return (
+          <ChartFrame title={block.title}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 4 }}>
+                <CartesianGrid
+                  stroke={theme.palette.divider}
+                  strokeDasharray="3 3"
+                />
+                <XAxis
+                  type="number"
+                  dataKey={mark.x.column}
+                  name={labelOf(mark.x)}
+                  stroke={stroke}
+                  tick={AXIS_TICK}
+                  domain={fitDomain(numColumn(rows, mark.x.column))}
+                />
+                <YAxis
+                  type="number"
+                  dataKey={mark.y.column}
+                  name={labelOf(mark.y)}
+                  stroke={stroke}
+                  tick={AXIS_TICK}
+                  width={44}
+                  domain={fitDomain(numColumn(rows, mark.y.column))}
+                />
+                {size
+                  ? (
+                    <ZAxis
+                      type="number"
+                      dataKey={size.column}
+                      range={[40, 400]}
+                      name={labelOf(size)}
+                    />
+                  )
+                  : null}
+                <Tooltip
+                  {...tip}
+                  {...TOOLTIP_PIN}
+                  cursor={{ strokeDasharray: "3 3" }}
+                />
+                {groups.length > 1
+                  ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} />
+                  : null}
+                {groups.map((g, i) => (
+                  <Scatter
+                    key={g.name}
+                    name={g.name}
+                    data={g.data}
+                    fill={colorAt(colors, i)}
+                    fillOpacity={seriesOpacity(g.name)}
+                    isAnimationActive={false}
+                  />
                 ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartFrame>
-      );
-    }
+                {overlayElements(block.overlays, kernel, theme)}
+              </ScatterChart>
+            </ResponsiveContainer>
+          </ChartFrame>
+        );
+      }
 
-    case "pie": {
-      const pieData = rows
-        .map((r) => ({ name: String(r[mark.category.column]), value: Number(r[mark.value.column]), row: r }))
-        .filter((d) => Number.isFinite(d.value));
-      const pieClick = (d: { payload?: { row?: Record<string, unknown> }; row?: Record<string, unknown> }): void => {
-        const row = d.payload?.row ?? d.row;
-        if (sel && row && Object.hasOwn(row, sel.column)) kernel.set(sel.signal, row[sel.column]);
-      };
-      return (
-        <ChartFrame title={block.title} selectable={!!sel}>
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={pieData}
-                dataKey="value"
-                nameKey="name"
-                cx="50%"
-                cy="50%"
-                innerRadius={mark.donut ? "55%" : 0}
-                outerRadius="80%"
-                stroke={theme.palette.background.paper}
-                isAnimationActive={false}
-                onClick={pieClick}
-                label={(e: { name?: string }) => e.name ?? ""}
+      case "histogram": {
+        const data = histogram(
+          numColumn(rows, mark.value.column),
+          mark.bins ?? 10,
+        );
+        return (
+          <ChartFrame title={block.title}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={data}
+                margin={{ top: 8, right: 16, bottom: 4, left: 4 }}
               >
-                {pieData.map((d, i) => (
-                  <Cell key={i} fill={colorAt(colors, i)} fillOpacity={catOpacity(d.name)} />
-                ))}
-              </Pie>
-              <Tooltip {...tip} {...TOOLTIP_PIN} />
-              <Legend wrapperStyle={LEGEND_STYLE} />
-            </PieChart>
-          </ResponsiveContainer>
-        </ChartFrame>
-      );
-    }
-
-    case "scatter": {
-      const size = mark.size;
-      const series = mark.series;
-      const groups: { name: string; data: Record<string, unknown>[] }[] = series
-        ? groupBy(rows, series.column)
-        : [{ name: labelOf(mark.y), data: rows }];
-      return (
-        <ChartFrame title={block.title}>
-          <ResponsiveContainer width="100%" height="100%">
-            <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 4 }}>
-              <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
-              <XAxis type="number" dataKey={mark.x.column} name={labelOf(mark.x)} stroke={stroke} tick={AXIS_TICK} />
-              <YAxis type="number" dataKey={mark.y.column} name={labelOf(mark.y)} stroke={stroke} tick={AXIS_TICK} width={44} />
-              {size ? <ZAxis type="number" dataKey={size.column} range={[40, 400]} name={labelOf(size)} /> : null}
-              <Tooltip {...tip} {...TOOLTIP_PIN} cursor={{ strokeDasharray: "3 3" }} />
-              {groups.length > 1 ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} /> : null}
-              {groups.map((g, i) => (
-                <Scatter
-                  key={g.name}
-                  name={g.name}
-                  data={g.data}
-                  fill={colorAt(colors, i)}
-                  fillOpacity={seriesOpacity(g.name)}
+                <CartesianGrid
+                  stroke={theme.palette.divider}
+                  strokeDasharray="3 3"
+                />
+                <XAxis
+                  dataKey="bin"
+                  stroke={stroke}
+                  tick={{ fontSize: 10 }}
+                  interval="preserveStartEnd"
+                />
+                <YAxis
+                  stroke={stroke}
+                  tick={AXIS_TICK}
+                  width={44}
+                  allowDecimals={false}
+                />
+                <Tooltip
+                  {...tip}
+                  {...TOOLTIP_PIN}
+                  cursor={{ fill: theme.palette.action.hover }}
+                />
+                <Bar
+                  dataKey="count"
+                  name={labelOf(mark.value)}
+                  fill={colorAt(colors, 0)}
                   isAnimationActive={false}
                 />
-              ))}
-              {overlayElements(block.overlays, kernel, theme)}
-            </ScatterChart>
-          </ResponsiveContainer>
-        </ChartFrame>
-      );
-    }
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartFrame>
+        );
+      }
 
-    case "histogram": {
-      const data = histogram(numColumn(rows, mark.value.column), mark.bins ?? 10);
-      return (
-        <ChartFrame title={block.title}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={data} margin={{ top: 8, right: 16, bottom: 4, left: 4 }}>
-              <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
-              <XAxis dataKey="bin" stroke={stroke} tick={{ fontSize: 10 }} interval="preserveStartEnd" />
-              <YAxis stroke={stroke} tick={AXIS_TICK} width={44} allowDecimals={false} />
-              <Tooltip {...tip} {...TOOLTIP_PIN} cursor={{ fill: theme.palette.action.hover }} />
-              <Bar dataKey="count" name={labelOf(mark.value)} fill={colorAt(colors, 0)} isAnimationActive={false} />
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartFrame>
-      );
-    }
-
-    case "candlestick": {
-      const lows = numColumn(rows, mark.low.column);
-      const highs = numColumn(rows, mark.high.column);
-      const lo = lows.length ? Math.min(...lows) : 0;
-      const hi = highs.length ? Math.max(...highs) : 1;
-      const pad = (hi - lo) * 0.05 || 1;
-      const Candle = makeCandle({
-        open: mark.open.column,
-        high: mark.high.column,
-        low: mark.low.column,
-        close: mark.close.column,
-        up: theme.palette.success.main,
-        down: theme.palette.error.main,
-      });
-      const candleData = rows.map((r) => ({ ...r, _hl: [Number(r[mark.low.column]), Number(r[mark.high.column])] }));
-      const mas = mark.ma ?? [];
-      return (
-        <ChartFrame title={block.title}>
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={candleData} margin={{ top: 8, right: 16, bottom: 4, left: 4 }}>
-              <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
-              <XAxis dataKey={mark.x.column} type={numericX(mark.x.column) ? "number" : "category"} stroke={stroke} tick={AXIS_TICK} />
-              <YAxis stroke={stroke} tick={AXIS_TICK} width={48} domain={[lo - pad, hi + pad]} allowDataOverflow />
-              <Tooltip {...tip} {...TOOLTIP_PIN} />
-              {mas.length > 0 ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} /> : null}
-              <Bar dataKey="_hl" shape={Candle} legendType="none" isAnimationActive={false} />
-              {mas.map((m, i) => (
-                <Line
-                  key={m.column}
-                  type="monotone"
-                  dataKey={m.column}
-                  name={labelOf(m)}
-                  stroke={colorAt(colors, i)}
-                  strokeWidth={1.5}
-                  strokeOpacity={seriesOpacity(m.column)}
-                  dot={false}
+      case "candlestick": {
+        const lows = numColumn(rows, mark.low.column);
+        const highs = numColumn(rows, mark.high.column);
+        const lo = lows.length ? Math.min(...lows) : 0;
+        const hi = highs.length ? Math.max(...highs) : 1;
+        const pad = (hi - lo) * 0.05 || 1;
+        const Candle = makeCandle({
+          open: mark.open.column,
+          high: mark.high.column,
+          low: mark.low.column,
+          close: mark.close.column,
+          up: theme.palette.success.main,
+          down: theme.palette.error.main,
+        });
+        const candleData = rows.map((r) => ({
+          ...r,
+          _hl: [Number(r[mark.low.column]), Number(r[mark.high.column])],
+        }));
+        const mas = mark.ma ?? [];
+        return (
+          <ChartFrame title={block.title}>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart
+                data={candleData}
+                margin={{ top: 8, right: 16, bottom: 4, left: 4 }}
+              >
+                <CartesianGrid
+                  stroke={theme.palette.divider}
+                  strokeDasharray="3 3"
+                />
+                <XAxis
+                  dataKey={mark.x.column}
+                  type={numericX(mark.x.column) ? "number" : "category"}
+                  stroke={stroke}
+                  tick={AXIS_TICK}
+                />
+                <YAxis
+                  stroke={stroke}
+                  tick={AXIS_TICK}
+                  width={48}
+                  domain={[lo - pad, hi + pad]}
+                  allowDataOverflow
+                />
+                <Tooltip {...tip} {...TOOLTIP_PIN} />
+                {mas.length > 0
+                  ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} />
+                  : null}
+                <Bar
+                  dataKey="_hl"
+                  shape={Candle}
+                  legendType="none"
                   isAnimationActive={false}
                 />
-              ))}
-              {overlayElements(block.overlays, kernel, theme)}
-            </ComposedChart>
-          </ResponsiveContainer>
-        </ChartFrame>
-      );
-    }
+                {mas.map((m, i) => (
+                  <Line
+                    key={m.column}
+                    type="monotone"
+                    dataKey={m.column}
+                    name={labelOf(m)}
+                    stroke={colorAt(colors, i)}
+                    strokeWidth={1.5}
+                    strokeOpacity={seriesOpacity(m.column)}
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                ))}
+                {overlayElements(block.overlays, kernel, theme)}
+              </ComposedChart>
+            </ResponsiveContainer>
+          </ChartFrame>
+        );
+      }
 
-    case "volume": {
-      const openCol = mark.open?.column;
-      const closeCol = mark.close?.column;
-      const directional = openCol !== undefined && closeCol !== undefined;
-      const up = theme.palette.success.main;
-      const down = theme.palette.error.main;
-      return (
-        <ChartFrame title={block.title}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={rows} margin={{ top: 8, right: 16, bottom: 4, left: 4 }}>
-              <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
-              <XAxis dataKey={mark.x.column} type={numericX(mark.x.column) ? "number" : "category"} stroke={stroke} tick={AXIS_TICK} />
-              <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
-              <Tooltip {...tip} {...TOOLTIP_PIN} cursor={{ fill: theme.palette.action.hover }} />
-              <Bar dataKey={mark.value.column} name={labelOf(mark.value)} isAnimationActive={false}>
-                {rows.map((r, i) => {
-                  const fill = directional
-                    ? Number(r[closeCol]) >= Number(r[openCol])
-                      ? up
-                      : down
-                    : colorAt(colors, 0);
-                  return <Cell key={i} fill={fill} />;
-                })}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartFrame>
-      );
-    }
+      case "volume": {
+        const openCol = mark.open?.column;
+        const closeCol = mark.close?.column;
+        const directional = openCol !== undefined && closeCol !== undefined;
+        const up = theme.palette.success.main;
+        const down = theme.palette.error.main;
+        return (
+          <ChartFrame title={block.title}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={rows}
+                margin={{ top: 8, right: 16, bottom: 4, left: 4 }}
+              >
+                <CartesianGrid
+                  stroke={theme.palette.divider}
+                  strokeDasharray="3 3"
+                />
+                <XAxis
+                  dataKey={mark.x.column}
+                  type={numericX(mark.x.column) ? "number" : "category"}
+                  stroke={stroke}
+                  tick={AXIS_TICK}
+                />
+                <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
+                <Tooltip
+                  {...tip}
+                  {...TOOLTIP_PIN}
+                  cursor={{ fill: theme.palette.action.hover }}
+                />
+                <Bar
+                  dataKey={mark.value.column}
+                  name={labelOf(mark.value)}
+                  isAnimationActive={false}
+                >
+                  {rows.map((r, i) => {
+                    const fill = directional
+                      ? Number(r[closeCol]) >= Number(r[openCol]) ? up : down
+                      : colorAt(colors, 0);
+                    return <Cell key={i} fill={fill} />;
+                  })}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </ChartFrame>
+        );
+      }
 
-    case "depth": {
-      const data = depthData(rows, mark.price.column, mark.bid.column, mark.ask.column);
-      const up = theme.palette.success.main;
-      const down = theme.palette.error.main;
-      return (
-        <ChartFrame title={block.title}>
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={data} margin={{ top: 8, right: 16, bottom: 4, left: 4 }}>
-              <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
-              <XAxis type="number" dataKey={mark.price.column} name={labelOf(mark.price)} stroke={stroke} tick={AXIS_TICK} domain={["dataMin", "dataMax"]} />
-              <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
-              <Tooltip {...tip} {...TOOLTIP_PIN} />
-              <Legend wrapperStyle={LEGEND_STYLE} />
-              <Area type="stepBefore" dataKey="_bid" name="Bids" stroke={up} fill={up} fillOpacity={0.25} isAnimationActive={false} connectNulls />
-              <Area type="stepAfter" dataKey="_ask" name="Asks" stroke={down} fill={down} fillOpacity={0.25} isAnimationActive={false} connectNulls />
-              {overlayElements(block.overlays, kernel, theme)}
-            </AreaChart>
-          </ResponsiveContainer>
-        </ChartFrame>
-      );
-    }
+      case "depth": {
+        const data = depthData(
+          rows,
+          mark.price.column,
+          mark.bid.column,
+          mark.ask.column,
+        );
+        const up = theme.palette.success.main;
+        const down = theme.palette.error.main;
+        return (
+          <ChartFrame title={block.title}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart
+                data={data}
+                margin={{ top: 8, right: 16, bottom: 4, left: 4 }}
+              >
+                <CartesianGrid
+                  stroke={theme.palette.divider}
+                  strokeDasharray="3 3"
+                />
+                <XAxis
+                  type="number"
+                  dataKey={mark.price.column}
+                  name={labelOf(mark.price)}
+                  stroke={stroke}
+                  tick={AXIS_TICK}
+                  domain={["dataMin", "dataMax"]}
+                />
+                <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
+                <Tooltip {...tip} {...TOOLTIP_PIN} />
+                <Legend wrapperStyle={LEGEND_STYLE} />
+                <Area
+                  type="stepBefore"
+                  dataKey="_bid"
+                  name="Bids"
+                  stroke={up}
+                  fill={up}
+                  fillOpacity={0.25}
+                  isAnimationActive={false}
+                  connectNulls
+                />
+                <Area
+                  type="stepAfter"
+                  dataKey="_ask"
+                  name="Asks"
+                  stroke={down}
+                  fill={down}
+                  fillOpacity={0.25}
+                  isAnimationActive={false}
+                  connectNulls
+                />
+                {overlayElements(block.overlays, kernel, theme)}
+              </AreaChart>
+            </ResponsiveContainer>
+          </ChartFrame>
+        );
+      }
 
-    default:
-      return assertNever(mark);
-  }
+      default:
+        return assertNever(mark);
+    }
+  };
+
+  return (
+    <ChartPanel block={block} signals={signals} kernel={kernel}>
+      {renderChart()}
+    </ChartPanel>
+  );
 }
 
-function groupBy(rows: Record<string, unknown>[], col: string): { name: string; data: Record<string, unknown>[] }[] {
+function groupBy(
+  rows: Record<string, unknown>[],
+  col: string,
+): { name: string; data: Record<string, unknown>[] }[] {
   const map = new Map<string, Record<string, unknown>[]>();
   for (const r of rows) {
     const key = String(r[col]);

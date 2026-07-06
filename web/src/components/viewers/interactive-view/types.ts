@@ -6,7 +6,12 @@
 // compile error, which is the closed-catalog soundness contract.
 
 /** `ColumnType` — serde `rename_all = "lowercase"`. */
-export type ColumnType = "number" | "integer" | "string" | "boolean" | "temporal";
+export type ColumnType =
+  | "number"
+  | "integer"
+  | "string"
+  | "boolean"
+  | "temporal";
 
 /** `SignalType` — serde per-variant renames (note the `interval<…>` / `array<…>`
  *  spellings that are literal tag strings, not TS generics). */
@@ -46,8 +51,20 @@ export interface ButtonAction {
 /** The v1 widget catalog — `#[serde(tag = "type", rename_all = "camelCase")]`. */
 export type Widget =
   | { type: "slider"; min: number; max: number; step?: number; label?: string }
-  | { type: "rangeSlider"; min: number; max: number; step?: number; label?: string }
-  | { type: "numberInput"; min?: number; max?: number; step?: number; label?: string }
+  | {
+    type: "rangeSlider";
+    min: number;
+    max: number;
+    step?: number;
+    label?: string;
+  }
+  | {
+    type: "numberInput";
+    min?: number;
+    max?: number;
+    step?: number;
+    label?: string;
+  }
   | { type: "stepper"; min?: number; max?: number; label?: string }
   | { type: "toggle"; label?: string }
   | { type: "segmented"; options: Opt[]; label?: string }
@@ -85,18 +102,30 @@ export type ChartMark =
   | { chart: "bar"; x: ChartField; y: ChartField[]; stacked?: boolean }
   | { chart: "barHorizontal"; category: ChartField; value: ChartField }
   | { chart: "pie"; category: ChartField; value: ChartField; donut?: boolean }
-  | { chart: "scatter"; x: ChartField; y: ChartField; size?: ChartField; series?: ChartField }
+  | {
+    chart: "scatter";
+    x: ChartField;
+    y: ChartField;
+    size?: ChartField;
+    series?: ChartField;
+  }
   | { chart: "histogram"; value: ChartField; bins?: number }
   | {
-      chart: "candlestick";
-      x: ChartField;
-      open: ChartField;
-      high: ChartField;
-      low: ChartField;
-      close: ChartField;
-      ma?: ChartField[];
-    }
-  | { chart: "volume"; x: ChartField; value: ChartField; open?: ChartField; close?: ChartField }
+    chart: "candlestick";
+    x: ChartField;
+    open: ChartField;
+    high: ChartField;
+    low: ChartField;
+    close: ChartField;
+    ma?: ChartField[];
+  }
+  | {
+    chart: "volume";
+    x: ChartField;
+    value: ChartField;
+    open?: ChartField;
+    close?: ChartField;
+  }
   | { chart: "depth"; price: ChartField; bid: ChartField; ask: ChartField };
 
 /** The discriminant strings of {@link ChartMark}. */
@@ -119,6 +148,14 @@ export interface Signal {
   widget?: Widget;
   from?: SelectionSource;
   derived?: string;
+}
+
+/** A control docked into a chart card (`chart.controls`). Same shape as an
+ *  `input` block: a `signal` (render its declared widget) or a standalone
+ *  `widget`. */
+export interface ChartControl {
+  signal?: string | null;
+  widget?: Widget;
 }
 
 export type CalloutKind = "note" | "tip" | "warning" | "info";
@@ -152,7 +189,16 @@ export type Block =
   | ({ block: "metric" } & Metric)
   | { block: "metricGroup"; items: Metric[] }
   | { block: "callout"; kind?: CalloutKind; md: string }
-  | { block: "chart"; id?: string; data: string; mark: ChartMark; overlays?: Overlay[]; title?: string }
+  | {
+    block: "chart";
+    id?: string;
+    data: string;
+    mark: ChartMark;
+    overlays?: Overlay[];
+    title?: string;
+    controls?: ChartControl[];
+    readouts?: Metric[];
+  }
   | { block: "table"; data: string; columns?: string[] }
   | { block: "input"; signal?: string | null; widget?: Widget }
   | { block: "stack"; children: Block[] }

@@ -526,8 +526,22 @@ impl<'a> Checker<'a> {
                 mark,
                 overlays,
                 title,
+                controls,
+                readouts,
                 ..
-            } => self.check_chart(data, mark, overlays, title.as_deref()),
+            } => {
+                self.check_chart(data, mark, overlays, title.as_deref());
+                // Docked controls validate exactly like a standalone `input`
+                // block; docked readouts exactly like a `metric` tile — the
+                // renderer draws them in the chart card, so the same soundness
+                // obligations (S3 refs resolve, V4 label bounds) apply.
+                for ctl in controls {
+                    self.check_input(ctl.signal.as_deref(), ctl.widget.as_ref());
+                }
+                for m in readouts {
+                    self.check_metric(m);
+                }
+            }
             Block::Table { data, columns } => {
                 if !self.datasets.contains_key(data) {
                     self.err(
@@ -1808,6 +1822,55 @@ mod tests {
         );
         assert!(
             rules(&d).contains(&"interactive-view/selection-unsupported"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn chart_docked_controls_and_readouts_pass() {
+        // A chart with its inputs (controls) and KPI chips (readouts) docked into
+        // its own card — the widget⇄chart co-action in one block.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"t":"number","v":"number"},"values":[]}},
+               "signals":{"th":{"type":"number","init":10,
+                 "widget":{"type":"slider","min":0,"max":100,"label":"threshold"}},
+                 "hits":{"type":"number","derived":"count(filter(px, v > th).v)"}},
+               "view":[{"block":"chart","data":"px",
+                 "mark":{"chart":"line","x":{"column":"t"},"y":[{"column":"v"}]},
+                 "overlays":[{"overlay":"hLine","value":"th"}],
+                 "controls":[{"signal":"th"}],
+                 "readouts":[{"label":"hits","value":"{{hits}}"}]}]}"#,
+        );
+        assert!(d.is_empty(), "unexpected: {d:?}");
+    }
+
+    #[test]
+    fn chart_docked_control_unknown_signal_rejected() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"t":"number","v":"number"},"values":[]}},
+               "view":[{"block":"chart","data":"px",
+                 "mark":{"chart":"line","x":{"column":"t"},"y":[{"column":"v"}]},
+                 "controls":[{"signal":"nope"}]}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/unknown-signal"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn chart_docked_readout_unknown_signal_rejected() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"t":"number","v":"number"},"values":[]}},
+               "view":[{"block":"chart","data":"px",
+                 "mark":{"chart":"line","x":{"column":"t"},"y":[{"column":"v"}]},
+                 "readouts":[{"label":"x","value":"{{nope}}"}]}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/unknown-signal"),
             "{d:?}"
         );
     }

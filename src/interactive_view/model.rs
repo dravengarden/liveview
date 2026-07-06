@@ -355,6 +355,15 @@ pub enum Block {
     /// `overlays` (reference lines/bands driven by signals). Series colours are
     /// theme-assigned — there is no author colour/CSS field — so every chart is
     /// light/dark-adaptive and visually sound by construction (V1).
+    ///
+    /// `controls` + `readouts` dock a chart's inputs and KPI tiles INTO its own
+    /// card, so the tunable and its visual effect read as one unit (the
+    /// widget⇄chart co-action), rather than floating in disconnected blocks
+    /// above the plot. Both are optional; a chart with neither renders exactly
+    /// as before (frameless plot). The renderer lays them out compactly
+    /// (Slack-block-kit style: a controls toolbar above the plot, a readout chip
+    /// strip below) — still no pixel/colour field, so the soundness guarantee
+    /// holds unchanged.
     Chart {
         #[serde(default)]
         id: Option<String>,
@@ -368,6 +377,14 @@ pub enum Block {
         overlays: Vec<Overlay>,
         #[serde(default)]
         title: Option<String>,
+        /// Compact inputs docked above the plot (each is an `Input`: a `signal`
+        /// whose declared widget renders, or a standalone `widget`).
+        #[serde(default)]
+        controls: Vec<ChartControl>,
+        /// Compact KPI chips docked below the plot (same `Metric` as a
+        /// `metric`/`metricGroup` block, rendered inline).
+        #[serde(default)]
+        readouts: Vec<Metric>,
     },
     /// A data table over a dataset (Phase 3).
     Table {
@@ -416,6 +433,17 @@ impl Block {
             Block::Tabs { .. } => "tabs",
         }
     }
+}
+
+/// A control docked into a chart card (`Block::Chart.controls`). Same shape as
+/// an `Input` block: exactly one of a `signal` (render its declared widget) or a
+/// standalone `widget` — validated by the same `check_input` path.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChartControl {
+    #[serde(default)]
+    pub signal: Option<String>,
+    #[serde(default)]
+    pub widget: Option<Widget>,
 }
 
 /// A KPI tile. `value` is an interpolation template (`"{{sharpe}}"`); `format`

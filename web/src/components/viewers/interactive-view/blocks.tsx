@@ -4,18 +4,25 @@
 // the page (§9 runtime resilience). Layout blocks preserve the fit invariant:
 // `stack` is full-width, `metricGroup`/`columns` reflow to one column on narrow.
 
-import { Component, lazy, Suspense, type JSX, type ReactNode, useState } from "react";
+import {
+  Component,
+  type JSX,
+  lazy,
+  type ReactNode,
+  Suspense,
+  useState,
+} from "react";
 import {
   Alert,
   Box,
   CircularProgress,
+  Tab,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
-  Tab,
   Tabs,
   Typography,
 } from "@mui/material";
@@ -46,7 +53,16 @@ function assertNever(x: never): never {
 
 function FallbackTile({ msg }: { msg: string }): JSX.Element {
   return (
-    <Box sx={{ p: 2, my: 1, borderRadius: 1, border: 1, borderColor: "divider", bgcolor: "background.paper" }}>
+    <Box
+      sx={{
+        p: 2,
+        my: 1,
+        borderRadius: 1,
+        border: 1,
+        borderColor: "divider",
+        bgcolor: "background.paper",
+      }}
+    >
       <Typography variant="body2" color="text.secondary">
         {msg}
       </Typography>
@@ -54,19 +70,24 @@ function FallbackTile({ msg }: { msg: string }): JSX.Element {
   );
 }
 
-class BlockBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+class BlockBoundary
+  extends Component<{ children: ReactNode }, { failed: boolean }> {
   override state = { failed: false };
   static getDerivedStateFromError(): { failed: boolean } {
     return { failed: true };
   }
   override render(): ReactNode {
-    return this.state.failed ? <FallbackTile msg="This block couldn't render." /> : this.props.children;
+    return this.state.failed
+      ? <FallbackTile msg="This block couldn't render." />
+      : this.props.children;
   }
 }
 
 /** Render a list of blocks, each in its own boundary (so a sibling failure is
  *  isolated). */
-function BlockList({ blocks, ctx, depth }: { blocks: Block[]; ctx: BlockCtx; depth: number }): JSX.Element {
+function BlockList(
+  { blocks, ctx, depth }: { blocks: Block[]; ctx: BlockCtx; depth: number },
+): JSX.Element {
   return (
     <>
       {blocks.map((b, i) => (
@@ -77,7 +98,11 @@ function BlockList({ blocks, ctx, depth }: { blocks: Block[]; ctx: BlockCtx; dep
 }
 
 /** The public entry: render a document's top-level view. */
-export function renderView(blocks: Block[], signals: Record<string, Signal>, kernel: Kernel): JSX.Element {
+export function renderView(
+  blocks: Block[],
+  signals: Record<string, Signal>,
+  kernel: Kernel,
+): JSX.Element {
   return <BlockList blocks={blocks} ctx={{ signals, kernel }} depth={0} />;
 }
 
@@ -92,9 +117,11 @@ function renderInline(text: string): ReactNode[] {
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) nodes.push(text.slice(last, m.index));
     const tok = m[0];
-    if (tok.startsWith("**")) nodes.push(<strong key={key++}>{tok.slice(2, -2)}</strong>);
-    else if (tok.startsWith("`")) nodes.push(<code key={key++}>{tok.slice(1, -1)}</code>);
-    else nodes.push(<em key={key++}>{tok.slice(1, -1)}</em>);
+    if (tok.startsWith("**")) {
+      nodes.push(<strong key={key++}>{tok.slice(2, -2)}</strong>);
+    } else if (tok.startsWith("`")) {
+      nodes.push(<code key={key++}>{tok.slice(1, -1)}</code>);
+    } else nodes.push(<em key={key++}>{tok.slice(1, -1)}</em>);
     last = m.index + tok.length;
   }
   if (last < text.length) nodes.push(text.slice(last));
@@ -127,7 +154,11 @@ function MarkdownText({ md }: { md: string }): JSX.Element {
     if (h) {
       flush();
       out.push(
-        <Typography key={key++} variant={headingVariant((h[1] ?? "").length)} sx={{ mt: 2, mb: 1 }}>
+        <Typography
+          key={key++}
+          variant={headingVariant((h[1] ?? "").length)}
+          sx={{ mt: 2, mb: 1 }}
+        >
           {renderInline(h[2] ?? "")}
         </Typography>,
       );
@@ -143,7 +174,9 @@ function MarkdownText({ md }: { md: string }): JSX.Element {
 
 // ── leaf components that subscribe to the kernel ──────────────────────────────
 
-function SectionBlock({ md, kernel }: { md: string; kernel: Kernel }): JSX.Element {
+function SectionBlock(
+  { md, kernel }: { md: string; kernel: Kernel },
+): JSX.Element {
   return (
     <Box sx={{ my: 1 }}>
       <MarkdownText md={interpolate(md, kernel)} />
@@ -158,7 +191,9 @@ const CALLOUT_SEVERITY: Record<CalloutKind, AlertColor> = {
   info: "info",
 };
 
-function CalloutBlock({ kind, md, kernel }: { kind: CalloutKind; md: string; kernel: Kernel }): JSX.Element {
+function CalloutBlock(
+  { kind, md, kernel }: { kind: CalloutKind; md: string; kernel: Kernel },
+): JSX.Element {
   return (
     <Alert severity={CALLOUT_SEVERITY[kind]} sx={{ my: 1 }}>
       <MarkdownText md={interpolate(md, kernel)} />
@@ -166,11 +201,25 @@ function CalloutBlock({ kind, md, kernel }: { kind: CalloutKind; md: string; ker
   );
 }
 
-function MetricTile({ metric, kernel }: { metric: Metric; kernel: Kernel }): JSX.Element {
+function MetricTile(
+  { metric, kernel }: { metric: Metric; kernel: Kernel },
+): JSX.Element {
   const value = evalMetric(metric.value, metric.format, kernel);
   return (
-    <Box sx={{ p: 2, borderRadius: 1, border: 1, borderColor: "divider", bgcolor: "background.paper" }}>
-      <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+    <Box
+      sx={{
+        p: 2,
+        borderRadius: 1,
+        border: 1,
+        borderColor: "divider",
+        bgcolor: "background.paper",
+      }}
+    >
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ display: "block" }}
+      >
         {metric.label}
       </Typography>
       <Typography variant="h6" sx={{ wordBreak: "break-word" }}>
@@ -180,17 +229,31 @@ function MetricTile({ metric, kernel }: { metric: Metric; kernel: Kernel }): JSX
   );
 }
 
-function TabsBlock({ items, ctx, depth }: { items: { title: string; children: Block[] }[]; ctx: BlockCtx; depth: number }): JSX.Element {
+function TabsBlock(
+  { items, ctx, depth }: {
+    items: { title: string; children: Block[] }[];
+    ctx: BlockCtx;
+    depth: number;
+  },
+): JSX.Element {
   const [active, setActive] = useState(0);
   const current = items[active];
   return (
     <Box sx={{ my: 1 }}>
-      <Tabs value={active} onChange={(_e, v: number) => setActive(v)} variant="scrollable" scrollButtons="auto" allowScrollButtonsMobile>
-        {items.map((t, i) => (
-          <Tab key={i} label={t.title} />
-        ))}
+      <Tabs
+        value={active}
+        onChange={(_e, v: number) => setActive(v)}
+        variant="scrollable"
+        scrollButtons="auto"
+        allowScrollButtonsMobile
+      >
+        {items.map((t, i) => <Tab key={i} label={t.title} />)}
       </Tabs>
-      <Box sx={{ pt: 2 }}>{current ? <BlockList blocks={current.children} ctx={ctx} depth={depth + 1} /> : null}</Box>
+      <Box sx={{ pt: 2 }}>
+        {current
+          ? <BlockList blocks={current.children} ctx={ctx} depth={depth + 1} />
+          : null}
+      </Box>
     </Box>
   );
 }
@@ -199,7 +262,17 @@ function TabsBlock({ items, ctx, depth }: { items: { title: string; children: Bl
  *  page doesn't jump when it swaps in). */
 function ChartLoading(): JSX.Element {
   return (
-    <Box sx={{ my: 1, height: 300, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: 1, bgcolor: "background.paper" }}>
+    <Box
+      sx={{
+        my: 1,
+        height: 300,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: 1,
+        bgcolor: "background.paper",
+      }}
+    >
       <CircularProgress size={28} />
     </Box>
   );
@@ -208,7 +281,12 @@ function ChartLoading(): JSX.Element {
 /** A dataset table. Columns default to the dataset's declared schema order; a
  *  large dataset is truncated to a preview (never a freeze). Unavailable data
  *  (a `source` blob not loaded in Phase 2) shows a graceful empty tile. */
-function TableBlock({ block, kernel }: { block: Extract<Block, { block: "table" }>; kernel: Kernel }): JSX.Element {
+function TableBlock(
+  { block, kernel }: {
+    block: Extract<Block, { block: "table" }>;
+    kernel: Kernel;
+  },
+): JSX.Element {
   const ds = kernel.data(block.data);
   const rows = ds?.rows ?? null;
   const cols = block.columns ?? (ds ? Object.keys(ds.columns) : []);
@@ -219,12 +297,17 @@ function TableBlock({ block, kernel }: { block: Extract<Block, { block: "table" 
   const truncated = rows.length - shown.length;
   return (
     <Box sx={{ my: 1 }}>
-      <TableContainer sx={{ border: 1, borderColor: "divider", borderRadius: 1 }}>
+      <TableContainer
+        sx={{ border: 1, borderColor: "divider", borderRadius: 1 }}
+      >
         <Table size="small" stickyHeader>
           <TableHead>
             <TableRow>
               {cols.map((c) => (
-                <TableCell key={c} sx={{ fontWeight: 600, bgcolor: "background.paper" }}>
+                <TableCell
+                  key={c}
+                  sx={{ fontWeight: 600, bgcolor: "background.paper" }}
+                >
                   {c}
                 </TableCell>
               ))}
@@ -233,19 +316,24 @@ function TableBlock({ block, kernel }: { block: Extract<Block, { block: "table" 
           <TableBody>
             {shown.map((r, i) => (
               <TableRow key={i} hover>
-                {cols.map((c) => (
-                  <TableCell key={c}>{cellText(r[c])}</TableCell>
-                ))}
+                {cols.map((c) => <TableCell key={c}>{cellText(r[c])}
+                </TableCell>)}
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </TableContainer>
-      {truncated > 0 ? (
-        <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-          + {truncated} more row{truncated === 1 ? "" : "s"}
-        </Typography>
-      ) : null}
+      {truncated > 0
+        ? (
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{ display: "block", mt: 0.5 }}
+          >
+            + {truncated} more row{truncated === 1 ? "" : "s"}
+          </Typography>
+        )
+        : null}
     </Box>
   );
 }
@@ -268,18 +356,31 @@ function blockBody(block: Block, ctx: BlockCtx, depth: number): JSX.Element {
       return <MetricTile metric={block} kernel={kernel} />;
     case "metricGroup":
       return (
-        <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(9rem, 1fr))", gap: 2, my: 1 }}>
+        <Box
+          sx={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(9rem, 1fr))",
+            gap: 2,
+            my: 1,
+          }}
+        >
           {block.items.map((it, i) => (
             <MetricTile key={i} metric={it} kernel={kernel} />
           ))}
         </Box>
       );
     case "callout":
-      return <CalloutBlock kind={block.kind ?? "note"} md={block.md} kernel={kernel} />;
+      return (
+        <CalloutBlock
+          kind={block.kind ?? "note"}
+          md={block.md}
+          kernel={kernel}
+        />
+      );
     case "chart":
       return (
         <Suspense fallback={<ChartLoading />}>
-          <ChartBlock block={block} kernel={kernel} />
+          <ChartBlock block={block} kernel={kernel} signals={signals} />
         </Suspense>
       );
     case "table":
@@ -288,7 +389,11 @@ function blockBody(block: Block, ctx: BlockCtx, depth: number): JSX.Element {
       const declared = block.signal ? signals[block.signal] : undefined;
       const widget = block.widget ?? declared?.widget;
       if (!widget) return <FallbackTile msg="This input has no widget." />;
-      return <Box sx={{ my: 1 }}>{renderWidget(widget, block.signal ?? null, kernel)}</Box>;
+      return (
+        <Box sx={{ my: 1 }}>
+          {renderWidget(widget, block.signal ?? null, kernel)}
+        </Box>
+      );
     }
     case "stack":
       return (
@@ -302,7 +407,10 @@ function blockBody(block: Block, ctx: BlockCtx, depth: number): JSX.Element {
         <Box
           sx={{
             display: "grid",
-            gridTemplateColumns: { xs: "1fr", md: `repeat(${cols}, minmax(0, 1fr))` },
+            gridTemplateColumns: {
+              xs: "1fr",
+              md: `repeat(${cols}, minmax(0, 1fr))`,
+            },
             gap: 2,
             my: 1,
           }}
