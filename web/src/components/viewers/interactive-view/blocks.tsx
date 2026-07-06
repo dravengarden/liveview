@@ -187,19 +187,76 @@ function SectionBlock(
   );
 }
 
-const CALLOUT_SEVERITY: Record<CalloutKind, AlertColor> = {
-  note: "info",
-  tip: "success",
-  warning: "warning",
-  info: "info",
+// Each callout kind maps to a THEME palette channel (never a hardcoded colour),
+// an emoji glyph, and — for `note`/`quote` — no MUI Alert at all, so a neutral
+// aside doesn't shout like a green success banner. `success` is reserved for a
+// genuinely CONFIRMED result; a plain explanation is `note`. `variant:"outlined"`
+// keeps even the coloured ones restrained (a tinted left rule, not a filled bar).
+const ALERT_STYLE: Record<
+  Exclude<CalloutKind, "note" | "quote">,
+  { severity: AlertColor; icon: string }
+> = {
+  info: { severity: "info", icon: "ℹ️" },
+  tip: { severity: "success", icon: "💡" },
+  success: { severity: "success", icon: "✅" },
+  warning: { severity: "warning", icon: "⚠️" },
+  danger: { severity: "error", icon: "🚫" },
 };
 
 function CalloutBlock(
   { kind, md, kernel }: { kind: CalloutKind; md: string; kernel: Kernel },
 ): JSX.Element {
+  const body = <MarkdownText md={interpolate(md, kernel)} />;
+  // `note` — a neutral aside: a subtle bordered card, no colour, no icon. This
+  // is the default and the right choice for a plain explanation.
+  if (kind === "note") {
+    return (
+      <Box
+        sx={{
+          my: 1,
+          px: 2,
+          py: 1,
+          borderRadius: 1,
+          border: 1,
+          borderColor: "divider",
+          bgcolor: "action.hover",
+          color: "text.secondary",
+        }}
+      >
+        {body}
+      </Box>
+    );
+  }
+  // `quote` — a definition/citation: a blockquote (thick left rule, italic,
+  // muted), visually distinct from every alert.
+  if (kind === "quote") {
+    return (
+      <Box
+        component="blockquote"
+        sx={{
+          my: 1,
+          ml: 0,
+          pl: 2,
+          py: 0.5,
+          borderLeft: 4,
+          borderColor: "primary.main",
+          color: "text.secondary",
+          fontStyle: "italic",
+        }}
+      >
+        {body}
+      </Box>
+    );
+  }
+  const { severity, icon } = ALERT_STYLE[kind];
   return (
-    <Alert severity={CALLOUT_SEVERITY[kind]} sx={{ my: 1 }}>
-      <MarkdownText md={interpolate(md, kernel)} />
+    <Alert
+      severity={severity}
+      variant="outlined"
+      icon={<span aria-hidden>{icon}</span>}
+      sx={{ my: 1, alignItems: "flex-start" }}
+    >
+      {body}
     </Alert>
   );
 }
@@ -404,6 +461,32 @@ function blockBody(block: Block, ctx: BlockCtx, depth: number): JSX.Element {
         </Box>
       );
     }
+    case "panel":
+      return (
+        <Box
+          sx={{
+            my: 1,
+            px: 2,
+            py: 1,
+            border: 1,
+            borderColor: "divider",
+            borderRadius: 2,
+            bgcolor: "background.paper",
+          }}
+        >
+          {block.title
+            ? (
+              <Typography
+                variant="subtitle2"
+                sx={{ color: "text.secondary", mt: 0.5, mb: 1 }}
+              >
+                {block.title}
+              </Typography>
+            )
+            : null}
+          <BlockList blocks={block.children} ctx={ctx} depth={depth + 1} />
+        </Box>
+      );
     case "stack":
       return (
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2, my: 1 }}>

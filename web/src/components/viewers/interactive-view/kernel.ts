@@ -40,6 +40,9 @@ export interface Kernel {
   get(name: string): unknown;
   set(name: string, value: unknown): void;
   reset(names: string[]): void;
+  /** True when ANY of `names` currently differs from its declared `init` — so a
+   *  card can show a Reset affordance only when there's something to reset. */
+  dirty(names: string[]): boolean;
   /** A named dataset's schema + rows (`rows: null` ⇒ unavailable). A `derived`
    *  dataset is recomputed reactively, so a chart reading it cross-filters live
    *  as its input signals change. */
@@ -166,6 +169,11 @@ export function useKernel(doc: Document): Kernel {
           }
           return next;
         }),
+      dirty: (names) =>
+        names.some((n) =>
+          Object.hasOwn(spec.initialBase, n) &&
+          !valueEqual(base[n], spec.initialBase[n])
+        ),
     }),
     [computed, spec],
   );
@@ -173,6 +181,16 @@ export function useKernel(doc: Document): Kernel {
 
 function sameScalar(a: unknown, b: unknown): boolean {
   if (isUnavailable(a) && isUnavailable(b)) return true;
+  return Object.is(a, b);
+}
+
+// Structural equality for a "dirty" check: interval/array signals hold arrays, so
+// a value dragged back to its init (a fresh array of identical contents) reads as
+// clean. Scalars fall back to Object.is.
+function valueEqual(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((x, i) => Object.is(x, b[i]));
+  }
   return Object.is(a, b);
 }
 

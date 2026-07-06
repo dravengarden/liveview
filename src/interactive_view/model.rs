@@ -434,6 +434,18 @@ pub enum Block {
         #[serde(default)]
         widget: Option<Widget>,
     },
+    /// A titled CARD grouping linked blocks (a control + its metric + table, or
+    /// any widgets that move together) into ONE framed unit — the non-chart
+    /// analog of a chart's docked-controls card. Use it whenever a segmented/
+    /// select/slider drives a `table`/`metric` that has no plot to dock into, so
+    /// the tunable and its result read as one thing instead of scattering into
+    /// loose `input`/`metric`/`table` blocks. Children render stacked, full
+    /// width (a card never splits the reading column).
+    Panel {
+        #[serde(default)]
+        title: Option<String>,
+        children: Vec<Block>,
+    },
     /// Vertical layout; children always get full width (always P-safe).
     Stack { children: Vec<Block> },
     /// Multi-column on wide screens; auto-collapses to a stack on narrow when
@@ -463,6 +475,7 @@ impl Block {
             Block::ChartGroup { .. } => "chartGroup",
             Block::Table { .. } => "table",
             Block::Input { .. } => "input",
+            Block::Panel { .. } => "panel",
             Block::Stack { .. } => "stack",
             Block::Columns { .. } => "columns",
             Block::Tabs { .. } => "tabs",
@@ -525,14 +538,24 @@ pub struct AudioSpec {
     pub skippable: bool,
 }
 
+/// A callout's intent, which the renderer maps to a distinct, restrained visual
+/// treatment. Kept semantic (not colour) so the theme owns the palette:
+/// `note` = neutral aside, `info` = factual context, `tip` = a helpful trick,
+/// `success` = a confirmed/correct result, `warning` = be careful, `danger` = a
+/// trap that will cost you, `quote` = a definition/citation rendered as a
+/// blockquote. Pick by MEANING, not by colour — a plain explanation is `note`,
+/// not a loud `success`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CalloutKind {
     #[default]
     Note,
-    Tip,
-    Warning,
     Info,
+    Tip,
+    Success,
+    Warning,
+    Danger,
+    Quote,
 }
 
 /// One tab: a title plus its own nested block list.

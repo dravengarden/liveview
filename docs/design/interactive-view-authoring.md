@@ -79,6 +79,15 @@ Literals `1`, `'x'`, `true`; operators `+ - * / %`, `&& || !`, `== != < <= > >=`
 
 - `filter(ds, pred)` → dataset. `pred` uses the dataset's columns unqualified
   (SQL-`WHERE`): `filter(sales, region == rgn && amount > 0)`.
+- `with(ds, 'name', expr, 'name2', expr2, …)` → dataset with **computed columns
+  appended**. Each `expr` sees the dataset's columns unqualified (like `filter`)
+  AND the signals, so it can RESHAPE a series reactively:
+  `with(candles, 'upper', mid + k*sigma, 'lower', mid - k*sigma)` — drag the `k`
+  signal and the `upper`/`lower` columns recompute per row, so a chart reading
+  them redraws (Bollinger bands widening with k). A scalar expr broadcasts to
+  every row; a later column may reference one added earlier. This is the tool
+  for "a widget changes the SHAPE of a plotted line," not just a threshold or a
+  filter.
 - aggregates `mean sum std min max median count` (over a column).
 - math `sqrt abs floor ceil round(x[,d]) clamp(x,lo,hi)`, `if(cond, a, b)`.
 
@@ -220,13 +229,74 @@ never touch layout. Still check-proof: a `chartGroup` that `liveview check`es
 passes renders and reflows on every screen. Use it only for genuinely linked
 plots; unrelated charts stay separate `chart` blocks.
 
+## Callouts — pick the variant by MEANING
+
+`{ "block": "callout", "kind": "...", "md": "..." }`. Kinds, and when each is
+right (the renderer gives each a restrained, theme-coloured treatment — never a
+loud filled banner):
+
+| kind | use for | looks like |
+|---|---|---|
+| `note` | a neutral aside / plain explanation (the DEFAULT) | subtle grey card, no icon |
+| `info` | a factual, non-urgent aside | ℹ️ blue, outlined |
+| `tip` | a helpful trick / "try this" | 💡 green, outlined |
+| `success` | a genuinely CONFIRMED / correct result | ✅ green, outlined |
+| `warning` | be careful — a real gotcha | ⚠️ amber, outlined |
+| `danger` | a trap that will cost you money/data | 🚫 red, outlined |
+| `quote` | a definition or citation | blockquote (left rule, italic) |
+
+The cardinal rule: **a plain explanation is `note`, not `success`** — don't dress
+a neutral sentence as a green "correct!" banner. And **don't state the obvious**:
+if the widget/chart already SHOWS the number, a callout restating it is noise
+(delete it). Keep callouts for the non-obvious — a caveat, a definition, a "this
+is where it bites you."
+
+## Grouping non-chart widgets — the `panel` block
+
+When a control drives a `table`/`metric` that has NO plot to dock into (a
+segmented that filters a table + a count), wrap them in a `panel` — a titled
+card, the non-chart analog of a chart's docked-controls card — so the tunable
+and its result read as ONE unit instead of loose blocks:
+
+```jsonc
+{ "block": "panel", "title": "Filter by goal", "children": [
+  { "block": "input", "signal": "goal" },
+  { "block": "metric", "label": "candidates", "value": "{{hits}}" },
+  { "block": "table", "data": "matched", "columns": ["indicator","note"] }
+] }
+```
+
 ## Blocks (the `view` array)
 
 `section` (markdown + `{{signal | round(2)}}` interpolation), `metric` /
-`metricGroup` (KPI tiles), `callout` (`kind: note|tip|warning|info`), `chart`,
+`metricGroup` (KPI tiles), `callout` (see the variant table above), `chart`,
 `chartGroup` (several linked charts + shared controls in one card — see above),
-`table` (`columns?`), `input` (`signal` or a standalone `widget`), and layout
-`stack` / `columns` (auto-collapse on phone) / `tabs`. Nesting ≤ 4.
+`table` (`columns?`), `input` (`signal` or a standalone `widget`), `panel` (a
+titled card grouping linked non-chart blocks), and layout `stack` / `columns`
+(auto-collapse on phone) / `tabs`. Nesting ≤ 4.
+
+## Principles for linked interactive components (READ THIS)
+
+These are non-negotiable — they're why the reader trusts the interactions:
+
+1. **A control and what it drives live in ONE card. Never scatter them.** A
+   slider that tunes a chart → the chart's `controls`/`readouts` (docked below
+   the plot). Several charts driven by one control → a `chartGroup`. A control
+   that drives a table/metric → a `panel`. A loose `input` block floating above
+   a separate `chart`/`table` is a bug.
+2. **A control must visibly change what it points at.** If a slider only moves a
+   readout number while the plot sits still, the reader thinks it's broken. Make
+   it drive the PLOT: reshape a series with `with()` (bands widening with k), a
+   threshold overlay (`hLine`/`vLine`), series emphasis (`highlight`), or a
+   `from` selection. A number-only readout is not enough on its own.
+3. **Don't over-explain.** The reader isn't stupid: if the widget shows it, don't
+   add a callout restating it. Reserve callouts for the non-obvious, and pick the
+   variant by meaning (a plain note is `note`).
+4. **Reset is automatic.** A card with controls shows a Reset affordance by
+   itself once any value moves off its `init` — you don't author it.
+5. **Everything stays check-proof.** `liveview check` is the whole gate: a fence
+   that passes renders, reflows on every screen, and heals its own sizing on
+   resume. No colour/pixel fields, ever.
 
 ## The canonical linkage (copy this shape)
 

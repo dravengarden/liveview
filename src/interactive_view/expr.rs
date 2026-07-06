@@ -63,6 +63,17 @@ impl S {
     }
 }
 
+/// The `ColumnType` a `with`-computed column of scalar kind `S` gets — the
+/// inverse of `S::of_column` (a numeric expression yields a `Number` column).
+fn column_type_of(s: S) -> ColumnType {
+    match s {
+        S::Num => ColumnType::Number,
+        S::Bool => ColumnType::Boolean,
+        S::Str => ColumnType::String,
+        S::Temporal => ColumnType::Temporal,
+    }
+}
+
 impl Ty {
     fn describe(&self) -> String {
         match self {
@@ -712,6 +723,52 @@ impl<'a> TypeChecker<'a> {
                 }
                 Ok(Ty::Dataset(cols))
             }
+            "with" => {
+                // with(ds, 'name', expr, 'name', expr, …) — append COMPUTED columns
+                // to a dataset. Each expr is checked with the dataset's columns in
+                // scope (unqualified refs bind, SQL-style), so it can combine
+                // columns with signals: `with(bands, 'upper', mid + k*sigma)`
+                // recomputes `upper` per row whenever the `k` signal changes. This
+                // is what lets a widget RESHAPE a series (Bollinger bands widening
+                // with k), not just filter it. Columns added earlier are in scope
+                // for later ones, so a chain can build on itself.
+                if args.len() < 3 || args.len() % 2 == 0 {
+                    return Err(ExprError::new(
+                        "`with` takes a dataset then (name, expression) pairs: with(ds, 'col', expr, …)",
+                    ));
+                }
+                let ds = self.check(&args[0], local_cols)?;
+                let mut cols = match ds {
+                    Ty::Dataset(c) => c,
+                    other => {
+                        return Err(ExprError::new(format!(
+                            "`with`'s first argument must be a dataset, got {}",
+                            other.describe()
+                        )))
+                    }
+                };
+                let mut i = 1;
+                while i + 1 < args.len() {
+                    let name = match &args[i] {
+                        Ast::Str(s) => s.clone(),
+                        _ => {
+                            return Err(ExprError::new(
+                                "`with` column name must be a string literal",
+                            ))
+                        }
+                    };
+                    let t = self.check(&args[i + 1], Some(&cols))?;
+                    let s = t.elem().ok_or_else(|| {
+                        ExprError::new(format!(
+                            "`with` column `{name}` must be a scalar or column, got {}",
+                            t.describe()
+                        ))
+                    })?;
+                    cols.insert(name, column_type_of(s));
+                    i += 2;
+                }
+                Ok(Ty::Dataset(cols))
+            }
             "mean" | "sum" | "std" | "min" | "max" | "median" => {
                 arity(1)?;
                 let t = self.check(&args[0], local_cols)?;
@@ -886,5 +943,31 @@ mod tests {
     #[test]
     fn aggregate_needs_column_not_scalar() {
         assert!(chk("mean(rf)").is_err());
+    }
+
+    #[test]
+    fn with_computed_columns_type_and_schema() {
+        // `with` appends columns combining existing columns with a signal — the
+        // reshaping primitive (Bollinger bands widening with `rf`).
+        let r = chk("with(returns, 'up', ret + rf, 'dn', ret - rf)").unwrap();
+        assert_eq!(r.ty_desc, "dataset");
+        let cols = r.dataset_columns.expect("with yields a dataset");
+        assert_eq!(cols.get("up"), Some(&ColumnType::Number));
+        assert_eq!(cols.get("dn"), Some(&ColumnType::Number));
+        assert!(cols.contains_key("ret")); // originals preserved
+        assert!(r.signal_refs.contains("rf"));
+    }
+
+    #[test]
+    fn with_later_column_sees_earlier() {
+        // a chained column can build on one added earlier in the same `with`.
+        let r = chk("with(returns, 'a', ret * 2, 'b', a + 1)").unwrap();
+        assert_eq!(r.ty_desc, "dataset");
+    }
+
+    #[test]
+    fn with_bad_name_rejected() {
+        // the column name must be a string literal, not an expression.
+        assert!(chk("with(returns, ret, ret + 1)").is_err());
     }
 }

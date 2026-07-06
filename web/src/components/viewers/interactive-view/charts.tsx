@@ -13,7 +13,13 @@
 //   • Overlays (reference lines/bands) read signals via the kernel, so they move
 //     reactively as widgets change — the checker guarantees the refs resolve.
 
-import { type JSX, type ReactNode, useEffect, useState } from "react";
+import {
+  type JSX,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { Box, Typography, useTheme } from "@mui/material";
 import type { Theme } from "@mui/material";
 import { renderWidget } from "./widgets";
@@ -149,30 +155,52 @@ function readAxis(kernel: Kernel, acc: string): number | string | null {
 }
 
 // recharts' ResponsiveContainer sizes itself from a ResizeObserver on its
-// parent. When the chart first lays out while the document is HIDDEN — an iOS
-// PWA resumed from the background, a bfcache page restore, a tab shown after
-// being rendered in the background — the parent measures 0×0, recharts caches
-// that, and no resize event fires on return, so the chart stays collapsed into a
-// flat sliver (the "it turned into a static image" bug). There is no prop that
-// forces a re-measure, so we remount the sizing container: this counter bumps on
-// every visibility→visible and pageshow, changing the container's `key` so React
-// mounts a fresh ResponsiveContainer that re-measures the now-visible column.
-// Cheap (charts are few, animations are off) and it only fires on a real
-// resume, so no steady-state churn.
-function useRemountOnVisible(): number {
+// parent. When the chart first lays out while its box has NO usable size — an iOS
+// PWA resumed from the background, a bfcache page restore, a lazy chunk mounted
+// while its column was still 0-wide — recharts caches that bad measurement and
+// draws a collapsed sliver (or, from a stale width, a wrongly-sized static SVG):
+// the "it turned into an image" bug. Round 2 remounted on `visibilitychange`,
+// but on iOS that event is unreliable on resume (it may not fire, or fires
+// before layout settles), so the collapse survived. The robust fix is to observe
+// the chart box's OWN geometry: a ResizeObserver fires exactly when the real
+// width becomes valid or changes, and we remount the inner ResponsiveContainer
+// then (bumping its `key`) so it always re-measures against the settled column.
+// visibility/pageshow are kept as a belt-and-suspenders trigger, deferred to the
+// next frame so layout is settled first. The `>1px` guard makes it idempotent —
+// once the width is stable a remount doesn't change it, so there is no churn.
+function useSelfHealingRemount(
+  boxRef: React.RefObject<HTMLElement | null>,
+): number {
   const [gen, setGen] = useState(0);
+  const lastWidth = useRef(0);
   useEffect(() => {
+    const el = boxRef.current;
     const bump = (): void => setGen((g) => g + 1);
+    let ro: ResizeObserver | undefined;
+    if (el && typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver((entries) => {
+        const w = entries[0]?.contentRect.width ?? 0;
+        if (w > 0 && Math.abs(w - lastWidth.current) > 1) {
+          lastWidth.current = w;
+          bump();
+        }
+      });
+      ro.observe(el);
+    }
+    const deferBump = (): void => {
+      requestAnimationFrame(bump);
+    };
     const onVis = (): void => {
-      if (document.visibilityState === "visible") bump();
+      if (document.visibilityState === "visible") deferBump();
     };
     document.addEventListener("visibilitychange", onVis);
-    globalThis.addEventListener("pageshow", bump);
+    globalThis.addEventListener("pageshow", deferBump);
     return () => {
+      ro?.disconnect();
       document.removeEventListener("visibilitychange", onVis);
-      globalThis.removeEventListener("pageshow", bump);
+      globalThis.removeEventListener("pageshow", deferBump);
     };
-  }, []);
+  }, [boxRef]);
   return gen;
 }
 
@@ -181,14 +209,17 @@ function useRemountOnVisible(): number {
 function ChartFrame({
   title,
   selectable,
-  remountKey,
   children,
 }: {
   title?: string | undefined;
   selectable?: boolean;
-  remountKey?: number;
   children: ReactNode;
 }): JSX.Element {
+  // Each frame heals its OWN plot: it watches its sizing box and remounts the
+  // ResponsiveContainer whenever the real geometry settles — so a chart is never
+  // stuck at a stale/zero measurement, no matter how it was first mounted.
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const gen = useSelfHealingRemount(boxRef);
   return (
     <Box sx={{ my: 1 }}>
       {title
@@ -202,14 +233,16 @@ function ChartFrame({
         )
         : null}
       <Box
-        key={remountKey}
+        ref={boxRef}
         sx={{
           width: "100%",
           height: CHART_HEIGHT,
           cursor: selectable ? "pointer" : "default",
         }}
       >
-        {children}
+        <Box key={gen} sx={{ width: "100%", height: "100%" }}>
+          {children}
+        </Box>
       </Box>
     </Box>
   );
@@ -286,7 +319,12 @@ function autoGrid(min: string): object {
   };
 }
 
-/** The docked-controls grid, rendered below the plot(s) — null when empty. */
+/** The docked-controls grid, rendered below the plot(s) — null when empty. A
+ *  Reset affordance appears in the strip's top-right ONLY when at least one
+ *  control has moved off its `init` (nothing to reset ⇒ no button, so it never
+ *  adds noise). Resetting snaps every signal the card's controls drive back to
+ *  its declared `init`; derived signals/datasets recompute, so one tap returns
+ *  the whole interactive to its starting state. */
 function ControlsGrid({
   controls,
   signals,
@@ -297,23 +335,48 @@ function ControlsGrid({
   kernel: Kernel;
 }): JSX.Element | null {
   if (controls.length === 0) return null;
+  const sigNames = controls
+    .map((c) => c.signal)
+    .filter((s): s is string => typeof s === "string" && s.length > 0);
+  const dirty = sigNames.length > 0 && kernel.dirty(sigNames);
   return (
-    <Box
-      sx={{
-        ...autoGrid(CONTROL_MIN),
-        columnGap: 2,
-        rowGap: 1,
-        px: 2,
-        py: 1.5,
-        borderTop: 1,
-        borderColor: "divider",
-      }}
-    >
-      {controls.map((c, i) => (
-        <Box key={i} sx={{ minWidth: 0 }}>
-          <DockedControl control={c} signals={signals} kernel={kernel} />
-        </Box>
-      ))}
+    <Box sx={{ px: 2, py: 1.5, borderTop: 1, borderColor: "divider" }}>
+      {dirty
+        ? (
+          <Box sx={{ display: "flex", justifyContent: "flex-end", mb: 0.5 }}>
+            <Box
+              component="button"
+              type="button"
+              onClick={() => kernel.reset(sigNames)}
+              sx={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 0.5,
+                px: 1,
+                py: 0.25,
+                border: 0,
+                borderRadius: 1,
+                cursor: "pointer",
+                bgcolor: "transparent",
+                color: "text.secondary",
+                font: "inherit",
+                fontSize: 12,
+                "&:hover": { bgcolor: "action.hover", color: "text.primary" },
+              }}
+            >
+              <span aria-hidden>↺</span>
+              Reset
+            </Box>
+          </Box>
+        )
+        : null}
+      <Box sx={{ ...autoGrid(CONTROL_MIN), columnGap: 2, rowGap: 1 }}>
+        {controls.map((c, i) => (
+          <Box key={i} sx={{ minWidth: 0 }}>
+            <DockedControl control={c} signals={signals} kernel={kernel} />
+          </Box>
+        ))}
+      </Box>
     </Box>
   );
 }
@@ -679,7 +742,6 @@ function ChartPlot({
   // grouped chart share this shape), so alias the incoming `spec` to `block`.
   const block = spec;
   const theme = useTheme();
-  const remountKey = useRemountOnVisible();
   // Legend-click isolation: clicking a series in the legend focuses it (others
   // dim); click again to restore. Pure local UI state — no signal, no author
   // syntax, so it stays sound. The clicked series is keyed by its dataKey.
@@ -848,7 +910,7 @@ function ChartPlot({
     switch (mark.chart) {
       case "line":
         return (
-          <ChartFrame title={block.title} remountKey={remountKey}>
+          <ChartFrame title={block.title}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
                 data={rows}
@@ -903,7 +965,7 @@ function ChartPlot({
 
       case "area":
         return (
-          <ChartFrame title={block.title} remountKey={remountKey}>
+          <ChartFrame title={block.title}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart
                 data={rows}
@@ -958,7 +1020,7 @@ function ChartPlot({
       case "bar": {
         const xCol = mark.x.column;
         return (
-          <ChartFrame title={block.title} selectable={!!sel} remountKey={remountKey}>
+          <ChartFrame title={block.title} selectable={!!sel}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={rows}
@@ -1014,7 +1076,7 @@ function ChartPlot({
       case "barHorizontal": {
         const catCol = mark.category.column;
         return (
-          <ChartFrame title={block.title} selectable={!!sel} remountKey={remountKey}>
+          <ChartFrame title={block.title} selectable={!!sel}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={rows}
@@ -1080,7 +1142,7 @@ function ChartPlot({
           }
         };
         return (
-          <ChartFrame title={block.title} selectable={!!sel} remountKey={remountKey}>
+          <ChartFrame title={block.title} selectable={!!sel}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -1120,7 +1182,7 @@ function ChartPlot({
             ? groupBy(rows, series.column)
             : [{ name: labelOf(mark.y), data: rows }];
         return (
-          <ChartFrame title={block.title} remountKey={remountKey}>
+          <ChartFrame title={block.title}>
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 4 }}>
                 <CartesianGrid
@@ -1190,7 +1252,7 @@ function ChartPlot({
           mark.bins ?? 10,
         );
         return (
-          <ChartFrame title={block.title} remountKey={remountKey}>
+          <ChartFrame title={block.title}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={data}
@@ -1249,7 +1311,7 @@ function ChartPlot({
         }));
         const mas = mark.ma ?? [];
         return (
-          <ChartFrame title={block.title} remountKey={remountKey}>
+          <ChartFrame title={block.title}>
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
                 data={candleData}
@@ -1314,7 +1376,7 @@ function ChartPlot({
         const up = theme.palette.success.main;
         const down = theme.palette.error.main;
         return (
-          <ChartFrame title={block.title} remountKey={remountKey}>
+          <ChartFrame title={block.title}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={rows}
@@ -1364,7 +1426,7 @@ function ChartPlot({
         const up = theme.palette.success.main;
         const down = theme.palette.error.main;
         return (
-          <ChartFrame title={block.title} remountKey={remountKey}>
+          <ChartFrame title={block.title}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart
                 data={data}

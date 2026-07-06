@@ -169,7 +169,14 @@ export interface GroupChart {
   highlight?: string;
 }
 
-export type CalloutKind = "note" | "tip" | "warning" | "info";
+export type CalloutKind =
+  | "note"
+  | "info"
+  | "tip"
+  | "success"
+  | "warning"
+  | "danger"
+  | "quote";
 
 /** Per-block audio intent (Phase 4 wires it). */
 export interface AudioSpec {
@@ -220,6 +227,7 @@ export type Block =
   }
   | { block: "table"; data: string; columns?: string[] }
   | { block: "input"; signal?: string | null; widget?: Widget }
+  | { block: "panel"; title?: string; children: Block[] }
   | { block: "stack"; children: Block[] }
   | { block: "columns"; collapse?: boolean; children: Block[] }
   | { block: "tabs"; items: Tab[] };

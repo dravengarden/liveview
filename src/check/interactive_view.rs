@@ -441,7 +441,9 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                Block::Stack { children } | Block::Columns { children, .. } => {
+                Block::Panel { children, .. }
+                | Block::Stack { children }
+                | Block::Columns { children, .. } => {
                     Self::collect_chart_meta(children, out)
                 }
                 Block::Tabs { items } => {
@@ -634,6 +636,19 @@ impl<'a> Checker<'a> {
                 }
             }
             Block::Input { signal, widget } => self.check_input(signal.as_deref(), widget.as_ref()),
+            Block::Panel { title, children } => {
+                if let Some(t) = title {
+                    if t.chars().count() > MAX_LABEL_LEN {
+                        self.warn(
+                            "interactive-view/label-long",
+                            format!("panel title exceeds {MAX_LABEL_LEN} chars"),
+                            None,
+                            self.locate(t),
+                        );
+                    }
+                }
+                self.check_container(doc, children, depth);
+            }
             Block::Stack { children } => self.check_container(doc, children, depth),
             Block::Columns { collapse, children } => {
                 if !*collapse {
@@ -2169,6 +2184,29 @@ mod tests {
                  "readouts":[{"label":"net","value":"{{net}}"}]}]}"#,
         );
         assert!(d.is_empty(), "unexpected: {d:?}");
+    }
+
+    #[test]
+    fn panel_groups_children_and_validates_them() {
+        // a panel wraps linked blocks in a card; its children still validate (an
+        // unknown-signal interpolation inside is caught).
+        let ok = check(
+            r#"{"interactiveView":1,
+               "signals":{"g":{"type":"enum","init":"a",
+                 "widget":{"type":"segmented","options":[{"label":"a","value":"a"}]}}},
+               "view":[{"block":"panel","title":"pick","children":[
+                 {"block":"input","signal":"g"},
+                 {"block":"section","md":"picked {{g}}"}]}]}"#,
+        );
+        assert!(ok.is_empty(), "unexpected: {ok:?}");
+        let bad = check(
+            r#"{"interactiveView":1,"view":[{"block":"panel","children":[
+                 {"block":"section","md":"{{nope}}"}]}]}"#,
+        );
+        assert!(
+            rules(&bad).contains(&"interactive-view/unknown-signal"),
+            "{bad:?}"
+        );
     }
 
     #[test]

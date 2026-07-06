@@ -523,6 +523,19 @@ function columnNumbers(v: unknown): number[] | null {
   return out;
 }
 
+// The `ColumnType` a `with`-computed column reports, inferred from its values —
+// used only for the chart's axis-kind hint (the checker already proved the real
+// type; this is the total runtime echo). A column of numbers → "number", etc.
+function inferColType(v: unknown): ColumnType {
+  const sample = isCol(v)
+    ? (v.values ?? []).find((e) => !isUnavailable(e) && e != null)
+    : v;
+  if (typeof sample === "number") return "number";
+  if (typeof sample === "boolean") return "boolean";
+  if (typeof sample === "string") return "string";
+  return "number";
+}
+
 function evalCall(name: string, args: Ast[], env: EvalEnv, scope: DsVal | null): unknown {
   const arg = (i: number): Ast | undefined => args[i];
   switch (name) {
@@ -543,6 +556,36 @@ function evalCall(name: string, args: Ast[], env: EvalEnv, scope: DsVal | null):
       }
       if (typeof pred === "boolean") return ds(dsv.columns, pred ? dsv.rows : []);
       return ds(dsv.columns, null);
+    }
+    case "with": {
+      // with(ds, 'name', expr, …) — append computed columns. Each expr is
+      // evaluated with the (progressively augmented) dataset in scope, so it can
+      // combine columns with signals (`upper = mid + k*sigma`) and reference
+      // columns added earlier in the same call. A scalar result broadcasts to
+      // every row; a column result maps per row.
+      const dsv = evalNode(arg(0) ?? { kind: "num", value: 0 }, env, scope);
+      if (!isDs(dsv)) return UNAVAILABLE;
+      if (dsv.rows === null) return dsv;
+      let columns: Record<string, ColumnType> = { ...dsv.columns };
+      let rows: Record<string, unknown>[] = dsv.rows.map((r) => ({ ...r }));
+      for (let i = 1; i + 1 < args.length; i += 2) {
+        const nameAst = args[i];
+        const exprAst = args[i + 1];
+        if (!nameAst || nameAst.kind !== "str" || !exprAst) return UNAVAILABLE;
+        const name = nameAst.value;
+        const val = evalNode(exprAst, env, ds(columns, rows));
+        if (isCol(val)) {
+          const vv = val.values;
+          rows = rows.map((r, idx) => ({
+            ...r,
+            [name]: vv === null ? UNAVAILABLE : (vv[idx] ?? UNAVAILABLE),
+          }));
+        } else {
+          rows = rows.map((r) => ({ ...r, [name]: val }));
+        }
+        columns = { ...columns, [name]: inferColType(val) };
+      }
+      return ds(columns, rows);
     }
     case "mean":
     case "sum":
