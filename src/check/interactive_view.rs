@@ -550,6 +550,7 @@ impl<'a> Checker<'a> {
                 controls,
                 readouts,
                 highlight,
+                spotlight,
                 ..
             } => {
                 self.check_chart(data, mark, overlays, title.as_deref());
@@ -565,6 +566,9 @@ impl<'a> Checker<'a> {
                 }
                 if let Some(sig) = highlight {
                     self.check_highlight(sig, mark);
+                }
+                if let Some(sig) = spotlight {
+                    self.check_spotlight(sig, mark);
                 }
             }
             Block::ChartGroup {
@@ -598,6 +602,9 @@ impl<'a> Checker<'a> {
                     self.check_chart(&gc.data, &gc.mark, &gc.overlays, gc.title.as_deref());
                     if let Some(sig) = &gc.highlight {
                         self.check_highlight(sig, &gc.mark);
+                    }
+                    if let Some(sig) = &gc.spotlight {
+                        self.check_spotlight(sig, &gc.mark);
                     }
                 }
                 for ctl in controls {
@@ -1115,6 +1122,53 @@ impl<'a> Checker<'a> {
                     mark.kind_tag()
                 ),
                 Some("highlight emphasises one of several series".into()),
+                (1, 1),
+            );
+        }
+    }
+
+    /// A chart's `spotlight` names a signal whose value selects one x-CATEGORY;
+    /// non-matching categories dim. Like `highlight` it must resolve and be an
+    /// enum/string (its value equals a category cell), but it sits on the
+    /// CATEGORICAL marks (bar/barHorizontal/pie/candlestick) whose x is a
+    /// category — the widget-driven counterpart of click-to-select.
+    fn check_spotlight(&mut self, sig: &str, mark: &ChartMark) {
+        let Some(&ty) = self.signals.get(sig) else {
+            self.err(
+                "interactive-view/unknown-signal",
+                format!("chart spotlight references unknown signal `{sig}`"),
+                None,
+                self.locate(sig),
+            );
+            return;
+        };
+        if !matches!(ty, SignalType::Enum | SignalType::String) {
+            self.err(
+                "interactive-view/spotlight-type",
+                format!(
+                    "chart spotlight signal `{sig}` is {}; it must be enum or string \
+                     (its value names the category to spotlight)",
+                    ty.label()
+                ),
+                None,
+                self.locate(sig),
+            );
+        }
+        let categorical = matches!(
+            mark,
+            ChartMark::Bar { .. }
+                | ChartMark::BarHorizontal { .. }
+                | ChartMark::Pie { .. }
+                | ChartMark::Candlestick { .. }
+        );
+        if !categorical {
+            self.err(
+                "interactive-view/spotlight-unsupported",
+                format!(
+                    "{} chart has no category axis to spotlight; use bar/barHorizontal/pie/candlestick",
+                    mark.kind_tag()
+                ),
+                Some("spotlight emphasises one category (a bar/candle), dimming the rest".into()),
                 (1, 1),
             );
         }
@@ -2206,6 +2260,38 @@ mod tests {
         assert!(
             rules(&bad).contains(&"interactive-view/unknown-signal"),
             "{bad:?}"
+        );
+    }
+
+    #[test]
+    fn chart_spotlight_on_candlestick_passes() {
+        // a select drives which candle lights up (category spotlight on candlestick).
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"c":{"columns":{"t":"string","open":"number","high":"number","low":"number","close":"number"},"values":[]}},
+               "signals":{"pick":{"type":"enum","init":"a",
+                 "widget":{"type":"select","options":[{"label":"a","value":"a"}]}}},
+               "view":[{"block":"chart","data":"c","spotlight":"pick",
+                 "mark":{"chart":"candlestick","x":{"column":"t"},"open":{"column":"open"},
+                   "high":{"column":"high"},"low":{"column":"low"},"close":{"column":"close"}}}]}"#,
+        );
+        assert!(d.is_empty(), "unexpected: {d:?}");
+    }
+
+    #[test]
+    fn chart_spotlight_on_line_rejected() {
+        // a line has no category axis to spotlight.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"t":"integer","v":"number"},"values":[]}},
+               "signals":{"pick":{"type":"string","init":"a",
+                 "widget":{"type":"textInput","maxLength":4}}},
+               "view":[{"block":"chart","data":"px","spotlight":"pick",
+                 "mark":{"chart":"line","x":{"column":"t"},"y":[{"column":"v"}]}}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/spotlight-unsupported"),
+            "{d:?}"
         );
     }
 

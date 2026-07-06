@@ -651,6 +651,11 @@ function makeCandle(
     close: string;
     up: string;
     down: string;
+    // Category-dim support: `xcol` is the x-category column and `dim` maps a
+    // category value to an opacity (1 normally, <1 when a spotlight/selection
+    // dims this candle) — how a `select`/`segmented` lights up one candle.
+    xcol: string;
+    dim: (catValue: unknown) => number;
   },
 ) {
   return function Candle(props: CandleShapeProps): JSX.Element | null {
@@ -658,6 +663,7 @@ function makeCandle(
     if (x == null || y == null || width == null || height == null || !payload) {
       return null;
     }
+    const candleOpacity = cfg.dim(payload[cfg.xcol]);
     const high = Number(payload[cfg.high]);
     const low = Number(payload[cfg.low]);
     const open = Number(payload[cfg.open]);
@@ -675,7 +681,7 @@ function makeCandle(
     const bodyH = Math.max(1, Math.abs(closeY - openY));
     const bodyW = Math.max(1, width * 0.6);
     return (
-      <g>
+      <g opacity={candleOpacity}>
         <line
           x1={cx}
           x2={cx}
@@ -877,11 +883,23 @@ function ChartPlot({
     rawSelected != null && !isUnavailable(rawSelected) && rawSelected !== ""
       ? rawSelected
       : null;
-  const catOpacity = (
-    v: unknown,
-  ): number => (selectedValue === null || String(v) === String(selectedValue)
-    ? 1
-    : 0.28);
+  // `spotlight`: a widget-driven signal names the selected x-CATEGORY, so a
+  // `select`/`segmented` lights up one candle/bar and dims the rest — the same
+  // category dimming as click-to-select, just sourced from a control. Both fold
+  // into one `catOpacity`: a datum stays bold only if it matches BOTH the click
+  // selection (if any) and the spotlight (if any).
+  const spotRaw = block.spotlight ? kernel.get(block.spotlight) : undefined;
+  const spotlightValue =
+    typeof spotRaw === "string" && spotRaw !== "" && !isUnavailable(spotRaw)
+      ? spotRaw
+      : null;
+  const catOpacity = (v: unknown): number => {
+    const selOk = selectedValue === null ||
+      String(v) === String(selectedValue);
+    const spotOk = spotlightValue === null ||
+      String(v) === String(spotlightValue);
+    return selOk && spotOk ? 1 : 0.28;
+  };
   // Emit the bound column from a clicked datum. recharts' Bar/Cell click hands
   // the datum directly (its `payload` is the row) — reliable even for a
   // synthetic click, unlike the chart-level `activeIndex` (only set on hover).
@@ -1019,6 +1037,9 @@ function ChartPlot({
 
       case "bar": {
         const xCol = mark.x.column;
+        // Render per-datum Cells (for category dimming) when EITHER a click
+        // selection or a spotlight is in play.
+        const catDim = !!sel || spotlightValue !== null;
         return (
           <ChartFrame title={block.title} selectable={!!sel}>
             <ResponsiveContainer width="100%" height="100%">
@@ -1056,7 +1077,7 @@ function ChartPlot({
                     isAnimationActive={false}
                     {...(sel ? { onClick: onPickDatum } : {})}
                   >
-                    {sel
+                    {catDim
                       ? rows.map((r, ri) => (
                         <Cell
                           key={ri}
@@ -1304,6 +1325,8 @@ function ChartPlot({
           close: mark.close.column,
           up: theme.palette.success.main,
           down: theme.palette.error.main,
+          xcol: mark.x.column,
+          dim: catOpacity,
         });
         const candleData = rows.map((r) => ({
           ...r,

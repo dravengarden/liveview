@@ -167,6 +167,7 @@ export interface GroupChart {
   overlays?: Overlay[];
   title?: string;
   highlight?: string;
+  spotlight?: string;
 }
 
 export type CalloutKind =

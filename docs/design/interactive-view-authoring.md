@@ -165,6 +165,13 @@ blocks:
   only moving a readout number. A series matches by column OR display label; any
   series NOT in the control's option set (a price/benchmark anchor) stays bold.
   Composes with the free legend-click isolation (a manual click overrides it).
+- `"spotlight"`: the CATEGORY counterpart of `highlight` — a signal (enum/string)
+  whose value names the selected x-CATEGORY; the matching bar/candle stays lit
+  and the rest dim. Use it on the categorical marks (`bar`/`barHorizontal`/`pie`/
+  `candlestick`) when a `select`/`segmented` picks ONE datum (one candle, one
+  bar) and you want that pick visible on the plot — the widget-driven twin of
+  click-to-select (`from`). Without it, a candlestick can't show which candle a
+  select picked (its x is a category, so `highlight`/`vLine` don't apply).
 
 ```jsonc
 { "block": "chart", "data": "series", "title": "SMA / EMA / HMA",

@@ -394,6 +394,15 @@ pub enum Block {
         /// free legend-click isolation (a manual legend click overrides it).
         #[serde(default)]
         highlight: Option<String>,
+        /// A signal name whose current value names the selected x-CATEGORY;
+        /// data points whose category differs dim. This is the widget-driven
+        /// analog of click-to-select (`from`) and the categorical counterpart of
+        /// `highlight` (which emphasises a series): a `select`/`segmented` that
+        /// picks one candle/bar makes THAT candle/bar light up while the rest
+        /// recede. Meaningful on the categorical marks (bar / barHorizontal /
+        /// pie / candlestick) whose x is a category; a no-op elsewhere.
+        #[serde(default)]
+        spotlight: Option<String>,
     },
     /// Several linked charts sharing ONE card and one set of docked controls +
     /// readouts. Reach for it when a single tunable (a window range-slider, a
@@ -514,6 +523,8 @@ pub struct GroupChart {
     pub title: Option<String>,
     #[serde(default)]
     pub highlight: Option<String>,
+    #[serde(default)]
+    pub spotlight: Option<String>,
 }
 
 /// A KPI tile. `value` is an interpolation template (`"{{sharpe}}"`); `format`
