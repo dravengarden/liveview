@@ -35,6 +35,9 @@ import { renderWidget } from "./widgets";
 
 // recharts is heavy — code-split it so only chapters with a chart pull the chunk.
 const ChartBlock = lazy(() => import("./charts"));
+const ChartGroupBlock = lazy(() =>
+  import("./charts").then((m) => ({ default: m.ChartGroupBlock }))
+);
 
 /** Max table rows rendered inline (a report table is a preview, not a data dump);
  *  a larger dataset is truncated with a note rather than freezing the reader. */
@@ -381,6 +384,12 @@ function blockBody(block: Block, ctx: BlockCtx, depth: number): JSX.Element {
       return (
         <Suspense fallback={<ChartLoading />}>
           <ChartBlock block={block} kernel={kernel} signals={signals} />
+        </Suspense>
+      );
+    case "chartGroup":
+      return (
+        <Suspense fallback={<ChartLoading />}>
+          <ChartGroupBlock block={block} kernel={kernel} signals={signals} />
         </Suspense>
       );
     case "table":

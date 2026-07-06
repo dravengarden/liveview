@@ -426,6 +426,21 @@ impl<'a> Checker<'a> {
                         },
                     );
                 }
+                Block::ChartGroup { charts, .. } => {
+                    // A grouped chart's `id` is a selection target exactly like a
+                    // top-level chart's — collect each member that carries one.
+                    for gc in charts {
+                        if let Some(id) = &gc.id {
+                            out.insert(
+                                id.clone(),
+                                ChartSel {
+                                    data: gc.data.clone(),
+                                    kind: gc.mark.kind_tag(),
+                                },
+                            );
+                        }
+                    }
+                }
                 Block::Stack { children } | Block::Columns { children, .. } => {
                     Self::collect_chart_meta(children, out)
                 }
@@ -548,6 +563,46 @@ impl<'a> Checker<'a> {
                 }
                 if let Some(sig) = highlight {
                     self.check_highlight(sig, mark);
+                }
+            }
+            Block::ChartGroup {
+                title,
+                charts,
+                controls,
+                readouts,
+            } => {
+                if let Some(t) = title {
+                    if t.chars().count() > MAX_LABEL_LEN {
+                        self.warn(
+                            "interactive-view/label-long",
+                            format!("chart group title exceeds {MAX_LABEL_LEN} chars"),
+                            None,
+                            self.locate(t),
+                        );
+                    }
+                }
+                if charts.is_empty() {
+                    self.err(
+                        "interactive-view/chart-group-empty",
+                        "chartGroup needs at least one chart".into(),
+                        Some("a chartGroup unifies several linked charts in one card".into()),
+                        (1, 1),
+                    );
+                }
+                // Each member validates exactly like a standalone `chart` (data
+                // resolves, columns/types line up, overlays + highlight sound);
+                // the group's controls/readouts are shared, checked once here.
+                for gc in charts {
+                    self.check_chart(&gc.data, &gc.mark, &gc.overlays, gc.title.as_deref());
+                    if let Some(sig) = &gc.highlight {
+                        self.check_highlight(sig, &gc.mark);
+                    }
+                }
+                for ctl in controls {
+                    self.check_input(ctl.signal.as_deref(), ctl.widget.as_ref());
+                }
+                for m in readouts {
+                    self.check_metric(m);
                 }
             }
             Block::Table { data, columns } => {
@@ -2089,5 +2144,56 @@ mod tests {
                  "overlays":[{"overlay":"vBand","from":"band[0]","to":"band[1]"}]}]}"#,
         );
         assert!(d.is_empty(), "unexpected: {d:?}");
+    }
+
+    #[test]
+    fn chart_group_valid_passes() {
+        // Two linked charts (price + obv) share one window range-slider control
+        // and two readouts — the whole group validates like two charts + an input.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"bars":{"columns":{"t":"integer","price":"number","obv":"number"},
+                 "values":[{"t":1,"price":100,"obv":0},{"t":2,"price":101,"obv":12}]},
+                 "sel":{"derived":"filter(bars, t >= win[0] && t <= win[1])"}},
+               "signals":{"win":{"type":"interval<number>","init":[1,2],
+                 "widget":{"type":"rangeSlider","min":1,"max":2,"step":1}},
+                 "net":{"type":"number","derived":"sum(sel.price)"}},
+               "view":[{"block":"chartGroup","title":"OBV divergence","charts":[
+                 {"data":"bars","title":"Price",
+                  "mark":{"chart":"line","x":{"column":"t"},"y":[{"column":"price"}]},
+                  "overlays":[{"overlay":"vBand","from":"win[0]","to":"win[1]"}]},
+                 {"data":"bars","title":"OBV",
+                  "mark":{"chart":"area","x":{"column":"t"},"y":[{"column":"obv"}]},
+                  "overlays":[{"overlay":"vBand","from":"win[0]","to":"win[1]"}]}],
+                 "controls":[{"signal":"win"}],
+                 "readouts":[{"label":"net","value":"{{net}}"}]}]}"#,
+        );
+        assert!(d.is_empty(), "unexpected: {d:?}");
+    }
+
+    #[test]
+    fn chart_group_empty_rejected() {
+        let d = check(
+            r#"{"interactiveView":1,"view":[{"block":"chartGroup","charts":[]}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/chart-group-empty"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn chart_group_member_bad_column_rejected() {
+        // A member chart validates like a standalone chart — a missing column fails.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"t":"integer","v":"number"},"values":[]}},
+               "view":[{"block":"chartGroup","charts":[
+                 {"data":"px","mark":{"chart":"line","x":{"column":"t"},"y":[{"column":"nope"}]}}]}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/unknown-column"),
+            "{d:?}"
+        );
     }
 }

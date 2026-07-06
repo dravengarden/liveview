@@ -183,10 +183,48 @@ including `vLine` on `barHorizontal` for a cutoff across a ranking) and the
 so a tight high-value series (prices ~100) fills the plot instead of collapsing
 to a flat ribbon; `bar` keeps a zero baseline.
 
+Clicking a legend entry **isolates** that series (others ghost); the legend
+entry itself goes bold to show what's selected, and the same dimming applies to a
+`highlight`-driven pick — so the legend always reflects the emphasised series.
+
+## Grouped charts (`chartGroup` — several linked plots, one card)
+
+When ONE tunable drives MORE THAN ONE chart that belong together — the canonical
+case is a **price pane stacked over a volume/OBV pane**, read down a shared
+x-axis — use a `chartGroup` instead of separate `chart` blocks. The members
+stack in a single framed card and share ONE set of docked `controls`/`readouts`
+below every plot, so the control reads as commanding the whole group (not just
+the one chart it happens to sit under):
+
+```jsonc
+{ "block": "chartGroup", "title": "Price vs volume",
+  "charts": [
+    { "data": "bars", "title": "Price",
+      "mark": { "chart": "line", "x": {"column":"t"}, "y": [{"column":"price"}] },
+      "overlays": [ { "overlay": "vBand", "from": "win[0]", "to": "win[1]" } ] },
+    { "data": "bars", "title": "OBV",
+      "mark": { "chart": "area", "x": {"column":"t"}, "y": [{"column":"obv"}] },
+      "overlays": [ { "overlay": "vBand", "from": "win[0]", "to": "win[1]" } ] }
+  ],
+  "controls": [ { "signal": "win" } ],
+  "readouts": [ { "label": "net", "value": "{{net}}" } ] }
+```
+
+Each entry in `charts` is a chart WITHOUT its own `controls`/`readouts` (those
+move to the group); it keeps its own `data`/`mark`/`overlays`/`title`/`highlight`
+/`id`, and a member `id` is a `from` selection target exactly like a top-level
+chart's. Layout is the same smart container as a single chart's card: the charts
+stack full-width (a chart needs the whole column to stay legible), then the
+shared controls grid, then the readouts grid — you list charts + controls and
+never touch layout. Still check-proof: a `chartGroup` that `liveview check`es
+passes renders and reflows on every screen. Use it only for genuinely linked
+plots; unrelated charts stay separate `chart` blocks.
+
 ## Blocks (the `view` array)
 
 `section` (markdown + `{{signal | round(2)}}` interpolation), `metric` /
 `metricGroup` (KPI tiles), `callout` (`kind: note|tip|warning|info`), `chart`,
+`chartGroup` (several linked charts + shared controls in one card — see above),
 `table` (`columns?`), `input` (`signal` or a standalone `widget`), and layout
 `stack` / `columns` (auto-collapse on phone) / `tabs`. Nesting ≤ 4.
 

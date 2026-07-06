@@ -395,6 +395,31 @@ pub enum Block {
         #[serde(default)]
         highlight: Option<String>,
     },
+    /// Several linked charts sharing ONE card and one set of docked controls +
+    /// readouts. Reach for it when a single tunable (a window range-slider, a
+    /// segmented pick) drives more than one chart that belong together — the
+    /// canonical case is a price pane stacked over a volume/OBV pane, read down a
+    /// shared x-axis. The shared control then reads as commanding the whole group
+    /// (not just the one chart it happens to sit under), and the plots stack in
+    /// one framed card instead of scattering into separate blocks with the
+    /// control marooned in the first.
+    ///
+    /// Each member is a `GroupChart` — the chart-specific fields of `Chart`
+    /// (data/mark/overlays/title/highlight/id) WITHOUT its own controls/readouts,
+    /// since those are shared at the group level and rendered once below every
+    /// plot. Layout is the same smart, self-arranging container as a single
+    /// chart's card: charts stack full-width (a chart needs the whole column to
+    /// stay legible), then the controls grid, then the readouts grid — no author
+    /// layout knobs, sound on every screen by construction.
+    ChartGroup {
+        #[serde(default)]
+        title: Option<String>,
+        charts: Vec<GroupChart>,
+        #[serde(default)]
+        controls: Vec<ChartControl>,
+        #[serde(default)]
+        readouts: Vec<Metric>,
+    },
     /// A data table over a dataset (Phase 3).
     Table {
         data: String,
@@ -435,6 +460,7 @@ impl Block {
             Block::MetricGroup { .. } => "metricGroup",
             Block::Callout { .. } => "callout",
             Block::Chart { .. } => "chart",
+            Block::ChartGroup { .. } => "chartGroup",
             Block::Table { .. } => "table",
             Block::Input { .. } => "input",
             Block::Stack { .. } => "stack",
@@ -453,6 +479,28 @@ pub struct ChartControl {
     pub signal: Option<String>,
     #[serde(default)]
     pub widget: Option<Widget>,
+}
+
+/// One chart inside a `Block::ChartGroup` — the chart-specific fields of
+/// `Block::Chart` minus its own `controls`/`readouts` (which live at the group
+/// level, shared across every member). Validated by the same `check_chart` /
+/// `check_highlight` paths as a standalone chart, so members are sound on the
+/// identical obligations; its `id` participates in `from` click-to-select
+/// exactly like a top-level chart's.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GroupChart {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub data: String,
+    // Boxed for the same reason as `Block::Chart.mark` — keep the enclosing
+    // struct/Vec element compact (candlestick carries five fields).
+    pub mark: Box<ChartMark>,
+    #[serde(default)]
+    pub overlays: Vec<Overlay>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub highlight: Option<String>,
 }
 
 /// A KPI tile. `value` is an interpolation template (`"{{sharpe}}"`); `format`

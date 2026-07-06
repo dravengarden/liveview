@@ -45,6 +45,7 @@ import type {
   Block,
   ChartControl,
   ChartField,
+  GroupChart,
   Metric,
   Overlay,
   Signal,
@@ -285,23 +286,82 @@ function autoGrid(min: string): object {
   };
 }
 
-/** Wrap a chart in a unified card WHEN it declares docked `controls`/`readouts`
+/** The docked-controls grid, rendered below the plot(s) — null when empty. */
+function ControlsGrid({
+  controls,
+  signals,
+  kernel,
+}: {
+  controls: ChartControl[];
+  signals: Record<string, Signal>;
+  kernel: Kernel;
+}): JSX.Element | null {
+  if (controls.length === 0) return null;
+  return (
+    <Box
+      sx={{
+        ...autoGrid(CONTROL_MIN),
+        columnGap: 2,
+        rowGap: 1,
+        px: 2,
+        py: 1.5,
+        borderTop: 1,
+        borderColor: "divider",
+      }}
+    >
+      {controls.map((c, i) => (
+        <Box key={i} sx={{ minWidth: 0 }}>
+          <DockedControl control={c} signals={signals} kernel={kernel} />
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+/** The docked-readouts chip grid, below the controls — null when empty. */
+function ReadoutsGrid({
+  readouts,
+  kernel,
+}: {
+  readouts: Metric[];
+  kernel: Kernel;
+}): JSX.Element | null {
+  if (readouts.length === 0) return null;
+  return (
+    <Box
+      sx={{
+        ...autoGrid(READOUT_MIN),
+        columnGap: 2.5,
+        rowGap: 1,
+        px: 2,
+        py: 1.25,
+        borderTop: 1,
+        borderColor: "divider",
+        bgcolor: "action.hover",
+      }}
+    >
+      {readouts.map((m, i) => <ReadoutChip key={i} metric={m} kernel={kernel} />)}
+    </Box>
+  );
+}
+
+/** Wrap ONE chart in a unified card WHEN it declares docked `controls`/`readouts`
  *  — the plot on top, a self-arranging controls grid below it, then a readout
  *  chip grid — so the tunable and its visual effect read as one unit. A chart
  *  with neither renders frameless, exactly as before (no corpus-wide restyle). */
-function ChartPanel({
-  block,
+function ChartCard({
+  controls,
+  readouts,
   signals,
   kernel,
   children,
 }: {
-  block: ChartBlockT;
+  controls: ChartControl[];
+  readouts: Metric[];
   signals: Record<string, Signal>;
   kernel: Kernel;
   children: ReactNode;
 }): JSX.Element {
-  const controls = block.controls ?? [];
-  const readouts = block.readouts ?? [];
   if (controls.length === 0 && readouts.length === 0) return <>{children}</>;
   return (
     <Box
@@ -315,47 +375,8 @@ function ChartPanel({
       }}
     >
       <Box sx={{ px: 1, pt: 1 }}>{children}</Box>
-      {controls.length > 0
-        ? (
-          <Box
-            sx={{
-              ...autoGrid(CONTROL_MIN),
-              columnGap: 2,
-              rowGap: 1,
-              px: 2,
-              py: 1.5,
-              borderTop: 1,
-              borderColor: "divider",
-            }}
-          >
-            {controls.map((c, i) => (
-              <Box key={i} sx={{ minWidth: 0 }}>
-                <DockedControl control={c} signals={signals} kernel={kernel} />
-              </Box>
-            ))}
-          </Box>
-        )
-        : null}
-      {readouts.length > 0
-        ? (
-          <Box
-            sx={{
-              ...autoGrid(READOUT_MIN),
-              columnGap: 2.5,
-              rowGap: 1,
-              px: 2,
-              py: 1.25,
-              borderTop: 1,
-              borderColor: "divider",
-              bgcolor: "action.hover",
-            }}
-          >
-            {readouts.map((m, i) => (
-              <ReadoutChip key={i} metric={m} kernel={kernel} />
-            ))}
-          </Box>
-        )
-        : null}
+      <ControlsGrid controls={controls} signals={signals} kernel={kernel} />
+      <ReadoutsGrid readouts={readouts} kernel={kernel} />
     </Box>
   );
 }
@@ -640,15 +661,23 @@ function depthData(
 
 // ── the chart dispatch (exhaustive) ───────────────────────────────────────────
 
-export default function ChartBlock({
-  block,
+/** One chart's plot — every per-chart concern (legend isolation, highlight,
+ *  click-selection, overlays, data-fit) lives here, keyed off a `GroupChart`
+ *  spec so BOTH a standalone `chart` block and a member of a `chartGroup` share
+ *  the exact same rendering (checker == renderer for either). The card framing
+ *  (docked controls/readouts) is the caller's job — this returns just the plot. */
+function ChartPlot({
+  spec,
   kernel,
   signals,
 }: {
-  block: ChartBlockT;
+  spec: GroupChart;
   kernel: Kernel;
   signals: Record<string, Signal>;
 }): JSX.Element {
+  // The plot body reads its chart-spec fields off `block` (a `chart` block and a
+  // grouped chart share this shape), so alias the incoming `spec` to `block`.
+  const block = spec;
   const theme = useTheme();
   const remountKey = useRemountOnVisible();
   // Legend-click isolation: clicking a series in the legend focuses it (others
@@ -702,6 +731,78 @@ export default function ChartBlock({
     return 0.16;
   };
 
+  // Custom legend content so the SELECTED state is visible ON the legend itself,
+  // not only on the plotted line. recharts' default legend gives a click target
+  // but no feedback — a reader can't tell which series is isolated/highlighted.
+  // Each entry mirrors its series' emphasis: the same `seriesOpacity` dims a
+  // ghosted series' swatch+label, and the emphasised one goes bold. Clicking an
+  // entry toggles legend isolation (the same `legendClick`), so tap-to-focus is
+  // now discoverable. Colours come from the payload recharts hands us.
+  const renderLegend = (props: {
+    payload?: readonly {
+      value?: unknown;
+      color?: string;
+      dataKey?: unknown;
+      type?: string;
+    }[];
+  }): JSX.Element => {
+    // recharts passes EVERY series to a custom `content`, including ones marked
+    // `legendType="none"` (which the default legend hides) — e.g. the
+    // candlestick's synthetic `_hl` [low,high] bar. Drop those so only real,
+    // legend-worthy series show.
+    const items = (props.payload ?? []).filter((it) => it.type !== "none");
+    return (
+      <Box
+        sx={{
+          display: "flex",
+          flexWrap: "wrap",
+          justifyContent: "center",
+          alignItems: "center",
+          columnGap: 1.5,
+          rowGap: 0.5,
+          pt: 0.5,
+          fontSize: 12,
+        }}
+      >
+        {items.map((it, i) => {
+          const label = String(it.value ?? "");
+          const key = typeof it.dataKey === "string" ? it.dataKey : label;
+          const op = seriesOpacity(key, label);
+          const bold = emphActive && op === 1;
+          return (
+            <Box
+              key={i}
+              component="span"
+              onClick={() =>
+                legendClick({ dataKey: it.dataKey, value: it.value })}
+              sx={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 0.5,
+                cursor: "pointer",
+                opacity: op,
+                fontWeight: bold ? 700 : 400,
+                userSelect: "none",
+              }}
+            >
+              <Box
+                component="span"
+                sx={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "2px",
+                  bgcolor: it.color ?? "text.secondary",
+                  flex: "0 0 auto",
+                }}
+              />
+              <Box component="span" sx={{ color: "text.primary" }}>{label}</Box>
+            </Box>
+          );
+        })}
+      </Box>
+    );
+  };
+
   const ds = kernel.data(block.data);
   const rows = ds?.rows ?? null;
 
@@ -730,11 +831,7 @@ export default function ChartBlock({
   };
 
   if (!rows || rows.length === 0) {
-    return (
-      <ChartPanel block={block} signals={signals} kernel={kernel}>
-        <ChartEmpty title={block.title} msg="no data available" />
-      </ChartPanel>
-    );
+    return <ChartEmpty title={block.title} msg="no data available" />;
   }
   const colors = palette(theme);
   const stroke = axisStroke(theme);
@@ -745,8 +842,8 @@ export default function ChartBlock({
     return t === "number" || t === "integer";
   };
 
-  // The plot itself — wrapped by ChartPanel so any docked controls/readouts
-  // frame it as one card (frameless when it declares none).
+  // The plot itself. The caller frames it (a single chart's docked controls/
+  // readouts card, or a chartGroup's shared card); this returns just the plot.
   const renderChart = (): JSX.Element => {
     switch (mark.chart) {
       case "line":
@@ -777,7 +874,12 @@ export default function ChartBlock({
                 />
                 <Tooltip {...tip} {...TOOLTIP_PIN} />
                 {mark.y.length > 1
-                  ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} />
+                  ? (
+                    <Legend
+                      wrapperStyle={LEGEND_STYLE}
+                      content={renderLegend}
+                    />
+                  )
                   : null}
                 {mark.y.map((s, i) => (
                   <Line
@@ -820,7 +922,12 @@ export default function ChartBlock({
                 <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
                 <Tooltip {...tip} {...TOOLTIP_PIN} />
                 {mark.y.length > 1
-                  ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} />
+                  ? (
+                    <Legend
+                      wrapperStyle={LEGEND_STYLE}
+                      content={renderLegend}
+                    />
+                  )
                   : null}
                 {mark.y.map((s, i) => {
                   const c = colorAt(colors, i);
@@ -869,7 +976,12 @@ export default function ChartBlock({
                   cursor={{ fill: theme.palette.action.hover }}
                 />
                 {mark.y.length > 1
-                  ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} />
+                  ? (
+                    <Legend
+                      wrapperStyle={LEGEND_STYLE}
+                      content={renderLegend}
+                    />
+                  )
                   : null}
                 {mark.y.map((s, i) => (
                   <Bar
@@ -1048,7 +1160,12 @@ export default function ChartBlock({
                   cursor={{ strokeDasharray: "3 3" }}
                 />
                 {groups.length > 1
-                  ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} />
+                  ? (
+                    <Legend
+                      wrapperStyle={LEGEND_STYLE}
+                      content={renderLegend}
+                    />
+                  )
                   : null}
                 {groups.map((g, i) => (
                   <Scatter
@@ -1157,7 +1274,12 @@ export default function ChartBlock({
                 />
                 <Tooltip {...tip} {...TOOLTIP_PIN} />
                 {mas.length > 0
-                  ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} />
+                  ? (
+                    <Legend
+                      wrapperStyle={LEGEND_STYLE}
+                      content={renderLegend}
+                    />
+                  )
                   : null}
                 <Bar
                   dataKey="_hl"
@@ -1295,10 +1417,83 @@ export default function ChartBlock({
     }
   };
 
+  return renderChart();
+}
+
+// ── the two block entry points ────────────────────────────────────────────────
+
+/** A single `chart` block: the plot wrapped in its docked-controls/readouts card
+ *  (frameless when it declares neither). The default export, lazy-loaded by the
+ *  block dispatcher. */
+export default function ChartBlock({
+  block,
+  kernel,
+  signals,
+}: {
+  block: ChartBlockT;
+  kernel: Kernel;
+  signals: Record<string, Signal>;
+}): JSX.Element {
   return (
-    <ChartPanel block={block} signals={signals} kernel={kernel}>
-      {renderChart()}
-    </ChartPanel>
+    <ChartCard
+      controls={block.controls ?? []}
+      readouts={block.readouts ?? []}
+      signals={signals}
+      kernel={kernel}
+    >
+      <ChartPlot spec={block} kernel={kernel} signals={signals} />
+    </ChartCard>
+  );
+}
+
+type ChartGroupT = Extract<Block, { block: "chartGroup" }>;
+
+/** A `chartGroup` block: several linked charts stacked in ONE card with a single
+ *  shared set of docked controls + readouts below every plot. The charts stack
+ *  full-width (each needs the whole content column to stay legible); the shared
+ *  controls/readouts flow in the same self-arranging `auto-fit` grid a single
+ *  chart's card uses — so the author lists charts + controls and never touches
+ *  layout, and the shared tunable reads as commanding the whole group. */
+export function ChartGroupBlock({
+  block,
+  kernel,
+  signals,
+}: {
+  block: ChartGroupT;
+  kernel: Kernel;
+  signals: Record<string, Signal>;
+}): JSX.Element {
+  const controls = block.controls ?? [];
+  const readouts = block.readouts ?? [];
+  return (
+    <Box
+      sx={{
+        my: 1,
+        border: 1,
+        borderColor: "divider",
+        borderRadius: 2,
+        bgcolor: "background.paper",
+        overflow: "hidden",
+      }}
+    >
+      {block.title
+        ? (
+          <Typography
+            variant="subtitle2"
+            sx={{ px: 2, pt: 1.5, color: "text.secondary" }}
+          >
+            {block.title}
+          </Typography>
+        )
+        : null}
+      <Box sx={{ px: 1, pt: 1 }}>
+        {block.charts.map((c, i) => (
+          <ChartPlot key={i} spec={c} kernel={kernel} signals={signals} />
+        ))}
+      </Box>
+      <ControlsGrid controls={controls} signals={signals} kernel={kernel} />
+      <ReadoutsGrid readouts={readouts} kernel={kernel} />
+    </Box>
   );
 }
 

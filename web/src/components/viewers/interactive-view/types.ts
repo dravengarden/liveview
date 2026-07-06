@@ -158,6 +158,17 @@ export interface ChartControl {
   widget?: Widget;
 }
 
+/** One chart inside a `chartGroup` — the chart-specific fields of a `chart`
+ *  block minus its own `controls`/`readouts` (shared at the group level). */
+export interface GroupChart {
+  id?: string;
+  data: string;
+  mark: ChartMark;
+  overlays?: Overlay[];
+  title?: string;
+  highlight?: string;
+}
+
 export type CalloutKind = "note" | "tip" | "warning" | "info";
 
 /** Per-block audio intent (Phase 4 wires it). */
@@ -199,6 +210,13 @@ export type Block =
     controls?: ChartControl[];
     readouts?: Metric[];
     highlight?: string;
+  }
+  | {
+    block: "chartGroup";
+    title?: string;
+    charts: GroupChart[];
+    controls?: ChartControl[];
+    readouts?: Metric[];
   }
   | { block: "table"; data: string; columns?: string[] }
   | { block: "input"; signal?: string | null; widget?: Widget }
