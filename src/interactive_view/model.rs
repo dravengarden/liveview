@@ -385,6 +385,15 @@ pub enum Block {
         /// `metric`/`metricGroup` block, rendered inline).
         #[serde(default)]
         readouts: Vec<Metric>,
+        /// A signal name whose current value emphasises the matching series
+        /// (others dim), so a docked `segmented`/`select`/`radioGroup` control
+        /// visibly commands the PLOT — not just a readout number. The value is
+        /// matched against each series' column OR its display label, so an
+        /// author can pick either spelling. Only meaningful on a multi-series
+        /// mark (line/area/bar/scatter); a no-op elsewhere. Composes with the
+        /// free legend-click isolation (a manual legend click overrides it).
+        #[serde(default)]
+        highlight: Option<String>,
     },
     /// A data table over a dataset (Phase 3).
     Table {

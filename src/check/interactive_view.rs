@@ -468,7 +468,11 @@ impl<'a> Checker<'a> {
             return;
         }
         let (data, select) = (sel.data.clone(), from.select.clone());
-        let col_ty = self.datasets.get(&data).and_then(|c| c.get(&select)).copied();
+        let col_ty = self
+            .datasets
+            .get(&data)
+            .and_then(|c| c.get(&select))
+            .copied();
         match col_ty {
             None => self.err(
                 "interactive-view/unknown-column",
@@ -528,6 +532,7 @@ impl<'a> Checker<'a> {
                 title,
                 controls,
                 readouts,
+                highlight,
                 ..
             } => {
                 self.check_chart(data, mark, overlays, title.as_deref());
@@ -540,6 +545,9 @@ impl<'a> Checker<'a> {
                 }
                 for m in readouts {
                     self.check_metric(m);
+                }
+                if let Some(sig) = highlight {
+                    self.check_highlight(sig, mark);
                 }
             }
             Block::Table { data, columns } => {
@@ -661,7 +669,15 @@ impl<'a> Checker<'a> {
         let kind = mark.kind_tag();
         match mark {
             ChartMark::Line { x, y, .. } | ChartMark::Area { x, y, .. } => {
-                self.check_field(&cols, data, kind, "x", x, col_ordered, "temporal, numeric, or categorical");
+                self.check_field(
+                    &cols,
+                    data,
+                    kind,
+                    "x",
+                    x,
+                    col_ordered,
+                    "temporal, numeric, or categorical",
+                );
                 self.require_series(kind, y);
                 for s in y {
                     self.check_field(&cols, data, kind, "y", s, col_numeric, "numeric");
@@ -708,12 +724,7 @@ impl<'a> Checker<'a> {
                 );
                 self.check_field(&cols, data, kind, "value", value, col_numeric, "numeric");
             }
-            ChartMark::Scatter {
-                x,
-                y,
-                size,
-                series,
-            } => {
+            ChartMark::Scatter { x, y, size, series } => {
                 self.check_field(&cols, data, kind, "x", x, col_numeric, "numeric");
                 self.check_field(&cols, data, kind, "y", y, col_numeric, "numeric");
                 if let Some(s) = size {
@@ -750,7 +761,15 @@ impl<'a> Checker<'a> {
                 close,
                 ma,
             } => {
-                self.check_field(&cols, data, kind, "x", x, col_ordered, "temporal, numeric, or categorical");
+                self.check_field(
+                    &cols,
+                    data,
+                    kind,
+                    "x",
+                    x,
+                    col_ordered,
+                    "temporal, numeric, or categorical",
+                );
                 self.check_field(&cols, data, kind, "open", open, col_numeric, "numeric");
                 self.check_field(&cols, data, kind, "high", high, col_numeric, "numeric");
                 self.check_field(&cols, data, kind, "low", low, col_numeric, "numeric");
@@ -765,7 +784,15 @@ impl<'a> Checker<'a> {
                 open,
                 close,
             } => {
-                self.check_field(&cols, data, kind, "x", x, col_ordered, "temporal, numeric, or categorical");
+                self.check_field(
+                    &cols,
+                    data,
+                    kind,
+                    "x",
+                    x,
+                    col_ordered,
+                    "temporal, numeric, or categorical",
+                );
                 self.check_field(&cols, data, kind, "value", value, col_numeric, "numeric");
                 if let Some(o) = open {
                     self.check_field(&cols, data, kind, "open", o, col_numeric, "numeric");
@@ -850,21 +877,28 @@ impl<'a> Checker<'a> {
         if overlays.is_empty() {
             return;
         }
-        // Only continuous-value marks carry overlays. Bar/pie/barHorizontal have
-        // a categorical axis and histogram is binned; volume is a companion pane.
-        let supports = matches!(
-            mark,
-            ChartMark::Line { .. }
-                | ChartMark::Area { .. }
-                | ChartMark::Scatter { .. }
-                | ChartMark::Candlestick { .. }
-                | ChartMark::Depth { .. }
-        );
+        // Continuous-value marks carry overlays freely. barHorizontal is a
+        // special case: its VALUE axis is horizontal (numeric X), so a vertical
+        // rule/band (vLine/vBand) at x = threshold is meaningful (a cutoff line
+        // across a ranking); only hLine/hBand — which would land on its category
+        // axis — are rejected below. bar/pie/histogram/volume have no continuous
+        // value axis to anchor a reference on.
+        let is_bar_h = matches!(mark, ChartMark::BarHorizontal { .. });
+        let supports = is_bar_h
+            || matches!(
+                mark,
+                ChartMark::Line { .. }
+                    | ChartMark::Area { .. }
+                    | ChartMark::Scatter { .. }
+                    | ChartMark::Candlestick { .. }
+                    | ChartMark::Depth { .. }
+            );
         if !supports {
             self.err(
                 "interactive-view/overlay-unsupported",
                 format!(
-                    "{} chart does not support overlays; use line/area/scatter/candlestick/depth",
+                    "{} chart does not support overlays; use \
+                     line/area/scatter/candlestick/depth/barHorizontal",
                     mark.kind_tag()
                 ),
                 Some("reference lines/bands need a continuous value axis".into()),
@@ -876,19 +910,41 @@ impl<'a> Checker<'a> {
         // categorical, so an x-axis rule/band (vLine/vBand) can only align on a
         // numeric x. A y-axis rule/band (hLine/hBand) is always fine — the value
         // axis is numeric-continuous for every supported mark. Every overlay
-        // position is therefore numeric.
+        // position is therefore numeric. barHorizontal's horizontal axis is its
+        // numeric value axis, so a vLine there is numeric too.
         let x_numeric = match mark {
             ChartMark::Line { x, .. }
             | ChartMark::Area { x, .. }
             | ChartMark::Candlestick { x, .. } => {
-                matches!(cols.get(&x.column), Some(ColumnType::Number | ColumnType::Integer))
+                matches!(
+                    cols.get(&x.column),
+                    Some(ColumnType::Number | ColumnType::Integer)
+                )
             }
-            // scatter x and depth's price axis are validated numeric.
-            ChartMark::Scatter { .. } | ChartMark::Depth { .. } => true,
+            // scatter x, depth's price axis, and barHorizontal's value axis are numeric.
+            ChartMark::Scatter { .. }
+            | ChartMark::Depth { .. }
+            | ChartMark::BarHorizontal { .. } => true,
             _ => false,
         };
 
         for ov in overlays {
+            // On barHorizontal the category axis is vertical, so an hLine/hBand
+            // (which sits on that axis) is nonsensical — only vLine/vBand map to
+            // the numeric value axis.
+            if is_bar_h && ov.is_vertical_axis() {
+                self.err(
+                    "interactive-view/overlay-unsupported",
+                    format!(
+                        "{} overlay would sit on barHorizontal's category axis; \
+                         use vLine/vBand on its value axis",
+                        ov.overlay_tag()
+                    ),
+                    None,
+                    (1, 1),
+                );
+                continue;
+            }
             if !ov.is_vertical_axis() && !x_numeric {
                 self.err(
                     "interactive-view/overlay-x-not-numeric",
@@ -943,6 +999,54 @@ impl<'a> Checker<'a> {
                 self.locate(acc),
             ),
             Ok(_) => {}
+        }
+    }
+
+    /// A chart's `highlight` names a signal whose value picks the emphasised
+    /// series. It must resolve, be a category-naming scalar (enum/string — the
+    /// only signal kinds whose value can equal a series column/label), and sit
+    /// on a multi-series mark (line/area/bar/scatter) where dimming means
+    /// something. Anything else is an author mistake worth flagging, not a
+    /// silent no-op.
+    fn check_highlight(&mut self, sig: &str, mark: &ChartMark) {
+        let Some(&ty) = self.signals.get(sig) else {
+            self.err(
+                "interactive-view/unknown-signal",
+                format!("chart highlight references unknown signal `{sig}`"),
+                None,
+                self.locate(sig),
+            );
+            return;
+        };
+        if !matches!(ty, SignalType::Enum | SignalType::String) {
+            self.err(
+                "interactive-view/highlight-type",
+                format!(
+                    "chart highlight signal `{sig}` is {}; it must be enum or string \
+                     (its value names the series to emphasise)",
+                    ty.label()
+                ),
+                None,
+                self.locate(sig),
+            );
+        }
+        let multi = matches!(
+            mark,
+            ChartMark::Line { .. }
+                | ChartMark::Area { .. }
+                | ChartMark::Bar { .. }
+                | ChartMark::Scatter { .. }
+        );
+        if !multi {
+            self.err(
+                "interactive-view/highlight-unsupported",
+                format!(
+                    "{} chart has no series to highlight; use line/area/bar/scatter",
+                    mark.kind_tag()
+                ),
+                Some("highlight emphasises one of several series".into()),
+                (1, 1),
+            );
         }
     }
 
@@ -1137,15 +1241,8 @@ impl<'a> Checker<'a> {
     // ── diagnostic helpers ──
 
     fn err(&mut self, rule: &str, msg: String, hint: Option<String>, at: (u32, u32)) {
-        self.diags.push(diag(
-            self.rel,
-            at.0,
-            at.1,
-            Severity::Error,
-            rule,
-            msg,
-            hint,
-        ));
+        self.diags
+            .push(diag(self.rel, at.0, at.1, Severity::Error, rule, msg, hint));
     }
     fn warn(&mut self, rule: &str, msg: String, hint: Option<String>, at: (u32, u32)) {
         self.diags.push(diag(
@@ -1871,6 +1968,110 @@ mod tests {
         );
         assert!(
             rules(&d).contains(&"interactive-view/unknown-signal"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn chart_highlight_enum_signal_passes() {
+        // A segmented control's enum signal emphasises the matching series.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"t":"number","a":"number","b":"number"},"values":[]}},
+               "signals":{"pick":{"type":"enum","init":"a",
+                 "widget":{"type":"segmented","options":[
+                   {"label":"a","value":"a"},{"label":"b","value":"b"}]}}},
+               "view":[{"block":"chart","data":"px",
+                 "mark":{"chart":"line","x":{"column":"t"},
+                   "y":[{"column":"a"},{"column":"b"}]},
+                 "controls":[{"signal":"pick"}],
+                 "highlight":"pick"}]}"#,
+        );
+        assert!(d.is_empty(), "unexpected: {d:?}");
+    }
+
+    #[test]
+    fn chart_highlight_unknown_signal_rejected() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"t":"number","v":"number"},"values":[]}},
+               "view":[{"block":"chart","data":"px",
+                 "mark":{"chart":"line","x":{"column":"t"},"y":[{"column":"v"}]},
+                 "highlight":"nope"}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/unknown-signal"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn chart_highlight_numeric_signal_rejected() {
+        // A numeric signal can't name a series — must be enum/string.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"t":"number","v":"number"},"values":[]}},
+               "signals":{"n":{"type":"number","init":0,
+                 "widget":{"type":"slider","min":0,"max":1}}},
+               "view":[{"block":"chart","data":"px",
+                 "mark":{"chart":"line","x":{"column":"t"},"y":[{"column":"v"}]},
+                 "highlight":"n"}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/highlight-type"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn chart_highlight_on_pie_rejected() {
+        // pie has no series to dim.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"c":"string","v":"number"},"values":[]}},
+               "signals":{"pick":{"type":"enum","init":"x",
+                 "widget":{"type":"segmented","options":[{"label":"x","value":"x"}]}}},
+               "view":[{"block":"chart","data":"px",
+                 "mark":{"chart":"pie","category":{"column":"c"},"value":{"column":"v"}},
+                 "highlight":"pick"}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/highlight-unsupported"),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn bar_horizontal_vline_overlay_passes() {
+        // A threshold vLine on a barHorizontal ranking — the value axis is
+        // horizontal, so x = threshold is a cutoff line across the bars.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"rank":{"columns":{"name":"string","mom":"number"},"values":[]}},
+               "signals":{"thr":{"type":"number","init":0,
+                 "widget":{"type":"slider","min":-5,"max":15,"label":"threshold"}}},
+               "view":[{"block":"chart","data":"rank",
+                 "mark":{"chart":"barHorizontal","category":{"column":"name"},"value":{"column":"mom"}},
+                 "overlays":[{"overlay":"vLine","value":"thr","label":"long cutoff"}],
+                 "controls":[{"signal":"thr"}]}]}"#,
+        );
+        assert!(d.is_empty(), "unexpected: {d:?}");
+    }
+
+    #[test]
+    fn bar_horizontal_hline_overlay_rejected() {
+        // hLine would land on barHorizontal's category axis — nonsensical.
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"rank":{"columns":{"name":"string","mom":"number"},"values":[]}},
+               "signals":{"thr":{"type":"number","init":0,
+                 "widget":{"type":"slider","min":-5,"max":15}}},
+               "view":[{"block":"chart","data":"rank",
+                 "mark":{"chart":"barHorizontal","category":{"column":"name"},"value":{"column":"mom"}},
+                 "overlays":[{"overlay":"hLine","value":"thr"}]}]}"#,
+        );
+        assert!(
+            rules(&d).contains(&"interactive-view/overlay-unsupported"),
             "{d:?}"
         );
     }

@@ -198,6 +198,7 @@ export type Block =
     title?: string;
     controls?: ChartControl[];
     readouts?: Metric[];
+    highlight?: string;
   }
   | { block: "table"; data: string; columns?: string[] }
   | { block: "input"; signal?: string | null; widget?: Widget }

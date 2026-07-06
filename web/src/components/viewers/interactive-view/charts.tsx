@@ -13,7 +13,7 @@
 //   • Overlays (reference lines/bands) read signals via the kernel, so they move
 //     reactively as widgets change — the checker guarantees the refs resolve.
 
-import { type JSX, type ReactNode, useState } from "react";
+import { type JSX, type ReactNode, useEffect, useState } from "react";
 import { Box, Typography, useTheme } from "@mui/material";
 import type { Theme } from "@mui/material";
 import { renderWidget } from "./widgets";
@@ -147,15 +147,45 @@ function readAxis(kernel: Kernel, acc: string): number | string | null {
   return null;
 }
 
+// recharts' ResponsiveContainer sizes itself from a ResizeObserver on its
+// parent. When the chart first lays out while the document is HIDDEN — an iOS
+// PWA resumed from the background, a bfcache page restore, a tab shown after
+// being rendered in the background — the parent measures 0×0, recharts caches
+// that, and no resize event fires on return, so the chart stays collapsed into a
+// flat sliver (the "it turned into a static image" bug). There is no prop that
+// forces a re-measure, so we remount the sizing container: this counter bumps on
+// every visibility→visible and pageshow, changing the container's `key` so React
+// mounts a fresh ResponsiveContainer that re-measures the now-visible column.
+// Cheap (charts are few, animations are off) and it only fires on a real
+// resume, so no steady-state churn.
+function useRemountOnVisible(): number {
+  const [gen, setGen] = useState(0);
+  useEffect(() => {
+    const bump = (): void => setGen((g) => g + 1);
+    const onVis = (): void => {
+      if (document.visibilityState === "visible") bump();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    globalThis.addEventListener("pageshow", bump);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      globalThis.removeEventListener("pageshow", bump);
+    };
+  }, []);
+  return gen;
+}
+
 // ── framing + empty state ─────────────────────────────────────────────────────
 
 function ChartFrame({
   title,
   selectable,
+  remountKey,
   children,
 }: {
   title?: string | undefined;
   selectable?: boolean;
+  remountKey?: number;
   children: ReactNode;
 }): JSX.Element {
   return (
@@ -171,6 +201,7 @@ function ChartFrame({
         )
         : null}
       <Box
+        key={remountKey}
         sx={{
           width: "100%",
           height: CHART_HEIGHT,
@@ -228,25 +259,36 @@ function DockedControl({
   return <>{renderWidget(widget, control.signal ?? null, kernel)}</>;
 }
 
-// Responsive layout, sound by construction (no visual review):
-//   • The panel lives inside the reader's CONTENT COLUMN, whose width is ~358px
-//     (iPhone), ~788px (iPad portrait), ~900px (desktop) — NOT the viewport. So
-//     MUI `xs/md` breakpoints (which key off the viewport) would mislay it (an
-//     iPad at 820px viewport would collapse to one column though its 788px
-//     column fits two). We therefore reflow with CONTAINER-RELATIVE `flexWrap`
-//     off a fixed basis: it reads the real column width and can't overflow.
-//   • CONTROL_BASIS 260px → iPhone stacks every control full-width (2×260+gap >
-//     358), iPad fits 2–3 across, desktop 3, so the toolbar is never a lone
-//     slider stranded across 900px nor a cramped row on a phone. `minWidth:0`
-//     lets a long-labelled control shrink instead of forcing a scrollbar.
-//   • Readout chips size to content (`0 1 auto`) with a floor, wrapping the same
-//     way; `wordBreak` on the value keeps a big number inside the chip.
-const CONTROL_BASIS = "260px";
+// A SMART, self-optimising layout — the author lists `controls`/`readouts` and
+// never thinks about placement, columns, or breakpoints; the container decides.
+// Sound by construction (no visual review), and correct on every screen:
+//   • Controls sit BELOW the plot (the preferred reading order — you look at the
+//     chart, then reach the tunables under it; on a phone they land under your
+//     thumb while the chart stays in view). Readouts sit below the controls.
+//   • Placement is CONTAINER-RELATIVE, not viewport-relative. The panel lives in
+//     the reader's content column (~358px iPhone / ~788px iPad / ~900px desktop),
+//     which is NOT the viewport, so MUI `xs/md` breakpoints would mislay it. We
+//     use a CSS Grid `auto-fit` track — `repeat(auto-fit, minmax(min(100%,B),1fr))`
+//     — which packs as many equal columns of ≥ B as the real column width fits
+//     and stretches them to fill, then wraps. One knob (the min basis) yields
+//     1 column on a phone, 2–3 on a tablet, 3+ on desktop, for ANY number of
+//     controls/readouts, with zero media queries. `min(100%,B)` guarantees a
+//     single control never overflows a narrow column.
+const CONTROL_MIN = "240px"; // a slider/segmented stays usable at this width
+const READOUT_MIN = "140px"; // a KPI chip is compact; more fit per row
+
+function autoGrid(min: string): object {
+  return {
+    display: "grid",
+    gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${min}), 1fr))`,
+    alignItems: "end",
+  };
+}
 
 /** Wrap a chart in a unified card WHEN it declares docked `controls`/`readouts`
- *  — a compact controls toolbar above the plot and a readout chip strip below,
- *  so the tunable and its visual effect read as one unit. A chart with neither
- *  renders frameless, exactly as before (no corpus-wide restyle). */
+ *  — the plot on top, a self-arranging controls grid below it, then a readout
+ *  chip grid — so the tunable and its visual effect read as one unit. A chart
+ *  with neither renders frameless, exactly as before (no corpus-wide restyle). */
 function ChartPanel({
   block,
   signals,
@@ -272,44 +314,34 @@ function ChartPanel({
         overflow: "hidden",
       }}
     >
+      <Box sx={{ px: 1, pt: 1 }}>{children}</Box>
       {controls.length > 0
         ? (
           <Box
             sx={{
-              display: "flex",
-              flexWrap: "wrap",
-              alignItems: "flex-end",
-              gap: 2,
+              ...autoGrid(CONTROL_MIN),
+              columnGap: 2,
+              rowGap: 1,
               px: 2,
-              pt: 1.5,
-              pb: 1,
-              borderBottom: 1,
+              py: 1.5,
+              borderTop: 1,
               borderColor: "divider",
             }}
           >
             {controls.map((c, i) => (
-              <Box
-                key={i}
-                sx={{
-                  flex: `1 1 ${CONTROL_BASIS}`,
-                  minWidth: 0,
-                  maxWidth: "100%",
-                }}
-              >
+              <Box key={i} sx={{ minWidth: 0 }}>
                 <DockedControl control={c} signals={signals} kernel={kernel} />
               </Box>
             ))}
           </Box>
         )
         : null}
-      <Box sx={{ px: 1 }}>{children}</Box>
       {readouts.length > 0
         ? (
           <Box
             sx={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 2.5,
+              ...autoGrid(READOUT_MIN),
+              columnGap: 2.5,
               rowGap: 1,
               px: 2,
               py: 1.25,
@@ -618,6 +650,7 @@ export default function ChartBlock({
   signals: Record<string, Signal>;
 }): JSX.Element {
   const theme = useTheme();
+  const remountKey = useRemountOnVisible();
   // Legend-click isolation: clicking a series in the legend focuses it (others
   // dim); click again to restore. Pure local UI state — no signal, no author
   // syntax, so it stays sound. The clicked series is keyed by its dataKey.
@@ -632,9 +665,42 @@ export default function ChartBlock({
       : null;
     setActiveSeries((cur) => (cur === k ? null : k));
   };
-  const seriesOpacity = (
-    col: string,
-  ): number => (activeSeries !== null && activeSeries !== col ? 0.16 : 1);
+  // Effective series emphasis: a manual legend click wins; otherwise the
+  // optional `highlight` signal (fed by a docked segmented/select control) picks
+  // the emphasised series, so the control visibly COMMANDS the plot — not just a
+  // readout number below it. A series matches by its column OR its display label,
+  // so `highlight` can point at either spelling.
+  //
+  // Crucially we only dim series that are IN the highlight control's option set
+  // (e.g. the three MAs a segmented control offers) — any series NOT among the
+  // options (a price/benchmark line the reader compares against) stays bold as
+  // the anchor. So picking "SMA5" bolds SMA5, keeps price prominent, and ghosts
+  // only the other MAs. With a plain string highlight (no options) there is no
+  // anchor set, so it falls back to isolating the picked series.
+  const hlRaw = block.highlight ? kernel.get(block.highlight) : undefined;
+  const highlightVal =
+    typeof hlRaw === "string" && hlRaw !== "" && !isUnavailable(hlRaw)
+      ? hlRaw
+      : null;
+  const hlWidget = block.highlight ? signals[block.highlight]?.widget : undefined;
+  const hlOptions: string[] = hlWidget && "options" in hlWidget
+    ? hlWidget.options.map((o) => String(o.value))
+    : [];
+  const inPickSet = (col: string, label?: string): boolean =>
+    hlOptions.includes(col) || (label !== undefined && hlOptions.includes(label));
+  const emphActive = activeSeries !== null || highlightVal !== null;
+  const seriesOpacity = (col: string, label?: string): number => {
+    if (!emphActive) return 1;
+    // Legend isolation: dim everything but the clicked series.
+    if (activeSeries !== null) {
+      return activeSeries === col || activeSeries === label ? 1 : 0.16;
+    }
+    // Highlight: the picked series is bold; a non-pickable anchor (price) stays
+    // bold; only the other members of the pick-set ghost.
+    if (col === highlightVal || label === highlightVal) return 1;
+    if (hlOptions.length > 0 && !inPickSet(col, label)) return 1;
+    return 0.16;
+  };
 
   const ds = kernel.data(block.data);
   const rows = ds?.rows ?? null;
@@ -685,7 +751,7 @@ export default function ChartBlock({
     switch (mark.chart) {
       case "line":
         return (
-          <ChartFrame title={block.title}>
+          <ChartFrame title={block.title} remountKey={remountKey}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
                 data={rows}
@@ -721,7 +787,7 @@ export default function ChartBlock({
                     name={labelOf(s)}
                     stroke={colorAt(colors, i)}
                     strokeWidth={2}
-                    strokeOpacity={seriesOpacity(s.column)}
+                    strokeOpacity={seriesOpacity(s.column, labelOf(s))}
                     dot={false}
                     activeDot={{ r: 5, strokeWidth: 2 }}
                     isAnimationActive={false}
@@ -735,7 +801,7 @@ export default function ChartBlock({
 
       case "area":
         return (
-          <ChartFrame title={block.title}>
+          <ChartFrame title={block.title} remountKey={remountKey}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart
                 data={rows}
@@ -758,7 +824,7 @@ export default function ChartBlock({
                   : null}
                 {mark.y.map((s, i) => {
                   const c = colorAt(colors, i);
-                  const op = seriesOpacity(s.column);
+                  const op = seriesOpacity(s.column, labelOf(s));
                   return (
                     <Area
                       key={s.column}
@@ -785,7 +851,7 @@ export default function ChartBlock({
       case "bar": {
         const xCol = mark.x.column;
         return (
-          <ChartFrame title={block.title} selectable={!!sel}>
+          <ChartFrame title={block.title} selectable={!!sel} remountKey={remountKey}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={rows}
@@ -812,7 +878,7 @@ export default function ChartBlock({
                     name={labelOf(s)}
                     {...(mark.stacked ? { stackId: "stack" } : {})}
                     fill={colorAt(colors, i)}
-                    fillOpacity={seriesOpacity(s.column)}
+                    fillOpacity={seriesOpacity(s.column, labelOf(s))}
                     isAnimationActive={false}
                     {...(sel ? { onClick: onPickDatum } : {})}
                   >
@@ -820,7 +886,7 @@ export default function ChartBlock({
                       ? rows.map((r, ri) => (
                         <Cell
                           key={ri}
-                          fillOpacity={seriesOpacity(s.column) *
+                          fillOpacity={seriesOpacity(s.column, labelOf(s)) *
                             catOpacity(r[xCol])}
                         />
                       ))
@@ -836,7 +902,7 @@ export default function ChartBlock({
       case "barHorizontal": {
         const catCol = mark.category.column;
         return (
-          <ChartFrame title={block.title} selectable={!!sel}>
+          <ChartFrame title={block.title} selectable={!!sel} remountKey={remountKey}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={rows}
@@ -875,6 +941,7 @@ export default function ChartBlock({
                     />
                   ))}
                 </Bar>
+                {overlayElements(block.overlays, kernel, theme)}
               </BarChart>
             </ResponsiveContainer>
           </ChartFrame>
@@ -901,7 +968,7 @@ export default function ChartBlock({
           }
         };
         return (
-          <ChartFrame title={block.title} selectable={!!sel}>
+          <ChartFrame title={block.title} selectable={!!sel} remountKey={remountKey}>
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -941,7 +1008,7 @@ export default function ChartBlock({
             ? groupBy(rows, series.column)
             : [{ name: labelOf(mark.y), data: rows }];
         return (
-          <ChartFrame title={block.title}>
+          <ChartFrame title={block.title} remountKey={remountKey}>
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 8, right: 16, bottom: 8, left: 4 }}>
                 <CartesianGrid
@@ -989,7 +1056,7 @@ export default function ChartBlock({
                     name={g.name}
                     data={g.data}
                     fill={colorAt(colors, i)}
-                    fillOpacity={seriesOpacity(g.name)}
+                    fillOpacity={seriesOpacity(g.name, g.name)}
                     isAnimationActive={false}
                   />
                 ))}
@@ -1006,7 +1073,7 @@ export default function ChartBlock({
           mark.bins ?? 10,
         );
         return (
-          <ChartFrame title={block.title}>
+          <ChartFrame title={block.title} remountKey={remountKey}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={data}
@@ -1065,7 +1132,7 @@ export default function ChartBlock({
         }));
         const mas = mark.ma ?? [];
         return (
-          <ChartFrame title={block.title}>
+          <ChartFrame title={block.title} remountKey={remountKey}>
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart
                 data={candleData}
@@ -1106,7 +1173,7 @@ export default function ChartBlock({
                     name={labelOf(m)}
                     stroke={colorAt(colors, i)}
                     strokeWidth={1.5}
-                    strokeOpacity={seriesOpacity(m.column)}
+                    strokeOpacity={seriesOpacity(m.column, labelOf(m))}
                     dot={false}
                     isAnimationActive={false}
                   />
@@ -1125,7 +1192,7 @@ export default function ChartBlock({
         const up = theme.palette.success.main;
         const down = theme.palette.error.main;
         return (
-          <ChartFrame title={block.title}>
+          <ChartFrame title={block.title} remountKey={remountKey}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={rows}
@@ -1175,7 +1242,7 @@ export default function ChartBlock({
         const up = theme.palette.success.main;
         const down = theme.palette.error.main;
         return (
-          <ChartFrame title={block.title}>
+          <ChartFrame title={block.title} remountKey={remountKey}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart
                 data={data}
