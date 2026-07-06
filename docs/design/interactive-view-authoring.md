@@ -132,6 +132,36 @@ positions the line), `hBand`/`vBand` (a `[from,to]` pair — usually an interval
 signal's `x[0]`/`x[1]`). A slider then slides a threshold; a range-slider shades
 a region. An out-of-range value rescales the axis to stay visible.
 
+## Docked controls & readouts (widget ⇄ chart, one card)
+
+A `chart` block may dock its inputs and KPI tiles INTO its own card, so the
+tunable and its visual effect read as one unit instead of floating in separate
+blocks above the plot:
+
+- `"controls"`: an array of inputs, each `{ "signal": "x" }` (render the widget
+  declared on signal `x`) or `{ "widget": {…} }` (a standalone control) — same
+  shape as an `input` block. Rendered as a compact toolbar ABOVE the plot.
+- `"readouts"`: an array of `Metric` tiles (`{ "label": "…", "value": "{{s}}" }`,
+  same as a `metricGroup` item) — rendered as compact KPI chips BELOW the plot.
+
+```jsonc
+{ "block": "chart", "data": "series", "title": "RSI",
+  "mark": { "chart": "line", "x": {"column":"t"}, "y": [{"column":"rsi"}] },
+  "overlays": [ { "overlay": "hLine", "value": "over", "label": "overbought" } ],
+  "controls": [ { "signal": "over" }, { "signal": "band" } ],
+  "readouts": [ { "label": "overbought line", "value": "{{over}}" },
+                { "label": "bars ≥ line",     "value": "{{overBars}}" } ] }
+```
+
+Prefer this over standalone `input`/`metric` blocks whenever the control tunes
+THIS chart (or its overlay). Layout is container-relative and mobile-first
+(iPhone stacks the controls full-width, iPad/desktop pack them across), so — like
+everything else here — a chart that `liveview check`s passes renders and reflows
+well with no visual review. A chart with neither field renders frameless as
+before. Y-axis note: `line`/`scatter` auto-fit the data extent (no forced zero
+baseline), so a tight high-value series (prices ~100) fills the plot instead of
+collapsing to a flat ribbon; `bar` keeps a zero baseline.
+
 ## Blocks (the `view` array)
 
 `section` (markdown + `{{signal | round(2)}}` interpolation), `metric` /
