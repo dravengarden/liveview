@@ -47,6 +47,21 @@ type ChartBlockT = Extract<Block, { block: "chart" }>;
 
 const CHART_HEIGHT = 300;
 
+// On touch devices recharts' hover tooltip mis-positions (a single tap renders it
+// once with a stale/zero measured size, so its viewport clamp is wrong) AND never
+// clears on touchend — it strands a card floating in the page margin. Pinning the
+// tooltip to a fixed in-plot coordinate short-circuits ALL of recharts' cursor +
+// measurement math (translate.js returns position[key] verbatim), so on a coarse
+// pointer it's always a clean top-left readout of the tapped datum. Mouse pointers
+// keep the nicer cursor-following default. Pure renderer concern — no author knob.
+const COARSE_POINTER =
+  typeof window !== "undefined" &&
+  typeof window.matchMedia === "function" &&
+  window.matchMedia("(pointer: coarse)").matches;
+const TOOLTIP_PIN: { position: { x: number; y: number } } | Record<string, never> = COARSE_POINTER
+  ? { position: { x: 8, y: 8 } }
+  : {};
+
 /** The categorical series palette, drawn from the theme so it tracks light/dark
  *  and any theme change — authors never pick a colour. */
 function palette(theme: Theme): string[] {
@@ -340,7 +355,7 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
               <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
               <XAxis dataKey={mark.x.column} type={numericX(mark.x.column) ? "number" : "category"} stroke={stroke} tick={AXIS_TICK} />
               <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
-              <Tooltip {...tip} />
+              <Tooltip {...tip} {...TOOLTIP_PIN} />
               {mark.y.length > 1 ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} /> : null}
               {mark.y.map((s, i) => (
                 <Line
@@ -370,7 +385,7 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
               <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
               <XAxis dataKey={mark.x.column} type={numericX(mark.x.column) ? "number" : "category"} stroke={stroke} tick={AXIS_TICK} />
               <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
-              <Tooltip {...tip} />
+              <Tooltip {...tip} {...TOOLTIP_PIN} />
               {mark.y.length > 1 ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} /> : null}
               {mark.y.map((s, i) => {
                 const c = colorAt(colors, i);
@@ -407,7 +422,7 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
               <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
               <XAxis dataKey={xCol} stroke={stroke} tick={AXIS_TICK} />
               <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
-              <Tooltip {...tip} cursor={{ fill: theme.palette.action.hover }} />
+              <Tooltip {...tip} {...TOOLTIP_PIN} cursor={{ fill: theme.palette.action.hover }} />
               {mark.y.length > 1 ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} /> : null}
               {mark.y.map((s, i) => (
                 <Bar
@@ -442,7 +457,7 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
               <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
               <XAxis type="number" stroke={stroke} tick={AXIS_TICK} />
               <YAxis type="category" dataKey={catCol} stroke={stroke} tick={AXIS_TICK} width={96} />
-              <Tooltip {...tip} cursor={{ fill: theme.palette.action.hover }} />
+              <Tooltip {...tip} {...TOOLTIP_PIN} cursor={{ fill: theme.palette.action.hover }} />
               <Bar
                 dataKey={mark.value.column}
                 name={labelOf(mark.value)}
@@ -489,7 +504,7 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
                   <Cell key={i} fill={colorAt(colors, i)} fillOpacity={catOpacity(d.name)} />
                 ))}
               </Pie>
-              <Tooltip {...tip} />
+              <Tooltip {...tip} {...TOOLTIP_PIN} />
               <Legend wrapperStyle={LEGEND_STYLE} />
             </PieChart>
           </ResponsiveContainer>
@@ -511,7 +526,7 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
               <XAxis type="number" dataKey={mark.x.column} name={labelOf(mark.x)} stroke={stroke} tick={AXIS_TICK} />
               <YAxis type="number" dataKey={mark.y.column} name={labelOf(mark.y)} stroke={stroke} tick={AXIS_TICK} width={44} />
               {size ? <ZAxis type="number" dataKey={size.column} range={[40, 400]} name={labelOf(size)} /> : null}
-              <Tooltip {...tip} cursor={{ strokeDasharray: "3 3" }} />
+              <Tooltip {...tip} {...TOOLTIP_PIN} cursor={{ strokeDasharray: "3 3" }} />
               {groups.length > 1 ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} /> : null}
               {groups.map((g, i) => (
                 <Scatter
@@ -539,7 +554,7 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
               <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
               <XAxis dataKey="bin" stroke={stroke} tick={{ fontSize: 10 }} interval="preserveStartEnd" />
               <YAxis stroke={stroke} tick={AXIS_TICK} width={44} allowDecimals={false} />
-              <Tooltip {...tip} cursor={{ fill: theme.palette.action.hover }} />
+              <Tooltip {...tip} {...TOOLTIP_PIN} cursor={{ fill: theme.palette.action.hover }} />
               <Bar dataKey="count" name={labelOf(mark.value)} fill={colorAt(colors, 0)} isAnimationActive={false} />
             </BarChart>
           </ResponsiveContainer>
@@ -570,7 +585,7 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
               <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
               <XAxis dataKey={mark.x.column} type={numericX(mark.x.column) ? "number" : "category"} stroke={stroke} tick={AXIS_TICK} />
               <YAxis stroke={stroke} tick={AXIS_TICK} width={48} domain={[lo - pad, hi + pad]} allowDataOverflow />
-              <Tooltip {...tip} />
+              <Tooltip {...tip} {...TOOLTIP_PIN} />
               {mas.length > 0 ? <Legend wrapperStyle={LEGEND_STYLE} onClick={legendClick} /> : null}
               <Bar dataKey="_hl" shape={Candle} legendType="none" isAnimationActive={false} />
               {mas.map((m, i) => (
@@ -606,7 +621,7 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
               <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
               <XAxis dataKey={mark.x.column} type={numericX(mark.x.column) ? "number" : "category"} stroke={stroke} tick={AXIS_TICK} />
               <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
-              <Tooltip {...tip} cursor={{ fill: theme.palette.action.hover }} />
+              <Tooltip {...tip} {...TOOLTIP_PIN} cursor={{ fill: theme.palette.action.hover }} />
               <Bar dataKey={mark.value.column} name={labelOf(mark.value)} isAnimationActive={false}>
                 {rows.map((r, i) => {
                   const fill = directional
@@ -634,7 +649,7 @@ export default function ChartBlock({ block, kernel }: { block: ChartBlockT; kern
               <CartesianGrid stroke={theme.palette.divider} strokeDasharray="3 3" />
               <XAxis type="number" dataKey={mark.price.column} name={labelOf(mark.price)} stroke={stroke} tick={AXIS_TICK} domain={["dataMin", "dataMax"]} />
               <YAxis stroke={stroke} tick={AXIS_TICK} width={44} />
-              <Tooltip {...tip} />
+              <Tooltip {...tip} {...TOOLTIP_PIN} />
               <Legend wrapperStyle={LEGEND_STYLE} />
               <Area type="stepBefore" dataKey="_bid" name="Bids" stroke={up} fill={up} fillOpacity={0.25} isAnimationActive={false} connectNulls />
               <Area type="stepAfter" dataKey="_ask" name="Asks" stroke={down} fill={down} fillOpacity={0.25} isAnimationActive={false} connectNulls />
