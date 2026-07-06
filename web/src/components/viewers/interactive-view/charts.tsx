@@ -47,19 +47,24 @@ type ChartBlockT = Extract<Block, { block: "chart" }>;
 
 const CHART_HEIGHT = 300;
 
-// On touch devices recharts' hover tooltip mis-positions (a single tap renders it
-// once with a stale/zero measured size, so its viewport clamp is wrong) AND never
-// clears on touchend — it strands a card floating in the page margin. Pinning the
-// tooltip to a fixed in-plot coordinate short-circuits ALL of recharts' cursor +
-// measurement math (translate.js returns position[key] verbatim), so on a coarse
-// pointer it's always a clean top-left readout of the tapped datum. Mouse pointers
-// keep the nicer cursor-following default. Pure renderer concern — no author knob.
+// recharts' default hover tooltip is unusable on touch: it activates on
+// touchMove (so merely SCROLLING past a chart spawns it), never clears on
+// touchEnd, and mis-positions on a single touch render — leaving a card stuck
+// mid-screen that reads as a frozen image. Two coupled props fix it on a coarse
+// pointer, both source-verified against recharts 3.9:
+//   • trigger:"click" — the tooltip then reads itemInteraction.click, set ONLY
+//     by a real tap/click, never by touchMove (combineTooltipInteractionState).
+//     So a scroll no longer spawns it; only a deliberate tap does.
+//   • position — a numeric position short-circuits ALL of recharts' cursor +
+//     size-measurement + viewport-clamp math (translate.js returns position[key]
+//     verbatim), so the tapped readout always lands cleanly top-left in-plot.
+// Mouse pointers keep the empty object → default hover-follow. No author knob.
 const COARSE_POINTER =
   typeof window !== "undefined" &&
   typeof window.matchMedia === "function" &&
   window.matchMedia("(pointer: coarse)").matches;
-const TOOLTIP_PIN: { position: { x: number; y: number } } | Record<string, never> = COARSE_POINTER
-  ? { position: { x: 8, y: 8 } }
+const TOOLTIP_PIN: { position: { x: number; y: number }; trigger: "click" } | Record<string, never> = COARSE_POINTER
+  ? { position: { x: 8, y: 8 }, trigger: "click" }
   : {};
 
 /** The categorical series palette, drawn from the theme so it tracks light/dark
