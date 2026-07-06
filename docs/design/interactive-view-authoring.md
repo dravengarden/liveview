@@ -132,35 +132,56 @@ positions the line), `hBand`/`vBand` (a `[from,to]` pair — usually an interval
 signal's `x[0]`/`x[1]`). A slider then slides a threshold; a range-slider shades
 a region. An out-of-range value rescales the axis to stay visible.
 
+`barHorizontal` also takes overlays, but only `vLine`/`vBand` — its value axis is
+horizontal, so a vertical rule at `x = signal` is a **cutoff line across the
+ranking** (a long threshold across momentum bars, a price marker across band
+rails). `hLine`/`hBand` are rejected there (they'd sit on the category axis).
+This is the way to make a slider visibly drive a barHorizontal, which has no
+series to reshape.
+
 ## Docked controls & readouts (widget ⇄ chart, one card)
 
 A `chart` block may dock its inputs and KPI tiles INTO its own card, so the
 tunable and its visual effect read as one unit instead of floating in separate
-blocks above the plot:
+blocks:
 
 - `"controls"`: an array of inputs, each `{ "signal": "x" }` (render the widget
   declared on signal `x`) or `{ "widget": {…} }` (a standalone control) — same
-  shape as an `input` block. Rendered as a compact toolbar ABOVE the plot.
+  shape as an `input` block. Rendered as a self-arranging grid BELOW the plot.
 - `"readouts"`: an array of `Metric` tiles (`{ "label": "…", "value": "{{s}}" }`,
-  same as a `metricGroup` item) — rendered as compact KPI chips BELOW the plot.
+  same as a `metricGroup` item) — a KPI-chip grid below the controls.
+- `"highlight"`: a signal name (enum/string) whose value **emphasises the
+  matching series and dims the others** on a `line`/`area`/`bar`/`scatter`, so a
+  docked `segmented`/`select`/`radioGroup` visibly COMMANDS the plot rather than
+  only moving a readout number. A series matches by column OR display label; any
+  series NOT in the control's option set (a price/benchmark anchor) stays bold.
+  Composes with the free legend-click isolation (a manual click overrides it).
 
 ```jsonc
-{ "block": "chart", "data": "series", "title": "RSI",
-  "mark": { "chart": "line", "x": {"column":"t"}, "y": [{"column":"rsi"}] },
-  "overlays": [ { "overlay": "hLine", "value": "over", "label": "overbought" } ],
-  "controls": [ { "signal": "over" }, { "signal": "band" } ],
-  "readouts": [ { "label": "overbought line", "value": "{{over}}" },
-                { "label": "bars ≥ line",     "value": "{{overBars}}" } ] }
+{ "block": "chart", "data": "series", "title": "SMA / EMA / HMA",
+  "mark": { "chart": "line", "x": {"column":"t"},
+            "y": [{"column":"price","label":"Price"},{"column":"sma","label":"SMA"},
+                  {"column":"ema","label":"EMA"},{"column":"hma","label":"HMA"}] },
+  "controls": [ { "signal": "focus" } ],
+  "highlight": "focus",
+  "readouts": [ { "label": "avg tracking error", "value": "{{gapval}}" } ] }
 ```
 
 Prefer this over standalone `input`/`metric` blocks whenever the control tunes
-THIS chart (or its overlay). Layout is container-relative and mobile-first
-(iPhone stacks the controls full-width, iPad/desktop pack them across), so — like
-everything else here — a chart that `liveview check`s passes renders and reflows
-well with no visual review. A chart with neither field renders frameless as
-before. Y-axis note: `line`/`scatter` auto-fit the data extent (no forced zero
-baseline), so a tight high-value series (prices ~100) fills the plot instead of
-collapsing to a flat ribbon; `bar` keeps a zero baseline.
+THIS chart (its series via `highlight`, or its overlay). The layout is a **smart,
+self-optimising container**: you list controls/readouts and never think about
+placement — they sit below the plot and auto-arrange in a CSS `auto-fit` grid
+(1 column on a phone, 2–3 on a tablet, 3+ on desktop, for any count, with no
+media queries), all container-relative and mobile-first. So — like everything
+here — a chart that `liveview check`s passes renders and reflows well with no
+visual review. A chart with none of these fields renders frameless as before.
+
+Two more reactive levers that make a control drive the plot without reshaping
+data: **overlays** (a slider moves a threshold line — see the Overlays section,
+including `vLine` on `barHorizontal` for a cutoff across a ranking) and the
+**y-fit**: `line`/`scatter` auto-fit the data extent (no forced zero baseline),
+so a tight high-value series (prices ~100) fills the plot instead of collapsing
+to a flat ribbon; `bar` keeps a zero baseline.
 
 ## Blocks (the `view` array)
 
