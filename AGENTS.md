@@ -73,6 +73,13 @@ shared across all the portal apps, not just liveview).
   mid-write (partial book); poll the pg goal state / `deploy_root`, not the
   service's `is-active` (the oneshot returns before content is ready).
   (memory: liveview-pg-rustfs-store)
+- **Code deploy is separate from content sync**. Frontend/server changes are
+  embedded in the `liveview` binary consumed by `/etc/nixos` as a `git+file`
+  flake input, so uncommitted source edits do not reach the running service.
+  For a hawk deploy: commit the focused liveview change, update the `liveview`
+  input in `/etc/nixos/flake.lock`, run `sudo nixos-rebuild build`, then
+  `sudo nixos-rebuild switch` for service-code-only changes. Verify
+  `liveview.service`, `/api/version`, and the served JS bundle.
 - **`liveview check`** = 8 content validators (markdown/math/mermaid/svg/typst/
   json/excalidraw) on the **checker == renderer** principle — "clean" means
   "renders". It's the engine behind the warn-only sync gate + `/fix-book`.
