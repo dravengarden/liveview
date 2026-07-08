@@ -1045,7 +1045,10 @@ export function Landing({
   const theme = useTheme();
   const upSm = useMediaQuery(theme.breakpoints.up("sm"));
   const upMd = useMediaQuery(theme.breakpoints.up("md"));
-  const cols = upMd ? 3 : upSm ? 2 : 1;
+  const upXl = useMediaQuery(theme.breakpoints.up("xl"));
+  const upWide = useMediaQuery("(min-width:1900px)");
+  const upUltra = useMediaQuery("(min-width:2300px)");
+  const cols = upUltra ? 6 : upWide ? 5 : upXl ? 4 : upMd ? 3 : upSm ? 2 : 1;
   // Round-robin a set of entries into `cols` top-anchored columns (card i →
   // column i % cols). Used both for the flat shelf and, per-section, for the
   // grouped shelf — so a group's masonry packs exactly like the flat one.
@@ -1291,7 +1294,7 @@ export function Landing({
       >
         <Box
           sx={{
-            maxWidth: 1000,
+            width: "100%",
             mx: "auto",
             display: "flex",
             alignItems: "center",
@@ -1518,7 +1521,7 @@ export function Landing({
               }),
           }}
         >
-          <Box sx={{ maxWidth: 1000, mx: "auto" }}>
+          <Box sx={{ width: "100%", mx: "auto" }}>
             {books.length === 0
               ? (
                 <Typography color="text.secondary">
