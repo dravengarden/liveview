@@ -295,16 +295,48 @@ import WebKit
   /// migrates a legacy extension-less blob in place, which is harmless here.
   private func reconcileIndex() {
     guard let s = store else { return }
-    let gone = s.allKeys().filter { resolveFile($0) == nil }
-    guard !gone.isEmpty else { return }
+    let fm = FileManager.default
+    let known = Set(s.allKeys())
+    // Half 1 — prune PHANTOM rows (indexed but the file is gone): the old
+    // purgeForeignAudio key bug left thousands behind, inflating the count and
+    // making the driver dedup deleted chapters as "cached" forever.
+    let gone = known.filter { resolveFile($0) == nil }
     for key in gone {
       s.remove(key: key)
       pinned.remove(key)
     }
-    savePins()
-    // Visible via the dl_stats telemetry: cachedCount drops to the real on-disk
-    // count on the next poll, then the driver re-enqueues the freed gaps.
-    NSLog("[lv-audio] reconcileIndex pruned %d phantom index rows", gone.count)
+    // Half 2 — ADOPT orphan files (on disk but NOT indexed). A completion whose
+    // async `indexPut` never ran — the app suspended/killed between `publish`
+    // (off-main, writes the file) and the main-queue hop that indexes it — leaves
+    // a `.caf` with no row. This is the SECOND wedge: the download DRIVER dedups
+    // against the INDEX (`store.allKeys`) while native `preload` dedups against
+    // DISK (`onDisk`), so an orphan is invisible to the driver (re-sent every
+    // tick) yet skipped by native (already on disk). The driver's front-anchored
+    // slice keeps re-feeding the same on-disk orphans and never advances to the
+    // truly-missing chapters — inflight/queued/done all 0 with disk > index, the
+    // fill frozen with no error. Adopting orphans makes index == disk so the
+    // driver's "uncached" set is truthful again and the fill resumes. Idempotent.
+    var adopted = 0
+    if let files = try? fm.contentsOfDirectory(
+      at: cacheDir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) {
+      for f in files where f.pathExtension == "caf" {
+        let key = String(f.deletingPathExtension().lastPathComponent)
+        if known.contains(key) || key.hasPrefix("_") { continue }
+        let vals = try? f.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let bytes = Int64(vals?.fileSize ?? 0)
+        let mtime = Int64(vals?.contentModificationDate?.timeIntervalSince1970
+          ?? Date().timeIntervalSince1970)
+        s.upsert(key: key, kind: "audio", bytes: bytes, pinned: pinned.contains(key), mtime: mtime)
+        adopted += 1
+      }
+    }
+    if !gone.isEmpty { savePins() }
+    // Visible via the dl_stats telemetry: cachedCount converges to the true
+    // on-disk count on the next poll, then the driver re-enqueues the real gaps.
+    if !gone.isEmpty || adopted > 0 {
+      NSLog("[lv-audio] reconcileIndex pruned %d phantom rows, adopted %d orphan files",
+            gone.count, adopted)
+    }
   }
 
   /// One-time cleanup: delete any audio file that is NOT the current compressed

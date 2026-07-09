@@ -188,9 +188,20 @@ export function useAudioPreloadDriver(): void {
       // dead across whole books. The cosmetic count is already handled by the
       // Downloads panel's min(cached,total) clamp; deleting the user's 5GB to fix a
       // label is the wrong trade. Orphans (rare) just age out via the LRU cap.
+      // Feed a WIDE window, not a narrow front slice. `cached` is the native
+      // INDEX (store.allKeys); native's own preload dedups against DISK. If the
+      // index has drifted BELOW disk (orphan .caf files with no row — a
+      // completion whose index write was lost to an app suspend), those orphans
+      // sit at the front of this filtered list, native skips them all (already on
+      // disk), and a narrow slice (was 300) never reaches the truly-missing
+      // chapters past the orphan cluster — the fill wedges at the index count
+      // with inflight/queued/done all 0. A large window spans past any realistic
+      // orphan cluster into the real gaps; native dedups the on-disk ones for
+      // free. (The durable fix is native reconcileIndex adopting orphans so the
+      // index is truthful; this keeps the fill self-healing regardless.)
       const items = audioRes
         .filter((r) => !cached.has(r.hash))
-        .slice(0, 300)
+        .slice(0, 1500)
         .map((r) => ({ url: `${REMOTE}${r.url}`, hash: r.hash }));
       if (items.length > 0) nativeAudioPreload(items);
     };
