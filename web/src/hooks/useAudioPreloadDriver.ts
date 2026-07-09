@@ -10,10 +10,12 @@ import {
 import {
   nativeAudioPreload,
   nativeAudioSetCap,
+  nativeAudioSetWifiOnly,
   nativeAudioStats,
 } from "@/native-audio";
 import { contentFetch } from "@/native-sync";
 import { ingestDag } from "@/audioMediaIndex";
+import { logEvent } from "@/apm";
 
 // Mirror of OfflineSection's storage budget key (the Settings → Downloads
 // "Max storage" select writes it). Read live each tick so a change takes effect
@@ -49,8 +51,15 @@ export function useAudioPreloadDriver(): void {
     // Reentrancy guard: refreshWorkingSet fires from mount, the pump (when the set
     // is empty) AND every foreground, so it must not overlap itself.
     let refreshing = false;
+    // Throttle for the dl_stats telemetry (below) so it emits ~every 30s, not every
+    // 3s pump tick.
+    let lastDlLog = 0;
 
     nativeAudioSetCap(maxBytes());
+    // Seed the native downloader's WiFi-only policy at startup so its background
+    // sessions carry the right allowsCellularAccess before the first task — the web
+    // gate below can't reach transfers that continue while the app is suspended.
+    nativeAudioSetWifiOnly(offlineWifiOnly());
 
     // (Re)build the audio working set from /api/dag. MUST be repeatable, NOT a
     // once-at-mount IIFE — the old code built `audioRes` exactly once at launch, so
@@ -139,10 +148,38 @@ export function useAudioPreloadDriver(): void {
       // pref is set. Unknown network → proceed (best effort).
       const a = await nativeAudioStats();
       if (cancelled || !a) return;
+      const cached = new Set(a.cached);
+      // Telemetry → APM/VictoriaLogs (throttled ~30s). The native download
+      // scheduler was never instrumented, so a silent stall was invisible to APM.
+      // Emit the whole download state each round: `event_type:dl_stats` in VL then
+      // shows inflight/queued/done/err, the index-vs-disk drift (cachedCount vs
+      // dlDisk), free space and the WiFi gate — the on-device signal, queryable
+      // without a screenshot. Log BEFORE the WiFi-gate return so a gate-skip round
+      // still reports (net/wifi_only reveal a mis-gated fill).
+      const uncached = audioRes.reduce((n, r) => n + (cached.has(r.hash) ? 0 : 1), 0);
+      const nowMs = Date.now();
+      if (nowMs - lastDlLog > 30_000) {
+        lastDlLog = nowMs;
+        logEvent("dl_stats", {
+          total: audioRes.length,
+          cached_count: a.cachedCount,
+          dl_disk: a.dlDisk ?? -1,
+          uncached,
+          inflight: a.dlInflight ?? -1,
+          queued: a.dlQueued ?? -1,
+          done: a.dlDone ?? -1,
+          used_gb: Math.round(a.usedBytes / 1e8) / 10,
+          free_gb: a.freeBytes != null && a.freeBytes >= 0
+            ? Math.round(a.freeBytes / 1e8) / 10
+            : -1,
+          net: a.net,
+          wifi_only: offlineWifiOnly(),
+          err: a.dlErr ?? "",
+        });
+      }
       // WiFi-only gate reads net from the AUDIO layer now (it owns the WiFi-gated
       // big download); the content store (nativeCacheStats) is Rust + not net-aware.
       if (offlineWifiOnly() && a.net !== "wifi") return;
-      const cached = new Set(a.cached);
       // NOTE: an orphan-GC (delete cached audio whose hash isn't in the manifest)
       // was REMOVED here. It was meant to tidy the "3391/3388" count, but it could
       // MASS-DELETE the user's downloaded audio: if the server's corpus re-keyed any

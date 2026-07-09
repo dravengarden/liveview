@@ -42,7 +42,7 @@ import Network
 import UIKit
 import WebKit
 
-@objc(NativeAudioController) public final class NativeAudioController: NSObject, WKScriptMessageHandler {
+@objc(NativeAudioController) public final class NativeAudioController: NSObject, WKScriptMessageHandler, URLSessionDownloadDelegate {
   private static var controllers: [ObjectIdentifier: NativeAudioController] = [:]
   private static let messageName = "lvNativeAudio"
   private static let skip: NSNumber = 15
@@ -151,52 +151,73 @@ import WebKit
   // exempt) keeps the store at/under this.
   private var capBytes: Int64 = 20_000_000_000
 
-  // ── Adaptive bulk-download scheduler ────────────────────────────────────────
-  // Bulk pin/preload no longer fire all tasks at once (under HTTP/2 they'd pile
-  // onto one connection with NO cap). A worker pool keeps up to `dlLimit` in
-  // flight; `dlLimit` adapts by hill-climbing aggregate throughput (find the
-  // bandwidth knee) and backs off hard on overload. Default task priority + full
-  // concurrency saturate the link (~45 MB/s); the currently-PLAYING chapter
-  // downloads immediately, bypassing this queue.
+  // ── Foreground bulk-download scheduler ───────────────────────────────────────
+  // The library fill (pin/preload) runs on a POOL of FOREGROUND `.default`
+  // URLSessions. WHY not `.background(withIdentifier:)` (an earlier attempt at
+  // "download in the background while suspended"): on THIS device the background
+  // nsurlsessiond pool made ZERO progress — not even in the foreground — while a
+  // `.default` session provably works (audio streaming/prefetch uses one, and the
+  // previous `.default` pool is what filled the first ~4327 chapters). The
+  // out-of-process daemon path never delivered a single completion here, so the
+  // fill stalled AND the on-screen fill regressed. Reverted to `.default`: it
+  // reliably advances whenever the app is open. The tradeoff — `.default`
+  // transfers suspend when the app leaves the foreground — is the accepted ceiling
+  // until true background continuation is solved separately (it needs a working
+  // background session + an app-suspend hand-off, hard in this wry app shell).
+  //
+  // A POOL of N sessions (not one): one URLSession multiplexes ALL its tasks onto a
+  // SINGLE HTTP/2 connection to a host; the origin is a TLS domain reached through a
+  // relay (NOT the LAN), so over that high-RTT path one connection's congestion +
+  // h2 flow-control window caps aggregate throughput to ~one stream's worth NO
+  // MATTER how many streams are in flight. N independent sessions = N connections =
+  // N parallel windows, restoring the ~tens-of-MB/s fill.
+  // `httpMaximumConnectionsPerHost` per session bounds the real concurrency.
   private struct DLItem { let url: URL; let key: String }
   private var dlQueue: [DLItem] = []
   private var dlInflight = 0
-  // High concurrency on purpose, SPREAD across the session pool (see dlSessions):
-  // a high-BDP path (device → tunnel → host) needs many in-flight transfers over
-  // SEVERAL connections to fill the pipe — one connection's streams are each
-  // flow-control-window-limited and share one congestion window. The old unbounded
-  // webview prefetch hit ~45 MB/s precisely because it had many concurrent
-  // transfers; we match that with dlLimit tasks fanned over N pool connections.
-  private var dlLimit = 48
-  private let dlMin = 16
-  private let dlMax = 100
-  private var dlWindowBytes: Int64 = 0
-  private var dlWindowStart: TimeInterval = 0
-  private var dlLastTput: Double = 0
   private var dlTimer: Timer?
   private var dlRetries: [String: Int] = [:]
+  private static let dlSessionCount = 6
 
-  // POOL of independent download sessions. URLSession multiplexes ALL of a
-  // session's tasks onto a SINGLE HTTP/2 connection to a host; the remote origin
-  // is a TLS domain reached through a relay (NOT the LAN), so over that high-RTT
-  // path one connection's congestion + h2 flow-control window caps aggregate
-  // throughput to ~one stream's worth (~200–350 KB/s) NO MATTER how many streams
-  // are in flight — which is exactly the slowdown vs the old webview `fetch()`
-  // path (a separate network stack with its own connections). N independent
-  // sessions = N separate connections = N parallel windows, restoring the old
-  // ~tens-of-MB/s fill. Tasks are spread round-robin across the pool.
-  private lazy var dlSessions: [URLSession] = (0..<8).map { _ in
-    let cfg = URLSessionConfiguration.default
-    cfg.httpMaximumConnectionsPerHost = 8
-    cfg.timeoutIntervalForRequest = 90
-    cfg.waitsForConnectivity = true
-    // Don't let the shared URL cache intercept/store these large blobs — we cache
-    // them ourselves on disk, content-addressed.
-    cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
-    cfg.urlCache = nil
-    return URLSession(configuration: cfg)
-  }
+  // "Prefetch on WiFi only": enforced NATIVELY on the pool via
+  // `allowsCellularAccess`, a belt-and-braces backstop to the web's own WiFi gate
+  // (which only stops ENQUEUING). Persisted in UserDefaults so the pool has the
+  // right cellular policy from the first task at launch, before the web re-pushes
+  // it. Default true (never surprise-burn cellular).
+  private static let wifiOnlyKey = "lv.audio.wifiOnly"
+  private lazy var wifiOnly: Bool =
+    (UserDefaults.standard.object(forKey: Self.wifiOnlyKey) as? Bool) ?? true
+
+  private var dlSessions: [URLSession] = []
   private var dlRR = 0
+
+  // Download diagnostics surfaced to the Downloads panel via `audioStats`, so a
+  // stalled fill is debuggable on-device (we can't stream this app's os_log off a
+  // wirelessly-paired phone). `dlDone` = completions since launch; `dlLastErr` =
+  // the most recent non-cancel transfer error.
+  private var dlDone = 0
+  private var dlLastErr: String?
+
+  /// Build the foreground `.default` pool. Called once eagerly at init and again
+  /// after a WiFi-only toggle. Assumes `dlSessions` is empty. Delegate-based
+  /// downloads (no completion handler) so publish/accounting run in the
+  /// URLSessionDownloadDelegate methods below.
+  private func setupDownloadSessions() {
+    guard dlSessions.isEmpty else { return }
+    dlSessions = (0..<Self.dlSessionCount).map { _ in
+      let cfg = URLSessionConfiguration.default
+      cfg.httpMaximumConnectionsPerHost = 6
+      cfg.allowsCellularAccess = !wifiOnly
+      // Ride out a brief connectivity blip instead of failing the task outright.
+      cfg.waitsForConnectivity = true
+      cfg.timeoutIntervalForRequest = 90
+      cfg.timeoutIntervalForResource = 24 * 60 * 60
+      cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+      cfg.urlCache = nil
+      return URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
+    }
+  }
+
   /// Next session from the pool, round-robin — spreads the fill across all N
   /// connections instead of piling every task onto one.
   private func nextDLSession() -> URLSession {
@@ -204,6 +225,44 @@ import WebKit
     dlRR &+= 1
     return s
   }
+
+  /// Apply the WiFi-only preference pushed from the web. Rebuilds the pool so the
+  /// new `allowsCellularAccess` takes effect (config is immutable). `.default`
+  /// sessions carry no shared identifier, so the new pool can be built immediately;
+  /// the old sessions' cancelled tasks fire didCompleteWithError(.cancelled), which
+  /// we skip-retry, and the web pump re-feeds the (still-uncached) items next round.
+  private func applyWifiOnly(_ on: Bool) {
+    if dlSessions.isEmpty { // first push at launch — just build with the right policy
+      if on != wifiOnly { wifiOnly = on; UserDefaults.standard.set(on, forKey: Self.wifiOnlyKey) }
+      setupDownloadSessions()
+      return
+    }
+    if on == wifiOnly { return }
+    wifiOnly = on
+    UserDefaults.standard.set(on, forKey: Self.wifiOnlyKey)
+    let old = dlSessions
+    dlSessions = []
+    dlInflight = 0
+    inFlight.removeAll()
+    for s in old { s.invalidateAndCancel() }
+    setupDownloadSessions()
+    startScheduler()
+  }
+
+  // Foreground single-file session for the play-path prefetch (the chapter being
+  // streamed right now) + explicit save-offline. Kept a `.default` completion-
+  // handler session on purpose: it's a want-it-NOW fetch while the app is active,
+  // not part of the background library fill, so it needs no out-of-process
+  // continuation. `waitsForConnectivity` rides out a brief drop.
+  private lazy var fgSession: URLSession = {
+    let cfg = URLSessionConfiguration.default
+    cfg.httpMaximumConnectionsPerHost = 6
+    cfg.timeoutIntervalForRequest = 90
+    cfg.waitsForConnectivity = true
+    cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
+    cfg.urlCache = nil
+    return URLSession(configuration: cfg)
+  }()
 
   private var timeObserver: Any?
   private var statusObs: NSKeyValueObservation?
@@ -223,6 +282,29 @@ import WebKit
     c.observeAudioSession()
     c.startTimeObserver()
     c.purgeForeignAudio()
+    c.reconcileIndex()
+  }
+
+  /// Prune index rows whose backing file is gone, so `cachedCount`/`usedBytes` and
+  /// the download driver's dedup reflect what's ACTUALLY on disk. Repairs the
+  /// damage the old `purgeForeignAudio` key bug left behind (thousands of phantom
+  /// rows: indexed as cached but deleted from disk). Without this, those chapters
+  /// stay "cached" in the index forever → the driver never re-downloads them, the
+  /// count is inflated, and they fail to play offline. Idempotent + cheap (one
+  /// existence check per row); self-heals on every launch. `resolveFile` also
+  /// migrates a legacy extension-less blob in place, which is harmless here.
+  private func reconcileIndex() {
+    guard let s = store else { return }
+    let gone = s.allKeys().filter { resolveFile($0) == nil }
+    guard !gone.isEmpty else { return }
+    for key in gone {
+      s.remove(key: key)
+      pinned.remove(key)
+    }
+    savePins()
+    // Visible via the dl_stats telemetry: cachedCount drops to the real on-disk
+    // count on the next poll, then the driver re-enqueues the freed gaps.
+    NSLog("[lv-audio] reconcileIndex pruned %d phantom index rows", gone.count)
   }
 
   /// One-time cleanup: delete any audio file that is NOT the current compressed
@@ -244,9 +326,18 @@ import WebKit
         try? h.close()
         let isCaf = head?.starts(with: [0x63, 0x61, 0x66, 0x66]) ?? false // "caff"
         if !isCaf {
+          // The index/pins key is the BARE hash; the file may carry a `.caf`
+          // extension. Strip it before remove — passing the filename-with-`.caf`
+          // (the original bug) matched no index row, so deleting foreign audio left
+          // a PHANTOM index row behind (indexed as cached, file gone), which
+          // inflated the count AND made the download driver dedup the deleted
+          // chapter as "already cached" so it never re-downloaded.
+          let key = f.pathExtension == "caf"
+            ? String(f.deletingPathExtension().lastPathComponent)
+            : f.lastPathComponent
           try? fm.removeItem(at: f)
-          pinned.remove(f.lastPathComponent)
-          store?.remove(key: f.lastPathComponent)
+          pinned.remove(key)
+          store?.remove(key: key)
         }
       }
     }
@@ -264,6 +355,13 @@ import WebKit
     player.automaticallyWaitsToMinimizeStalling = true
     netMonitor.pathUpdateHandler = { [weak self] p in self?.netPath = p }
     netMonitor.start(queue: DispatchQueue(label: "lv.net"))
+    // Force the cache dir's lazy init on THIS (main) thread before any download
+    // session exists: a transfer's didFinishDownloadingTo → publish runs on the
+    // session's delegate queue (off main) and touches `cacheDir`; a non-thread-safe
+    // lazy racing that first access could crash. Pre-touching here closes the window.
+    _ = cacheDir
+    // Build the download pool eagerly so it's ready before the first preload arrives.
+    setupDownloadSessions()
   }
 
   /// "wifi" (incl. wired / unknown-but-online, e.g. the simulator) | "cell" | "none".
@@ -294,6 +392,7 @@ import WebKit
     case "preload": preload(d)
     case "unpin": unpin(d)
     case "setCap": setCap(d)
+    case "setWifiOnly": if let on = d?["on"] as? Bool { applyWifiOnly(on) }
     case "audioStats": audioStats(d)
     default: break
     }
@@ -340,12 +439,10 @@ import WebKit
 
   // MARK: adaptive download scheduler
 
-  /// Start the worker pool + the hill-climb timer (idempotent).
+  /// Start the budget/drain timer (idempotent) + pump.
   private func startScheduler() {
     if dlTimer == nil {
-      dlWindowStart = Date.timeIntervalSinceReferenceDate
-      dlWindowBytes = 0
-      // Adjust the limit + sweep stuck tasks every 2s while there's work.
+      // Enforce the budget + sweep for drained state every 2s while there's work.
       dlTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
         self?.schedulerTick()
       }
@@ -353,68 +450,36 @@ import WebKit
     pump()
   }
 
-  /// Keep up to `dlLimit` downloads in flight. No foreground gate: with the MP3
-  /// hog gone (compressed CAF) + default priority, the bulk and the foreground
-  /// stream/reads share the one H2 connection fine — the gate's hard throttle was
-  /// capping the whole fill at ~1 stream (~260 KB/s) while audio played. Full
-  /// concurrency matches the old unbounded path's ~45 MB/s.
+  /// Hand every queued item to the background pool. The system daemon paces the
+  /// real concurrency (httpMaximumConnectionsPerHost per session); the rest of the
+  /// batch waits in the daemon and drains while the app is suspended. Dedup guards
+  /// against re-resuming an in-flight / on-disk key.
   private func pump() {
-    while dlInflight < dlLimit, !dlQueue.isEmpty {
+    guard !dlSessions.isEmpty else { return } // pool rebuilding — next tick pumps
+    while !dlQueue.isEmpty {
       let item = dlQueue.removeFirst()
       if onDisk(item.key) || inFlight.contains(item.key) { continue }
       runScheduled(item)
     }
   }
 
-  /// One scheduled (bulk) download with throughput accounting + bounded retry.
+  /// Enqueue one bulk download on the background pool. Delegate-based on purpose: a
+  /// background session has NO completion handler (that API is a runtime error on a
+  /// background config) — publish + accounting happen in the URLSessionDownloadDelegate
+  /// methods below. The cache key rides on `taskDescription` so the delegate (which
+  /// may fire in a fresh process after relaunch) can recover it.
   private func runScheduled(_ item: DLItem) {
     inFlight.insert(item.key)
     dlInflight += 1
-    let task = nextDLSession().downloadTask(with: item.url) { [weak self] tmp, resp, _ in
-      guard let self else { return }
-      let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-      // Publish SYNCHRONOUSLY, RIGHT HERE. This closure runs on URLSession's
-      // background delegate queue (NOT main), and the downloaded temp file is
-      // valid ONLY for the duration of this call — URLSession reclaims it the
-      // instant we return. The old code deferred the move into a
-      // DispatchQueue.main.async, so under main-thread load (the playing
-      // read-along hammers main every audio tick) the temp file was frequently
-      // GONE by the time the move ran → publish failed → the chapter was requeued
-      // and RE-DOWNLOADED. That burned the link on repeats while net stored bytes
-      // (the speed readout = usedBytes delta) crawled — the real reason the fill
-      // sat at ~1 stream's worth despite full concurrency. Moving it here also
-      // keeps the file I/O off the contended main thread. Each task writes a
-      // DISTINCT key, so concurrent publishes don't race.
-      let n: Int64? = (code == 200 && tmp != nil) ? self.publish(tmp!, item.key) : nil
-      DispatchQueue.main.async {
-        self.dlInflight -= 1
-        self.inFlight.remove(item.key)
-        if let n {
-          self.dlWindowBytes += n
-          self.dlRetries[item.key] = nil
-          self.indexPut(item.key, n) // maintain the SQLite stats index
-        } else {
-          // Overload → hard multiplicative decrease. Retryable → requeue (bounded).
-          if code == 429 || code == 503 || code == 0 {
-            self.dlLimit = max(self.dlMin, Int(Double(self.dlLimit) * 0.7))
-          }
-          let r = (self.dlRetries[item.key] ?? 0) + 1
-          if r <= 3 { self.dlRetries[item.key] = r; self.dlQueue.append(item) }
-        }
-        self.pump()
-      }
-    }
-    // NOTE: do NOT set a low task.priority — on iOS URLSession that doesn't just
-    // hint H2 stream priority (deprecated/ignored anyway), it THROTTLES the
-    // transfer's scheduling, which capped the bulk fill at ~349 KB/s vs the
-    // ~45 MB/s a default-priority fill reaches. Yielding to foreground is the
-    // gate's job (stop issuing), not priority.
+    let task = nextDLSession().downloadTask(with: item.url)
+    task.taskDescription = item.key
     task.resume()
   }
 
-  /// 2s tick: hill-climb `dlLimit` on aggregate throughput, enforce the budget,
-  /// stop when drained. (Budget check lives here, not in `pump`, so the O(files)
-  /// dir scan runs ~every 2s instead of after every completion.)
+  /// 2s tick: stop when the queue has fully drained, else keep the budget and pump.
+  /// (Budget check lives here, not per-completion, so the used-bytes read runs
+  /// ~every 2s.) The pool's `httpMaximumConnectionsPerHost` paces real concurrency;
+  /// pump() hands it the whole queue.
   private func schedulerTick() {
     if dlQueue.isEmpty && dlInflight == 0 {
       dlTimer?.invalidate()
@@ -425,24 +490,53 @@ import WebKit
       dlQueue.removeAll()
       enforceCap()
     }
-    let now = Date.timeIntervalSinceReferenceDate
-    let dt = now - dlWindowStart
-    let tput = dt > 0 ? Double(dlWindowBytes) / dt : 0
-    dlWindowStart = now
-    dlWindowBytes = 0
-    // Hill-climb toward the throughput knee (grow while saturated + improving;
-    // shrink if it drops). Bounded [dlMin, dlMax].
-    if tput > dlLastTput * 1.05 {
-      if dlInflight >= dlLimit { dlLimit = min(dlMax, dlLimit + 4) }
-    } else if tput < dlLastTput * 0.90 {
-      dlLimit = max(dlMin, dlLimit - 2)
-    }
-    NSLog("lvdl: tput=%.0f KB/s inflight=%d limit=%d queued=%d", tput / 1024, dlInflight, dlLimit, dlQueue.count)
-    dlLastTput = max(tput, dlLastTput * 0.5) // decay the reference so it re-probes
-    // Stalled tasks: a hung connection just fails (or hits URLSession's timeout) →
-    // the completion handler requeues it (bounded). We keep no per-task handle, so
-    // a slow-but-progressing task simply holds its slot and the limit compensates.
     pump()
+  }
+
+  // MARK: URLSessionDownloadDelegate (foreground bulk pool)
+
+  /// A finished transfer's temp file is valid ONLY inside this call — publish it
+  /// synchronously here (on the session's delegate queue, off main). A "download"
+  /// still completes for a 404/500 (the body is the error page), so status-gate:
+  /// only a 200 publishes; a non-200 falls through to didCompleteWithError for a
+  /// bounded retry. Each task writes a DISTINCT key, so concurrent publishes across
+  /// the pool don't race.
+  public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                         didFinishDownloadingTo location: URL) {
+    guard let key = downloadTask.taskDescription else { return }
+    let code = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
+    guard code == 200, let n = publish(location, key) else { return }
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.dlRetries[key] = nil
+      self.dlDone += 1 // diagnostic: completions since launch
+      self.indexPut(key, n) // maintain the SQLite stats index
+    }
+  }
+
+  /// Terminal callback for every bulk task. Decrement in-flight, requeue a bounded
+  /// number of times on failure (the file didn't land on disk), and pump. Runs on
+  /// the session's delegate queue; hop to main for the shared scheduler state.
+  public func urlSession(_ session: URLSession, task: URLSessionTask,
+                         didCompleteWithError error: Error?) {
+    guard let key = task.taskDescription else { return }
+    let url = task.originalRequest?.url
+    let urlErr = error as? URLError
+    let cancelled = urlErr?.code == .cancelled
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.dlInflight = max(0, self.dlInflight - 1)
+      self.inFlight.remove(key)
+      // A cancel is a deliberate pool teardown (WiFi-only rebuild); the web pump
+      // re-feeds the item, so don't burn its retry budget. Otherwise success ==
+      // the file is on disk (didFinishDownloadingTo published it before this fires).
+      if !cancelled, !self.onDisk(key), let url {
+        if let e = error { self.dlLastErr = (e as NSError).localizedDescription } // diagnostic
+        let r = (self.dlRetries[key] ?? 0) + 1
+        if r <= 3 { self.dlRetries[key] = r; self.dlQueue.append(DLItem(url: url, key: key)) }
+      }
+      self.pump()
+    }
   }
 
   /// Move a freshly-downloaded temp file into the cache under `key`; returns bytes.
@@ -519,11 +613,31 @@ import WebKit
     // until they switch to the count.
     let (count, used, pinnedBytes) = store?.stats() ?? (0, 0, 0)
     let cached: [String] = store?.allKeys() ?? []
-    let obj: [String: Any] = [
+    // Diagnostics (temporary): the TRUE on-disk `.caf` count vs the SQLite index
+    // `count` above. If diskCount > cachedCount the index has drifted below disk —
+    // the driver would keep re-sending "uncached" items that native then skips as
+    // already-on-disk, freezing the fill at the index count with no error. Plus the
+    // device's real free space: the fill can't grow past the volume's free bytes no
+    // matter how large the app budget is. contentsOfDirectory is O(files) but only
+    // runs on an explicit stats poll (~every 2-3s), acceptable for diagnosis.
+    let diskCount = (try? FileManager.default.contentsOfDirectory(
+      at: cacheDir, includingPropertiesForKeys: nil))?
+      .filter { $0.pathExtension == "caf" }.count ?? -1
+    var freeBytes: Int64 = -1
+    if let vals = try? URL(fileURLWithPath: NSHomeDirectory())
+      .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+      let f = vals.volumeAvailableCapacityForImportantUsage {
+      freeBytes = Int64(f)
+    }
+    var obj: [String: Any] = [
       "usedBytes": used, "cap": capBytes, "pinnedBytes": pinnedBytes,
       "cachedCount": count, "cached": cached, "pinned": Array(pinned),
       "net": netType(),
+      // Download diagnostics for the Downloads panel (see dlDone/dlLastErr).
+      "dlInflight": dlInflight, "dlQueued": dlQueue.count, "dlDone": dlDone,
+      "dlDisk": diskCount, "freeBytes": freeBytes,
     ]
+    if let e = dlLastErr { obj["dlErr"] = e }
     let json = (try? JSONSerialization.data(withJSONObject: obj))
       .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     let esc = json.replacingOccurrences(of: "\\", with: "\\\\")
@@ -928,7 +1042,7 @@ import WebKit
     let dest = fileURL(key) // <key>.caf — see fileURL()
     if onDisk(key) || inFlight.contains(key) { return }
     inFlight.insert(key)
-    let task = nextDLSession().downloadTask(with: url) { [weak self] tmp, resp, _ in
+    let task = fgSession.downloadTask(with: url) { [weak self] tmp, resp, _ in
       guard let self else { return }
       defer { DispatchQueue.main.async { self.inFlight.remove(key) } }
       guard let tmp, let code = (resp as? HTTPURLResponse)?.statusCode, code == 200 else { return }

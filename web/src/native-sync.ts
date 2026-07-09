@@ -12,7 +12,7 @@
 // Off the shell (PWA / browser) the scheme is absent → every helper falls back to a
 // normal `fetch` (the service worker handles offline there).
 
-import { nativeAudioStats } from "@/native-audio";
+import { nativeAudioSetWifiOnly, nativeAudioStats } from "@/native-audio";
 
 const SCHEME = "lvsync://localhost";
 
@@ -210,6 +210,10 @@ export function setOfflineAuto(on: boolean): void {
 }
 export function setOfflineWifiOnly(on: boolean): void {
   globalThis.localStorage?.setItem(WIFI_KEY, on ? "1" : "0");
+  // Push to native so its BACKGROUND download sessions get the new cellular policy
+  // (allowsCellularAccess) — the web gate alone can't stop transfers already handed
+  // to the system daemon, which keep running while the app is suspended.
+  nativeAudioSetWifiOnly(on);
   // Relaxing the constraint may unblock a previously-refused run.
   if (!on) void ensureAutoSync();
 }

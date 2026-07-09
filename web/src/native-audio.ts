@@ -74,6 +74,7 @@ type OutMsg =
   }
   | { readonly kind: "unpin"; readonly data: { readonly keys: string[] } }
   | { readonly kind: "setCap"; readonly data: { readonly bytes: number } }
+  | { readonly kind: "setWifiOnly"; readonly data: { readonly on: boolean } }
   | { readonly kind: "audioStats"; readonly data: { readonly id: string } };
 
 interface WebKitHandler {
@@ -173,6 +174,15 @@ export function nativeAudioSetCap(bytes: number): boolean {
   return send({ kind: "setCap", data: { bytes } });
 }
 
+/** Push the "prefetch on WiFi only" preference to the native downloader. Native
+ *  enforces it on its BACKGROUND download sessions via `allowsCellularAccess` —
+ *  the web's own WiFi gate only stops ENQUEUING and can't reach transfers that
+ *  keep running in the system daemon while the app is suspended. Push it at
+ *  startup and whenever the toggle changes. No-op off-shell. */
+export function nativeAudioSetWifiOnly(on: boolean): boolean {
+  return send({ kind: "setWifiOnly", data: { on } });
+}
+
 /** Remove (delete) a book's audio — the only way audio leaves the durable store
  *  (nothing is auto-evicted). `keys` are the sanitized content hashes. */
 export function nativeAudioUnpin(keys: string[]): boolean {
@@ -200,6 +210,20 @@ export interface AudioStats {
   /** Live network path type — drives the "prefetch on WiFi only" gate for the large
    *  audio download (the WiFi-gated one). Moved here from the retired content layer. */
   net: "wifi" | "cell" | "none";
+  /** Download diagnostics (native downloader): tasks in flight, items queued,
+   *  completions since launch, and the most recent non-cancel transfer error.
+   *  Surfaced in the Downloads panel so a stalled fill is debuggable on-device. */
+  dlInflight?: number;
+  dlQueued?: number;
+  dlDone?: number;
+  dlErr?: string;
+  /** TRUE on-disk `.caf` count (diagnostic). If this exceeds `cachedCount` the
+   *  SQLite index has drifted below disk and the fill is wedged (native skips the
+   *  re-sent items as already-on-disk). */
+  dlDisk?: number;
+  /** Device free space in bytes (volumeAvailableCapacityForImportantUsage). The
+   *  fill can't grow past this regardless of the app budget. */
+  freeBytes?: number;
 }
 
 const audioPending = new Map<string, (json: string) => void>();
@@ -242,6 +266,12 @@ export async function nativeAudioStats(): Promise<AudioStats | null> {
       cached: o.cached ?? [],
       pinned: o.pinned ?? [],
       net: o.net ?? "wifi",
+      ...(o.dlInflight != null ? { dlInflight: o.dlInflight } : {}),
+      ...(o.dlQueued != null ? { dlQueued: o.dlQueued } : {}),
+      ...(o.dlDone != null ? { dlDone: o.dlDone } : {}),
+      ...(o.dlErr != null ? { dlErr: o.dlErr } : {}),
+      ...(o.dlDisk != null ? { dlDisk: o.dlDisk } : {}),
+      ...(o.freeBytes != null ? { freeBytes: o.freeBytes } : {}),
     };
   } catch {
     return null;
