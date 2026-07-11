@@ -794,7 +794,11 @@ mod tests {
         // fences never pair — both survive as literal `$$`.
         let d = check("$$\n\\frac{a}{b}\n=\n\\frac{c}{d}\n$$\n");
         let r = rules(&d);
-        assert_eq!(r, ["md/stray-math-delim", "md/stray-math-delim"], "got {r:?}");
+        assert_eq!(
+            r,
+            ["md/stray-math-delim", "md/stray-math-delim"],
+            "got {r:?}"
+        );
         assert!(d.iter().all(|x| x.severity == Severity::Warning));
     }
 

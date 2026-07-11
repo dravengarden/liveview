@@ -23,12 +23,7 @@ pub struct ObjStore {
 
 impl ObjStore {
     /// Build a client for `endpoint` (e.g. `http://127.0.0.1:9001`) + `bucket`.
-    pub fn connect(
-        endpoint: &str,
-        access_key: &str,
-        secret_key: &str,
-        bucket: &str,
-    ) -> Self {
+    pub fn connect(endpoint: &str, access_key: &str, secret_key: &str, bucket: &str) -> Self {
         let creds = Credentials::new(access_key, secret_key, None, None, "liveview");
         let conf = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::latest())
@@ -46,7 +41,13 @@ impl ObjStore {
     /// Create the bucket if absent. Idempotent: an "already owned/exists" error
     /// is success.
     pub async fn ensure_bucket(&self) -> Result<()> {
-        match self.client.create_bucket().bucket(&self.bucket).send().await {
+        match self
+            .client
+            .create_bucket()
+            .bucket(&self.bucket)
+            .send()
+            .await
+        {
             Ok(_) => Ok(()),
             Err(e) => {
                 let msg = e.to_string();

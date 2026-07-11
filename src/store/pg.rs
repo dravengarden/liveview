@@ -62,6 +62,18 @@ pub struct BookRow {
     pub updated_at: i64,
 }
 
+/// Input for one book catalog upsert. Keeping the related fields together
+/// prevents call sites from silently swapping adjacent optional strings.
+pub struct BookUpsert<'a> {
+    pub slug: &'a str,
+    pub label: &'a str,
+    pub description: Option<&'a str>,
+    pub collection: Option<&'a str>,
+    pub author: Option<&'a str>,
+    pub cover_hash: Option<&'a str>,
+    pub default_rendition: &'a str,
+}
+
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct RenditionRow {
     pub kind: String,
@@ -105,6 +117,18 @@ pub struct AudioTask {
     pub enqueued_at: i64,
     pub started_at: Option<i64>,
     pub finished_at: Option<i64>,
+}
+
+/// Input for an idempotent audio-queue upsert.
+pub struct AudioTaskUpsert<'a> {
+    pub book_slug: &'a str,
+    pub rendition: &'a str,
+    pub lang: &'a str,
+    pub rel_path: &'a str,
+    pub content_hash: &'a str,
+    pub leaf_kind: &'a str,
+    pub voice: &'a str,
+    pub priority: i32,
 }
 
 /// Per-book (NULL slug = global) audio-task counts for the status surface.
@@ -199,16 +223,7 @@ impl PgStore {
 
     // ── Books / renditions / editions ───────────────────────────────────────
 
-    pub async fn upsert_book(
-        &self,
-        slug: &str,
-        label: &str,
-        description: Option<&str>,
-        collection: Option<&str>,
-        author: Option<&str>,
-        cover_hash: Option<&str>,
-        default_rendition: &str,
-    ) -> Result<(), sqlx::Error> {
+    pub async fn upsert_book(&self, book: &BookUpsert<'_>) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO books (slug, label, description, collection, author, cover_hash, default_rendition)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -220,13 +235,13 @@ impl PgStore {
                  cover_hash = EXCLUDED.cover_hash,
                  default_rendition = EXCLUDED.default_rendition",
         )
-        .bind(slug)
-        .bind(label)
-        .bind(description)
-        .bind(collection)
-        .bind(author)
-        .bind(cover_hash)
-        .bind(default_rendition)
+        .bind(book.slug)
+        .bind(book.label)
+        .bind(book.description)
+        .bind(book.collection)
+        .bind(book.author)
+        .bind(book.cover_hash)
+        .bind(book.default_rendition)
         .execute(&self.pool)
         .await
         .map(|_| ())
@@ -743,17 +758,7 @@ impl PgStore {
     /// regenerate); an UNCHANGED one leaves a `running`/`done` task alone (so a
     /// re-sync doesn't redo finished work) but only refreshes `priority` upward
     /// (an interactive request can promote a queued backfill task).
-    pub async fn enqueue_audio_task(
-        &self,
-        book_slug: &str,
-        rendition: &str,
-        lang: &str,
-        rel_path: &str,
-        content_hash: &str,
-        leaf_kind: &str,
-        voice: &str,
-        priority: i32,
-    ) -> Result<(), sqlx::Error> {
+    pub async fn enqueue_audio_task(&self, task: &AudioTaskUpsert<'_>) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO audio_tasks
                  (book_slug, rendition, lang, rel_path, content_hash, leaf_kind,
@@ -772,14 +777,14 @@ impl PgStore {
                  error       = CASE WHEN audio_tasks.content_hash <> EXCLUDED.content_hash
                                     THEN NULL ELSE audio_tasks.error END",
         )
-        .bind(book_slug)
-        .bind(rendition)
-        .bind(lang)
-        .bind(rel_path)
-        .bind(content_hash)
-        .bind(leaf_kind)
-        .bind(voice)
-        .bind(priority)
+        .bind(task.book_slug)
+        .bind(task.rendition)
+        .bind(task.lang)
+        .bind(task.rel_path)
+        .bind(task.content_hash)
+        .bind(task.leaf_kind)
+        .bind(task.voice)
+        .bind(task.priority)
         .bind(now_millis())
         .execute(&self.pool)
         .await
@@ -862,10 +867,12 @@ impl PgStore {
     /// Startup reaper: a `running` task left by a crashed/restarted server is
     /// re-queued so the worker picks it up again.
     pub async fn requeue_running_audio_tasks(&self) -> Result<u64, sqlx::Error> {
-        sqlx::query("UPDATE audio_tasks SET status = 'queued', started_at = NULL WHERE status = 'running'")
-            .execute(&self.pool)
-            .await
-            .map(|r| r.rows_affected())
+        sqlx::query(
+            "UPDATE audio_tasks SET status = 'queued', started_at = NULL WHERE status = 'running'",
+        )
+        .execute(&self.pool)
+        .await
+        .map(|r| r.rows_affected())
     }
 
     /// Re-queue all `failed` tasks (the `liveview tasks retry` path); scope to one
@@ -928,7 +935,9 @@ impl PgStore {
     /// The deploy root + its per-book child subtree hashes — the top-level
     /// manifest the SW diffs (root unchanged ⇒ nothing to sync; a changed book
     /// subtree ⇒ fetch that book's sub-manifest). Empty before the first sync.
-    pub async fn manifest_books(&self) -> Result<(Option<String>, Vec<(String, String)>), sqlx::Error> {
+    pub async fn manifest_books(
+        &self,
+    ) -> Result<(Option<String>, Vec<(String, String)>), sqlx::Error> {
         let root = self.deploy_root().await?;
         let children = match &root {
             Some(r) => match self.get_merkle_node(r).await? {
@@ -1004,9 +1013,7 @@ impl PgStore {
     /// can show reading AND listening progress side by side; deduping by slug
     /// alone dropped whichever rendition was touched less recently. Paths may be
     /// a bare `<slug>` (no chapter), which classifies as the text rendition.
-    pub async fn progress_recent_per_rendition(
-        &self,
-    ) -> Result<Vec<ProgressEntry>, sqlx::Error> {
+    pub async fn progress_recent_per_rendition(&self) -> Result<Vec<ProgressEntry>, sqlx::Error> {
         let rows = sqlx::query_as::<_, ProgressEntry>(
             "SELECT path, scroll, updated_at FROM progress ORDER BY updated_at DESC",
         )
@@ -1125,9 +1132,17 @@ mod tests {
     async fn book_rendition_edition_roundtrip() {
         let Some(s) = store().await else { return };
         s.delete_book("t-book").await.unwrap();
-        s.upsert_book("t-book", "T Book", Some("blurb"), None, None, None, "text")
-            .await
-            .unwrap();
+        s.upsert_book(&BookUpsert {
+            slug: "t-book",
+            label: "T Book",
+            description: Some("blurb"),
+            collection: None,
+            author: None,
+            cover_hash: None,
+            default_rendition: "text",
+        })
+        .await
+        .unwrap();
         s.upsert_rendition("t-book", "text", "阅读", "zh", None, true, 0)
             .await
             .unwrap();
@@ -1135,9 +1150,17 @@ mod tests {
             .await
             .unwrap();
         // Re-upsert (idempotent) then cascade-delete.
-        s.upsert_book("t-book", "T Book v2", None, None, None, None, "text")
-            .await
-            .unwrap();
+        s.upsert_book(&BookUpsert {
+            slug: "t-book",
+            label: "T Book v2",
+            description: None,
+            collection: None,
+            author: None,
+            cover_hash: None,
+            default_rendition: "text",
+        })
+        .await
+        .unwrap();
         s.delete_book("t-book").await.unwrap();
     }
 
@@ -1196,9 +1219,9 @@ mod tests {
         let Some(s) = store().await else { return };
         s.progress_upsert("bk/01", 0.42, Some(1000)).await.unwrap();
         s.progress_upsert("bk/01", 0.55, Some(2000)).await.unwrap(); // newer ts wins
-        // A STALE replay (older ts) must NOT clobber the newer value — last-write-
-        // wins is what lets an offline device flush without overwriting a fresher
-        // edit made on another device meanwhile.
+                                                                     // A STALE replay (older ts) must NOT clobber the newer value — last-write-
+                                                                     // wins is what lets an offline device flush without overwriting a fresher
+                                                                     // edit made on another device meanwhile.
         let stale = s.progress_upsert("bk/01", 0.10, Some(1500)).await.unwrap();
         assert!(!stale, "an older-ts progress write must be rejected");
         let rows = s.progress_for_book("bk").await.unwrap();
@@ -1215,8 +1238,11 @@ mod tests {
         let recent = s.progress_recent_per_rendition().await.unwrap();
         assert!(recent.iter().any(|r| r.path == "bk/00.spoken.md"));
         assert_eq!(
-            recent.iter().filter(|r| !r.path.ends_with(".spoken.md")
-                && r.path.split('/').next() == Some("bk"))
+            recent
+                .iter()
+                .filter(
+                    |r| !r.path.ends_with(".spoken.md") && r.path.split('/').next() == Some("bk")
+                )
                 .count(),
             1,
             "the book's text chapters must dedup to one row",

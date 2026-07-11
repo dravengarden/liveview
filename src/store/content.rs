@@ -7,16 +7,16 @@
 //!   - the filesystem (`fs::FsStore`) — `liveview preview`, which renders a
 //!     local book on demand with the SAME engines, no `sync`/deploy.
 //!
-//! Errors are stringified at this boundary: a filesystem backend has no
-//! `sqlx::Error` to fabricate, and every server call site already consumes
-//! these via `.ok()` / `%e` / `.map_err(|e| e.to_string())`, so `String` keeps
-//! the handlers untouched.
+//! Errors are stringified at this boundary because a filesystem backend has no
+//! `sqlx::Error` to fabricate. Protocol-critical manifest handlers turn these
+//! into explicit 503 responses; optional/fallback paths decide locally whether
+//! absence is acceptable.
 
 use async_trait::async_trait;
 
 use crate::store::pg::{
-    AssetRow, AudioTaskRollup, BookRow, ChapterRow, DagChapter, EditionRow, ManifestChapter, ProgressEntry,
-    RenditionRow,
+    AssetRow, AudioTaskRollup, BookRow, ChapterRow, DagChapter, EditionRow, ManifestChapter,
+    ProgressEntry, RenditionRow,
 };
 
 /// Catalog structure + chapter/asset access the reader needs. The deployed
@@ -50,7 +50,10 @@ pub trait ContentStore: Send + Sync {
         default_lang: &str,
         rel_path: &str,
     ) -> Result<Option<(ChapterRow, String)>, String> {
-        if let Some(c) = self.get_chapter(book_slug, rendition, lang, rel_path).await? {
+        if let Some(c) = self
+            .get_chapter(book_slug, rendition, lang, rel_path)
+            .await?
+        {
             return Ok(Some((c, lang.to_string())));
         }
         if lang != default_lang {
@@ -68,8 +71,7 @@ pub trait ContentStore: Send + Sync {
 
     /// Register an asset's metadata (mime/size) — used by on-demand audio
     /// synthesis when it stores a freshly generated blob.
-    async fn upsert_asset(&self, content_hash: &str, mime: &str, size: i64)
-        -> Result<(), String>;
+    async fn upsert_asset(&self, content_hash: &str, mime: &str, size: i64) -> Result<(), String>;
 
     /// Resolve the pre-generated spoken text for a set of narration `keys`
     /// (content-addressed; see `server::narration`). Returns `key → text` for the
@@ -178,12 +180,7 @@ impl ContentStore for PgStore {
             .await
             .map_err(|e| e.to_string())
     }
-    async fn upsert_asset(
-        &self,
-        content_hash: &str,
-        mime: &str,
-        size: i64,
-    ) -> Result<(), String> {
+    async fn upsert_asset(&self, content_hash: &str, mime: &str, size: i64) -> Result<(), String> {
         PgStore::upsert_asset(self, content_hash, mime, size)
             .await
             .map_err(|e| e.to_string())
@@ -250,7 +247,9 @@ impl ContentStore for PgStore {
             .map_err(|e| e.to_string())
     }
     async fn manifest_books(&self) -> Result<(Option<String>, Vec<(String, String)>), String> {
-        PgStore::manifest_books(self).await.map_err(|e| e.to_string())
+        PgStore::manifest_books(self)
+            .await
+            .map_err(|e| e.to_string())
     }
     async fn manifest_chapters(&self, slug: &str) -> Result<Vec<ManifestChapter>, String> {
         PgStore::manifest_chapters(self, slug)

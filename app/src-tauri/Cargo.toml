@@ -1,9 +1,9 @@
 # liveview native shell (Tauri 2).
 #
-# This is a THIN remote WebView wrapper, not a second copy of the server.
-# liveview's real backend (axum + pg + rustfs) only runs on hawk; the client is
-# a pure reader over the already-https UI. The whole point of this crate is to
-# get a NATIVE WKWebView (iOS) / WKWebView (macOS) around
+# The axum + postgres + rustfs backend runs on hawk. This crate bundles the web
+# shell and adds the native capabilities that a PWA cannot provide: offline
+# content via the lvsync custom scheme, background/lock-screen audio, haptics,
+# and app-settings integration. It is not a second copy of the server.
 # https://liveview.hawk.thundersparrow.top (behind caddy on the tailnet),
 # because a pure-web PWA on iOS CANNOT keep an audiobook playing once the screen
 # locks / the app backgrounds, nor drive the lock-screen media controls — only a
@@ -40,9 +40,7 @@ tauri-plugin-opener = "2"
 # `plugin:haptics|*` via the injected IPC bridge; granted to the remote origin in
 # capabilities/remote-haptics.json. installHaptics() (web) buzzes every control.
 tauri-plugin-haptics = "2"
-# B2: the cross-platform Rust offline data layer (lv-sync core + SqliteBlobStore),
-# served to the bundled SPA via the `lvsync://` URI scheme (iOS webview→plugin IPC
-# is unreliable). Registered ALONGSIDE the Swift controllers during migration — the
-# web keeps using the Swift path until the plugin is verified end-to-end, then the
-# Swift offline layer is retired. Cross-compiles to aarch64-apple-ios (verified).
+# Cross-platform Rust offline data layer (lv-sync core + SqliteBlobStore), served
+# to the bundled SPA via the `lvsync://` URI scheme because iOS webview-to-plugin
+# IPC is unreliable. Cross-compiles to aarch64-apple-ios (verified).
 tauri-plugin-lvsync = { path = "../../plugins/lvsync" }

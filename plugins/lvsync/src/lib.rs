@@ -1,9 +1,8 @@
-//! Native offline-first data layer (eager mode) for the iOS/Mac shell, as a
-//! Tauri PLUGIN so the REMOTE web UI can reach it (app commands can't be invoked
-//! from a remote origin in Tauri 2 — see capabilities/remote-sync.json).
+//! Native offline-first data layer (eager mode) for the iOS/Mac shell. The
+//! bundled SPA reaches it through the `lvsync://` custom scheme because Tauri's
+//! webview-to-plugin IPC is unreliable on iOS.
 //!
-//! The remote UI calls `plugin:lvsync|resolve` etc. over IPC; each resolves
-//! through the shared [`lv_sync::Engine`] — store-first against a filesystem
+//! Requests resolve through the shared [`lv_sync::Engine`] — store-first against a SQLite
 //! content-addressed cache, fetching + caching on a miss. Once read online, a
 //! resource replays OFFLINE with zero network. Scope: NON-audio reader content
 //! (text/units/spoken/marks/assets) + navigation metadata (tree/books/covers,
@@ -24,7 +23,7 @@ use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{AppHandle, Manager, Runtime, State};
 use tokio::sync::RwLock;
 
-/// The remote liveview origin (same as the loader's REMOTE / tauri.conf devUrl).
+/// The liveview backend origin used for cache misses and synchronization.
 const REMOTE: &str = "https://liveview.hawk.thundersparrow.top";
 
 /// Safety cap on the APM outbox: a device that never gets a flushable network
@@ -178,7 +177,10 @@ impl LvState {
     /// Sanitize an OTA version string (the entry filename, which has `/` and `.`) into
     /// a single safe path component for `web/roots/<v>/`.
     fn ver_dir(version: &str) -> String {
-        version.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect()
+        version
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect()
     }
 
     /// An OTA web-bundle file for the CURRENT version, or None (→ the `/app/` handler
@@ -196,7 +198,10 @@ impl LvState {
         }
         if rel == "index.html" {
             return std::fs::read(
-                self.web_root.join("roots").join(Self::ver_dir(current)).join("index.html"),
+                self.web_root
+                    .join("roots")
+                    .join(Self::ver_dir(current))
+                    .join("index.html"),
             )
             .ok();
         }
@@ -250,7 +255,10 @@ impl LvState {
         }
 
         let files_dir = self.web_root.join("files");
-        let root_dir = self.web_root.join("roots").join(Self::ver_dir(&manifest.version));
+        let root_dir = self
+            .web_root
+            .join("roots")
+            .join(Self::ver_dir(&manifest.version));
         if let Err(e) = std::fs::create_dir_all(&root_dir) {
             return format!("mkdir-err: {e}");
         }
@@ -309,8 +317,17 @@ impl LvState {
 
     /// Download one OTA bundle file → bytes, or an error string.
     async fn dl(client: &reqwest::Client, path: &str) -> Result<Vec<u8>, String> {
-        match client.get(format!("{REMOTE}/app-dist/{path}")).send().await.and_then(|r| r.error_for_status()) {
-            Ok(r) => r.bytes().await.map(|b| b.to_vec()).map_err(|e| format!("dl-body {path}: {e}")),
+        match client
+            .get(format!("{REMOTE}/app-dist/{path}"))
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+        {
+            Ok(r) => r
+                .bytes()
+                .await
+                .map(|b| b.to_vec())
+                .map_err(|e| format!("dl-body {path}: {e}")),
             Err(e) => Err(format!("dl {path}: {e}")),
         }
     }
@@ -372,7 +389,9 @@ impl LvState {
     }
 
     fn prune_files(base: &PathBuf, dir: &PathBuf, keep: &std::collections::HashSet<String>) {
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
         for e in entries.flatten() {
             let p = e.path();
             if p.is_dir() {
@@ -413,7 +432,10 @@ impl LvState {
 }
 
 fn index(m: &Manifest) -> HashMap<String, Resource> {
-    m.resources.iter().map(|r| (norm(&r.url), r.clone())).collect()
+    m.resources
+        .iter()
+        .map(|r| (norm(&r.url), r.clone()))
+        .collect()
 }
 
 /// Percent-decode a URL so the web's `encodeURIComponent`'d reads match the
@@ -440,7 +462,7 @@ fn norm(url: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-// ── Plugin commands (invoked from the remote UI as `plugin:lvsync|<name>`) ────
+// ── Plugin commands (kept for desktop/debug IPC callers) ─────────────────────
 
 /// Resolve a content URL → its content as a UTF-8 STRING, offline-safe. A
 /// MANIFEST resource resolves store-first by content hash; any OTHER content URL
@@ -462,7 +484,11 @@ async fn resolve(state: State<'_, LvState>, url: String) -> Result<String, Strin
     let bytes = match res {
         Some(r) => state.engine.resolve(&r).await,
         None => {
-            let key = format!("{}{}", lv_sync::URL_KEY_PREFIX, lv_sync::hash_hex(n.as_bytes()));
+            let key = format!(
+                "{}{}",
+                lv_sync::URL_KEY_PREFIX,
+                lv_sync::hash_hex(n.as_bytes())
+            );
             state.engine.fetch_keyed(&key, &n).await
         }
     }
@@ -536,7 +562,11 @@ async fn gc(state: State<'_, LvState>) -> Result<u64, String> {
 async fn cache_stats(state: State<'_, LvState>) -> Result<(u64, u64, u64, u64), String> {
     let resources: Vec<Resource> = {
         let m = state.manifest.read().await;
-        m.resources.iter().filter(|r| r.kind != "audio").cloned().collect()
+        m.resources
+            .iter()
+            .filter(|r| r.kind != "audio")
+            .cloned()
+            .collect()
     };
     let (mut cc, mut cb) = (0u64, 0u64);
     let total = resources.len() as u64;
@@ -557,7 +587,11 @@ async fn cache_stats(state: State<'_, LvState>) -> Result<(u64, u64, u64, u64), 
 async fn sync_all(state: State<'_, LvState>) -> Result<u64, String> {
     let resources: Vec<Resource> = {
         let m = state.manifest.read().await;
-        m.resources.iter().filter(|r| r.kind != "audio").cloned().collect()
+        m.resources
+            .iter()
+            .filter(|r| r.kind != "audio")
+            .cloned()
+            .collect()
     };
     // CONCURRENT (was sequential): the text store has ~12k tiny resources; resolving
     // them one-at-a-time over the high-latency remote tunnel took MINUTES, so a
@@ -571,7 +605,13 @@ async fn sync_all(state: State<'_, LvState>) -> Result<u64, String> {
     // a higher-ranked-lifetime error with buffer_unordered).
     let engine = &state.engine;
     let done = futures_util::stream::iter(resources.into_iter())
-        .map(|r| async move { if engine.resolve(&r).await.is_ok() { r.bytes } else { 0 } })
+        .map(|r| async move {
+            if engine.resolve(&r).await.is_ok() {
+                r.bytes
+            } else {
+                0
+            }
+        })
         .buffer_unordered(24)
         .fold(0u64, |acc, b| async move { acc.saturating_add(b) })
         .await;
@@ -625,7 +665,8 @@ fn sniff_content_type(body: &[u8]) -> &'static str {
         _ if {
             let s = &body[..body.len().min(64)];
             let t = std::str::from_utf8(s).unwrap_or("").trim_start();
-            t.starts_with("<svg") || (t.starts_with("<?xml") && body.windows(4).take(256).any(|w| w == b"<svg"))
+            t.starts_with("<svg")
+                || (t.starts_with("<?xml") && body.windows(4).take(256).any(|w| w == b"<svg"))
         } =>
         {
             "image/svg+xml"
@@ -664,7 +705,11 @@ fn content_type_for(path: &str, body: &[u8]) -> &'static str {
 async fn stats_inner(state: &LvState) -> (u64, u64, u64, u64) {
     let resources: Vec<Resource> = {
         let m = state.manifest.read().await;
-        m.resources.iter().filter(|r| r.kind != "audio").cloned().collect()
+        m.resources
+            .iter()
+            .filter(|r| r.kind != "audio")
+            .cloned()
+            .collect()
     };
     let (mut cc, mut cb) = (0u64, 0u64);
     let total = resources.len() as u64;
@@ -700,9 +745,16 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
             let bytes = match res {
                 Some(r) => state.engine.resolve(&r).await,
                 None => {
-                    let key =
-                        format!("{}{}", lv_sync::URL_KEY_PREFIX, lv_sync::hash_hex(url.as_bytes()));
-                    match if cache_first { state.engine.store().get(&key).await } else { None } {
+                    let key = format!(
+                        "{}{}",
+                        lv_sync::URL_KEY_PREFIX,
+                        lv_sync::hash_hex(url.as_bytes())
+                    );
+                    match if cache_first {
+                        state.engine.store().get(&key).await
+                    } else {
+                        None
+                    } {
                         Some(b) => Ok(b),
                         None => state.engine.fetch_keyed(&key, &url).await,
                     }
@@ -747,7 +799,11 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
         "/sync_all" => {
             let resources: Vec<Resource> = {
                 let m = state.manifest.read().await;
-                m.resources.iter().filter(|r| r.kind != "audio").cloned().collect()
+                m.resources
+                    .iter()
+                    .filter(|r| r.kind != "audio")
+                    .cloned()
+                    .collect()
             };
             let mut done = 0u64;
             for r in &resources {
@@ -768,8 +824,12 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
             let body = decode_all(&raw);
             let (id, ts) = match serde_json::from_str::<serde_json::Value>(&body) {
                 Ok(v) => (
-                    v.get("event_id").and_then(|x| x.as_str()).map(str::to_string),
-                    v.get("client_ts").and_then(serde_json::Value::as_i64).unwrap_or_else(|| now_ms() as i64),
+                    v.get("event_id")
+                        .and_then(|x| x.as_str())
+                        .map(str::to_string),
+                    v.get("client_ts")
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or_else(|| now_ms() as i64),
                 ),
                 Err(_) => (None, now_ms() as i64),
             };
@@ -789,7 +849,8 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
             // Each stored body is already a JSON object; splice them into an array
             // without re-parsing (the web POSTs this verbatim to /api/ingest).
             let bodies = state.engine.store().apm_drain(limit);
-            let mut out = String::with_capacity(bodies.iter().map(|b| b.len() + 1).sum::<usize>() + 2);
+            let mut out =
+                String::with_capacity(bodies.iter().map(|b| b.len() + 1).sum::<usize>() + 2);
             out.push('[');
             for (i, b) in bodies.iter().enumerate() {
                 if i > 0 {
@@ -803,7 +864,11 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
         "/apm/ack" => {
             let ids: Vec<String> = query_get(query, "ids")
                 .map(|s| {
-                    decode_all(&s).split(',').filter(|x| !x.is_empty()).map(str::to_string).collect()
+                    decode_all(&s)
+                        .split(',')
+                        .filter(|x| !x.is_empty())
+                        .map(str::to_string)
+                        .collect()
                 })
                 .unwrap_or_default();
             state.engine.store().apm_ack(&ids);
@@ -866,9 +931,10 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 if let Some(rel0) = path.strip_prefix("/app/") {
                     let rel = if rel0.is_empty() { "index.html" } else { rel0 };
                     let state = app.state::<LvState>();
-                    let body = state.web_get(rel).await.or_else(|| {
-                        app.asset_resolver().get(rel.to_string()).map(|a| a.bytes)
-                    });
+                    let body = state
+                        .web_get(rel)
+                        .await
+                        .or_else(|| app.asset_resolver().get(rel.to_string()).map(|a| a.bytes));
                     let (status, bytes) = match body {
                         Some(b) => (200u16, b),
                         None => (404u16, b"not found".to_vec()),

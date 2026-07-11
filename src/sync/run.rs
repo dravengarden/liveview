@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{RenditionKind, Resolved};
 use crate::server::renderer;
 use crate::shared::FileType;
-use crate::store::pg::{ChapterRow, PgStore};
+use crate::store::pg::{AudioTaskUpsert, BookUpsert, ChapterRow, PgStore};
 use crate::sync::diff::{plan, Plan};
 use crate::sync::merkle::{Build, Dag, Leaf};
 use crate::sync::objstore::ObjStore;
@@ -157,15 +157,15 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
             None => None,
         };
         store
-            .upsert_book(
-                &book.slug,
-                &book.label,
-                book.description.as_deref(),
-                book.collection.as_deref(),
-                book.author.as_deref(),
-                cover_hash.as_deref(),
-                book.default_rendition.as_str(),
-            )
+            .upsert_book(&BookUpsert {
+                slug: &book.slug,
+                label: &book.label,
+                description: book.description.as_deref(),
+                collection: book.collection.as_deref(),
+                author: book.author.as_deref(),
+                cover_hash: cover_hash.as_deref(),
+                default_rendition: book.default_rendition.as_str(),
+            })
             .await
             .map_err(|e| format!("upsert book {}: {e}", book.slug))?;
 
@@ -216,11 +216,9 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                                         })?;
                                 }
                             }
-                            Err(e) => tracing::warn!(
-                                "narration sidecar {}/{}: {e}",
-                                book.slug,
-                                ed.lang
-                            ),
+                            Err(e) => {
+                                tracing::warn!("narration sidecar {}/{}: {e}", book.slug, ed.lang)
+                            }
                         }
                     }
                 }
@@ -426,8 +424,13 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
         .map_err(|e| format!("set deploy root: {e}"))?;
     report.root = new.root;
 
-    // Nudge a running server to reload its catalog (best-effort).
-    let _ = store.notify_reload().await;
+    // The content is committed at this point, but clients must not be told the
+    // deploy completed cleanly if the running server could not be nudged to
+    // reload its catalog. Re-running sync is idempotent and retries this signal.
+    store
+        .notify_reload()
+        .await
+        .map_err(|e| format!("content committed but reload notification failed: {e}"))?;
     Ok(report)
 }
 
@@ -589,16 +592,16 @@ async fn enqueue_audio(
             tracing::warn!(path = %leaf.path, "repair: stale audio marks — re-baking");
         }
         store
-            .enqueue_audio_task(
-                &a.book_slug,
-                &a.rendition,
-                &a.lang,
-                &a.rel_path,
-                &a.content_hash,
-                &leaf.kind,
-                &voice,
-                0, // backfill priority; an on-demand request promotes to 100
-            )
+            .enqueue_audio_task(&AudioTaskUpsert {
+                book_slug: &a.book_slug,
+                rendition: &a.rendition,
+                lang: &a.lang,
+                rel_path: &a.rel_path,
+                content_hash: &a.content_hash,
+                leaf_kind: &leaf.kind,
+                voice: &voice,
+                priority: 0, // backfill; an on-demand request promotes to 100
+            })
             .await
             .map_err(|e| format!("enqueue audio {}: {e}", a.rel_path))?;
         report.enqueued += 1;
@@ -614,11 +617,7 @@ async fn enqueue_audio(
 /// wrong paragraph. Same-count edits (a reworded sentence) mis-TIME but don't
 /// index-shift; they aren't caught here and are covered going forward by
 /// `upsert_chapter`'s content-change guard. Only consulted under `--repair`.
-async fn audio_marks_stale(
-    store: &PgStore,
-    obj: &ObjStore,
-    a: &LeafApply,
-) -> Result<bool, String> {
+async fn audio_marks_stale(store: &PgStore, obj: &ObjStore, a: &LeafApply) -> Result<bool, String> {
     let Some(row) = store
         .get_chapter(&a.book_slug, &a.rendition, &a.lang, &a.rel_path)
         .await

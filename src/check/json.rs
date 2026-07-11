@@ -29,7 +29,9 @@ impl Validator for JsonValidator {
                 source: "json",
                 rule: "json/parse-error".to_string(),
                 message: clean_message(&e.to_string()),
-                hint: Some("strict JSON only — no comments, trailing commas, or single quotes".to_string()),
+                hint: Some(
+                    "strict JSON only — no comments, trailing commas, or single quotes".to_string(),
+                ),
                 snippet: None,
             }],
         }

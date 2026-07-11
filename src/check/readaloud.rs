@@ -45,7 +45,11 @@ pub fn run(paths: &[PathBuf], format: OutputFormat) -> i32 {
     for (rel, source) in &files {
         // Language only tints prose stand-ins in the report; infer it from the
         // conventional `<lang>/` path segment, default zh.
-        let lang = if rel.contains("/en/") || rel.contains("\\en\\") { "en" } else { "zh" };
+        let lang = if rel.contains("/en/") || rel.contains("\\en\\") {
+            "en"
+        } else {
+            "zh"
+        };
         let store = stores
             .entry(format!("{}|{lang}", book_root_of(rel)))
             .or_insert_with(|| load_store(rel, lang));
@@ -65,7 +69,10 @@ pub fn run(paths: &[PathBuf], format: OutputFormat) -> i32 {
         OutputFormat::Human => {
             let report = render_human(&diags);
             if report.is_empty() {
-                eprintln!("narrate-audit: {} file(s), no non-prose resources", files.len());
+                eprintln!(
+                    "narrate-audit: {} file(s), no non-prose resources",
+                    files.len()
+                );
             } else {
                 print!("{report}");
                 eprintln!(
@@ -136,7 +143,10 @@ pub fn plan_run(paths: &[PathBuf], lang: &str, format: OutputFormat) -> i32 {
         }
     }
     match format {
-        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".into())),
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&items).unwrap_or_else(|_| "[]".into())
+        ),
         OutputFormat::Human => {
             for it in &items {
                 println!("{}  {}  {}", it.key, it.kind, preview(&it.src));
@@ -177,7 +187,10 @@ fn audit_unit(rel: &str, unit: &Unit, lang: &str, store: &NarrationStore) -> Opt
         // hazard (a URL/address/phone got a spoken stand-in). Compare against a
         // whitespace-collapsed baseline so the mere double-space left by an
         // inline-math drop is NOT reported as a substitution.
-        Speech::Ready { rule: "speak/prose", text } => {
+        Speech::Ready {
+            rule: "speak/prose",
+            text,
+        } => {
             let baseline = unit.text.split_whitespace().collect::<Vec<_>>().join(" ");
             (text != baseline).then(|| {
                 mk(
@@ -194,7 +207,11 @@ fn audit_unit(rel: &str, unit: &Unit, lang: &str, store: &NarrationStore) -> Opt
             // the author lengthens it to a moderate spoken description.
             let thin = unit.kind == UnitKind::Image && text.chars().count() < MIN_ALT_CHARS;
             Some(mk(
-                if thin { Severity::Warning } else { Severity::Info },
+                if thin {
+                    Severity::Warning
+                } else {
+                    Severity::Info
+                },
                 rule,
                 format!(
                     "{} → spoken from authored text{}",
@@ -208,7 +225,12 @@ fn audit_unit(rel: &str, unit: &Unit, lang: &str, store: &NarrationStore) -> Opt
             ))
         }
         // A narrated resource: stored already (info) or still to generate (warning).
-        Speech::Narrated { rule, kind, key, src } => {
+        Speech::Narrated {
+            rule,
+            kind,
+            key,
+            src,
+        } => {
             if store.contains(&key) {
                 Some(mk(
                     Severity::Info,
@@ -252,7 +274,9 @@ fn kind_word(kind: UnitKind) -> &'static str {
 fn silent_hint(rule: &str) -> &'static str {
     match rule {
         "speak/image-no-alt" => "add alt text: a moderate spoken description of the figure",
-        "speak/html" => "embedded HTML isn't narrated — draw it as inline <svg> or describe it in prose",
+        "speak/html" => {
+            "embedded HTML isn't narrated — draw it as inline <svg> or describe it in prose"
+        }
         "speak/table-empty" => "table has no cell text to narrate",
         "speak/code-empty" => "empty code block",
         _ => "no handler for this resource yet",
@@ -315,7 +339,10 @@ fn collect_markdown(paths: &[PathBuf]) -> Result<Vec<(String, String)>, String> 
                 let entry = entry.map_err(|e| format!("walk {}: {e}", p.display()))?;
                 let path = entry.path();
                 if path.is_file()
-                    && matches!(FileType::from_path(&path.to_string_lossy()), FileType::Markdown)
+                    && matches!(
+                        FileType::from_path(&path.to_string_lossy()),
+                        FileType::Markdown
+                    )
                 {
                     push_md(path, &mut out)?;
                 }
@@ -328,7 +355,10 @@ fn collect_markdown(paths: &[PathBuf]) -> Result<Vec<(String, String)>, String> 
 }
 
 fn push_md(path: &Path, out: &mut Vec<(String, String)>) -> Result<(), String> {
-    if !matches!(FileType::from_path(&path.to_string_lossy()), FileType::Markdown) {
+    if !matches!(
+        FileType::from_path(&path.to_string_lossy()),
+        FileType::Markdown
+    ) {
         return Ok(());
     }
     let source =

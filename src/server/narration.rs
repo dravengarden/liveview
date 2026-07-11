@@ -84,8 +84,7 @@ impl Sidecar {
     pub fn load(book_root: &Path, lang: &str) -> Result<Sidecar, String> {
         let p = Self::path(book_root, lang);
         match std::fs::read_to_string(&p) {
-            Ok(s) => serde_json::from_str(&s)
-                .map_err(|e| format!("parse {}: {e}", p.display())),
+            Ok(s) => serde_json::from_str(&s).map_err(|e| format!("parse {}: {e}", p.display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Sidecar {
                 schema: 1,
                 prompt_version: 1,
@@ -107,12 +106,16 @@ impl NarrationStore {
     /// Nothing narrated — every non-prose resource resolves to a silent
     /// step-over. The runtime default until the pg table is populated.
     pub fn empty() -> Self {
-        Self { map: HashMap::new() }
+        Self {
+            map: HashMap::new(),
+        }
     }
 
     /// Build from `(key, text)` pairs (pg rows, or a sidecar's entries).
     pub fn from_pairs(pairs: impl IntoIterator<Item = (String, String)>) -> Self {
-        Self { map: pairs.into_iter().collect() }
+        Self {
+            map: pairs.into_iter().collect(),
+        }
     }
 
     /// Build the resolve view from a loaded sidecar (offline tools).
@@ -145,8 +148,16 @@ mod tests {
     #[test]
     fn key_separates_lang_kind_and_content() {
         let src = "graph TD; A-->B;";
-        assert_ne!(key("zh", KIND_DIAGRAM, src), key("en", KIND_DIAGRAM, src), "lang");
-        assert_ne!(key("zh", KIND_DIAGRAM, src), key("zh", KIND_CODE, src), "kind");
+        assert_ne!(
+            key("zh", KIND_DIAGRAM, src),
+            key("en", KIND_DIAGRAM, src),
+            "lang"
+        );
+        assert_ne!(
+            key("zh", KIND_DIAGRAM, src),
+            key("zh", KIND_CODE, src),
+            "kind"
+        );
         assert_ne!(
             key("zh", KIND_DIAGRAM, "A-->B"),
             key("zh", KIND_DIAGRAM, "A-->C"),

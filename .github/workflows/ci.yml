@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  server-and-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-action@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - uses: cachix/install-nix-action@v31
+
+      - name: Materialize shared UI
+        run: make shell
+
+      - name: Install web dependencies
+        working-directory: web
+        run: deno install --allow-scripts
+
+      - name: Check server
+        run: |
+          cargo fmt --check
+          cargo clippy -- -D warnings
+          cargo test --all-targets
+
+      - name: Check native sync core
+        run: |
+          cargo fmt --manifest-path lv-sync/Cargo.toml --check
+          cargo clippy --manifest-path lv-sync/Cargo.toml --all-targets -- -D warnings
+          cargo test --manifest-path lv-sync/Cargo.toml
+          cargo fmt --manifest-path plugins/lvsync/Cargo.toml --check
+          cargo fmt --manifest-path app/src-tauri/Cargo.toml --check
+
+      - name: Check web
+        working-directory: web
+        run: |
+          deno task typecheck
+          deno task build
+
+      - name: Validate native dependency graph
+        run: cargo metadata --locked --manifest-path app/src-tauri/Cargo.toml --format-version 1 >/dev/null

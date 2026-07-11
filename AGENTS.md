@@ -94,9 +94,8 @@ shared across all the portal apps, not just liveview).
   doesn't write its initial value until the first `.set()`.)
 - **PWA / native**: hard iOS limits (lock-screen/background audio needs the Tauri
   shell, not the PWA). The Tauri macOS build must pin `time = 0.3.47` (0.3.48
-  trips an E0119 in tauri-utils); `src-tauri/Cargo.lock` is untracked, so the pin
-  isn't durable — re-check it. (memories: liveview-pwa-apis, liveview-tauri-shell,
-  liveview-tauri-macos-build)
+  trips an E0119 in tauri-utils); `app/src-tauri/Cargo.lock` is tracked and CI
+  checks the native dependency graph with `--locked`.
 
 Authoring books that this reader serves: see the **books** project's AGENTS.md
 (the check + fix + chart-review delivery gate).

@@ -105,7 +105,11 @@ pub fn collect(
         if book_filter.is_some_and(|f| f != book.slug) {
             continue;
         }
-        let Some(text) = book.renditions.iter().find(|r| r.kind == RenditionKind::Text) else {
+        let Some(text) = book
+            .renditions
+            .iter()
+            .find(|r| r.kind == RenditionKind::Text)
+        else {
             continue;
         };
         for ed in &text.editions {
@@ -116,8 +120,8 @@ pub fn collect(
                 if !rel.ends_with(".md") {
                     continue;
                 }
-                let source =
-                    std::fs::read_to_string(&abs).map_err(|e| format!("read {}: {e}", abs.display()))?;
+                let source = std::fs::read_to_string(&abs)
+                    .map_err(|e| format!("read {}: {e}", abs.display()))?;
                 let charts = charts_in(&source);
                 if charts.is_empty() {
                     continue;
@@ -125,8 +129,7 @@ pub fn collect(
                 // Reader hash route: `#<encodeURIComponent(slug/rel)>&lang=<lang>`
                 // — mirrors the SPA's buildHash exactly.
                 let path = format!("{}/{}", book.slug, rel);
-                let page_url =
-                    format!("{base}/#{}&lang={}", encode_uri_component(&path), ed.lang);
+                let page_url = format!("{base}/#{}&lang={}", encode_uri_component(&path), ed.lang);
                 for c in charts {
                     out.push(ChartTarget {
                         book: book.slug.clone(),

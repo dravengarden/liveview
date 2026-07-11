@@ -310,5 +310,4 @@ mod tests {
         // Second sentence starts right where the silence ended (no drift).
         assert_eq!(marks[1].start_ms, marks[0].end_ms);
     }
-
 }

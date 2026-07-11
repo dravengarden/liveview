@@ -179,7 +179,10 @@ async fn generate(
     match crate::transcode_audio(mp3).await {
         Ok(caf) => {
             let key = format!("{audio_hash}.{}", crate::AUDIO_VARIANT.tag);
-            if let Err(e) = obj.put_if_absent(&key, caf, crate::AUDIO_VARIANT.mime).await {
+            if let Err(e) = obj
+                .put_if_absent(&key, caf, crate::AUDIO_VARIANT.mime)
+                .await
+            {
                 tracing::warn!(error = %e, "pre-gen CAF store failed");
             }
         }
@@ -225,7 +228,12 @@ async fn commit_leaf_node(pg: &PgStore, task: &AudioTask) {
 }
 
 /// Upload bytes content-addressed (skip if present) + record the asset row.
-async fn put_blob(pg: &PgStore, obj: &ObjStore, bytes: Vec<u8>, mime: &str) -> Result<String, String> {
+async fn put_blob(
+    pg: &PgStore,
+    obj: &ObjStore,
+    bytes: Vec<u8>,
+    mime: &str,
+) -> Result<String, String> {
     let hash = blake3::hash(&bytes).to_hex().to_string();
     let size = bytes.len() as i64;
     obj.put_if_absent(&hash, bytes, mime).await?;

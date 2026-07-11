@@ -90,8 +90,7 @@ fn validate_formula(literal: &str, display: bool) -> Option<(String, Option<Stri
 // We keep `<message> at position <N>` and drop the caret-context dump (which is
 // full of combining-underline marks), then unescape the doubled backslashes the
 // debug wrapper introduced.
-static POSITION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r" at position \d+:").unwrap());
+static POSITION_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" at position \d+:").unwrap());
 
 /// Turn a raw `katex::Error` string into a concise `(message, hint)`.
 fn clean_katex_error(raw: &str) -> (String, Option<String>) {
@@ -166,7 +165,9 @@ mod tests {
         assert_eq!(d[0].severity, Severity::Warning);
         assert_eq!(d[0].source, "math");
         assert!(
-            d[0].message.to_lowercase().contains("undefined control sequence"),
+            d[0].message
+                .to_lowercase()
+                .contains("undefined control sequence"),
             "message was: {}",
             d[0].message
         );

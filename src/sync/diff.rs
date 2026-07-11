@@ -39,7 +39,11 @@ pub fn plan(new: &Dag, stored: &Dag) -> Plan {
     if new.is_empty() && stored.is_empty() {
         return p;
     }
-    let new_root = if new.is_empty() { None } else { Some(new.root.as_str()) };
+    let new_root = if new.is_empty() {
+        None
+    } else {
+        Some(new.root.as_str())
+    };
     let stored_root = if stored.is_empty() {
         None
     } else {
@@ -76,7 +80,9 @@ fn diff_node(
             Some(Node::Leaf(l)) => plan.put.push(l.clone()),
             Some(Node::Tree(new_children)) => {
                 let stored_children: HashMap<&str, &str> = match stored.nodes.get(s) {
-                    Some(Node::Tree(c)) => c.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect(),
+                    Some(Node::Tree(c)) => {
+                        c.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect()
+                    }
                     // Stored side was a leaf (kind/shape changed): treat its
                     // leaves as deletions, then add the new subtree.
                     Some(Node::Leaf(l)) => {
@@ -85,8 +91,10 @@ fn diff_node(
                     }
                     None => HashMap::new(),
                 };
-                let new_names: HashMap<&str, &str> =
-                    new_children.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+                let new_names: HashMap<&str, &str> = new_children
+                    .iter()
+                    .map(|(k, v)| (k.as_str(), v.as_str()))
+                    .collect();
 
                 for (name, child) in new_children {
                     diff_node(
@@ -187,7 +195,10 @@ mod tests {
 
     #[test]
     fn removed_book_deletes_all_its_leaves() {
-        let stored = corpus(&[("b1", &[("00", "h0")]), ("b2", &[("00", "g0"), ("01", "g1")])]);
+        let stored = corpus(&[
+            ("b1", &[("00", "h0")]),
+            ("b2", &[("00", "g0"), ("01", "g1")]),
+        ]);
         let new = corpus(&[("b1", &[("00", "h0")])]);
         let p = plan(&new, &stored);
         assert!(p.put.is_empty());

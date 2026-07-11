@@ -131,7 +131,10 @@ mod tests {
     fn wrong_type_and_missing_elements_flagged() {
         let d = check("{\"type\": \"drawing\"}\n");
         let rules: Vec<&str> = d.iter().map(|x| x.rule.as_str()).collect();
-        assert_eq!(rules, ["excalidraw/invalid-schema", "excalidraw/invalid-schema"]);
+        assert_eq!(
+            rules,
+            ["excalidraw/invalid-schema", "excalidraw/invalid-schema"]
+        );
         assert!(d.iter().all(|x| x.severity == Severity::Warning));
     }
 }

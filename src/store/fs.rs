@@ -18,8 +18,8 @@ use crate::server::tree::build_virtual_tree;
 use crate::shared::FileType;
 use crate::store::content::{BlobStore, ContentStore};
 use crate::store::pg::{
-    AssetRow, AudioTaskRollup, BookRow, ChapterRow, DagChapter, EditionRow, ManifestChapter, ProgressEntry,
-    RenditionRow,
+    AssetRow, AudioTaskRollup, BookRow, ChapterRow, DagChapter, EditionRow, ManifestChapter,
+    ProgressEntry, RenditionRow,
 };
 
 pub struct FsStore {
@@ -197,7 +197,8 @@ impl ContentStore for FsStore {
         if matches!(ft, FileType::Image | FileType::Pdf) {
             // Binary: cache the bytes content-addressed; api_raw fetches them via
             // BlobStore::get(asset_hash) — the same FsStore instance.
-            let bytes = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+            let bytes =
+                std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
             let hash = blake3_hex(&bytes);
             let mime = mime_for(rel_path);
             self.blobs
@@ -208,8 +209,8 @@ impl ContentStore for FsStore {
             row.content_hash = hash.clone();
             row.asset_hash = Some(hash);
         } else {
-            let src =
-                std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+            let src = std::fs::read_to_string(&path)
+                .map_err(|e| format!("read {}: {e}", path.display()))?;
             row.content_hash = blake3_hex(src.as_bytes());
             row.html = Some(crate::server::renderer::render_file(&src, &ft));
             row.markdown = Some(src);
@@ -218,13 +219,16 @@ impl ContentStore for FsStore {
     }
 
     async fn get_asset(&self, content_hash: &str) -> Result<Option<AssetRow>, String> {
-        Ok(self.blobs.lock().unwrap().get(content_hash).map(|(b, m)| {
-            AssetRow {
+        Ok(self
+            .blobs
+            .lock()
+            .unwrap()
+            .get(content_hash)
+            .map(|(b, m)| AssetRow {
                 content_hash: content_hash.to_string(),
                 mime: m.clone(),
                 size: b.len() as i64,
-            }
-        }))
+            }))
     }
 
     async fn upsert_asset(&self, _hash: &str, _mime: &str, _size: i64) -> Result<(), String> {

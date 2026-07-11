@@ -217,9 +217,7 @@ mod tests {
 
     #[test]
     fn unclosed_tag_flagged() {
-        let d = check(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\">\n<rect x=\"1\">\n</svg>\n",
-        );
+        let d = check("<svg xmlns=\"http://www.w3.org/2000/svg\">\n<rect x=\"1\">\n</svg>\n");
         assert_eq!(d.len(), 1, "got: {d:?}");
         assert_eq!(d[0].rule, "svg/parse-error");
         assert_eq!(d[0].severity, Severity::Warning);
@@ -227,9 +225,7 @@ mod tests {
 
     #[test]
     fn unescaped_ampersand_flagged() {
-        let d = check(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\">\n<text>A & B</text>\n</svg>\n",
-        );
+        let d = check("<svg xmlns=\"http://www.w3.org/2000/svg\">\n<text>A & B</text>\n</svg>\n");
         assert_eq!(d.len(), 1, "unescaped & not flagged: {d:?}");
     }
 

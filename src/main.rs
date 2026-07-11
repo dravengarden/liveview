@@ -99,8 +99,10 @@ mod embedded_assets {
             for e in dir.entries() {
                 match e {
                     include_dir::DirEntry::File(f) => {
-                        if let Some(rel) =
-                            f.path().to_str().and_then(|p| p.strip_prefix("app-bundle/"))
+                        if let Some(rel) = f
+                            .path()
+                            .to_str()
+                            .and_then(|p| p.strip_prefix("app-bundle/"))
                         {
                             out.push(rel.to_string());
                         }
@@ -162,11 +164,7 @@ mod embedded_assets {
             // `no-cache`: the navigation entry point must revalidate so a deploy's
             // new bundle refs (and thus the new SW) reach the device — same reason
             // as `sw.js` in `cache_control_for`.
-            Some(html) => (
-                [(header::CACHE_CONTROL, "no-cache")],
-                Html(html),
-            )
-                .into_response(),
+            Some(html) => ([(header::CACHE_CONTROL, "no-cache")], Html(html)).into_response(),
             None => StatusCode::NOT_FOUND.into_response(),
         }
     }
@@ -250,7 +248,11 @@ fn main() {
 
     // `liveview narrate-plan` — offline; emit the skill's to-generate narration list.
     if let Some(Command::NarratePlan(args)) = cli.command.clone() {
-        std::process::exit(check::readaloud::plan_run(&args.paths, &args.lang, args.format));
+        std::process::exit(check::readaloud::plan_run(
+            &args.paths,
+            &args.lang,
+            args.format,
+        ));
     }
 
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
@@ -308,14 +310,13 @@ fn run_targets(args: &cli::TargetsArgs) -> i32 {
             return 2;
         }
     };
-    let targets =
-        match check::targets::collect(&resolved, &args.base_url, args.book.as_deref()) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("targets: {e}");
-                return 2;
-            }
-        };
+    let targets = match check::targets::collect(&resolved, &args.base_url, args.book.as_deref()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("targets: {e}");
+            return 2;
+        }
+    };
     match args.format {
         cli::OutputFormat::Json => {
             println!(
@@ -501,7 +502,11 @@ fn build_apm_sink() -> Option<ApmSink> {
         .build()
         .map_err(|e| tracing::warn!(error = %e, "apm http client build failed"))
         .ok()?;
-    Some(ApmSink { client, vl_url, token })
+    Some(ApmSink {
+        client,
+        vl_url,
+        token,
+    })
 }
 
 /// Listen for `liveview sync`'s `NOTIFY liveview_reload`; on each, reload the
@@ -598,8 +603,7 @@ async fn run(cli: Cli, server: config::ServerCfg) {
     let (tx, _rx) = broadcast::channel::<String>(64);
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     let tts_cmd = env("LIVEVIEW_EDGE_TTS_CMD").unwrap_or_else(|| "edge-tts".to_string());
-    let tts_voice =
-        env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string());
+    let tts_voice = env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string());
 
     // Drain the audio task queue in the background (sync only enqueues now).
     crate::server::audio_worker::spawn(worker_pg, worker_obj, tts_cmd.clone(), tx.clone());
@@ -704,7 +708,10 @@ async fn api_blob(
     match range {
         Some((start, end)) => base
             .status(StatusCode::PARTIAL_CONTENT)
-            .header(header::CONTENT_RANGE, format!("bytes {start}-{end}/{total}"))
+            .header(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{total}"),
+            )
             .header(header::CONTENT_LENGTH, end - start + 1)
             .body(Body::from(data[start as usize..=end as usize].to_vec()))
             .unwrap()
@@ -718,22 +725,41 @@ async fn api_blob(
     }
 }
 
+fn store_unavailable(operation: &'static str, error: String) -> Response {
+    tracing::error!(operation, %error, "content store unavailable");
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(serde_json::json!({
+            "error": "content store unavailable",
+            "operation": operation,
+        })),
+    )
+        .into_response()
+}
+
 /// `GET /api/manifest` — the top-level Merkle manifest: the deploy root + each
 /// book's subtree hash (the SW's O(1) "anything changed?" + per-book prune) plus
 /// an audio-readiness rollup for the shelf badge.
 async fn api_manifest(State(state): State<SharedState>) -> impl IntoResponse {
-    let (root, books) = state.store.manifest_books().await.unwrap_or((None, Vec::new()));
+    let (root, books) = match state.store.manifest_books().await {
+        Ok(value) => value,
+        Err(error) => return store_unavailable("manifest_books", error),
+    };
     let mut audio: std::collections::HashMap<String, (i64, i64)> = std::collections::HashMap::new();
-    for r in state.store.audio_task_rollup().await.unwrap_or_default() {
+    let audio_rollup = match state.store.audio_task_rollup().await {
+        Ok(value) => value,
+        Err(error) => return store_unavailable("audio_task_rollup", error),
+    };
+    for r in audio_rollup {
         if let Some(s) = r.book_slug {
             audio.insert(s, (r.done, r.total));
         }
     }
-    let updated: std::collections::HashMap<String, i64> = state
-        .store
-        .list_books()
-        .await
-        .unwrap_or_default()
+    let books_updated = match state.store.list_books().await {
+        Ok(value) => value,
+        Err(error) => return store_unavailable("list_books", error),
+    };
+    let updated: std::collections::HashMap<String, i64> = books_updated
         .into_iter()
         .map(|b| (b.slug, b.updated_at))
         .collect();
@@ -759,7 +785,10 @@ async fn api_manifest_book(
     State(state): State<SharedState>,
     axum::extract::Path(slug): axum::extract::Path<String>,
 ) -> impl IntoResponse {
-    let chapters = state.store.manifest_chapters(&slug).await.unwrap_or_default();
+    let chapters = match state.store.manifest_chapters(&slug).await {
+        Ok(value) => value,
+        Err(error) => return store_unavailable("manifest_chapters", error),
+    };
     let arr: Vec<_> = chapters
         .iter()
         .map(|c| {
@@ -794,13 +823,22 @@ async fn api_manifest_book(
 /// manifest's root: if equal, the whole tree is unchanged → reuse everything,
 /// skip the full `/api/dag` fetch + the per-resource rescan. One hash, no work.
 async fn api_root(State(state): State<SharedState>) -> impl IntoResponse {
-    let (root, _) = state.store.manifest_books().await.unwrap_or((None, Vec::new()));
+    let (root, _) = match state.store.manifest_books().await {
+        Ok(value) => value,
+        Err(error) => return store_unavailable("manifest_books", error),
+    };
     Json(serde_json::json!({ "root": root })).into_response()
 }
 
 async fn api_dag(State(state): State<SharedState>) -> impl IntoResponse {
-    let (root, _) = state.store.manifest_books().await.unwrap_or((None, Vec::new()));
-    let chapters = state.store.dag_chapters().await.unwrap_or_default();
+    let (root, _) = match state.store.manifest_books().await {
+        Ok(value) => value,
+        Err(error) => return store_unavailable("manifest_books", error),
+    };
+    let chapters = match state.store.dag_chapters().await {
+        Ok(value) => value,
+        Err(error) => return store_unavailable("dag_chapters", error),
+    };
     let mut resources: Vec<serde_json::Value> = Vec::new();
     for c in &chapters {
         let doc = format!("{}/{}/{}/{}", c.book_slug, c.rendition, c.lang, c.rel_path);
@@ -891,12 +929,19 @@ async fn api_dag(State(state): State<SharedState>) -> impl IntoResponse {
 /// `GET /api/sizes` — PRECOMPUTED download totals (per-book + global), keyed by
 /// the deploy root, so the Downloads UI gets a TINY response instead of fetching
 /// + parsing the ~4 MB `/api/dag` just to sum sizes. Same byte accounting as the
+///
 /// dag (audio ≈ source ×0.33 compressed). The client caches this by `root` and
 /// re-fetches only when the root changes; the per-device CACHED progress is the
 /// client's own index — this endpoint is the denominator, not the numerator.
 async fn api_sizes(State(state): State<SharedState>) -> impl IntoResponse {
-    let (root, _) = state.store.manifest_books().await.unwrap_or((None, Vec::new()));
-    let chapters = state.store.dag_chapters().await.unwrap_or_default();
+    let (root, _) = match state.store.manifest_books().await {
+        Ok(value) => value,
+        Err(error) => return store_unavailable("manifest_books", error),
+    };
+    let chapters = match state.store.dag_chapters().await {
+        Ok(value) => value,
+        Err(error) => return store_unavailable("dag_chapters", error),
+    };
     #[derive(Default)]
     struct Agg {
         audio_bytes: i64,
@@ -986,7 +1031,11 @@ async fn api_ingest(
             ev.insert("received_at".to_string(), serde_json::json!(received_at));
         }
         // VL's default message column: the event type, for readable log rows.
-        let msg = ev.get("event_type").and_then(|v| v.as_str()).unwrap_or("event").to_string();
+        let msg = ev
+            .get("event_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("event")
+            .to_string();
         ev.insert("_msg".to_string(), serde_json::json!(msg));
         if let Ok(line) = serde_json::to_string(ev) {
             body.push_str(&line);
@@ -1061,7 +1110,10 @@ fn build_app(state: SharedState) -> Router {
     {
         api_router
             // OTA web bundle for the native shell (more specific than /{*path}).
-            .route("/app-dist/manifest.json", get(embedded_assets::app_dist_manifest))
+            .route(
+                "/app-dist/manifest.json",
+                get(embedded_assets::app_dist_manifest),
+            )
             .route("/app-dist/{*path}", get(embedded_assets::serve_app_dist))
             .route("/", get(embedded_assets::serve_index))
             .route("/assets/{*path}", get(embedded_assets::serve_assets))
@@ -1842,7 +1894,13 @@ async fn api_units(
     };
     match state
         .store
-        .get_chapter_fallback(&ctx.slug, ctx.kind.as_str(), &ctx.lang, &ctx.default_lang, &ctx.rest)
+        .get_chapter_fallback(
+            &ctx.slug,
+            ctx.kind.as_str(),
+            &ctx.lang,
+            &ctx.default_lang,
+            &ctx.rest,
+        )
         .await
     {
         Ok(Some((row, served_lang))) => {
@@ -1896,7 +1954,16 @@ pub const AUDIO_VARIANT: AudioVariant = AudioVariant {
     tag: "op16c",
     mime: "audio/x-caf",
     ext: "caf",
-    args: &["-c:a", "libopus", "-b:a", "16k", "-ac", "1", "-application", "voip"],
+    args: &[
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "16k",
+        "-ac",
+        "1",
+        "-application",
+        "voip",
+    ],
 };
 
 /// Transcode an MP3 (`src`) per `AUDIO_VARIANT`. ffmpeg reads stdin and writes a
@@ -1908,7 +1975,11 @@ pub async fn transcode_audio(src: Vec<u8>) -> Result<Vec<u8>, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    tmp.push(format!("lvtc-{}-{nanos}.{}", std::process::id(), AUDIO_VARIANT.ext));
+    tmp.push(format!(
+        "lvtc-{}-{nanos}.{}",
+        std::process::id(),
+        AUDIO_VARIANT.ext
+    ));
     let mut cmd = tokio::process::Command::new("ffmpeg");
     cmd.arg("-v").arg("error").arg("-y").arg("-i").arg("pipe:0");
     for a in AUDIO_VARIANT.args {
@@ -1947,7 +2018,10 @@ async fn compressed_audio(
     }
     match transcode_audio(data.clone()).await {
         Ok(b) => {
-            let _ = state.obj.put_if_absent(&key, b.clone(), AUDIO_VARIANT.mime).await;
+            let _ = state
+                .obj
+                .put_if_absent(&key, b.clone(), AUDIO_VARIANT.mime)
+                .await;
             (b, AUDIO_VARIANT.mime)
         }
         Err(e) => {
@@ -2062,7 +2136,11 @@ async fn api_audio(
     // ALWAYS the compressed variant — MP3 is fully sunset client-side (one format;
     // the source MP3 is only the internal transcode input). Cached by the source
     // hash (+ ".tail" when the bookend cue is baked in, which differs from the blob).
-    let ck = if is_bookend { format!("{hash}.tail") } else { hash.clone() };
+    let ck = if is_bookend {
+        format!("{hash}.tail")
+    } else {
+        hash.clone()
+    };
     let (bytes, mime) = compressed_audio(&state, &ck, data).await;
     serve_audio_range(bytes, &headers, mime)
 }
@@ -2168,7 +2246,13 @@ async fn ensure_text_audio(
     // up. (The overlay is the audiobook rendition's own curated script.)
     let (row, served) = state
         .store
-        .get_chapter_fallback(&ctx.slug, ctx.kind.as_str(), &ctx.lang, &ctx.default_lang, &ctx.rest)
+        .get_chapter_fallback(
+            &ctx.slug,
+            ctx.kind.as_str(),
+            &ctx.lang,
+            &ctx.default_lang,
+            &ctx.rest,
+        )
         .await
         .ok()
         .flatten()
@@ -2196,7 +2280,13 @@ async fn ensure_text_audio(
     // Re-check after acquiring: a prior holder may have just filled the hashes.
     if let Ok(Some((fresh, _))) = state
         .store
-        .get_chapter_fallback(&ctx.slug, ctx.kind.as_str(), &ctx.lang, &ctx.default_lang, &ctx.rest)
+        .get_chapter_fallback(
+            &ctx.slug,
+            ctx.kind.as_str(),
+            &ctx.lang,
+            &ctx.default_lang,
+            &ctx.rest,
+        )
         .await
     {
         if let (Some(a), Some(m)) = (fresh.audio_hash, fresh.marks_hash) {
@@ -2390,9 +2480,13 @@ mod apm_tests {
     async fn ingest_rejects_missing_or_wrong_token() {
         let st = state_with(Some(sink("http://127.0.0.1:1/unused", Some("s3cr3t")))).await;
 
-        let missing = api_ingest(State(st.clone()), HeaderMap::new(), Json(one_event("d", "x")))
-            .await
-            .into_response();
+        let missing = api_ingest(
+            State(st.clone()),
+            HeaderMap::new(),
+            Json(one_event("d", "x")),
+        )
+        .await
+        .into_response();
         assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
 
         let mut wrong = HeaderMap::new();
@@ -2409,7 +2503,9 @@ mod apm_tests {
     async fn ingest_open_when_no_token_and_empty_is_ok() {
         let st = state_with(Some(sink("http://127.0.0.1:1/unused", None))).await;
         let empty: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
-        let r = api_ingest(State(st), HeaderMap::new(), Json(empty)).await.into_response();
+        let r = api_ingest(State(st), HeaderMap::new(), Json(empty))
+            .await
+            .into_response();
         assert_eq!(r.status(), StatusCode::OK);
     }
 

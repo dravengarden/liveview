@@ -9,8 +9,35 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  web:
+    name: Build web bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Materialize shared UI
+        run: make shell
+
+      - name: Build frontend
+        working-directory: web
+        run: |
+          deno install --allow-scripts
+          deno task build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+
   build:
     name: Build ${{ matrix.target }}
+    needs: web
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -32,16 +59,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Deno
-        uses: denoland/setup-deno@v2
+      - uses: actions/download-artifact@v4
         with:
-          deno-version: vx.x.x # latest stable
-
-      - name: Build frontend
-        run: |
-          cd web
-          deno install --allow-scripts
-          deno task build
+          name: web-dist
+          path: web/dist
 
       - name: Setup Rust
         uses: dtolnay/rust-action@stable
@@ -55,21 +76,21 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          tar -czvf ../../../lv-${{ matrix.target }}.tar.gz lv
+          tar -czvf ../../../liveview-${{ matrix.target }}.tar.gz liveview
           cd ../../..
 
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          7z a ../../../lv-${{ matrix.target }}.zip lv.exe
+          7z a ../../../liveview-${{ matrix.target }}.zip liveview.exe
           cd ../../..
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: lv-${{ matrix.target }}
-          path: lv-${{ matrix.target }}.*
+          name: liveview-${{ matrix.target }}
+          path: liveview-${{ matrix.target }}.*
 
   release:
     name: Create Release
@@ -93,33 +114,6 @@ jobs:
           files: artifacts/*
           generate_release_notes: true
 
-  publish-crates:
-    name: Publish to crates.io
-    needs: release
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Deno
-        uses: denoland/setup-deno@v2
-        with:
-          deno-version: vx.x.x # latest stable
-
-      - name: Build frontend
-        run: |
-          cd web
-          deno install --allow-scripts
-          deno task build
-
-      - name: Setup Rust
-        uses: dtolnay/rust-action@stable
-
-      - name: Publish to crates.io
-        run: cargo publish --features embedded
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
   publish-npm:
     name: Publish to npm
     needs: release
@@ -138,7 +132,7 @@ jobs:
         run: |
           cd npm
           VERSION=${GITHUB_REF_NAME#v}
-          npm version $VERSION --no-git-tag-version
+          npm version "$VERSION" --no-git-tag-version
 
       - name: Publish to npm
         run: |

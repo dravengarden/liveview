@@ -732,7 +732,7 @@ impl<'a> TypeChecker<'a> {
                 // is what lets a widget RESHAPE a series (Bollinger bands widening
                 // with k), not just filter it. Columns added earlier are in scope
                 // for later ones, so a chain can build on itself.
-                if args.len() < 3 || args.len() % 2 == 0 {
+                if args.len() < 3 || args.len().is_multiple_of(2) {
                     return Err(ExprError::new(
                         "`with` takes a dataset then (name, expression) pairs: with(ds, 'col', expr, …)",
                     ));

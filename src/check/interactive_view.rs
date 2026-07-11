@@ -443,9 +443,7 @@ impl<'a> Checker<'a> {
                 }
                 Block::Panel { children, .. }
                 | Block::Stack { children }
-                | Block::Columns { children, .. } => {
-                    Self::collect_chart_meta(children, out)
-                }
+                | Block::Columns { children, .. } => Self::collect_chart_meta(children, out),
                 Block::Tabs { items } => {
                     for t in items {
                         Self::collect_chart_meta(&t.children, out)
@@ -2297,9 +2295,7 @@ mod tests {
 
     #[test]
     fn chart_group_empty_rejected() {
-        let d = check(
-            r#"{"interactiveView":1,"view":[{"block":"chartGroup","charts":[]}]}"#,
-        );
+        let d = check(r#"{"interactiveView":1,"view":[{"block":"chartGroup","charts":[]}]}"#);
         assert!(
             rules(&d).contains(&"interactive-view/chart-group-empty"),
             "{d:?}"

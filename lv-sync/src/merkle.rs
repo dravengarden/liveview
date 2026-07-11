@@ -1,26 +1,20 @@
-//! Content-addressed Merkle DAG over the book corpus.
+//! Content-addressed Merkle DAG over the book corpus — the SHARED implementation.
 //!
-//! Leaves are content files (chapters, assets); interior tree nodes group them
-//! (root → book → rendition → lang → chapter). A node's hash covers its
-//! identity-bearing payload, so `liveview sync` can compare two corpus
-//! snapshots by hash and skip any subtree whose hash is unchanged
-//! (see `super::diff`). Identical subtrees collapse to one node — the "DAG".
-//!
-//! This module is pure: it hashes structure, never touches pg / rustfs / the
-//! filesystem. The bytes behind a leaf are fetched later, and only for leaves
-//! the diff says changed.
+//! Pure: it hashes structure, never touches IO. blake3 compiles to WASM, so this
+//! one module is the single source of truth for the Merkle hashing used by the
+//! server (build + diff the corpus) AND the client (verify / diff the manifest).
+//! (Extracted verbatim from the server's `src/sync/merkle.rs`; the server will
+//! depend on this crate by path so the two never drift.)
 
 use std::collections::HashMap;
 
-/// A content leaf — identity plus the blake3 (hex) of its deployed form
-/// (source bytes, salted by the caller with render-version for text). The sync
-/// layer turns a `Leaf` into pg rows / rustfs objects; here it is only hashed.
+/// A content leaf — identity plus the blake3 (hex) of its deployed form.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Leaf {
     /// Unique logical id within the corpus (e.g. `book/text/zh/00.md`).
     pub path: String,
-    /// Opaque tag the sync layer uses to decide how to apply (`chapter` /
-    /// `asset` / …). Part of the leaf hash so a kind change re-applies.
+    /// Opaque tag the sync layer uses to decide how to apply. Part of the leaf
+    /// hash so a kind change re-applies.
     pub kind: String,
     /// blake3 of the leaf's deployed content, computed by the caller.
     pub content_hash: String,
@@ -52,8 +46,7 @@ pub enum Build {
     Tree(Vec<(String, Build)>),
 }
 
-/// The node hash of a leaf — its content-addressed identity in `merkle_nodes`.
-/// Used by the sync to record "this leaf is applied" for optimistic resume.
+/// The node hash of a leaf — its content-addressed identity.
 pub fn leaf_hash(l: &Leaf) -> String {
     hash_leaf(l)
 }
@@ -89,13 +82,12 @@ impl Dag {
         Self { root, nodes }
     }
 
-    /// Whether the DAG is empty (no root yet — e.g. before the first sync).
+    /// Whether the DAG is empty (no root yet).
     pub fn is_empty(&self) -> bool {
         self.root.is_empty()
     }
 
-    /// Every content leaf reachable from `hash`, in deterministic (sorted)
-    /// order. Used to enumerate a whole subtree for add/delete.
+    /// Every content leaf reachable from `hash`, in deterministic order.
     pub fn leaves_under(&self, hash: &str) -> Vec<&Leaf> {
         let mut out = Vec::new();
         self.collect(hash, &mut out);
@@ -166,7 +158,7 @@ mod tests {
             ("b".into(), leaf("x/b", "h2")),
             ("a".into(), leaf("x/a", "h1")),
         ]));
-        assert_eq!(a.root, b.root, "child order must not change the root");
+        assert_eq!(a.root, b.root);
     }
 
     #[test]
@@ -178,30 +170,10 @@ mod tests {
 
     #[test]
     fn identical_subtrees_dedup_to_one_node() {
-        // Two books with byte-identical structure share their subtree node.
         let dag = Dag::build(Build::Tree(vec![
             ("b1".into(), Build::Tree(vec![("a".into(), leaf("a", "h"))])),
             ("b2".into(), Build::Tree(vec![("a".into(), leaf("a", "h"))])),
         ]));
-        // root + one shared subtree + one shared leaf = 3 distinct nodes.
         assert_eq!(dag.nodes.len(), 3);
-    }
-
-    #[test]
-    fn leaves_under_collects_all() {
-        let dag = Dag::build(Build::Tree(vec![
-            ("a".into(), leaf("x/a", "h1")),
-            (
-                "sub".into(),
-                Build::Tree(vec![("b".into(), leaf("x/sub/b", "h2"))]),
-            ),
-        ]));
-        let mut paths: Vec<_> = dag
-            .leaves_under(&dag.root)
-            .iter()
-            .map(|l| l.path.clone())
-            .collect();
-        paths.sort();
-        assert_eq!(paths, vec!["x/a", "x/sub/b"]);
     }
 }

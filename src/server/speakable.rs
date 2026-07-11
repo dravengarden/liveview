@@ -64,14 +64,23 @@ pub fn plan(unit: &Unit, lang: &str) -> Speech {
         // DISPLAY text (`unit.text`) is untouched, so the highlight still matches.
         UnitKind::Prose => {
             let text = normalize_inline(&unit.text, lang);
-            let text = if text.trim().is_empty() { unit.text.clone() } else { text };
-            Speech::Ready { rule: "speak/prose", text }
+            let text = if text.trim().is_empty() {
+                unit.text.clone()
+            } else {
+                text
+            };
+            Speech::Ready {
+                rule: "speak/prose",
+                text,
+            }
         }
         UnitKind::Image => image_plan(unit),
         UnitKind::Math => narrated("speak/math", narration::KIND_MATH, &unit.src, lang),
         UnitKind::Table => {
             if unit.src.trim().is_empty() {
-                Speech::Silent { rule: "speak/table-empty" }
+                Speech::Silent {
+                    rule: "speak/table-empty",
+                }
             } else {
                 narrated("speak/table", narration::KIND_TABLE, &unit.src, lang)
             }
@@ -82,7 +91,9 @@ pub fn plan(unit: &Unit, lang: &str) -> Speech {
             if unit.info.eq_ignore_ascii_case("mermaid") {
                 narrated("speak/diagram", narration::KIND_DIAGRAM, &unit.src, lang)
             } else if unit.src.trim().is_empty() {
-                Speech::Silent { rule: "speak/code-empty" }
+                Speech::Silent {
+                    rule: "speak/code-empty",
+                }
             } else {
                 narrated("speak/code", narration::KIND_CODE, &unit.src, lang)
             }
@@ -134,9 +145,14 @@ fn narrated(rule: &'static str, kind: &'static str, src: &str, lang: &str) -> Sp
 fn image_plan(unit: &Unit) -> Speech {
     let has_alt = !unit.src.trim().is_empty() && unit.src != unit.info;
     if has_alt {
-        Speech::Ready { rule: "speak/image-alt", text: unit.src.clone() }
+        Speech::Ready {
+            rule: "speak/image-alt",
+            text: unit.src.clone(),
+        }
     } else {
-        Speech::Silent { rule: "speak/image-no-alt" }
+        Speech::Silent {
+            rule: "speak/image-no-alt",
+        }
     }
 }
 
@@ -212,7 +228,11 @@ pub fn normalize_inline(text: &str, lang: &str) -> String {
     }
     // Hash only when it's actually hex (has a letter) — a 16+ digit DECIMAL run
     // is a number, so the keep-branch returns the original text unchanged.
-    let hash_word = if is_zh(lang) { "（某哈希值）" } else { " (a hash) " };
+    let hash_word = if is_zh(lang) {
+        "（某哈希值）"
+    } else {
+        " (a hash) "
+    };
     s = HASHHEX_RE
         .replace_all(&s, |c: &regex::Captures| {
             if c[0].bytes().any(|b| b.is_ascii_alphabetic()) {
@@ -232,7 +252,10 @@ mod tests {
     use crate::server::spoken::spoken_units;
 
     fn unit(md: &str, kind: UnitKind) -> Unit {
-        spoken_units(md).into_iter().find(|u| u.kind == kind).unwrap()
+        spoken_units(md)
+            .into_iter()
+            .find(|u| u.kind == kind)
+            .unwrap()
     }
 
     fn rule_of(s: &Speech) -> &'static str {
@@ -247,12 +270,20 @@ mod tests {
     fn mermaid_routes_to_diagram_not_code() {
         let u = unit("```mermaid\ngraph TD; A-->B;\n```\n", UnitKind::Code);
         match plan(&u, "en") {
-            Speech::Narrated { rule, kind, key, src } => {
+            Speech::Narrated {
+                rule,
+                kind,
+                key,
+                src,
+            } => {
                 assert_eq!(rule, "speak/diagram");
                 assert_eq!(kind, narration::KIND_DIAGRAM);
                 assert!(src.contains("A-->B"), "source preview lost");
                 // Key is stable + matches narration::key for the same inputs.
-                assert_eq!(key, narration::key("en", narration::KIND_DIAGRAM, "graph TD; A-->B;"));
+                assert_eq!(
+                    key,
+                    narration::key("en", narration::KIND_DIAGRAM, "graph TD; A-->B;")
+                );
             }
             other => panic!("expected Narrated diagram, got {}", rule_of(&other)),
         }
@@ -268,7 +299,9 @@ mod tests {
     fn table_routes_to_table_with_source() {
         let u = unit("| A | B |\n|---|---|\n| 1 | 2 |\n", UnitKind::Table);
         match plan(&u, "zh") {
-            Speech::Narrated { rule, kind, src, .. } => {
+            Speech::Narrated {
+                rule, kind, src, ..
+            } => {
                 assert_eq!(rule, "speak/table");
                 assert_eq!(kind, narration::KIND_TABLE);
                 assert!(src.contains("columns: A | B"), "table source preview lost");
@@ -319,7 +352,10 @@ mod tests {
         assert!(s.contains("(a link)") && !s.contains("http"), "url: {s}");
         let s = normalize_inline("发到 a.b+c@mail.co 或 0xdeadBEEF1234 看", "zh");
         assert!(s.contains("（邮箱）") && !s.contains('@'), "email: {s}");
-        assert!(s.contains("（某地址）") && !s.contains("0xdead"), "addr: {s}");
+        assert!(
+            s.contains("（某地址）") && !s.contains("0xdead"),
+            "addr: {s}"
+        );
         let s = normalize_inline("call +1 (800) 555-1234 now", "en");
         assert!(s.contains("(a phone number)"), "phone: {s}");
     }

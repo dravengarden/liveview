@@ -317,7 +317,11 @@ fn non_prose_block<'a>(node: &'a AstNode<'a>) -> Option<(UnitKind, String, Strin
                 collect_inline(d, &mut frags, &mut cur);
                 frags.push(cur);
                 let alt = join_wrapped(&frags);
-                let src = if alt.trim().is_empty() { link.url.clone() } else { alt };
+                let src = if alt.trim().is_empty() {
+                    link.url.clone()
+                } else {
+                    alt
+                };
                 return Some((UnitKind::Image, src, link.url.clone()));
             }
             NodeValue::Math(m) => return Some((UnitKind::Math, m.literal.clone(), String::new())),
@@ -362,7 +366,15 @@ fn table_source<'a>(table: &'a AstNode<'a>) -> String {
 
 /// A unit before its chapter-wide `idx` is assigned (set in `spoken_units`).
 fn mk(kind: UnitKind, blk: usize, line: usize, text: String, src: String, info: String) -> Unit {
-    Unit { idx: 0, kind, blk, line, text, src, info }
+    Unit {
+        idx: 0,
+        kind,
+        blk,
+        line,
+        text,
+        src,
+        info,
+    }
 }
 
 /// Emit the unit(s) for one block at top-level ordinal `blk` (source `line`),
@@ -374,18 +386,40 @@ fn emit_block<'a>(node: &'a AstNode<'a>, blk: usize, line: usize, out: &mut Vec<
             // Keep the fence language (first info-string token) so the registry
             // can route ```mermaid to the diagram narrator, not generic code.
             let lang = nc.info.split_whitespace().next().unwrap_or("").to_string();
-            out.push(mk(UnitKind::Code, blk, line, String::new(), nc.literal.clone(), lang));
+            out.push(mk(
+                UnitKind::Code,
+                blk,
+                line,
+                String::new(),
+                nc.literal.clone(),
+                lang,
+            ));
         }
         NodeValue::Table(_) => {
-            out.push(mk(UnitKind::Table, blk, line, String::new(), table_source(node), String::new()));
+            out.push(mk(
+                UnitKind::Table,
+                blk,
+                line,
+                String::new(),
+                table_source(node),
+                String::new(),
+            ));
         }
         NodeValue::HtmlBlock(nh) => {
             // Carry the raw HTML so the registry can describe an inline <svg>
             // diagram (else it stays a silent step-over, as before).
-            out.push(mk(UnitKind::Html, blk, line, String::new(), nh.literal.clone(), String::new()));
+            out.push(mk(
+                UnitKind::Html,
+                blk,
+                line,
+                String::new(),
+                nh.literal.clone(),
+                String::new(),
+            ));
         }
         // Structural / non-spoken — no unit, but the block ordinal still advances.
-        NodeValue::ThematicBreak | NodeValue::FootnoteDefinition(_) | NodeValue::FrontMatter(_) => {}
+        NodeValue::ThematicBreak | NodeValue::FootnoteDefinition(_) | NodeValue::FrontMatter(_) => {
+        }
         NodeValue::Paragraph | NodeValue::Heading(_) => {
             let prose = leaf_prose(node);
             if prose.trim().is_empty() {
@@ -396,7 +430,14 @@ fn emit_block<'a>(node: &'a AstNode<'a>, blk: usize, line: usize, out: &mut Vec<
                 let mut sentences = Vec::new();
                 segment_block(&prose, &mut sentences);
                 for s in sentences {
-                    out.push(mk(UnitKind::Prose, blk, line, s, String::new(), String::new()));
+                    out.push(mk(
+                        UnitKind::Prose,
+                        blk,
+                        line,
+                        s,
+                        String::new(),
+                        String::new(),
+                    ));
                 }
             }
         }
@@ -421,7 +462,14 @@ fn emit_block<'a>(node: &'a AstNode<'a>, blk: usize, line: usize, out: &mut Vec<
                 let mut sentences = Vec::new();
                 segment_block(&prose, &mut sentences);
                 for s in sentences {
-                    out.push(mk(UnitKind::Prose, blk, line, s, String::new(), String::new()));
+                    out.push(mk(
+                        UnitKind::Prose,
+                        blk,
+                        line,
+                        s,
+                        String::new(),
+                        String::new(),
+                    ));
                 }
             }
         }
@@ -560,8 +608,14 @@ mod tests {
         assert_eq!(code.info, "mermaid", "fence lang lost: {code:?}");
         assert!(code.src.contains("A-->B"), "code literal lost: {code:?}");
         let table = u.iter().find(|x| x.kind == UnitKind::Table).unwrap();
-        assert!(table.src.contains("columns: Name | Role"), "header lost: {table:?}");
-        assert!(table.src.contains("Ada | dev") && table.src.contains(" || "), "rows lost: {table:?}");
+        assert!(
+            table.src.contains("columns: Name | Role"),
+            "header lost: {table:?}"
+        );
+        assert!(
+            table.src.contains("Ada | dev") && table.src.contains(" || "),
+            "rows lost: {table:?}"
+        );
         let html = u.iter().find(|x| x.kind == UnitKind::Html).unwrap();
         assert!(html.src.contains("<svg"), "html literal lost: {html:?}");
     }
@@ -570,7 +624,10 @@ mod tests {
     fn units_carry_block_source_line_for_anchoring() {
         // line 1 = paragraph, line 3 = code fence (1-based, matching data-sourcepos).
         let u = spoken_units("first para.\n\n```rust\nfn x() {}\n```\n");
-        assert_eq!(u.iter().find(|x| x.kind == UnitKind::Prose).unwrap().line, 1);
+        assert_eq!(
+            u.iter().find(|x| x.kind == UnitKind::Prose).unwrap().line,
+            1
+        );
         assert_eq!(u.iter().find(|x| x.kind == UnitKind::Code).unwrap().line, 3);
     }
 
