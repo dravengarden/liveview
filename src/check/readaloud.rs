@@ -344,7 +344,11 @@ fn collect_markdown(paths: &[PathBuf]) -> Result<Vec<(String, String)>, String> 
         if p.is_file() {
             push_md(p, &mut out)?;
         } else if p.is_dir() {
-            for entry in WalkDir::new(p).sort_by_file_name() {
+            for entry in WalkDir::new(p)
+                .sort_by_file_name()
+                .into_iter()
+                .filter_entry(super::should_walk)
+            {
                 let entry = entry.map_err(|e| format!("walk {}: {e}", p.display()))?;
                 let path = entry.path();
                 if path.is_file()

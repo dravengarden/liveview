@@ -179,10 +179,44 @@ async function markdownFiles(inputs: string[]): Promise<string[]> {
     if (stat.isFile && /\.(md|markdown)$/i.test(input)) {
       files.push(input);
     } else if (stat.isDirectory) {
-      await walkMarkdown(input, files);
+      const tracked = await gitMarkdownFiles(input);
+      if (tracked === null) await walkMarkdown(input, files);
+      else files.push(...tracked);
     }
   }
   return files.sort();
+}
+
+/** Respect the repository's ignore contract when linting a worktree. This keeps
+ *  regeneratable MinerU output, build trees, and other ignored corpora out of the
+ *  same command CI runs, while still including both tracked files and untracked
+ *  authoring work that is not ignored. Non-git directories fall back to walking. */
+async function gitMarkdownFiles(dir: string): Promise<string[] | null> {
+  try {
+    const output = await new Deno.Command("git", {
+      args: [
+        "-C",
+        dir,
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        "*.md",
+        "*.markdown",
+      ],
+      stdout: "piped",
+      stderr: "null",
+    }).output();
+    if (!output.success) return null;
+    const base = dir.replace(/\/$/, "");
+    return new TextDecoder().decode(output.stdout).split("\0")
+      .filter(Boolean)
+      .map((path) => `${base}/${path}`);
+  } catch {
+    return null;
+  }
 }
 
 async function walkMarkdown(dir: string, files: string[]): Promise<void> {

@@ -26,7 +26,7 @@ pub mod typst;
 
 use std::path::{Path, PathBuf};
 
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 
 use crate::check::diagnostic::{render_human, render_json, worst_severity, Diagnostic, Severity};
 use crate::cli::OutputFormat;
@@ -186,7 +186,11 @@ fn collect_files(paths: &[PathBuf]) -> Result<Vec<CheckFile>, String> {
             }
         } else if p.is_dir() {
             // Recurse; sort entries for deterministic output across runs.
-            for entry in WalkDir::new(p).sort_by_file_name() {
+            for entry in WalkDir::new(p)
+                .sort_by_file_name()
+                .into_iter()
+                .filter_entry(should_walk)
+            {
                 let entry = entry.map_err(|e| format!("walk {}: {e}", p.display()))?;
                 let path = entry.path();
                 if path.is_file() && is_checkable(path) {
@@ -200,6 +204,22 @@ fn collect_files(paths: &[PathBuf]) -> Result<Vec<CheckFile>, String> {
         }
     }
     Ok(out)
+}
+
+/// Keep local/generated trees out of every corpus pass. In particular, `.build`
+/// is intentionally gitignored but often present on an authoring machine; if it
+/// leaks into `gate`, local results diverge from clean CI and warning budgets
+/// become dependent on disposable extraction artifacts. `.narration` is the one
+/// hidden directory kept because its checked-in JSON is production content.
+pub(crate) fn should_walk(entry: &DirEntry) -> bool {
+    if entry.depth() == 0 || !entry.file_type().is_dir() {
+        return true;
+    }
+    let name = entry.file_name().to_string_lossy();
+    if name == ".narration" {
+        return true;
+    }
+    !name.starts_with('.') && !matches!(name.as_ref(), "node_modules" | "target")
 }
 
 /// Does this path have any validator? The single source of truth is the
@@ -224,4 +244,24 @@ fn load_file(path: &Path, rel: &Path) -> Result<Option<CheckFile>, String> {
         source,
         file_type,
     }))
+}
+
+#[cfg(test)]
+mod collect_tests {
+    use super::*;
+
+    #[test]
+    fn collect_skips_generated_hidden_directories() {
+        let root = std::env::temp_dir().join(format!("liveview-check-walk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("zh")).unwrap();
+        std::fs::create_dir_all(root.join(".build")).unwrap();
+        std::fs::write(root.join("zh/kept.md"), "kept").unwrap();
+        std::fs::write(root.join(".build/ignored.md"), "ignored").unwrap();
+
+        let files = collect_files(std::slice::from_ref(&root)).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].path.ends_with("zh/kept.md"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

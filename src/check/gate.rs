@@ -174,7 +174,11 @@ fn discover_books(paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
             roots.insert(path.clone());
             continue;
         }
-        for entry in WalkDir::new(path).sort_by_file_name() {
+        for entry in WalkDir::new(path)
+            .sort_by_file_name()
+            .into_iter()
+            .filter_entry(super::should_walk)
+        {
             let entry = entry.map_err(|e| format!("walk {}: {e}", path.display()))?;
             if entry.file_type().is_file() && entry.file_name() == "book.toml" {
                 if let Some(parent) = entry.path().parent() {
