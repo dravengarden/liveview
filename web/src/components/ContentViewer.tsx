@@ -2,17 +2,19 @@ import { rem } from "@/px";
 import { lazy, Suspense } from "react";
 import { Box, CircularProgress, Skeleton, Typography } from "@mui/material";
 import { Description as FileIcon } from "@mui/icons-material";
-import { READING_COLUMN_MAX, type FileType, type Theme } from "@/types";
+import { type FileType, READING_COLUMN_MAX, type Theme } from "@/types";
 import { useI18n } from "@/i18n";
 import { MarkdownViewer } from "./MarkdownViewer";
 import { ImageViewer } from "./viewers/ImageViewer";
 import { JsonViewer } from "./viewers/JsonViewer";
+import { InteractiveViewViewer } from "./viewers/InteractiveViewViewer";
 
-// Markdown (the common path), the tiny image viewer, and the now-lightweight
-// JSON viewer stay eager. The rest are rare file types backed by heavy libs
-// (PDF.js, Excalidraw, a CSV grid, …); code-split them out of the main bundle
-// so opening a book doesn't ship code for file types it may never show. Named
-// exports → map to a default for React.lazy.
+// Markdown (the common path), the tiny image/JSON viewers, and interactive-view
+// stay eager. Markdown embeds InteractiveViewInline from that same module, so a
+// second dynamic import could not split it and only produced a Vite warning. The
+// remaining rare file types are backed by heavy libs (PDF.js, Excalidraw, a CSV
+// grid, …), so code-split those out of the main bundle. Named exports map to a
+// default for React.lazy.
 const PdfViewer = lazy(() =>
   import("./viewers/PdfViewer").then((m) => ({ default: m.PdfViewer }))
 );
@@ -33,12 +35,6 @@ const LatexViewer = lazy(() =>
 const TypstViewer = lazy(() =>
   import("./viewers/TypstViewer").then((m) => ({ default: m.TypstViewer }))
 );
-const InteractiveViewViewer = lazy(() =>
-  import("./viewers/InteractiveViewViewer").then((m) => ({
-    default: m.InteractiveViewViewer,
-  }))
-);
-
 interface ContentViewerProps {
   content: string | null;
   fileType: FileType;

@@ -141,8 +141,10 @@ web/src/apm.ts logEvent()          plugins/lvsync /apm/*         src/main.rs
   the cleanup (no cron).
 - **Auth** — bearer token: server reads `LIVEVIEW_APM_TOKEN[_FILE]`
   (`/etc/liveview/secrets/apm-token`, NixOS unit); client bakes the same value in via
-  Vite `VITE_APM_TOKEN`. **Both absent ⇒ open** (dev/LAN): the server logs a warning
-  and accepts unauthenticated, so nothing breaks until you provision both.
+  Vite `VITE_APM_TOKEN`. **Both absent ⇒ open** (dev/LAN): set
+  `LIVEVIEW_APM_ALLOW_UNAUTHENTICATED=true` to declare that choice and suppress the
+  startup warning. Production also bounds ingest bodies and rejects oversized
+  batches rather than partially acknowledging them.
 
 **Debug in vmui** (`http://192.168.0.96:6302/select/vmui/`, LogsQL):
 

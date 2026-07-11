@@ -981,15 +981,21 @@ export function App(): React.JSX.Element {
         // Feature-detected + skipped under prefers-reduced-motion; instant swap
         // otherwise.
         const doc = document as Document & {
-          startViewTransition?: (cb: () => void) => unknown;
+          startViewTransition?: (cb: () => void) => {
+            finished: Promise<void>;
+          };
         };
         const reduceMotion = window.matchMedia?.(
           "(prefers-reduced-motion: reduce)",
         ).matches;
         if (!reduceMotion && typeof doc.startViewTransition === "function") {
-          doc.startViewTransition(() => {
+          const transition = doc.startViewTransition(() => {
             flushSync(apply);
           });
+          // A second navigation legitimately supersedes the first transition.
+          // Browsers reject `finished` in that case; consume the expected
+          // cancellation so the global APM hook does not report a false error.
+          void transition.finished.catch(() => undefined);
         } else {
           apply();
         }

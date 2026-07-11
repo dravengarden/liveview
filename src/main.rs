@@ -9,7 +9,7 @@ mod sync;
 
 use axum::{
     body::Body,
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -490,6 +490,8 @@ fn store_config_from_env() -> Result<StoreConfig, String> {
 /// offline-buffered event lands at when it HAPPENED, not when it was flushed).
 fn build_apm_sink() -> Option<ApmSink> {
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let allow_unauthenticated = env("LIVEVIEW_APM_ALLOW_UNAUTHENTICATED")
+        .is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"));
     let base = env("LIVEVIEW_APM_VL_URL")
         .unwrap_or_else(|| "http://127.0.0.1:6302/insert/jsonline".to_string());
     let vl_url =
@@ -498,12 +500,19 @@ fn build_apm_sink() -> Option<ApmSink> {
         Some(f) => match std::fs::read_to_string(&f) {
             Ok(s) => Some(s.trim().to_string()).filter(|s| !s.is_empty()),
             Err(e) => {
-                tracing::warn!(error = %e, file = %f, "apm token file unreadable; auth disabled");
+                if !allow_unauthenticated {
+                    tracing::warn!(error = %e, file = %f, "apm token file unreadable; auth disabled");
+                }
                 None
             }
         },
         None => env("LIVEVIEW_APM_TOKEN"),
     };
+    if token.is_none() && !allow_unauthenticated {
+        tracing::warn!(
+            "apm ingest is unauthenticated; set a token or explicitly allow unauthenticated ingest"
+        );
+    }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
@@ -1002,6 +1011,9 @@ async fn api_sizes(State(state): State<SharedState>) -> impl IntoResponse {
 /// shared bearer token when configured (else open, for dev). We return 200 ONLY
 /// when VL accepted the batch — a VL hiccup returns 502 so the client keeps the
 /// events and retries (at-least-once; `event_id` dedups a re-send at query time).
+const APM_MAX_EVENTS: usize = 1_000;
+const APM_MAX_BODY_BYTES: usize = 256 * 1024;
+
 async fn api_ingest(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1025,8 +1037,11 @@ async fn api_ingest(
     if events.is_empty() {
         return StatusCode::OK;
     }
-    // Cap a single batch so a misbehaving client can't blow up the forward.
-    events.truncate(1000);
+    // Reject rather than silently truncate: a successful response makes the
+    // client acknowledge the WHOLE batch, so truncation would lose the tail.
+    if events.len() > APM_MAX_EVENTS {
+        return StatusCode::PAYLOAD_TOO_LARGE;
+    }
     let received_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -1099,7 +1114,10 @@ fn build_app(state: SharedState) -> Router {
         // a stale build id right after a deploy, defeating the whole check.
         .route("/api/version", get(version))
         // Batched client APM events → forwarded to VictoriaLogs (see api_ingest).
-        .route("/api/ingest", post(api_ingest))
+        .route(
+            "/api/ingest",
+            post(api_ingest).layer(DefaultBodyLimit::max(APM_MAX_BODY_BYTES)),
+        )
         .route("/ws", get(server::ws::ws_handler))
         .with_state(state.clone())
         // CORS for the BUNDLED native app. The iOS/macOS Tauri shell now loads the
@@ -2514,6 +2532,18 @@ mod apm_tests {
             .await
             .into_response();
         assert_eq!(r.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn ingest_rejects_oversized_event_batch_without_forwarding() {
+        let st = state_with(Some(sink("http://127.0.0.1:1/unused", None))).await;
+        let events = (0..=APM_MAX_EVENTS)
+            .map(|_| one_event("d", "x").pop().unwrap())
+            .collect();
+        let r = api_ingest(State(st), HeaderMap::new(), Json(events))
+            .await
+            .into_response();
+        assert_eq!(r.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     /// Live end-to-end: a good-token batch is forwarded to the real host VictoriaLogs
