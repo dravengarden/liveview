@@ -23,46 +23,25 @@ use crate::server::speakable::{plan, Speech, MIN_ALT_CHARS};
 use crate::server::spoken::{spoken_units, Unit, UnitKind};
 use crate::shared::FileType;
 
+pub type MarkdownSource = (String, String);
+pub type AuditCollection = (Vec<MarkdownSource>, Vec<Diagnostic>);
+
 /// Walk `paths` (files as-is, dirs recursed for markdown), evaluate each
 /// chapter's read-along units, and print the report. Returns the process exit
 /// code: `2` on an IO/usage error, else `0` (the audit is informational —
 /// "silent" resources are warnings, not failures).
 pub fn run(paths: &[PathBuf], format: OutputFormat) -> i32 {
-    let files = match collect_markdown(paths) {
-        Ok(f) => f,
+    let (files, diags) = match collect(paths) {
+        Ok(result) => result,
         Err(e) => {
             eprintln!("narrate-audit: {e}");
             return 2;
         }
     };
-
-    let mut diags: Vec<Diagnostic> = Vec::new();
-    let mut warnings = 0usize;
-    // One narration store per (book root, lang) — so a narrated resource shows as
-    // already-stored vs needs-generation. Cached across the book's chapters.
-    let mut stores: std::collections::HashMap<String, NarrationStore> =
-        std::collections::HashMap::new();
-    for (rel, source) in &files {
-        // Language only tints prose stand-ins in the report; infer it from the
-        // conventional `<lang>/` path segment, default zh.
-        let lang = if rel.contains("/en/") || rel.contains("\\en\\") {
-            "en"
-        } else {
-            "zh"
-        };
-        let store = stores
-            .entry(format!("{}|{lang}", book_root_of(rel)))
-            .or_insert_with(|| load_store(rel, lang));
-        for unit in spoken_units(source) {
-            if let Some(d) = audit_unit(rel, &unit, lang, store) {
-                if d.severity == Severity::Warning {
-                    warnings += 1;
-                }
-                diags.push(d);
-            }
-        }
-    }
-    diags.sort_by_key(|d| (d.file.clone(), d.line, d.col));
+    let warnings = diags
+        .iter()
+        .filter(|d| d.severity == Severity::Warning)
+        .count();
 
     match format {
         OutputFormat::Json => println!("{}", render_json(&diags)),
@@ -85,6 +64,36 @@ pub fn run(paths: &[PathBuf], format: OutputFormat) -> i32 {
         }
     }
     0
+}
+
+/// Collect read-aloud diagnostics without printing. The production gate uses
+/// this so narration policy cannot drift from `narrate-audit` or runtime speech.
+pub fn collect(paths: &[PathBuf]) -> Result<AuditCollection, String> {
+    let files = collect_markdown(paths)?;
+    let mut diags = Vec::new();
+    // One narration store per (book root, lang) — so a narrated resource shows as
+    // already-stored vs needs-generation. Cached across the book's chapters.
+    let mut stores: std::collections::HashMap<String, NarrationStore> =
+        std::collections::HashMap::new();
+    for (rel, source) in &files {
+        // Language only tints prose stand-ins in the report; infer it from the
+        // conventional `<lang>/` path segment, default zh.
+        let lang = if rel.contains("/en/") || rel.contains("\\en\\") {
+            "en"
+        } else {
+            "zh"
+        };
+        let store = stores
+            .entry(format!("{}|{lang}", book_root_of(rel)))
+            .or_insert_with(|| load_store(rel, lang));
+        for unit in spoken_units(source) {
+            if let Some(d) = audit_unit(rel, &unit, lang, store) {
+                diags.push(d);
+            }
+        }
+    }
+    diags.sort_by_key(|d| (d.file.clone(), d.line, d.col));
+    Ok((files, diags))
 }
 
 /// One resource the skill must narrate: a content key + its full source. Emitted

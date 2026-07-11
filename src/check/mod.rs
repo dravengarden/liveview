@@ -13,6 +13,7 @@
 
 pub mod diagnostic;
 pub mod excalidraw;
+pub mod gate;
 pub mod interactive_view;
 pub mod json;
 pub mod markdown;
@@ -126,27 +127,13 @@ pub fn check_source(rel: &str, source: &str, dir: &Path, file_type: FileType) ->
 ///   `0` otherwise. (Distinct codes so CI can treat warnings as soft unless
 ///   asked.)
 pub fn run(paths: &[PathBuf], format: OutputFormat, deny_warnings: bool) -> i32 {
-    let files = match collect_files(paths) {
-        Ok(f) => f,
+    let (files, diags) = match collect(paths) {
+        Ok(result) => result,
         Err(e) => {
             eprintln!("check: {e}");
             return 2;
         }
     };
-
-    let mut diags: Vec<Diagnostic> = Vec::new();
-    for file in &files {
-        let ctx = CheckCtx {
-            dir: file
-                .path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from(".")),
-        };
-        for validator in validators_for(&file.file_type) {
-            diags.extend(validator.check(file, &ctx));
-        }
-    }
 
     match format {
         OutputFormat::Json => println!("{}", render_json(&diags)),
@@ -167,6 +154,26 @@ pub fn run(paths: &[PathBuf], format: OutputFormat, deny_warnings: bool) -> i32 
         Some(Severity::Warning) if deny_warnings => 1,
         _ => 0,
     }
+}
+
+/// Collect checker diagnostics without printing or choosing an exit code.
+/// Production policy (`gate`) and the CLI share this exact renderer-backed pass.
+pub fn collect(paths: &[PathBuf]) -> Result<(Vec<CheckFile>, Vec<Diagnostic>), String> {
+    let files = collect_files(paths)?;
+    let mut diags = Vec::new();
+    for file in &files {
+        let ctx = CheckCtx {
+            dir: file
+                .path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(".")),
+        };
+        for validator in validators_for(&file.file_type) {
+            diags.extend(validator.check(file, &ctx));
+        }
+    }
+    Ok((files, diags))
 }
 
 /// Expand the CLI paths into the set of markdown `CheckFile`s to check.

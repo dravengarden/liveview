@@ -235,6 +235,12 @@ fn main() {
         std::process::exit(code);
     }
 
+    // `liveview gate` — offline production policy over checker + narration
+    // diagnostics. It runs before Tokio like the underlying deterministic passes.
+    if let Some(Command::Gate(args)) = cli.command.clone() {
+        std::process::exit(check::gate::run(&args));
+    }
+
     // `liveview targets` is likewise synchronous (resolve corpus → list charts).
     if let Some(Command::Targets(args)) = cli.command.clone() {
         std::process::exit(run_targets(&args));
@@ -268,6 +274,7 @@ fn main() {
         // `liveview check` / `targets` are handled (and exit) above, before the
         // runtime is built — they never reach this match.
         Some(Command::Check(_)) => unreachable!("check handled before the tokio runtime"),
+        Some(Command::Gate(_)) => unreachable!("gate handled before the tokio runtime"),
         Some(Command::Targets(_)) => unreachable!("targets handled before the tokio runtime"),
         Some(Command::NarrateAudit(_)) => {
             unreachable!("narrate-audit handled before the tokio runtime")
