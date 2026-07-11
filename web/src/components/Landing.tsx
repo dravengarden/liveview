@@ -18,8 +18,6 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   Typography,
-  useMediaQuery,
-  useTheme,
 } from "@mui/material";
 import { alpha, type Theme } from "@mui/material/styles";
 import {
@@ -53,6 +51,7 @@ import {
 } from "@/hooks";
 import { useI18n } from "@/i18n";
 import { useSyncStatus } from "@/syncStore";
+import { ShelfCardArtwork } from "./CoverTile";
 import { ScrollToTopButton } from "./ScrollToTopButton";
 
 interface LandingProps {
@@ -189,20 +188,8 @@ function slugHue(slug: string): number {
   return Math.abs(h) % 360;
 }
 
-/** A book has no cover art, so synthesise one: a calm two-stop gradient keyed
- *  off the slug. Mid lightness so the white kind-icon over it reads on any
- *  theme. */
-function coverGradient(slug: string): string {
-  const h = slugHue(slug);
-  return `linear-gradient(135deg, hsl(${h} 52% 52%), hsl(${
-    (h + 38) % 360
-  } 48% 42%))`;
-}
-
-/** A faint, translucent version of {@link coverGradient} — the book's colour as
- *  a frosted 磨砂玻璃 wash. Composited OVER a compact card's paper surface (so the
- *  card stays legible) to keep each book visually distinct without the cover
- *  band. Low alpha so it reads on both the warm-light and dark shelves. */
+/** A faint slug-keyed wash over the card paper. It preserves the original
+ *  shelf's colourful identity while authored artwork remains the focal point. */
 function compactTint(slug: string): string {
   const h = slugHue(slug);
   return `linear-gradient(135deg, hsl(${h} 52% 52% / 0.22), hsl(${
@@ -256,12 +243,22 @@ function CoverRenditionSwitch({
         alignItems: "stretch",
         borderRadius: 5,
         overflow: "hidden",
-        ...(inline ? { flexShrink: 0, bgcolor: "action.selected" } : {
-          position: "absolute",
-          top: 8,
-          left: 8,
-          bgcolor: "rgba(0,0,0,0.45)",
-        }),
+        ...(inline
+          ? {
+            flexShrink: 0,
+            bgcolor: (theme: Theme) =>
+              alpha(theme.palette.background.paper, 0.58),
+            border: 1,
+            borderColor: (theme: Theme) =>
+              alpha(theme.palette.text.primary, 0.12),
+            backdropFilter: "blur(12px) saturate(140%)",
+          }
+          : {
+            position: "absolute",
+            top: 8,
+            right: 8,
+            bgcolor: "rgba(0,0,0,0.45)",
+          }),
       }}
     >
       {segs.map((s) => {
@@ -332,75 +329,8 @@ function CompactKindBadge(
   );
 }
 
-/** Intl formatter construction is slow (several ms each on mobile Safari) and
- *  these run once per card. Building two per card across the whole shelf on
- *  every render — including the return from a book — was a 1–2s main-thread
- *  stall: `content-visibility:auto` skips off-screen *layout/paint*, NOT this
- *  *JS* that builds every card. The formatters are pure + immutable, so cache
- *  one instance per locale and reuse it (88 constructions/render → 2 lookups).
- *  Locales here are only zh-CN / en-US, so the caches stay tiny. */
-const toLocale = (lang: string): string => (lang === "zh" ? "zh-CN" : "en-US");
-const DATE_FMT = new Map<string, Intl.DateTimeFormat>();
-function dateFmt(lang: string): Intl.DateTimeFormat {
-  const loc = toLocale(lang);
-  let f = DATE_FMT.get(loc);
-  if (!f) {
-    f = new Intl.DateTimeFormat(loc, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-    DATE_FMT.set(loc, f);
-  }
-  return f;
-}
-const REL_FMT = new Map<string, Intl.RelativeTimeFormat>();
-function relFmt(lang: string): Intl.RelativeTimeFormat {
-  const loc = toLocale(lang);
-  let f = REL_FMT.get(loc);
-  if (!f) {
-    f = new Intl.RelativeTimeFormat(loc, { numeric: "auto" });
-    REL_FMT.set(loc, f);
-  }
-  return f;
-}
-
-/** Format a unix-ms deploy stamp as a locale date, or null when unset (0). */
-function fmtDate(ms: number, lang: string): string | null {
-  if (!ms) return null;
-  return dateFmt(lang).format(new Date(ms));
-}
-
-/** The largest [unit, seconds-per-unit] step a delta fits into, coarsest last. */
-const REL_STEPS: [Intl.RelativeTimeFormatUnit, number][] = [
-  ["year", 31536000],
-  ["month", 2592000],
-  ["day", 86400],
-  ["hour", 3600],
-  ["minute", 60],
-];
-
-/** Format a unix-ms timestamp as a locale relative time ("3 hours ago" /
- *  "3小时前"), or null when unset (0). `now` is passed in so every card on one
- *  render shares a single clock read. */
-function fmtRelative(ms: number, now: number, lang: string): string | null {
-  if (!ms) return null;
-  const rtf = relFmt(lang);
-  const sec = (ms - now) / 1000; // negative ⇒ in the past
-  const abs = Math.abs(sec);
-  for (const [unit, per] of REL_STEPS) {
-    if (abs >= per) return rtf.format(Math.round(sec / per), unit);
-  }
-  return rtf.format(Math.round(sec), "second");
-}
-
-/** A compact progress "meter pill": a rounded track with an accent fill to
- *  `pct`, the mode icon + the % riding on top. Two sit side by side on a
- *  text+audio card (reading / listening); one fills the row on a single-
- *  rendition card. This per-item meter (the Audiobookshelf / Plex idiom)
- *  replaces the old stacked cover chips + naked bottom bars, and stays legible
- *  in every theme — the fill is a soft accent wash, so the label reads over
- *  both its filled and unfilled halves. */
+/** A compact per-rendition progress pill. Text and audio advance independently,
+ *  so a dual-rendition book keeps one small meter for each track. */
 function ProgressMeter(
   { icon, pct }: { icon: ReactNode; pct: number },
 ): React.JSX.Element {
@@ -413,9 +343,18 @@ function ProgressMeter(
         height: 26,
         borderRadius: 999,
         overflow: "hidden",
-        bgcolor: "action.hover",
+        bgcolor: (theme) =>
+          alpha(
+            theme.palette.background.paper,
+            theme.palette.mode === "dark" ? 0.5 : 0.58,
+          ),
+        border: 1,
+        borderColor: (theme) => alpha(theme.palette.text.primary, 0.1),
         display: "flex",
         alignItems: "center",
+        backdropFilter: "blur(12px) saturate(140%)",
+        boxShadow: (theme) =>
+          `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.12)}`,
       }}
     >
       <Box
@@ -424,7 +363,7 @@ function ProgressMeter(
           inset: 0,
           right: "auto",
           width: `${pct}%`,
-          bgcolor: (t) => alpha(t.palette.primary.main, 0.3),
+          bgcolor: (theme) => alpha(theme.palette.primary.main, 0.22),
         }}
       />
       <Box
@@ -436,7 +375,6 @@ function ProgressMeter(
           px: 1,
           width: "100%",
           color: "text.secondary",
-          "& svg": { flexShrink: 0 },
         }}
       >
         {icon}
@@ -460,7 +398,7 @@ function ProgressMeter(
 // on book-close, so a manual pull was redundant. See docs/offline-first.md.
 
 /** One collapsible series section: a sticky frosted-glass header (series name +
- *  count + a rotating chevron) over a `Collapse` wrapping that group's masonry.
+ *  count + a rotating chevron) over a `Collapse` wrapping that group's grid.
  *  The header is a full-width button (mouse + keyboard) toggling the group's
  *  collapsed state; `sticky top:0` pins it to the scrolling shelf as you read
  *  down a long series. Each section keeps a little bottom margin so adjacent
@@ -590,18 +528,13 @@ interface ShelfCardProps {
   generating?: boolean | undefined;
   onOpen: (slug: string, renditionKind?: string) => void;
   t: ReturnType<typeof useI18n>["t"];
-  lang: string;
-  nowMinute: number;
 }
 
 // One shelf card for a single entry, memoized at module level. The shelf
 // re-renders on every return from a book (only the read book's progress
 // changed), so an un-memoized card closure rebuilt all ~44 cards each time —
 // the bulk of the return-from-book freeze. As a memoized component, only the
-// card whose props actually changed re-renders. `nowMinute` (minute-bucketed
-// clock) keeps the relative "updated" stamp's prop stable across renders within
-// a minute so it doesn't defeat the memo. The markup is byte-for-byte the
-// previous inline card body.
+// card whose props actually changed re-renders.
 const ShelfCard = memo(function ShelfCard({
   book: b,
   category,
@@ -611,8 +544,6 @@ const ShelfCard = memo(function ShelfCard({
   generating,
   onOpen,
   t,
-  lang,
-  nowMinute,
 }: ShelfCardProps): React.JSX.Element {
   const langs = b.langs;
   // Progress is split by rendition: a text+audio book shows
@@ -630,110 +561,57 @@ const ShelfCard = memo(function ShelfCard({
       Math.max(0, Math.round(r.fraction * 100)),
     );
   const resume = textP && audioP
-    ? (textP.updatedAt >= audioP.updatedAt
-      ? textP
-      : audioP)
+    ? (textP.updatedAt >= audioP.updatedAt ? textP : audioP)
     : (textP ?? audioP);
   // The dual-format card shows a rendition switch; the
   // highlighted "current" segment is the last-used one
   // (most-recent progress), defaulting to reading for a
   // never-opened book (the default rendition of a "book").
   const activeKind: "text" | "audio" = textP && audioP
-    ? (audioP.updatedAt > textP.updatedAt
-      ? "audio"
-      : "text")
+    ? (audioP.updatedAt > textP.updatedAt ? "audio" : "text")
     : audioP
     ? "audio"
     : "text";
-  // Stamps line: the book's content recency (the shelf's
-  // default sort key) — when it was last added/edited, shown
-  // relative. "Updated" when it changed after first
-  // appearing, else "Added". The absolute creation date
-  // trails as a second fact only when the book has since
-  // been updated (otherwise it duplicates the line above).
-  const changedAfterAdd = Boolean(
-    b.updated_at && b.updated_at !== b.created_at,
-  );
-  const changedRel = fmtRelative(
-    b.updated_at || b.created_at,
-    nowMinute,
-    lang,
-  );
-  const createdStr = fmtDate(b.created_at, lang);
-  // When the book was last READ (the most-recent rendition's progress stamp),
-  // shown relative. Leads the stamps line — it's the fact you scan for, and it
-  // replaces the dedicated reading-history widget (sort by "Read" + this stamp).
-  const readRel = resume && resume.updatedAt
-    ? fmtRelative(resume.updatedAt, nowMinute, lang)
-    : null;
-  const stamps = [
-    readRel && t("landing.readRel", { time: readRel }),
-    changedRel &&
-    t(
-      changedAfterAdd
-        ? "landing.updatedRel"
-        : "landing.addedRel",
-      { time: changedRel },
-    ),
-    changedAfterAdd && createdStr &&
-    t("landing.added", { date: createdStr }),
-  ].filter((s): s is string => Boolean(s));
   return (
     <Card
       variant="outlined"
       sx={{
-        mb: "20px",
         borderRadius: 2,
         overflow: "hidden",
         position: "relative",
-        // Every card is compact (no cover band), so carry the book's
-        // slug-keyed colour as a faint FROSTED wash tinting the whole
-        // card — the same two-stop gradient as the cover, but
-        // translucent and diffuse (磨砂玻璃), composited over the
-        // card's paper surface. Distinguishes each book without the
-        // 104px band or a hard colour bar.
         backgroundImage: compactTint(b.slug),
-        // (No content-visibility:auto on the cards: it interacted badly with the
-        // shelf reveal — flash/stall — and the card is memoized, so a plain render
-        // is cheap enough to skip the optimization.)
-        // Hover lift is a pointer affordance; on touch it fires on
-        // every scroll-tap and forces a repaint mid-scroll, so gate
-        // the transition + lift behind a real hover-capable pointer.
         "@media (hover: hover)": {
           transition: "box-shadow 0.18s, transform 0.18s",
           "&:hover": {
-            boxShadow: 4,
+            boxShadow: 5,
             transform: "translateY(-2px)",
           },
         },
       }}
     >
-      <CardActionArea onClick={() => onOpen(b.slug)}>
-        <Box sx={{ p: 1.75 }}>
-          {
-            /* Title row. In compact mode the cover band (and its
-              📖|🎧 switch) is gone, so a dual-rendition book gets
-              an INLINE switch here at the title's trailing edge —
-              still lets you open text vs audio straight from the
-              shelf. Single-kind books need no switch. */
-          }
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "flex-start",
-              justifyContent: "space-between",
-              gap: 1,
-            }}
-          >
-            <Typography
-              variant="subtitle1"
-              fontWeight={700}
-              sx={{ lineHeight: 1.3, minWidth: 0 }}
-            >
-              {b.label}
-            </Typography>
-            {hasText && hasAudio
-              ? (
+      <ShelfCardArtwork slug={b.slug} hasCover={b.cover} />
+      <CardActionArea
+        onClick={() => onOpen(b.slug)}
+        sx={{
+          position: "relative",
+          zIndex: 1,
+          p: 1.75,
+          alignItems: "flex-start",
+          height: "100%",
+        }}
+      >
+        <Box
+          sx={{
+            position: "relative",
+            minHeight: 142,
+            width: "100%",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          {hasText && hasAudio
+            ? (
+              <Box sx={{ position: "absolute", top: 0, right: 0 }}>
                 <CoverRenditionSwitch
                   slug={b.slug}
                   activeKind={activeKind}
@@ -742,8 +620,10 @@ const ShelfCard = memo(function ShelfCard({
                   audioLabel={t("landing.audiobookBadge")}
                   inline
                 />
-              )
-              : (
+              </Box>
+            )
+            : (
+              <Box sx={{ position: "absolute", top: 0, right: 0 }}>
                 <CompactKindBadge
                   category={category}
                   label={t(
@@ -754,162 +634,112 @@ const ShelfCard = memo(function ShelfCard({
                       : "landing.bookBadge",
                   )}
                 />
-              )}
-          </Box>
-          {/* Author byline — the book's own credit line (agent name, or
-              "<original> · Claude Code 修订" for a converted/translated book).
-              Sits right under the title; absent ⇒ no line. */}
+              </Box>
+            )}
+          <Typography
+            variant="subtitle1"
+            fontWeight={700}
+            sx={{
+              lineHeight: 1.3,
+              pr: 9,
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            {b.label}
+          </Typography>
           {b.author && (
             <Typography
               variant="caption"
               color="text.secondary"
-              sx={{ display: "block", mt: 0.25, fontWeight: 500 }}
+              noWrap
+              sx={{ display: "block", mt: 0.35 }}
             >
               {b.author}
             </Typography>
           )}
-          {b.description
-            ? (
-              <Typography
-                variant="body2"
-                color="text.secondary"
-                sx={{
-                  mt: 0.5,
-                  // Clamp long blurbs but let short ones stay short —
-                  // the height variance is what makes the masonry work.
-                  display: "-webkit-box",
-                  WebkitLineClamp: 5,
-                  WebkitBoxOrient: "vertical",
-                  overflow: "hidden",
-                }}
-              >
-                {b.description}
-              </Typography>
-            )
-            : (
-              <Typography
-                variant="body2"
-                color="text.disabled"
-                fontStyle="italic"
-                sx={{ mt: 0.5 }}
-              >
-                /{b.slug}
-              </Typography>
-            )}
-          {
-            /* Progress as a labeled meter per rendition —
-            reading and/or listening, side by side. The
-            mode icon names each; the fill + % show how
-            far. A clean per-item meter (Audiobookshelf /
-            Plex idiom) instead of stacked naked bars. */
-          }
-          {
-            /* Always show a meter for EACH rendition the book
-              offers — reading and/or listening — even when it
-              has never been opened (it reads 0% until there's
-              progress). A book's place on the shelf should show
-              where you are at a glance, 0% included, so a fresh
-              book isn't visually indistinguishable from one
-              that's simply lost its meter; gated on the book
-              HAVING a rendition (not on progress existing), so a
-              bare docs tree with neither stays meter-free. */
-          }
-          {(hasText || hasAudio) && (
-            <Box
-              sx={{ display: "flex", gap: 1, mt: 1.25 }}
+          {b.description && (
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{
+                mt: 0.75,
+                display: "-webkit-box",
+                WebkitLineClamp: 3,
+                WebkitBoxOrient: "vertical",
+                overflow: "hidden",
+              }}
             >
+              {b.description}
+            </Typography>
+          )}
+          {(hasText || hasAudio) && (
+            <Box sx={{ display: "flex", gap: 1, mt: 1.25 }}>
               {hasText && (
                 <ProgressMeter
-                  icon={
-                    <BookIcon
-                      sx={{ fontSize: rem(15) }}
-                    />
-                  }
+                  icon={<BookIcon sx={{ fontSize: rem(15) }} />}
                   pct={textP ? pctOf(textP) : 0}
                 />
               )}
               {hasAudio && (
                 <ProgressMeter
-                  icon={
-                    <AudiobookIcon
-                      sx={{ fontSize: rem(15) }}
-                    />
-                  }
+                  icon={<AudiobookIcon sx={{ fontSize: rem(15) }} />}
                   pct={audioP ? pctOf(audioP) : 0}
                 />
               )}
             </Box>
           )}
-          {
-            /* Resume the most-recently-opened rendition. */
-          }
           {resume && (
             <Typography
               variant="caption"
               color="text.secondary"
-              sx={{
-                display: "block",
-                mt: 1,
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
+              noWrap
+              sx={{ display: "block", mt: 0.75 }}
             >
-              {t("landing.continue", {
-                chapter: resume.chapterLabel,
-              })}
+              {t("landing.continue", { chapter: resume.chapterLabel })}
             </Typography>
           )}
-          {/* Show the language chip(s) even for a single edition — a Chinese-only
-              book still surfaces its 中文 chip, so language is always legible. */}
-          {langs.length >= 1 && (
-            <Box
-              sx={{
-                display: "flex",
-                flexWrap: "wrap",
-                gap: 0.5,
-                mt: 1,
-              }}
-            >
-              {langs.map((l) => (
-                <Chip
-                  key={l.lang}
-                  label={l.label}
-                  size="small"
-                  variant="outlined"
-                />
-              ))}
-            </Box>
-          )}
-          {/* Audio still generating — an inline, in-flow status line (NOT a
-              floating badge that overlapped the rendition button). Sits in the
-              card's footer whitespace; a small spinner reads "in progress". */}
+          <Box
+            sx={{
+              mt: "auto",
+              pt: 1.25,
+              display: "flex",
+              alignItems: "center",
+              flexWrap: "wrap",
+              gap: 0.5,
+              minWidth: 0,
+            }}
+          >
+            {langs.map((l) => (
+              <Chip
+                key={l.lang}
+                label={l.label}
+                size="small"
+                variant="outlined"
+                sx={{
+                  bgcolor: (theme) =>
+                    alpha(
+                      theme.palette.background.paper,
+                      theme.palette.mode === "dark" ? 0.5 : 0.62,
+                    ),
+                  borderColor: (theme) =>
+                    alpha(theme.palette.text.primary, 0.2),
+                  backdropFilter: "blur(12px) saturate(140%)",
+                }}
+              />
+            ))}
+          </Box>
           {generating && (
             <Box
-              sx={{ display: "flex", alignItems: "center", gap: 0.75, mt: 1 }}
+              sx={{ display: "flex", alignItems: "center", gap: 0.6, mt: 0.75 }}
             >
-              <CircularProgress
-                size={rem(12)}
-                thickness={5}
-                sx={{ color: "text.secondary" }}
-              />
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ fontSize: rem(11), fontWeight: 500 }}
-              >
+              <CircularProgress size={rem(11)} thickness={5} />
+              <Typography variant="caption" color="text.secondary">
                 {t("landing.generatingAudio")}
               </Typography>
             </Box>
-          )}
-          {stamps.length > 0 && (
-            <Typography
-              variant="caption"
-              color="text.disabled"
-              sx={{ display: "block", mt: 1 }}
-            >
-              {stamps.join(" · ")}
-            </Typography>
           )}
         </Box>
       </CardActionArea>
@@ -919,15 +749,12 @@ const ShelfCard = memo(function ShelfCard({
 
 /**
  * The "bookshelf" landing page: a sticky navbar (title · search · filters ·
- * settings · launcher) over a masonry of book cards.
+ * settings · launcher) over a cover-first book grid.
  *
- * Why masonry cards (not the old equal-height grid, nor a flat list): books
- * have no cover art, so an equal-height tile grid is mostly empty box around a
- * little text — the "giant cards" problem. Masonry fixes exactly that: each
- * card sizes to its own content (title + however much description + langs +
- * progress), so there's no dead space, while a synthesised gradient cover keyed
- * off the slug gives the shelf real visual rhythm and makes it scan like a
- * library. CSS columns give the vertical waterfall with no JS. Picking a card
+ * A 2:3 cover is the primary scan target; title and author stay as accessible
+ * real text beneath it. Coverless books use the same geometry with a stable
+ * gradient fallback, so a partially illustrated shelf never changes layout.
+ * Picking a card
  * enters that book (resuming the last-read chapter); books with more than one
  * language edition show their editions as chips, and books with saved progress
  * show a % badge on the cover plus a progress bar along the card's bottom.
@@ -949,7 +776,8 @@ export function Landing({
   // Books whose audiobook audio is still generating — drives the card micro-badge.
   const syncStatus = useSyncStatus();
   const generatingSlugs = useMemo(
-    () => new Set(syncStatus.books.filter((b) => b.pending > 0).map((b) => b.slug)),
+    () =>
+      new Set(syncStatus.books.filter((b) => b.pending > 0).map((b) => b.slug)),
     [syncStatus],
   );
   // Group-by-series: when "collection", the shelf splits into collapsible
@@ -964,14 +792,6 @@ export function Landing({
   // The combined Sort & Filter sheet (one toolbar control for both the shelf order
   // and the kind narrowing — the two list-organizing concerns in one place).
   const [sfOpen, setSfOpen] = useState(false);
-
-  // Bucket the clock to the MINUTE so the memoized ShelfCard's props are
-  // stable across renders within a minute (the relative "updated" stamp only
-  // needs minute resolution) — re-rendering every card every frame to refresh
-  // it was the bulk of the return-from-book freeze. The shelf re-renders on
-  // each return from a book, so the relative times still refresh then without
-  // a per-second ticker.
-  const nowMinute = Math.floor(Date.now() / 60_000) * 60_000;
 
   // One card per book (audio rides along as a badge on text+audio books),
   // ordered by the Settings → Library → Sort preference. Default "updated":
@@ -1031,35 +851,6 @@ export function Landing({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries, kind, query]);
 
-  // Masonry as N independent top-anchored flex columns, NOT CSS multicol.
-  // Why: WebKit (Safari/iPad/iPhone) mis-positions the first card of a
-  // multicol's 2nd+ column — it gets pushed down so column tops don't align
-  // (the `overflow:hidden` cards form BFCs, which WebKit fragments badly at
-  // column boundaries). Chromium aligns them; Safari doesn't, and no CSS
-  // property reliably pins it (the earlier content-visibility scoping only
-  // dodged one variant). A flex row of column stacks gives every column its
-  // own `top:0`, so first-card tops are always flush, in every engine — while
-  // per-card height variance keeps the waterfall look. Column count is fixed
-  // per breakpoint (no JS measuring); cards fan out round-robin (card i →
-  // column i % cols), so reading order runs left→right then down.
-  const theme = useTheme();
-  const upSm = useMediaQuery(theme.breakpoints.up("sm"));
-  const upMd = useMediaQuery(theme.breakpoints.up("md"));
-  const upXl = useMediaQuery(theme.breakpoints.up("xl"));
-  const upWide = useMediaQuery("(min-width:1900px)");
-  const upUltra = useMediaQuery("(min-width:2300px)");
-  const cols = upUltra ? 6 : upWide ? 5 : upXl ? 4 : upMd ? 3 : upSm ? 2 : 1;
-  // Round-robin a set of entries into `cols` top-anchored columns (card i →
-  // column i % cols). Used both for the flat shelf and, per-section, for the
-  // grouped shelf — so a group's masonry packs exactly like the flat one.
-  const toColumns = (es: ShelfEntry[]): ShelfEntry[][] => {
-    const out: ShelfEntry[][] = Array.from({ length: cols }, () => []);
-    es.forEach((e, i) => {
-      (out[i % cols] ??= []).push(e);
-    });
-    return out;
-  };
-  const columns = useMemo(() => toColumns(visible), [visible, cols]);
   // The ordered series sections (only when grouping by collection). Order:
   // curated PREFERRED_GROUP_ORDER first, then other collections A→Z, then the
   // "Other" catch-all last; empty groups omitted.
@@ -1170,45 +961,28 @@ export function Landing({
       generating={generatingSlugs.has(e.book.slug)}
       onOpen={onOpen}
       t={t}
-      lang={lang}
-      nowMinute={nowMinute}
     />
   );
 
-  // The masonry markup for a set of round-robin columns: a flex row of
-  // top-anchored column stacks, each a vertical stack of cards. Shared by the
-  // flat shelf and every grouped section, so a group packs exactly like the
-  // flat shelf. `keyPrefix` namespaces the per-column keys so multiple sections
-  // on one page keep stable, unique keys.
-  const renderColumns = (
-    cols2: ShelfEntry[][],
-    keyPrefix = "",
-  ): React.JSX.Element => (
-    // Flex column stacks (see `columns` above) — a true waterfall with
-    // no JS, where every column shares `top:0` so first-card tops are
-    // flush in every engine (the CSS-multicol version drifted in
-    // WebKit). `alignItems:flex-start` keeps columns top-anchored
-    // regardless of their differing total heights.
+  // Compact artwork-backed cards stay one-up on phones, then progressively add
+  // columns. Equal tracks keep reading order stable in every engine.
+  const renderGrid = (entries2: ShelfEntry[]): React.JSX.Element => (
     <Box
       sx={{
-        display: "flex",
-        alignItems: "flex-start",
-        gap: "20px",
+        display: "grid",
+        gridTemplateColumns: {
+          xs: "repeat(1, minmax(0, 1fr))",
+          sm: "repeat(2, minmax(0, 1fr))",
+          md: "repeat(3, minmax(0, 1fr))",
+          lg: "repeat(4, minmax(0, 1fr))",
+          xl: "repeat(5, minmax(0, 1fr))",
+        },
+        columnGap: { xs: 2, sm: 2.5, md: 3 },
+        rowGap: { xs: 3, md: 4 },
+        alignItems: "start",
       }}
     >
-      {cols2.map((col, ci) => (
-        <Box
-          key={`${keyPrefix}${ci}`}
-          sx={{
-            flex: 1,
-            minWidth: 0,
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          {col.map((e) => renderCard(e))}
-        </Box>
-      ))}
+      {entries2.map((e) => renderCard(e))}
     </Box>
   );
 
@@ -1350,10 +1124,12 @@ export function Landing({
                 }}
                 sx={{ flexGrow: 1, minWidth: 0 }}
               />
-              {/* ONE control for both shelf order + kind narrowing — opens the
+              {
+                /* ONE control for both shelf order + kind narrowing — opens the
                   Sort & Filter sheet. The pill shows the active sort at a glance
                   (always set); a primary dot flags an active kind filter (the
-                  occasional state). Replaces the old two-dropdown clutter. */}
+                  occasional state). Replaces the old two-dropdown clutter. */
+              }
               <Badge
                 color="primary"
                 variant="dot"
@@ -1379,9 +1155,11 @@ export function Landing({
               </Badge>
             </>
           )}
-          {/* Settings (gear / launcher), pinned at the row's end. The reading-
+          {
+            /* Settings (gear / launcher), pinned at the row's end. The reading-
               history widget was removed — sort by "Read" surfaces the same thing,
-              and each card now carries its own last-read stamp. */}
+              and each card now carries its own last-read stamp. */
+          }
           <Box
             sx={{
               flexShrink: 0,
@@ -1443,8 +1221,10 @@ export function Landing({
               </ToggleButtonGroup>
             </Stack>
           )}
-          {/* Group — moved here from Settings: organizing the shelf belongs with
-              sort + filter, not in app preferences. */}
+          {
+            /* Group — moved here from Settings: organizing the shelf belongs with
+              sort + filter, not in app preferences. */
+          }
           <Stack spacing={1}>
             <Typography variant="overline" color="text.secondary">
               {t("landing.group")}
@@ -1538,8 +1318,7 @@ export function Landing({
               ? (
                 // Grouped shelf: one collapsible series section per collection,
                 // in the curated order (PREFERRED_GROUP_ORDER → others A→Z →
-                // Other last). Each section's masonry packs round-robin over
-                // just that group's entries, identical to the flat shelf.
+                // Other last). Each section uses the same responsive cover grid.
                 groupSections.map((g) => (
                   <GroupSection
                     key={g.name}
@@ -1548,14 +1327,13 @@ export function Landing({
                     collapsed={collapsed.has(g.name)}
                     onToggle={() => toggleGroupCollapsed(g.name)}
                   >
-                    {renderColumns(toColumns(g.entries), `${g.name}-`)}
+                    {renderGrid(g.entries)}
                   </GroupSection>
                 ))
               )
               : (
-                // Flat shelf: a single round-robin masonry over all visible
-                // entries (the default, ungrouped view).
-                renderColumns(columns)
+                // Flat shelf: one responsive cover grid over all visible entries.
+                renderGrid(visible)
               )}
           </Box>
         </Box>

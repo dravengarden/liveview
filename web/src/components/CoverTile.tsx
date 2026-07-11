@@ -1,6 +1,7 @@
 import { rem } from "@/px";
 import { coverSrc } from "@/native-sync";
 import { Box } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import { Headphones as AudiobookIcon } from "@mui/icons-material";
 
 /** Stable hue from a slug → a calm gradient stand-in cover (mirrors the shelf
@@ -61,6 +62,73 @@ export function CoverTile({
             sx={{ fontSize: rem(48), color: "rgba(255,255,255,0.92)" }}
           />
         )}
+    </Box>
+  );
+}
+
+/** A real cover used as a restrained card background rather than a literal
+ *  full-height poster. Theme-paper veiling keeps text contrast predictable;
+ *  image failure simply reveals the card's slug-keyed gradient beneath. */
+export function ShelfCardArtwork(
+  { slug, hasCover }: {
+    slug: string;
+    hasCover: boolean;
+  },
+): React.JSX.Element | null {
+  if (!hasCover) return null;
+  return (
+    <Box
+      aria-hidden="true"
+      sx={{
+        position: "absolute",
+        inset: 0,
+        overflow: "hidden",
+        pointerEvents: "none",
+      }}
+    >
+      <Box
+        component="img"
+        src={coverSrc(slug)}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        onError={(event) => {
+          event.currentTarget.style.display = "none";
+        }}
+        sx={{
+          position: "absolute",
+          top: 0,
+          right: 0,
+          width: "64%",
+          height: "100%",
+          objectFit: "cover",
+          objectPosition: "center",
+          opacity: (theme) => theme.palette.mode === "dark" ? 0.62 : 0.7,
+          filter: "saturate(0.88) contrast(0.92)",
+          transform: "scale(1.04)",
+        }}
+      />
+      <Box
+        sx={{
+          position: "absolute",
+          inset: 0,
+          background: coverGradient(slug),
+          opacity: (theme) => theme.palette.mode === "dark" ? 0.2 : 0.14,
+          mixBlendMode: "color",
+        }}
+      />
+      <Box
+        sx={{
+          position: "absolute",
+          inset: 0,
+          background: (theme) =>
+            `linear-gradient(90deg, ${
+              alpha(theme.palette.background.paper, 0.94)
+            } 0%, ${alpha(theme.palette.background.paper, 0.78)} 52%, ${
+              alpha(theme.palette.background.paper, 0.18)
+            } 100%)`,
+        }}
+      />
     </Box>
   );
 }
