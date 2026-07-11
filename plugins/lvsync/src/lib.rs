@@ -23,8 +23,11 @@ use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{AppHandle, Manager, Runtime, State};
 use tokio::sync::RwLock;
 
-/// The liveview backend origin used for cache misses and synchronization.
-const REMOTE: &str = "https://liveview.hawk.thundersparrow.top";
+/// Backend routes are raced for every native network operation. Public/tailnet
+/// access keeps the app working away from home; direct LAN access avoids making
+/// split DNS / proxy hairpinning a single point of failure on the home network.
+const REMOTE_PUBLIC: &str = "https://liveview.hawk.thundersparrow.top";
+const REMOTE_LAN: &str = "http://192.168.0.96:4160";
 
 /// Safety cap on the APM outbox: a device that never gets a flushable network
 /// can't grow the buffer without bound. Normal operation acks + deletes rows, so
@@ -53,6 +56,63 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+#[derive(Debug)]
+struct FetchFailure {
+    message: String,
+    connectivity: bool,
+}
+
+impl std::fmt::Display for FetchFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+fn successful_response(
+    result: Result<reqwest::Response, reqwest::Error>,
+) -> Result<reqwest::Response, FetchFailure> {
+    let response = result.map_err(|error| FetchFailure {
+        connectivity: error.is_connect() || error.is_timeout(),
+        message: error.to_string(),
+    })?;
+    response.error_for_status().map_err(|error| FetchFailure {
+        message: error.to_string(),
+        connectivity: false,
+    })
+}
+
+/// Race the public and LAN routes and return the first successful HTTP response.
+/// If the first completion is a failure, keep waiting for the other route rather
+/// than allowing a fast DNS/proxy error to hide a healthy backend.
+async fn send_remote<F>(
+    client: &reqwest::Client,
+    path: &str,
+    configure: F,
+) -> Result<reqwest::Response, FetchFailure>
+where
+    F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
+{
+    let public = configure(client.get(format!("{REMOTE_PUBLIC}{path}"))).send();
+    let lan = configure(client.get(format!("{REMOTE_LAN}{path}"))).send();
+    tokio::pin!(public, lan);
+    tokio::select! {
+        first = &mut public => match successful_response(first) {
+            Ok(response) => Ok(response),
+            Err(first_error) => successful_response(lan.await).map_err(|second_error| FetchFailure {
+                connectivity: first_error.connectivity && second_error.connectivity,
+                message: format!("public: {first_error}; lan: {second_error}"),
+            }),
+        },
+        first = &mut lan => match successful_response(first) {
+            Ok(response) => Ok(response),
+            Err(first_error) => successful_response(public.await).map_err(|second_error| FetchFailure {
+                connectivity: first_error.connectivity && second_error.connectivity,
+                message: format!("lan: {first_error}; public: {second_error}"),
+            }),
+        },
+    }
+}
+
 /// reqwest-backed network fetcher. Manifest URLs are origin-relative
 /// (`/api/...`); absolute URLs (rare) pass through unchanged.
 struct HttpFetcher {
@@ -71,26 +131,23 @@ impl Fetcher for HttpFetcher {
         if OFFLINE_UNTIL_MS.load(Relaxed) > now_ms() {
             return Err("offline (recent failure)".into());
         }
-        let full = if url.starts_with("http") {
-            url.to_string()
+        let result = if url.starts_with("http") {
+            successful_response(self.client.get(url).send().await)
         } else {
-            format!("{REMOTE}{url}")
+            send_remote(&self.client, url, |request| request).await
         };
-        match self.client.get(&full).send().await {
+        match result {
             Ok(r) => {
                 OFFLINE_UNTIL_MS.store(0, Relaxed); // a response ⇒ network is up
-                if !r.status().is_success() {
-                    return Err(format!("{full} -> {}", r.status()));
-                }
                 Ok(r.bytes().await.map_err(|e| e.to_string())?.to_vec())
             }
-            Err(e) => {
+            Err(error) => {
                 // A connect/timeout failure = offline → open the fast-fail window so
                 // the rest of this screen's reads don't each wait the connect timeout.
-                if e.is_connect() || e.is_timeout() {
+                if error.connectivity {
                     OFFLINE_UNTIL_MS.store(now_ms() + 5000, Relaxed);
                 }
-                Err(e.to_string())
+                Err(error.to_string())
             }
         }
     }
@@ -144,7 +201,7 @@ impl LvState {
         // verify OFF: a resource hash is a content key (rustfs / source blake3),
         // not blake3 of the SERVED bytes (rendered html) — trust the store key.
         // TIMEOUTS ARE CRITICAL: without them, an OFFLINE resolve miss makes reqwest
-        // hang on the TCP connect to the (unreachable tailnet) REMOTE for a long OS
+        // hang on TCP connects to unreachable backend routes for a long OS
         // timeout — so a card tap's `await contentFetch` froze with no navigation
         // until the network came back ("needs network to jump"). A short connect
         // timeout fails fast → the engine returns Offline → lvsync:// 504 → the web
@@ -224,11 +281,10 @@ impl LvState {
             .trim()
             .to_string();
         // Cheap conditional probe: If-None-Match the current version → 304 = no update.
-        let resp = match client
-            .get(format!("{REMOTE}/app-dist/manifest.json"))
-            .header("If-None-Match", current.clone())
-            .send()
-            .await
+        let resp = match send_remote(&client, "/app-dist/manifest.json", |request| {
+            request.header("If-None-Match", current.clone())
+        })
+        .await
         {
             Ok(r) => r,
             Err(e) => return format!("check-err: {e}"),
@@ -236,16 +292,13 @@ impl LvState {
         if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
             return "uptodate".into();
         }
-        let manifest: WebManifest = match resp.error_for_status() {
+        let manifest: WebManifest = match resp.text().await {
             // reqwest has no `json` feature here; parse via serde_json.
-            Ok(r) => match r.text().await {
-                Ok(t) => match serde_json::from_str::<WebManifest>(&t) {
-                    Ok(m) => m,
-                    Err(e) => return format!("manifest-parse-err: {e}"),
-                },
-                Err(e) => return format!("manifest-read-err: {e}"),
+            Ok(t) => match serde_json::from_str::<WebManifest>(&t) {
+                Ok(m) => m,
+                Err(e) => return format!("manifest-parse-err: {e}"),
             },
-            Err(e) => return format!("manifest-fetch-err: {e}"),
+            Err(e) => return format!("manifest-read-err: {e}"),
         };
         if manifest.version.is_empty() || manifest.files.is_empty() {
             return "manifest-empty".into();
@@ -317,12 +370,7 @@ impl LvState {
 
     /// Download one OTA bundle file → bytes, or an error string.
     async fn dl(client: &reqwest::Client, path: &str) -> Result<Vec<u8>, String> {
-        match client
-            .get(format!("{REMOTE}/app-dist/{path}"))
-            .send()
-            .await
-            .and_then(|r| r.error_for_status())
-        {
+        match send_remote(client, &format!("/app-dist/{path}"), |request| request).await {
             Ok(r) => r
                 .bytes()
                 .await
@@ -409,13 +457,12 @@ impl LvState {
     async fn refresh(&self) -> Result<String, String> {
         // Timeout so a background refresh can't hang forever offline (mirrors the
         // engine fetcher's timeouts).
-        let json = reqwest::Client::builder()
+        let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(4))
             .timeout(Duration::from_secs(30))
             .build()
-            .unwrap_or_default()
-            .get(format!("{REMOTE}/api/dag"))
-            .send()
+            .unwrap_or_default();
+        let json = send_remote(&client, "/api/dag", |request| request)
             .await
             .map_err(|e| e.to_string())?
             .text()

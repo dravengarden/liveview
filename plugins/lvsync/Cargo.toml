@@ -19,7 +19,7 @@ links = "tauri-plugin-lvsync"
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 async-trait = "0.1"
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["macros", "sync"] }
 # Bounded-concurrency streams for sync_all (buffer_unordered). Already in the tree
 # transitively via reqwest, so no new download.
 futures-util = "0.3"

@@ -96,6 +96,11 @@ shared across all the portal apps, not just liveview).
   shell, not the PWA). The Tauri macOS build must pin `time = 0.3.47` (0.3.48
   trips an E0119 in tauri-utils); `app/src-tauri/Cargo.lock` is tracked and CI
   checks the native dependency graph with `--locked`.
+- **Native backend selection**: one hostname must never be a single point of
+  failure. `web/src/apiBase.ts` races the public/tailnet origin with hawk's LAN
+  origin before mounting; `plugins/lvsync` applies the same policy to OTA,
+  manifest refreshes, and cache misses. Keep both layers aligned when endpoints
+  change—the old cached web bundle depends on the native layer to recover itself.
 
 Authoring books that this reader serves: see the **books** project's AGENTS.md
 (the check + fix + chart-review delivery gate).

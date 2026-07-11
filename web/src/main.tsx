@@ -4,12 +4,17 @@ import { App } from "./App";
 import { I18nProvider } from "./i18n";
 import { AudioPlayerProvider } from "./audio/player";
 import { installHaptics } from "./_shell";
-import { BUNDLED, installApiShim } from "./apiBase";
+import { BUNDLED, installApiShim, selectRemote } from "./apiBase";
 import { startOfflineFlagSync } from "./native-sync";
 import { startSyncQueue } from "./syncQueue";
 import { startApm } from "./apm";
 import { startOtaUpdater } from "./otaUpdater";
 import "./styles/index.css";
+
+// Choose a reachable native endpoint before any subsystem captures/uses REMOTE.
+// This races the public/tailnet route with the direct LAN route and is a no-op in
+// the PWA, where relative same-origin URLs remain authoritative.
+await selectRemote();
 
 // When bundled into the native shell (local origin), point relative /api/* fetches
 // at the remote server so the app works; reader CONTENT still resolves offline via
@@ -119,7 +124,10 @@ if (import.meta.env.PROD && !BUNDLED && "serviceWorker" in navigator) {
             });
           }
         };
-        globalThis.document.addEventListener("visibilitychange", checkForUpdate);
+        globalThis.document.addEventListener(
+          "visibilitychange",
+          checkForUpdate,
+        );
       })
       .catch(() => {
         // Non-fatal: the app still works without offline support.

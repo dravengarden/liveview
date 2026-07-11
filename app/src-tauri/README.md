@@ -1,11 +1,18 @@
 # liveview native shell (Tauri 2)
 
-A **thin native WebView wrapper** around the liveview UI. It bundles no frontend
-and embeds no backend — the window loads the already-https remote UI:
+A **thin native WebView wrapper** around the liveview UI. It bundles the app-mode
+SPA, embeds no backend, and serves the UI from the local `lvsync://` origin. The
+backend remains on hawk and is reachable through either route:
 
 ```
-https://liveview.hawk.thundersparrow.top   (caddy → localhost:4160, tailnet-only)
+https://liveview.hawk.thundersparrow.top   (public/tailnet route)
+http://192.168.0.96:4160                   (direct LAN fallback)
 ```
+
+The Web layer selects the first reachable route before React mounts. The Rust
+`lvsync` plugin independently races both routes for OTA, manifest refreshes, and
+cache misses, so an old cached bundle can recover even when split DNS or proxy
+hairpinning breaks the public hostname.
 
 This mirrors cowboy's `tauri-shell` strategy: **code on hawk, build on the Mac.**
 The cross-platform scaffolding in this dir is authored on hawk and synced to the
@@ -30,9 +37,9 @@ The native fix has two halves, both wired up here:
    `gen/apple/Sources/liveview-app/LiveviewNativeTweaks.mm`. The web layer's
    existing MediaSession code then drives the lock-screen controls.
 
-No Tauri IPC is exposed to the remote origin
-(`dangerousRemoteDomainIpcAccess` is intentionally unset) — the native value is
-purely the WKWebView + the audio-session tweak.
+Reader content and OTA assets use the Rust `lvsync` custom scheme; audio playback,
+lock-screen controls, and durable media caching stay native. The local origin is
+what makes those native paths reliable on iOS while retaining an offline shell.
 
 ## Prerequisites (build host = a Mac)
 
@@ -41,7 +48,8 @@ iOS/macOS builds need Xcode — they **cannot** run on hawk (Linux). On the Mac:
 - Xcode + command line tools
 - `cargo-tauri` (`cargo install tauri-cli --version '^2'`)
 - iOS Rust targets: `aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios`
-- the device/simulator must be on the **tailnet** to reach the remote URL
+- the device/simulator must reach hawk through either the tailnet/public route or
+  the direct LAN address
 
 ## Workflow (code on hawk, build on Mac)
 
