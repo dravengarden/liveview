@@ -11,8 +11,9 @@
 // checker too — they can never silently diverge.
 //
 // Usage:
-//   deno run -A tools/mermaid-lint.ts <file.md> [more.md ...]   # human report, exit 1 on any error
-//   deno run -A tools/mermaid-lint.ts --json  < stdin            # batch: stdin JSON [{id,text}] → [{id,error,line}]
+//   deno run -A tools/mermaid-lint.ts <file-or-dir> [...]        # recursive human report
+//   deno run -A tools/mermaid-lint.ts --json <file-or-dir> [...] # machine report for chart-review
+//   deno run -A tools/mermaid-lint.ts --json < stdin             # batch [{id,text}] → failures
 //
 // Output (human): one line per bad block: "<file>:<line>: <message>"; silent + exit 0 when all clean.
 
@@ -37,10 +38,14 @@ function vendoredVersion(): string {
 }
 
 // ── Boot a headless DOM + the real mermaid parser ───────────────────────────
-const dom = new JSDOM("<!DOCTYPE html><body></body>", { pretendToBeVisual: true });
-globalThis.window = dom.window as unknown as Window & typeof globalThis;
-globalThis.document = dom.window.document;
-globalThis.navigator = dom.window.navigator;
+const dom = new JSDOM("<!DOCTYPE html><body></body>", {
+  pretendToBeVisual: true,
+});
+Object.assign(globalThis, {
+  window: dom.window,
+  document: dom.window.document,
+  navigator: dom.window.navigator,
+});
 const ver = vendoredVersion();
 // deno caches the npm graph after the first run; mermaid loads its diagram
 // grammars lazily via dynamic import (works under deno).
@@ -48,13 +53,15 @@ const mermaid = (await import(`npm:mermaid@${ver}`)).default;
 mermaid.initialize({ startOnLoad: false, securityLevel: "loose" });
 
 /** Validate one diagram. Returns null when valid, else the first error line. */
-async function parseOne(text: string): Promise<string | null> {
+async function parseOne(
+  text: string,
+): Promise<{ error: string | null; type: string | null }> {
   try {
-    await mermaid.parse(text, { suppressErrors: false });
-    return null;
+    const parsed = await mermaid.parse(text, { suppressErrors: false });
+    return { error: null, type: parsed?.diagramType ?? null };
   } catch (e) {
     const msg = (e instanceof Error ? e.message : String(e)).split("\n")[0];
-    return msg.trim();
+    return { error: msg.trim(), type: null };
   }
 }
 
@@ -70,7 +77,9 @@ function mermaidBlocks(md: string): { text: string; line: number }[] {
       const start = i;
       const body: string[] = [];
       i++;
-      while (i < lines.length && !new RegExp(`^\\s*${fence}{3,}\\s*$`).test(lines[i])) {
+      while (
+        i < lines.length && !new RegExp(`^\\s*${fence}{3,}\\s*$`).test(lines[i])
+      ) {
         body.push(lines[i]);
         i++;
       }
@@ -82,23 +91,42 @@ function mermaidBlocks(md: string): { text: string; line: number }[] {
 }
 
 // ── JSON batch mode (for the Rust checker to shell out to) ───────────────────
-if (Deno.args.includes("--json")) {
-  const input = JSON.parse(new TextDecoder().decode(await readAll(Deno.stdin))) as {
+const json = Deno.args.includes("--json");
+const targets = Deno.args.filter((arg) => !arg.startsWith("--"));
+if (json && targets.length === 0) {
+  const input = JSON.parse(
+    await new Response(Deno.stdin.readable).text(),
+  ) as {
     id: string;
     text: string;
   }[];
   const results: { id: string; error: string }[] = [];
   for (const { id, text } of input) {
-    const err = await parseOne(text);
-    if (err) results.push({ id, error: err });
+    const parsed = await parseOne(text);
+    if (parsed.error) results.push({ id, error: parsed.error });
   }
   console.log(JSON.stringify({ version: ver, results }));
   Deno.exit(0);
 }
 
-// ── Human mode: lint the given markdown files ────────────────────────────────
-let bad = 0;
-for (const file of Deno.args.filter((a) => !a.startsWith("--"))) {
+// ── Path mode: recursively lint Markdown files ───────────────────────────────
+if (targets.length === 0) {
+  console.error("usage: mermaid-lint [--json] <file-or-dir> [...]");
+  Deno.exit(2);
+}
+
+type PathResult = {
+  file: string;
+  startLine: number;
+  type: string | null;
+  ok: boolean;
+  error?: string;
+  blockLine?: number;
+  snippet?: string;
+};
+
+const results: PathResult[] = [];
+for (const file of await markdownFiles(targets)) {
   let md: string;
   try {
     md = await Deno.readTextFile(file);
@@ -106,30 +134,69 @@ for (const file of Deno.args.filter((a) => !a.startsWith("--"))) {
     continue;
   }
   for (const blk of mermaidBlocks(md)) {
-    const err = await parseOne(blk.text);
-    if (err) {
-      bad++;
-      console.log(`${file}:${blk.line}: ${err}`);
-    }
+    const parsed = await parseOne(blk.text);
+    const lineMatch = parsed.error?.match(/line (\d+)/i);
+    const blockLine = lineMatch ? Number(lineMatch[1]) : undefined;
+    results.push({
+      file,
+      startLine: blk.line,
+      type: parsed.type,
+      ok: parsed.error === null,
+      ...(parsed.error ? { error: parsed.error } : {}),
+      ...(blockLine
+        ? {
+          blockLine,
+          snippet: blk.text.split("\n")[blockLine - 1]?.trim(),
+        }
+        : {}),
+    });
   }
 }
-if (bad === 0) console.error(`mermaid-lint: all clean (mermaid ${ver})`);
-Deno.exit(bad > 0 ? 1 : 0);
+const failures = results.filter((result) => !result.ok);
+if (json) {
+  console.log(JSON.stringify(results, null, 2));
+} else {
+  for (const failure of failures) {
+    console.log(`${failure.file}:${failure.startLine}: ${failure.error}`);
+  }
+  console.error(
+    `mermaid-lint: ${
+      results.length - failures.length
+    }/${results.length} block(s) clean (mermaid ${ver})`,
+  );
+}
+Deno.exit(failures.length > 0 ? 1 : 0);
 
-async function readAll(r: Deno.Reader): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = [];
-  const buf = new Uint8Array(65536);
-  while (true) {
-    const n = await r.read(buf);
-    if (n === null) break;
-    chunks.push(buf.slice(0, n));
+async function markdownFiles(inputs: string[]): Promise<string[]> {
+  const files: string[] = [];
+  for (const input of inputs) {
+    let stat: Deno.FileInfo;
+    try {
+      stat = await Deno.stat(input);
+    } catch {
+      continue;
+    }
+    if (stat.isFile && /\.(md|markdown)$/i.test(input)) {
+      files.push(input);
+    } else if (stat.isDirectory) {
+      await walkMarkdown(input, files);
+    }
   }
-  const total = chunks.reduce((a, c) => a + c.length, 0);
-  const out = new Uint8Array(total);
-  let o = 0;
-  for (const c of chunks) {
-    out.set(c, o);
-    o += c.length;
+  return files.sort();
+}
+
+async function walkMarkdown(dir: string, files: string[]): Promise<void> {
+  for await (const entry of Deno.readDir(dir)) {
+    if (
+      entry.name.startsWith(".") ||
+      ["node_modules", "target"].includes(entry.name)
+    ) {
+      continue;
+    }
+    const path = `${dir.replace(/\/$/, "")}/${entry.name}`;
+    if (entry.isDirectory) await walkMarkdown(path, files);
+    else if (entry.isFile && /\.(md|markdown)$/i.test(entry.name)) {
+      files.push(path);
+    }
   }
-  return out;
 }
