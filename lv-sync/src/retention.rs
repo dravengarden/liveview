@@ -193,6 +193,7 @@ mod tests {
                 audio("b", 3, 10),
                 audio("b", 4, 10),
             ],
+            ..Manifest::default()
         };
         let plan = plan_audio(&PlanInput {
             manifest: &m,
@@ -220,6 +221,7 @@ mod tests {
                 audio("hot", 0, 100),
                 audio("cold", 0, 100),
             ],
+            ..Manifest::default()
         };
         let mut scores = HashMap::new();
         scores.insert("hot".to_string(), 5.0);
@@ -247,6 +249,7 @@ mod tests {
         let m = Manifest {
             root: "r".into(),
             resources: vec![audio("big", 0, 999), audio("other", 0, 10)],
+            ..Manifest::default()
         };
         let mut scores = HashMap::new();
         scores.insert("other".to_string(), 9.0);

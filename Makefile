@@ -25,7 +25,7 @@ dev-server:
 
 # Build frontend SPA
 build-web: shell
-	cd web && deno install --allow-scripts && deno task build
+	cd web && deno install --frozen --allow-scripts && deno task build
 
 # Build release binary with embedded SPA
 build: build-web
@@ -43,20 +43,22 @@ fmt:
 	cargo fmt --manifest-path lv-sync/Cargo.toml
 	cargo fmt --manifest-path plugins/lvsync/Cargo.toml
 	cargo fmt --manifest-path app/src-tauri/Cargo.toml
-	cd web && deno task typecheck || true
 
 check:
 	cargo fmt --check
-	cargo clippy -- -D warnings
+	cargo clippy --all-targets -- -D warnings
 	cargo fmt --manifest-path lv-sync/Cargo.toml --check
 	cargo clippy --manifest-path lv-sync/Cargo.toml --all-targets -- -D warnings
 	cargo fmt --manifest-path plugins/lvsync/Cargo.toml --check
+	cargo clippy --locked --manifest-path plugins/lvsync/Cargo.toml --all-targets -- -D warnings
 	cargo fmt --manifest-path app/src-tauri/Cargo.toml --check
 	cd web && deno task typecheck
 
 test:
-	cargo test --all-targets
-	cargo test --manifest-path lv-sync/Cargo.toml
+	cargo test --locked --all-targets
+	cargo test --locked --manifest-path lv-sync/Cargo.toml
+	cargo test --locked --manifest-path plugins/lvsync/Cargo.toml --all-targets
+	cd web && deno task test
 
 # A cheap clean-clone proof for the native dependency graph. The actual iOS
 # compile/install/launch gate runs on the Mac Simulator (tools/lvsim.sh).

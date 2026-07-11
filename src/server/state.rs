@@ -6,6 +6,12 @@ use tokio::sync::{broadcast, Mutex, RwLock};
 use crate::server::catalog::Catalog;
 use crate::store::content::{BlobStore, ContentStore};
 
+#[derive(Clone)]
+pub struct CachedJson {
+    pub root: String,
+    pub body: axum::body::Bytes,
+}
+
 /// APM ingest sink: forwards batched client events (POST /api/ingest) to the host
 /// VictoriaLogs as jsonline, where they're queried/debugged with LogsQL. `None`
 /// when no VL is configured (e.g. `liveview preview`) — /api/ingest then no-ops.
@@ -30,6 +36,11 @@ pub struct AppState {
     pub store: Arc<dyn ContentStore>,
     pub obj: Arc<dyn BlobStore>,
     pub catalog: RwLock<Catalog>,
+    /// Whole-corpus responses are immutable for a deploy root but expensive to
+    /// rebuild. Cache their serialized bytes and replace them lazily when the
+    /// content store reports a new root.
+    pub dag_cache: Mutex<Option<CachedJson>>,
+    pub sizes_cache: Mutex<Option<CachedJson>>,
     /// edge-tts executable + default voice for on-demand (lazy) audio synthesis
     /// when the backfill hasn't pre-generated a chapter yet.
     pub tts_cmd: String,

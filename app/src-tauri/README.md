@@ -1,159 +1,66 @@
-# liveview native shell (Tauri 2)
+# LiveView native shell
 
-A **thin native WebView wrapper** around the liveview UI. It bundles the app-mode
-SPA, embeds no backend, and serves the UI from the local `lvsync://` origin. The
-backend remains on hawk and is reachable through either route:
+This is the Tauri 2 shell for LiveView. It bundles the app-mode SPA, serves it
+from the local `lvsync://` origin, and connects to one or more configured
+LiveView servers. The backend is not embedded in the application.
 
-```
-https://liveview.hawk.thundersparrow.top   (public/tailnet route)
-http://192.168.0.96:4160                   (direct LAN fallback)
-```
+## Why a native shell?
 
-The Web layer selects the first reachable route before React mounts. The Rust
-`lvsync` plugin independently races both routes for OTA, manifest refreshes, and
-cache misses, so an old cached bundle can recover even when split DNS or proxy
-hairpinning breaks the public hostname.
+The PWA covers normal browser reading. The native shell adds capabilities that
+mobile browsers cannot provide reliably:
 
-This mirrors cowboy's `tauri-shell` strategy: **code on hawk, build on the Mac.**
-The cross-platform scaffolding in this dir is authored on hawk and synced to the
-Mac; the platform-specific generation + builds happen on the Mac (Xcode).
+- background and lock-screen audiobook playback;
+- native media controls and haptics;
+- a durable SQLite-backed offline content cache;
+- content-addressed OTA updates for the bundled web UI.
 
-## Why this exists
+## Configure backend origins
 
-liveview's backend (axum + pg + rustfs) only runs on hawk, so the client is a
-pure reader over the remote UI. As a web PWA it already works well — EXCEPT for
-one hard iOS limit that **only a native WKWebView can fix**:
-
-- **Background / lock-screen audiobook playback.** A web PWA's `<audio>` is
-  suspended the moment the screen locks or the app backgrounds, and it can't own
-  the lock-screen / Control Center transport. The audiobook is liveview's
-  headline feature, so this is the whole point of the shell.
-
-The native fix has two halves, both wired up here:
-
-1. `UIBackgroundModes = [audio]` in `Info.ios.plist` (merged into the app
-   Info.plist every build).
-2. An `AVAudioSession` in the **Playback / SpokenAudio** category, set in
-   `gen/apple/Sources/liveview-app/LiveviewNativeTweaks.mm`. The web layer's
-   existing MediaSession code then drives the lock-screen controls.
-
-Reader content and OTA assets use the Rust `lvsync` custom scheme; audio playback,
-lock-screen controls, and durable media caching stay native. The local origin is
-what makes those native paths reliable on iOS while retaining an offline shell.
-
-## Prerequisites (build host = a Mac)
-
-iOS/macOS builds need Xcode — they **cannot** run on hawk (Linux). On the Mac:
-
-- Xcode + command line tools
-- `cargo-tauri` (`cargo install tauri-cli --version '^2'`)
-- iOS Rust targets: `aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios`
-- the device/simulator must reach hawk through either the tailnet/public route or
-  the direct LAN address
-
-## Workflow (code on hawk, build on Mac)
+Set the same comma-separated origin list for the Web and Rust layers when
+building the app:
 
 ```sh
-# Sync this dir hawk → Mac (rsync src-tauri/, like the cowboy shell).
-# Then, on the Mac, from src-tauri/:
+export VITE_LIVEVIEW_ORIGINS="https://reader.example.com,http://192.168.1.10:4160"
+export LIVEVIEW_REMOTE_ORIGINS="$VITE_LIVEVIEW_ORIGINS"
+```
 
-# 0. one-time: generate the icon set from liveview's PWA icon
-cargo tauri icon ../web/public/icon-512.png
+Both layers race the configured origins and keep the first healthy route. A
+plain checkout defaults to `http://127.0.0.1:4160` and contains no deployment-
+specific endpoints.
 
-# 1. one-time: generate the iOS Xcode project. This creates gen/apple/* (pbxproj,
-#    project.yml, the Info.plist template, main.mm, bindings). It PRESERVES the
-#    hand-authored files already committed here — LaunchScreen.storyboard, the
-#    LaunchBackground colour set, and Sources/liveview-app/LiveviewNativeTweaks.mm
-#    — and re-globs Sources/ so the tweak file compiles in. Commit gen/apple after.
-cargo tauri ios init
+## Prerequisites
 
-# 2. desktop dev (fastest smoke test that the remote URL loads natively)
+iOS and macOS builds require a Mac with:
+
+- Xcode and the command line tools;
+- `cargo-tauri` 2.x;
+- the required Rust targets (`aarch64-apple-ios`,
+  `aarch64-apple-ios-sim`, and optionally `x86_64-apple-ios`).
+
+Build the app-mode frontend from the repository root before invoking Tauri:
+
+```sh
+nix develop -c make build-web
+cd app/src-tauri
 cargo tauri dev
-
-# 3. iOS dev on a simulator / connected device
+cargo tauri build
 cargo tauri ios dev
-
-# 4. release bundles
-cargo tauri build              # macOS .app/.dmg
-cargo tauri ios build          # iOS .ipa
+cargo tauri ios build
 ```
 
-`gen/apple` is committed so the app builds without re-running init; `gen/schemas`
-and `target/` are gitignored.
+`gen/apple` is committed so routine builds do not need to regenerate the Xcode
+project. Run `cargo tauri ios init` only when intentionally refreshing generated
+platform scaffolding, then review the generated diff carefully.
 
-## Native-layer customizations
+## Native customizations
 
-- **Background / lock-screen audio** — `Info.ios.plist` (`UIBackgroundModes`) +
-  `LiveviewNativeTweaks.mm` (AVAudioSession Playback/SpokenAudio). The web app
-  already calls the MediaSession API, so the lock-screen artwork + transport
-  light up once the session is Playback.
-- **Keyboard accessory bar removed** — same `.mm` swizzles the private
-  `WKContentView`'s `inputAccessoryView` to nil, so focusing the shelf search box
-  shows only the QuickType bar, not the ∧∨+Done strip.
-- **Branded launch screen** — `LaunchScreen.storyboard` fills with the
-  `LaunchBackground` colour set (light `#ffffff` / dark `#0d1117`), matching the
-  web app's pre-mount splash so cold start has no white flash.
+- `Info.ios.plist` enables background audio.
+- `LiveviewNativeTweaks.mm` configures `AVAudioSession` for spoken playback and
+  removes the WKWebView keyboard accessory strip.
+- `LaunchScreen.storyboard` and `LaunchBackground` provide matching light and
+  dark launch surfaces.
+- `plugins/lvsync` owns offline content, route failover, and OTA storage.
 
-- **Local Network loader** — `../loader/index.html` is bundled as `frontendDist`
-  instead of the remote URL. On iOS the first connection to the tailnet host
-  trips the one-time "Local Network" prompt; the old direct-to-remote load
-  white-screened until force-quit. The loader boots locally (never white), probes
-  the remote, then redirects — granting reconnects automatically, denying shows
-  an error card with a "去设置开启" deep-link (opener plugin → `app-settings:`).
-  See the comment at the top of `loader/index.html` for the full flow. Exposes
-  `tauri-plugin-opener` + `opener:allow-open-url` (the only IPC the shell grants).
-
-Safe-area insets (`env(safe-area-inset-*)`) are reported correctly by the native
-WebView with no extra code.
-
-### Rebuilding after the Local Network loader change (do this on the Mac)
-
-No `tauri ios init` re-gen needed — the loader is `frontendDist` (re-embedded by
-the Rust rebuild) and the opener is a normal dependency. From `src-tauri/`:
-
-```sh
-export PATH=/opt/homebrew/bin:$PATH
-cargo tauri ios build        # first run adds tauri-plugin-opener to Cargo.lock — commit it
-```
-
-Then re-sign + reinstall, and verify on-device (identical flow to the cowboy
-shell — see `projects/cowboy/tauri-shell/src-tauri/README.md`):
-
-1. **Delete the app first** so iOS re-shows the Local Network prompt.
-2. Launch → Allow → connects within ~1–3s, no white screen, no reopen.
-3. Re-install → Don't Allow → error card; **去设置开启** opens Settings on
-   LiveView's page; toggle on + swipe back → auto-reconnects (no tap).
-4. If 去设置开启 doesn't open Settings, the opener invoke shape may differ —
-   check `openSettings()` in `loader/index.html` (it degrades to a manual hint).
-
-### If background audio still pauses on lock (on-device tuning)
-
-The Info.plist `audio` mode + Playback category is the documented baseline, but
-WKWebView background audio can need device testing. If it still pauses:
-
-- confirm the web `<audio>` is actually playing through MediaSession with a valid
-  `setPositionState` (liveview already does this);
-- the session may need re-asserting (`setActive:YES`) when playback starts or on
-  `AVAudioSessionInterruptionNotification` — add that to the `.mm` if needed;
-- AVFoundation is linked explicitly in `gen/apple/project.yml` (the `#import`
-  does NOT auto-link it — the first build failed on `_AVAudioSession*` undefined
-  symbols until it was added). `cargo tauri ios init` regenerates project.yml and
-  DROPS that line, so re-add it + `xcodegen generate` if you ever re-init.
-
-## Gotchas (from the cowboy shell, same toolchain)
-
-- **Homebrew isn't on the non-interactive PATH.** `tauri ios init`/`build` shell
-  out to `xcodegen` / `pod`; over SSH `export PATH=/opt/homebrew/bin:$PATH` first
-  or it fails trying to `brew install` them.
-- **`cargo tauri ios init` regenerates the in-project `Info.plist` and the
-  pbxproj from templates.** It wipes hand edits to the generated `Info.plist`
-  (→ use `Info.ios.plist`, which it merges) but leaves `LaunchScreen.storyboard`,
-  Assets, and extra `Sources/*.mm` alone. Re-running init is how a newly added
-  source file gets into the build (it makes xcodegen re-glob `Sources/`).
-- **Free Apple ID provisioning profiles expire ~weekly.** Like the cowboy shell
-  (see the `cowboy-ios-resign` skill), a free-tier signed build stops launching
-  after ~7 days; rebuild + reinstall to re-sign. A paid developer account avoids
-  this.
-- **Simulator software keyboard won't appear** while "Connect Hardware Keyboard"
-  is on (`defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool false`,
-  then reboot the sim) — needed to verify the accessory-bar change.
+If background playback pauses on a physical device, verify that the web audio
+element has an active MediaSession, confirm the Playback/SpokenAudio session is
+active, and inspect interruption handling before changing WebView behavior.

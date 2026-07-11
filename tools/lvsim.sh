@@ -1,7 +1,7 @@
 #!/bin/bash
 # lvsim — the agent's iOS-SIMULATOR control surface for liveview. Runs ON the Mac
 # (the simulator, Xcode, ios_webkit_debug_proxy and osascript all live there).
-# Drive it from hawk over SSH, e.g.:
+# It can also be driven from another development machine over SSH, e.g.:
 #
 #   ssh macbook-air liveview/tools/lvsim.sh eval 'document.title'
 #   ssh macbook-air liveview/tools/lvsim.sh shot && scp macbook-air:lvsim.png .
@@ -18,9 +18,8 @@
 # eval-driven interaction (`eval 'document.querySelector(sel).click()'`) over pixel
 # `tap` — robust to window placement and theme. See .agents/skills/ios-sim-dev.
 #
-# CAUTION: port 9222 on the Mac is Mac CHROME's CDP (the chrome-tunnel + chrome-
-# debug-bridge), NOT the sim. Inspecting :9222 talks to Chrome viewing the remote
-# PWA, never the iOS app — that mix-up is exactly why we use the in-app bridge.
+# CAUTION: a desktop Chrome CDP port does not expose the simulator WebView. Use
+# the in-app bridge when inspecting the iOS app.
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
 HERE="$(cd "$(dirname "$0")" && pwd)"

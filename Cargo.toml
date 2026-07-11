@@ -33,7 +33,7 @@ notify-debouncer-full = "0.4"
 globset = "0.4"
 # Directory recursion for `liveview check` (expand a dir into its *.md files).
 walkdir = "2"
-tower-http = { version = "0.6", features = ["cors", "fs"] }
+tower-http = { version = "0.6", features = ["compression-gzip", "cors", "fs"] }
 open = "5"
 futures-util = "0.3"
 mime_guess = "2"

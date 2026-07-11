@@ -19,7 +19,7 @@ use clap::Parser;
 use cli::{Cli, Command};
 use config::{auto_discover, implicit_resolved, Config, RenditionKind, Resolved};
 use server::catalog::Catalog;
-use server::state::{ApmSink, AppState, SharedState};
+use server::state::{ApmSink, AppState, CachedJson, SharedState};
 use shared::{FileContent, FileType, TreeNode, WsMessage};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -95,6 +95,14 @@ mod embedded_assets {
 
     /// Walk the embedded `app-bundle/` tree → bundle-relative file paths.
     fn app_bundle_paths() -> Vec<String> {
+        if let Some(paths) = DIST_DIR
+            .get_file("app-bundle/manifest-files.json")
+            .and_then(|file| file.contents_utf8())
+            .and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+        {
+            return paths;
+        }
+
         fn walk(dir: &Dir, out: &mut Vec<String>) {
             for e in dir.entries() {
                 match e {
@@ -119,8 +127,9 @@ mod embedded_assets {
     }
 
     /// `GET /app-dist/manifest.json` — the OTA bundle's `version` (the content-hashed
-    /// entry name, so it changes every web build) + the full file list. The plugin
-    /// compares `version` to its stored copy and downloads each file when it differs.
+    /// entry name, so it changes when the web app changes) + the full file list. The
+    /// plugin compares `version` to its stored copy and downloads each file when it
+    /// differs.
     /// The embedded app-bundle's version = the content-hashed entry-bundle name
     /// Vite stamps into `app-bundle/index.html`. Changes iff the shipped web app
     /// changes. Shared by the OTA manifest endpoint and the WS `AppVersion` push.
@@ -136,17 +145,13 @@ mod embedded_assets {
         let version = app_bundle_version();
         // Cheap conditional probe: the client sends its current version as
         // If-None-Match; unchanged → 304 (a few bytes), no manifest body.
-        if headers
-            .get(header::IF_NONE_MATCH)
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|v| v == version)
-        {
-            return (StatusCode::NOT_MODIFIED, [(header::ETAG, version)]).into_response();
+        if super::manifest_not_modified(&headers, &version) {
+            return super::manifest_not_modified_response(&version);
         }
         let body = serde_json::json!({ "version": version, "files": app_bundle_paths() });
         (
             [
-                (header::ETAG, version),
+                (header::ETAG, super::manifest_etag(&version)),
                 (header::CACHE_CONTROL, "no-cache".to_string()),
             ],
             axum::Json(body),
@@ -156,7 +161,14 @@ mod embedded_assets {
 
     /// `GET /app-dist/<path>` — one OTA bundle file from the embedded `app-bundle/`.
     pub async fn serve_app_dist(Path(path): Path<String>) -> impl IntoResponse {
-        serve_file(&format!("app-bundle/{path}"))
+        let app_path = format!("app-bundle/{path}");
+        if DIST_DIR.get_file(&app_path).is_some() {
+            serve_file(&app_path).into_response()
+        } else {
+            // stage-app-bundle omits bytes identical to the PWA build. Serve
+            // those from their shared root path while preserving the OTA URL.
+            serve_file(&path).into_response()
+        }
     }
 
     pub async fn serve_index() -> impl IntoResponse {
@@ -629,6 +641,8 @@ async fn run(cli: Cli, server: config::ServerCfg) {
         store,
         obj,
         catalog: RwLock::new(catalog),
+        dag_cache: Default::default(),
+        sizes_cache: Default::default(),
         tts_cmd,
         tts_voice,
         book_end_cue: Default::default(),
@@ -669,6 +683,8 @@ async fn run_preview(args: cli::PreviewArgs) -> Result<(), String> {
         store,
         obj,
         catalog: RwLock::new(catalog),
+        dag_cache: Default::default(),
+        sizes_cache: Default::default(),
         tts_cmd: env("LIVEVIEW_EDGE_TTS_CMD").unwrap_or_else(|| "edge-tts".to_string()),
         tts_voice: env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string()),
         book_end_cue: Default::default(),
@@ -838,19 +854,85 @@ async fn api_manifest_book(
 /// anything change?" probe. The offline client compares this against its cached
 /// manifest's root: if equal, the whole tree is unchanged → reuse everything,
 /// skip the full `/api/dag` fetch + the per-resource rescan. One hash, no work.
-async fn api_root(State(state): State<SharedState>) -> impl IntoResponse {
-    let (root, _) = match state.store.manifest_books().await {
-        Ok(value) => value,
-        Err(error) => return store_unavailable("manifest_books", error),
-    };
-    Json(serde_json::json!({ "root": root })).into_response()
+const MANIFEST_PROTOCOL_VERSION: u32 = 1;
+
+fn manifest_etag(root: &str) -> String {
+    format!("\"{root}\"")
 }
 
-async fn api_dag(State(state): State<SharedState>) -> impl IntoResponse {
+fn manifest_not_modified(headers: &HeaderMap, root: &str) -> bool {
+    !root.is_empty()
+        && headers
+            .get(header::IF_NONE_MATCH)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| {
+                value.split(',').any(|candidate| {
+                    let candidate = candidate.trim();
+                    candidate == "*"
+                        || candidate
+                            .strip_prefix("W/")
+                            .unwrap_or(candidate)
+                            .trim_matches('"')
+                            == root
+                })
+            })
+}
+
+fn manifest_json_response(root: &str, body: axum::body::Bytes) -> Response {
+    let mut response = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CACHE_CONTROL, "no-cache");
+    if !root.is_empty() {
+        response = response.header(header::ETAG, manifest_etag(root));
+    }
+    response
+        .body(Body::from(body))
+        .expect("valid manifest response")
+}
+
+fn manifest_not_modified_response(root: &str) -> Response {
+    Response::builder()
+        .status(StatusCode::NOT_MODIFIED)
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::ETAG, manifest_etag(root))
+        .body(Body::empty())
+        .expect("valid manifest response")
+}
+
+async fn api_root(State(state): State<SharedState>, headers: HeaderMap) -> Response {
     let (root, _) = match state.store.manifest_books().await {
         Ok(value) => value,
         Err(error) => return store_unavailable("manifest_books", error),
     };
+    let root = root.unwrap_or_default();
+    if manifest_not_modified(&headers, &root) {
+        return manifest_not_modified_response(&root);
+    }
+    let body = axum::body::Bytes::from(
+        serde_json::json!({
+            "protocol_version": MANIFEST_PROTOCOL_VERSION,
+            "root": root,
+        })
+        .to_string(),
+    );
+    manifest_json_response(&root, body)
+}
+
+async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Response {
+    let (root, _) = match state.store.manifest_books().await {
+        Ok(value) => value,
+        Err(error) => return store_unavailable("manifest_books", error),
+    };
+    let root = root.unwrap_or_default();
+    if manifest_not_modified(&headers, &root) {
+        return manifest_not_modified_response(&root);
+    }
+
+    let mut cache = state.dag_cache.lock().await;
+    if let Some(cached) = cache.as_ref().filter(|cached| cached.root == root) {
+        return manifest_json_response(&root, cached.body.clone());
+    }
     let chapters = match state.store.dag_chapters().await {
         Ok(value) => value,
         Err(error) => return store_unavailable("dag_chapters", error),
@@ -927,7 +1009,7 @@ async fn api_dag(State(state): State<SharedState>) -> impl IntoResponse {
     // the client requests via contentFetch (App.tsx enterBook/backToLanding + the
     // shelf load), so the offline cache-first hit matches. Bytes 0 (tiny; the size
     // accounting is dominated by audio anyway).
-    let root_key = root.clone().unwrap_or_default();
+    let root_key = root.clone();
     for u in [
         "/api/books",
         "/api/tree",
@@ -939,7 +1021,19 @@ async fn api_dag(State(state): State<SharedState>) -> impl IntoResponse {
             "bytes": 0, "url": u,
         }));
     }
-    Json(serde_json::json!({ "root": root, "resources": resources })).into_response()
+    let body = axum::body::Bytes::from(
+        serde_json::json!({
+            "protocol_version": MANIFEST_PROTOCOL_VERSION,
+            "root": root,
+            "resources": resources,
+        })
+        .to_string(),
+    );
+    *cache = Some(CachedJson {
+        root: root.clone(),
+        body: body.clone(),
+    });
+    manifest_json_response(&root, body)
 }
 
 /// `GET /api/sizes` — PRECOMPUTED download totals (per-book + global), keyed by
@@ -949,11 +1043,20 @@ async fn api_dag(State(state): State<SharedState>) -> impl IntoResponse {
 /// dag (audio ≈ source ×0.33 compressed). The client caches this by `root` and
 /// re-fetches only when the root changes; the per-device CACHED progress is the
 /// client's own index — this endpoint is the denominator, not the numerator.
-async fn api_sizes(State(state): State<SharedState>) -> impl IntoResponse {
+async fn api_sizes(State(state): State<SharedState>, headers: HeaderMap) -> Response {
     let (root, _) = match state.store.manifest_books().await {
         Ok(value) => value,
         Err(error) => return store_unavailable("manifest_books", error),
     };
+    let root = root.unwrap_or_default();
+    if manifest_not_modified(&headers, &root) {
+        return manifest_not_modified_response(&root);
+    }
+
+    let mut cache = state.sizes_cache.lock().await;
+    if let Some(cached) = cache.as_ref().filter(|cached| cached.root == root) {
+        return manifest_json_response(&root, cached.body.clone());
+    }
     let chapters = match state.store.dag_chapters().await {
         Ok(value) => value,
         Err(error) => return store_unavailable("dag_chapters", error),
@@ -995,13 +1098,21 @@ async fn api_sizes(State(state): State<SharedState>) -> impl IntoResponse {
             })
         })
         .collect();
-    Json(serde_json::json!({
-        "root": root,
-        "audio_bytes": total.audio_bytes, "audio_count": total.audio_count,
-        "text_bytes": total.text_bytes, "text_count": total.text_count,
-        "books": books_json,
-    }))
-    .into_response()
+    let body = axum::body::Bytes::from(
+        serde_json::json!({
+            "protocol_version": MANIFEST_PROTOCOL_VERSION,
+            "root": root,
+            "audio_bytes": total.audio_bytes, "audio_count": total.audio_count,
+            "text_bytes": total.text_bytes, "text_count": total.text_count,
+            "books": books_json,
+        })
+        .to_string(),
+    );
+    *cache = Some(CachedJson {
+        root: root.clone(),
+        body: body.clone(),
+    });
+    manifest_json_response(&root, body)
 }
 
 /// Batched client APM events → VictoriaLogs. The native app buffers operation /
@@ -1120,6 +1231,9 @@ fn build_app(state: SharedState) -> Router {
         )
         .route("/ws", get(server::ws::ws_handler))
         .with_state(state.clone())
+        // Large whole-corpus metadata responses are highly compressible (the
+        // current DAG shrinks by roughly an order of magnitude with gzip).
+        .layer(tower_http::compression::CompressionLayer::new())
         // CORS for the BUNDLED native app. The iOS/macOS Tauri shell now loads the
         // SPA from a LOCAL origin (tauri://localhost) and fetches `/api/...`
         // CROSS-ORIGIN against this server (via apiBase.ts installApiShim). WKWebView
@@ -2462,6 +2576,18 @@ mod apm_tests {
     use super::*;
     use crate::store::fs::FsStore;
 
+    #[test]
+    fn manifest_etag_accepts_strong_weak_and_lists() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::IF_NONE_MATCH,
+            r#""old", W/"current""#.parse().unwrap(),
+        );
+        assert!(manifest_not_modified(&headers, "current"));
+        assert!(!manifest_not_modified(&headers, "other"));
+        assert!(!manifest_not_modified(&HeaderMap::new(), "current"));
+    }
+
     /// Minimal AppState over an empty in-memory FsStore (no pg/rustfs, no audio
     /// worker) with the given APM sink — enough to exercise `api_ingest` directly.
     async fn state_with(apm: Option<ApmSink>) -> SharedState {
@@ -2475,6 +2601,8 @@ mod apm_tests {
             store,
             obj,
             catalog: RwLock::new(catalog),
+            dag_cache: Default::default(),
+            sizes_cache: Default::default(),
             tts_cmd: "edge-tts".into(),
             tts_voice: "x".into(),
             book_end_cue: Default::default(),

@@ -31,6 +31,38 @@ interface Entry {
   m?: string; // marks blob hash
 }
 
+export interface DagMediaResource {
+  hash: string;
+  kind: string;
+  path: string;
+}
+
+export interface ParsedMediaResource {
+  key: string;
+  kind: "audio" | "marks";
+  hash: string;
+}
+
+/** Parse one DAG audio/marks resource without touching storage. */
+export function parseMediaResource(
+  resource: DagMediaResource,
+): ParsedMediaResource | undefined {
+  if (resource.kind !== "audio" && resource.kind !== "marks") return undefined;
+  const hashIdx = resource.path.lastIndexOf("#");
+  const body = hashIdx >= 0 ? resource.path.slice(0, hashIdx) : resource.path;
+  const parts = body.split("/");
+  if (parts.length < 4) return undefined;
+  const slug = parts[0] ?? "";
+  const lang = parts[2] ?? "";
+  const rel = parts.slice(3).join("/");
+  if (!slug || !lang || !rel) return undefined;
+  return {
+    key: keyOf(slug, lang, rel),
+    kind: resource.kind,
+    hash: resource.hash,
+  };
+}
+
 // In-memory mirror of the persisted map, loaded once. `null` until first load.
 let mem: Map<string, Entry> | null = null;
 
@@ -51,7 +83,10 @@ function load(): Map<string, Entry> {
 
 function persist(m: Map<string, Entry>): void {
   try {
-    globalThis.localStorage?.setItem(LS_KEY, JSON.stringify(Object.fromEntries(m)));
+    globalThis.localStorage?.setItem(
+      LS_KEY,
+      JSON.stringify(Object.fromEntries(m)),
+    );
   } catch {
     // quota / unavailable — the in-memory map still serves this session.
   }
@@ -100,33 +135,19 @@ export function putMedia(
  *  — into the index, then persists once. This is what makes "downloaded ⇒ hash is
  *  available offline" hold. */
 export function ingestDag(
-  resources: { hash: string; kind: string; path: string }[],
+  resources: DagMediaResource[],
 ): void {
   const m = load();
   let changed = false;
   for (const r of resources) {
-    if (r.kind !== "audio" && r.kind !== "marks") continue;
-    const hash = r.kind === "audio"
-      ? r.hash
-      // marks resources are keyed by the raw blob hash already; audio's `hash`
-      // is the source audio_hash. Both are exactly what the player needs.
-      : r.hash;
-    // path = "<slug>/<rendition>/<lang>/<rel...>#<kind>"
-    const hashIdx = r.path.lastIndexOf("#");
-    const body = hashIdx >= 0 ? r.path.slice(0, hashIdx) : r.path;
-    const parts = body.split("/");
-    if (parts.length < 4) continue;
-    const slug = parts[0] ?? "";
-    const lang = parts[2] ?? "";
-    const rel = parts.slice(3).join("/");
-    if (!slug || !lang || !rel) continue;
-    const k = keyOf(slug, lang, rel);
-    const prev = m.get(k) ?? {};
+    const parsed = parseMediaResource(r);
+    if (!parsed) continue;
+    const prev = m.get(parsed.key) ?? {};
     const next: Entry = { ...prev };
-    if (r.kind === "audio") next.a = hash;
-    else next.m = hash;
+    if (parsed.kind === "audio") next.a = parsed.hash;
+    else next.m = parsed.hash;
     if (next.a !== prev.a || next.m !== prev.m) {
-      m.set(k, next);
+      m.set(parsed.key, next);
       changed = true;
     }
   }

@@ -2,12 +2,13 @@
 //
 // Every preset is a bundled web font (via @fontsource) — we never rely on the
 // reader's system fonts. Faces are loaded on demand: each preset's `load()`
-// dynamically imports its @fontsource CSS, so Vite emits the woff2 in separate
+// dynamically imports its font CSS, so Vite emits the woff2 in separate
 // async chunks that the browser only fetches when that font is selected.
 //
 // Each preset pairs a Latin reading face with a CJK companion (Noto SC) so
-// mixed English / 中文 books render fully. The CJK CSS uses `unicode-range`
-// per glyph slice, so only the slices a page actually uses are downloaded.
+// mixed English / 中文 books render fully. Local CSS intentionally references
+// WOFF2 only; Fontsource's compatibility CSS also emitted a duplicate WOFF copy
+// of every multi-megabyte CJK face.
 
 export interface FontPreset {
   /** Stable id persisted in localStorage. */
@@ -29,16 +30,10 @@ const GENERIC_SERIF = "Georgia, Cambria, 'Times New Roman', serif";
 // Shared CJK companions — imported once, then cached by the bundler/browser,
 // so multiple presets that share a companion don't re-download it.
 const loadNotoSansSC = (): Promise<unknown> =>
-  Promise.all([
-    import("@fontsource/noto-sans-sc/chinese-simplified-400.css"),
-    import("@fontsource/noto-sans-sc/chinese-simplified-700.css"),
-  ]);
+  import("./font-css/noto-sans-sc.css");
 
 const loadNotoSerifSC = (): Promise<unknown> =>
-  Promise.all([
-    import("@fontsource/noto-serif-sc/chinese-simplified-400.css"),
-    import("@fontsource/noto-serif-sc/chinese-simplified-700.css"),
-  ]);
+  import("./font-css/noto-serif-sc.css");
 
 export const FONT_PRESETS: FontPreset[] = [
   {
@@ -47,7 +42,10 @@ export const FONT_PRESETS: FontPreset[] = [
     note: "Sans · 无衬线",
     stack: `'Inter Variable', 'Noto Sans SC', ${GENERIC_SANS}`,
     load: () =>
-      Promise.all([import("@fontsource-variable/inter/wght.css"), loadNotoSansSC()]),
+      Promise.all([
+        import("@fontsource-variable/inter/wght.css"),
+        loadNotoSansSC(),
+      ]),
   },
   {
     id: "ibm-plex-sans",
@@ -67,8 +65,7 @@ export const FONT_PRESETS: FontPreset[] = [
     stack: `'Atkinson Hyperlegible', 'Noto Sans SC', ${GENERIC_SANS}`,
     load: () =>
       Promise.all([
-        import("@fontsource/atkinson-hyperlegible/400.css"),
-        import("@fontsource/atkinson-hyperlegible/700.css"),
+        import("./font-css/atkinson.css"),
         loadNotoSansSC(),
       ]),
   },
@@ -89,7 +86,10 @@ export const FONT_PRESETS: FontPreset[] = [
     note: "Literary · 文学衬线",
     stack: `'Lora Variable', 'Noto Serif SC', ${GENERIC_SERIF}`,
     load: () =>
-      Promise.all([import("@fontsource-variable/lora/wght.css"), loadNotoSerifSC()]),
+      Promise.all([
+        import("@fontsource-variable/lora/wght.css"),
+        loadNotoSerifSC(),
+      ]),
   },
   {
     id: "newsreader",

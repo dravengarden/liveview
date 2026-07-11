@@ -1,8 +1,7 @@
 //! Strip + segment markdown into speakable sentences.
 //!
-//! Mirrors the strip policy of `narrate-book/helpers/narrate.py` in the
-//! columbus harness (keep the two in sync) and adds zh+en sentence
-//! segmentation. The single ordered list this produces feeds BOTH the
+//! Defines the server's Markdown stripping policy and adds Chinese and English
+//! sentence segmentation. The single ordered list this produces feeds both the
 //! read-along view's `<span data-sent=N>` spans and the edge-tts time marks, so
 //! audio, marks, and highlighted text align by construction.
 //!

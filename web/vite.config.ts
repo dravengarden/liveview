@@ -75,7 +75,10 @@ function forceSingletons(): Plugin {
     async resolveId(source, importer, options) {
       if (!importer || !isSingleton(source)) return null;
       // skipSelf so this doesn't re-enter; importer=APP_ROOT pins the app's copy.
-      const r = await this.resolve(source, APP_ROOT, { ...options, skipSelf: true });
+      const r = await this.resolve(source, APP_ROOT, {
+        ...options,
+        skipSelf: true,
+      });
       return r ?? null;
     },
   };
@@ -98,7 +101,9 @@ function assertSingletons(): Plugin {
       for (const p of SINGLETONS) {
         const marker = `/node_modules/${p}/`;
         const i = id.indexOf(marker);
-        if (i !== -1) (seen[p] ??= new Set()).add(id.slice(0, i + marker.length));
+        if (i !== -1) {
+          (seen[p] ??= new Set()).add(id.slice(0, i + marker.length));
+        }
       }
     },
     buildEnd() {
@@ -110,7 +115,9 @@ function assertSingletons(): Plugin {
             "(washed-out SDK components in dark mode). Force them to one copy in " +
             "vite.config resolve.alias.\n" +
             dupes
-              .map(([p, s]) => `  ${p}:\n` + [...s].map((x) => `    ${x}`).join("\n"))
+              .map(([p, s]) =>
+                `  ${p}:\n` + [...s].map((x) => `    ${x}`).join("\n")
+              )
               .join("\n"),
         );
       }
@@ -154,16 +161,27 @@ function stampServiceWorker(): Plugin {
         ),
       ].sort();
       if (assets.length === 0) {
-        throw new Error("lv-stamp-sw: no /assets/* references found in dist/index.html");
+        throw new Error(
+          "lv-stamp-sw: no /assets/* references found in dist/index.html",
+        );
       }
       // VERSION = content hash of the shell asset set → changes iff the shell
       // changes (each filename already embeds Vite's per-file content hash).
-      const version =
-        "lv-" + createHash("sha256").update(assets.join(",")).digest("hex").slice(0, 12);
+      const version = "lv-" +
+        createHash("sha256").update(assets.join(",")).digest("hex").slice(
+          0,
+          12,
+        );
       const swPath = resolve(dist, "sw.js");
       const out = readFileSync(swPath, "utf8")
-        .replace('const VERSION = "lv-dev";', `const VERSION = ${JSON.stringify(version)};`)
-        .replace("const SHELL_ASSETS = [];", `const SHELL_ASSETS = ${JSON.stringify(assets)};`);
+        .replace(
+          'const VERSION = "lv-dev";',
+          `const VERSION = ${JSON.stringify(version)};`,
+        )
+        .replace(
+          "const SHELL_ASSETS = [];",
+          `const SHELL_ASSETS = ${JSON.stringify(assets)};`,
+        );
       if (!out.includes(version) || !out.includes(JSON.stringify(assets))) {
         throw new Error(
           "lv-stamp-sw: VERSION / SHELL_ASSETS placeholders not found in dist/sw.js — did the SW source change?",
@@ -204,63 +222,56 @@ function stripServiceWorker(): Plugin {
 export default defineConfig(({ mode }) => {
   const isApp = mode === "app";
   return {
-  // App build uses RELATIVE asset URLs so the same bundle works whether it's
-  // served from the embedded origin (tauri://localhost/) OR the OTA origin
-  // (lvsync://localhost/app/) — relative `./assets/…` resolve against the
-  // document/module URL in both. The PWA stays absolute (/) for its SW scope.
-  base: isApp ? "./" : "/",
-  plugins: [
-    react({
-      babel: {
-        plugins: [["babel-plugin-react-compiler", ReactCompilerConfig]],
-      },
-    }),
-    forceSingletons(),
-    splashInjector(),
-    assertSingletons(),
-    ...(isApp ? [stripServiceWorker()] : [stampServiceWorker()]),
-  ],
-  // __BUILD_TIME__: the build moment (ISO-8601 UTC), stamped at config eval so
-  // Settings → About can show a human "version time" alongside the bundle hash.
-  // Real wall-clock in the nix build sandbox (no faketime), so it reflects when
-  // this bundle was actually produced. Changes every build — that's intended for
-  // a version stamp.
-  define: {
-    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
-    ...(isApp ? { __TARGET__: JSON.stringify("app") } : {}),
-  },
-  resolve: {
-    // forceSingletons() (a resolveId plugin, above) pins the React-context-bearing
-    // packages to the app's single copy so the symlinked _shell SDK shares the app's
-    // React/MUI/emotion context (the dual-context bug that washed out the nav bar +
-    // Settings sheet in dark mode); assertSingletons() guards against regressions.
-    dedupe: ["react", "react-dom"],
-    alias: {
-      "@": resolve(import.meta.dirname, "./src"),
+    // App build uses RELATIVE asset URLs so the same bundle works whether it's
+    // served from the embedded origin (tauri://localhost/) OR the OTA origin
+    // (lvsync://localhost/app/) — relative `./assets/…` resolve against the
+    // document/module URL in both. The PWA stays absolute (/) for its SW scope.
+    base: isApp ? "./" : "/",
+    plugins: [
+      react({
+        babel: {
+          plugins: [["babel-plugin-react-compiler", ReactCompilerConfig]],
+        },
+      }),
+      forceSingletons(),
+      splashInjector(),
+      assertSingletons(),
+      ...(isApp ? [stripServiceWorker()] : [stampServiceWorker()]),
+    ],
+    define: {
+      ...(isApp ? { __TARGET__: JSON.stringify("app") } : {}),
     },
-  },
-  build: {
-    outDir: isApp ? "dist-app" : "dist",
-    emptyOutDir: true,
-    sourcemap: false,
-    minify: "esbuild",
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          vendor: ["react", "react-dom"],
-          mui: ["@mui/material", "@mui/icons-material"],
+    resolve: {
+      // forceSingletons() (a resolveId plugin, above) pins the React-context-bearing
+      // packages to the app's single copy so the symlinked _shell SDK shares the app's
+      // React/MUI/emotion context (the dual-context bug that washed out the nav bar +
+      // Settings sheet in dark mode); assertSingletons() guards against regressions.
+      dedupe: ["react", "react-dom"],
+      alias: {
+        "@": resolve(import.meta.dirname, "./src"),
+      },
+    },
+    build: {
+      outDir: isApp ? "dist-app" : "dist",
+      emptyOutDir: true,
+      sourcemap: false,
+      minify: "esbuild",
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            mui: ["@mui/material", "@mui/icons-material"],
+          },
         },
       },
     },
-  },
-  server: {
-    proxy: {
-      "/api": "http://127.0.0.1:4159",
-      "/ws": {
-        target: "ws://127.0.0.1:4159",
-        ws: true,
+    server: {
+      proxy: {
+        "/api": "http://127.0.0.1:4159",
+        "/ws": {
+          target: "ws://127.0.0.1:4159",
+          ws: true,
+        },
       },
     },
-  },
   };
 });

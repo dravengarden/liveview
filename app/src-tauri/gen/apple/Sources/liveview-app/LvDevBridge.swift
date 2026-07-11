@@ -10,8 +10,8 @@
 // THE TECHNIQUE: since this is OUR app, expose a tiny loopback HTTP server that
 // runs `webView.evaluateJavaScript` and returns the result. Works identically on
 // the simulator AND a device, needs no iwdp / Chrome / Safari, and is fully
-// headless. The simulator shares the Mac's loopback, so from the Mac (or hawk over
-// SSH) `curl 127.0.0.1:4170/eval -d '<js>'` evaluates JS in the live app.
+// headless. The simulator shares the Mac's loopback, so a local or SSH session
+// can use `curl 127.0.0.1:4170/eval -d '<js>'` to evaluate JS in the live app.
 //
 //   curl -s 127.0.0.1:4170/ping                       # → ok
 //   curl -s 127.0.0.1:4170/eval -d 'location.href'    # → the URL

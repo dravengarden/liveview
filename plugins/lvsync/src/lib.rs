@@ -13,7 +13,7 @@
 //! app start. resolve() never blocks on the refresh.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -23,11 +23,19 @@ use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{AppHandle, Manager, Runtime, State};
 use tokio::sync::RwLock;
 
-/// Backend routes are raced for every native network operation. Public/tailnet
-/// access keeps the app working away from home; direct LAN access avoids making
-/// split DNS / proxy hairpinning a single point of failure on the home network.
-const REMOTE_PUBLIC: &str = "https://liveview.hawk.thundersparrow.top";
-const REMOTE_LAN: &str = "http://192.168.0.96:4160";
+/// Comma-separated backend origins baked into the native shell. Deployments can
+/// provide public + LAN routes with `LIVEVIEW_REMOTE_ORIGINS`; a public checkout
+/// defaults to the local development server and contains no private endpoints.
+const DEFAULT_REMOTE_ORIGINS: &str = "http://127.0.0.1:4160";
+
+fn remote_origins() -> Vec<&'static str> {
+    option_env!("LIVEVIEW_REMOTE_ORIGINS")
+        .unwrap_or(DEFAULT_REMOTE_ORIGINS)
+        .split(',')
+        .map(str::trim)
+        .filter(|origin| !origin.is_empty())
+        .collect()
+}
 
 /// Safety cap on the APM outbox: a device that never gets a flushable network
 /// can't grow the buffer without bound. Normal operation acks + deletes rows, so
@@ -81,9 +89,8 @@ fn successful_response(
     })
 }
 
-/// Race the public and LAN routes and return the first successful HTTP response.
-/// If the first completion is a failure, keep waiting for the other route rather
-/// than allowing a fast DNS/proxy error to hide a healthy backend.
+/// Race every configured route and return the first successful HTTP response.
+/// Fast failures do not hide a slower healthy route.
 async fn send_remote<F>(
     client: &reqwest::Client,
     path: &str,
@@ -92,25 +99,33 @@ async fn send_remote<F>(
 where
     F: Fn(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 {
-    let public = configure(client.get(format!("{REMOTE_PUBLIC}{path}"))).send();
-    let lan = configure(client.get(format!("{REMOTE_LAN}{path}"))).send();
-    tokio::pin!(public, lan);
-    tokio::select! {
-        first = &mut public => match successful_response(first) {
-            Ok(response) => Ok(response),
-            Err(first_error) => successful_response(lan.await).map_err(|second_error| FetchFailure {
-                connectivity: first_error.connectivity && second_error.connectivity,
-                message: format!("public: {first_error}; lan: {second_error}"),
-            }),
-        },
-        first = &mut lan => match successful_response(first) {
-            Ok(response) => Ok(response),
-            Err(first_error) => successful_response(public.await).map_err(|second_error| FetchFailure {
-                connectivity: first_error.connectivity && second_error.connectivity,
-                message: format!("lan: {first_error}; public: {second_error}"),
-            }),
-        },
+    use futures_util::stream::{FuturesUnordered, StreamExt as _};
+
+    let mut pending = FuturesUnordered::new();
+    for origin in remote_origins() {
+        let label = origin.to_string();
+        let request = configure(client.get(format!("{origin}{path}"))).send();
+        pending.push(async move { (label, request.await) });
     }
+    let mut errors = Vec::new();
+    let mut connectivity = true;
+    while let Some((origin, result)) = pending.next().await {
+        match successful_response(result) {
+            Ok(response) => return Ok(response),
+            Err(error) => {
+                connectivity &= error.connectivity;
+                errors.push(format!("{origin}: {error}"));
+            }
+        }
+    }
+    Err(FetchFailure {
+        connectivity,
+        message: if errors.is_empty() {
+            "no backend origins configured".into()
+        } else {
+            errors.join("; ")
+        },
+    })
 }
 
 /// reqwest-backed network fetcher. Manifest URLs are origin-relative
@@ -162,6 +177,32 @@ struct WebManifest {
     files: Vec<String>,
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct RootResponse {
+    #[serde(default = "default_protocol_version")]
+    protocol_version: u32,
+    root: String,
+}
+
+fn default_protocol_version() -> u32 {
+    lv_sync::MANIFEST_PROTOCOL_VERSION
+}
+
+impl RootResponse {
+    fn from_json(json: &str) -> Result<Self, String> {
+        let response: Self =
+            serde_json::from_str(json).map_err(|error| format!("root parse: {error}"))?;
+        if response.protocol_version > lv_sync::MANIFEST_PROTOCOL_VERSION {
+            return Err(format!(
+                "manifest protocol {} is newer than supported {}",
+                response.protocol_version,
+                lv_sync::MANIFEST_PROTOCOL_VERSION
+            ));
+        }
+        Ok(response)
+    }
+}
+
 pub struct LvState {
     engine: Engine<SqliteBlobStore, HttpFetcher>,
     manifest: RwLock<Manifest>,
@@ -185,7 +226,7 @@ pub struct LvState {
 impl LvState {
     /// Construct synchronously from the app data dir: open the blob dir, seed the
     /// manifest from the on-disk cache if present (so offline launch has a map).
-    fn new(data_dir: &PathBuf) -> Result<Self, String> {
+    fn new(data_dir: &Path) -> Result<Self, String> {
         // One SQLite DB (blobs + bytes + LRU index) instead of a file-per-hash dir
         // — O(1) stats + SQL eviction, and the same store compiles for every native
         // platform (iOS/macOS/Android). Cross-compiles to aarch64-apple-ios via
@@ -452,8 +493,9 @@ impl LvState {
         }
     }
 
-    /// Re-pull `/api/dag` from the network; on success swap the manifest + index
-    /// and rewrite the on-disk cache. Best-effort: offline keeps the old map.
+    /// Probe `/api/root`, then pull `/api/dag` only when the deploy root changed.
+    /// On success swap the manifest + index and rewrite the on-disk cache.
+    /// Best-effort: offline keeps the old map.
     async fn refresh(&self) -> Result<String, String> {
         // Timeout so a background refresh can't hang forever offline (mirrors the
         // engine fetcher's timeouts).
@@ -462,12 +504,48 @@ impl LvState {
             .timeout(Duration::from_secs(30))
             .build()
             .unwrap_or_default();
-        let json = send_remote(&client, "/api/dag", |request| request)
-            .await
-            .map_err(|e| e.to_string())?
-            .text()
-            .await
-            .map_err(|e| e.to_string())?;
+        let current = self.manifest.read().await.root.clone();
+        let root_response = send_remote(&client, "/api/root", |request| {
+            if current.is_empty() {
+                request
+            } else {
+                request.header("If-None-Match", current.clone())
+            }
+        })
+        .await;
+        match root_response {
+            Ok(response) if response.status() == reqwest::StatusCode::NOT_MODIFIED => {
+                return Ok(current);
+            }
+            Ok(response) => {
+                let root = response
+                    .text()
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|body| RootResponse::from_json(&body).map(|root| root.root))?;
+                if !current.is_empty() && root == current {
+                    return Ok(current);
+                }
+            }
+            Err(_) => {
+                // Older servers may not expose /api/root. Fall through to the
+                // full DAG request so compatibility and self-healing win.
+            }
+        }
+
+        let response = send_remote(&client, "/api/dag", |request| {
+            if current.is_empty() {
+                request
+            } else {
+                request.header("If-None-Match", current.clone())
+            }
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        if response.status() == reqwest::StatusCode::NOT_MODIFIED {
+            return Ok(current);
+        }
+        let json = response.text().await.map_err(|e| e.to_string())?;
         let m = Manifest::from_json(&json)?;
         let root = m.root.clone();
         let idx = index(&m);
@@ -651,7 +729,7 @@ async fn sync_all(state: State<'_, LvState>) -> Result<u64, String> {
     // and move OWNED `Resource`s into each future (borrowing the iterator item trips
     // a higher-ranked-lifetime error with buffer_unordered).
     let engine = &state.engine;
-    let done = futures_util::stream::iter(resources.into_iter())
+    let done = futures_util::stream::iter(resources)
         .map(|r| async move {
             if engine.resolve(&r).await.is_ok() {
                 r.bytes
@@ -830,7 +908,8 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
             (200, msg.into_bytes())
         }
         "/refresh" => {
-            // Re-pull /api/dag → swap the manifest + by_url index. The web driver
+            // Probe /api/root and, when changed, re-pull /api/dag → swap the
+            // manifest + by_url index. The web driver
             // calls this on EVERY app open + foreground (not just cold launch, which
             // is the only other time setup_state refreshes). Without it, a device
             // that warm-resumes never learns about resources ADDED to the corpus
@@ -841,6 +920,25 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
             match state.refresh().await {
                 Ok(root) => (200, root.into_bytes()),
                 Err(e) => (504, e.into_bytes()),
+            }
+        }
+        "/audio-index" => {
+            // The web audio driver needs only audio + marks resources. Serving
+            // this subset from the already-refreshed in-memory manifest avoids a
+            // second multi-megabyte /api/dag network request on every foreground.
+            let manifest = state.manifest.read().await;
+            let resources: Vec<&Resource> = manifest
+                .resources
+                .iter()
+                .filter(|resource| resource.kind == "audio" || resource.kind == "marks")
+                .collect();
+            match serde_json::to_vec(&serde_json::json!({
+                "protocol_version": manifest.protocol_version,
+                "root": manifest.root,
+                "resources": resources,
+            })) {
+                Ok(body) => (200, body),
+                Err(error) => (500, error.to_string().into_bytes()),
             }
         }
         "/sync_all" => {
@@ -1022,4 +1120,70 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             });
         })
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn resource(kind: &str, path: &str) -> Resource {
+        Resource {
+            path: path.into(),
+            hash: format!("hash-{kind}"),
+            kind: kind.into(),
+            bytes: 1,
+            url: format!("/api/{kind}"),
+        }
+    }
+
+    #[test]
+    fn url_normalization_and_content_types_are_stable() {
+        assert_eq!(norm("/api/file?path=a%2Fb%20c"), "/api/file?path=a/b c");
+        assert_eq!(content_type_for("assets/app.js", b""), "text/javascript");
+        assert_eq!(content_type_for("assets/font.woff2", b""), "font/woff2");
+        assert_eq!(LvState::ver_dir("assets/index-a.b/c"), "assets_index_a_b_c");
+    }
+
+    #[test]
+    fn root_protocol_defaults_legacy_and_rejects_future() {
+        let legacy = RootResponse::from_json(r#"{"root":"r"}"#).unwrap();
+        assert_eq!(legacy.protocol_version, lv_sync::MANIFEST_PROTOCOL_VERSION);
+
+        let future = format!(
+            r#"{{"protocol_version":{},"root":"r"}}"#,
+            lv_sync::MANIFEST_PROTOCOL_VERSION + 1
+        );
+        assert!(RootResponse::from_json(&future)
+            .unwrap_err()
+            .contains("newer than supported"));
+    }
+
+    #[tokio::test]
+    async fn audio_index_exposes_only_audio_and_marks() {
+        let unique = format!("liveview-lvsync-test-{}-{}", std::process::id(), now_ms());
+        let root = std::env::temp_dir().join(unique);
+        let data = root.join("plugin");
+        std::fs::create_dir_all(&data).unwrap();
+        let state = LvState::new(&data).unwrap();
+        *state.manifest.write().await = Manifest {
+            root: "root".into(),
+            resources: vec![
+                resource("text", "book/text/en/a.md"),
+                resource("audio", "book/audio/en/a.md#audio"),
+                resource("marks", "book/audio/en/a.md#marks"),
+            ],
+            ..Manifest::default()
+        };
+
+        let (status, body) = scheme_dispatch(&state, "/audio-index", "").await;
+        assert_eq!(status, 200);
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let resources = json["resources"].as_array().unwrap();
+        assert_eq!(resources.len(), 2);
+        assert!(resources
+            .iter()
+            .all(|resource| { matches!(resource["kind"].as_str(), Some("audio" | "marks")) }));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

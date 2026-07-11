@@ -12,26 +12,30 @@
 // only knows native plugins). A LOCAL origin reaches the Rust plugin AND the app
 // shell is available offline. See memory tauri-remote-ipc-needs-plugin.
 
-const PUBLIC_REMOTE = "https://liveview.hawk.thundersparrow.top";
-const LAN_REMOTE = "http://192.168.0.96:4160";
+const CONFIGURED_REMOTES = (
+  (import.meta.env["VITE_LIVEVIEW_ORIGINS"] as string | undefined) ??
+    "http://127.0.0.1:4160"
+)
+  .split(",")
+  .map((origin) => origin.trim().replace(/\/$/, ""))
+  .filter(Boolean);
+const DEFAULT_REMOTE = CONFIGURED_REMOTES[0] ?? "http://127.0.0.1:4160";
 const REMOTE_KEY = "lv.remote.origin";
 
 /** The selected liveview server. ES-module imports are live bindings, so callers
  *  see the endpoint chosen by selectRemote() before React mounts. */
-export let REMOTE = PUBLIC_REMOTE;
+export let REMOTE = DEFAULT_REMOTE;
 
 /** True when the SPA was bundled into the native shell (local origin): running
  *  inside the Tauri shell BUT not served from the remote server. (Old shell that
  *  loaded the remote → false; PWA/browser → false; bundled-local shell → true.) */
 export const BUNDLED =
   !!(globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ &&
-  !(globalThis.location?.origin ?? "").includes("thundersparrow.top");
+  !["http:", "https:"].includes(globalThis.location?.protocol ?? "");
 
-/** Select the first reachable native backend instead of treating one DNS route
- *  as a single point of failure. The public/tailnet origin remains authoritative
- *  away from home; the direct LAN origin wins quickly when split DNS or hairpin
- *  routing is unavailable. A short bounded probe adds at most 750 ms to an
- *  offline cold launch, and the last winner is retained as a future candidate. */
+/** Select the first reachable configured native backend instead of treating one
+ *  route as a single point of failure. A short bounded probe adds at most 750 ms
+ *  to an offline cold launch, and the last winner is retained as a candidate. */
 export async function selectRemote(): Promise<string> {
   if (!BUNDLED) return REMOTE;
   let previous: string | null = null;
@@ -41,7 +45,7 @@ export async function selectRemote(): Promise<string> {
     // Storage is an optimization only.
   }
   const candidates = [
-    ...new Set([previous, PUBLIC_REMOTE, LAN_REMOTE].filter(Boolean)),
+    ...new Set([previous, ...CONFIGURED_REMOTES].filter(Boolean)),
   ] as string[];
   const controller = new AbortController();
   const timer = globalThis.setTimeout(() => controller.abort(), 750);
@@ -62,9 +66,9 @@ export async function selectRemote(): Promise<string> {
       // Private mode / quota: use the in-memory winner for this launch.
     }
   } catch {
-    // Both routes unavailable: keep the prior/public origin and let the native
+    // Every route is unavailable: keep the prior/default origin and let the native
     // content cache provide the offline experience.
-    REMOTE = previous ?? PUBLIC_REMOTE;
+    REMOTE = previous ?? DEFAULT_REMOTE;
   } finally {
     globalThis.clearTimeout(timer);
     controller.abort();

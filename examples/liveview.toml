@@ -90,21 +90,3 @@ source = "i18n-demo/zh"
 
 [book.layout]
 order = ["README.md", "chapter.md"]
-
-# ───────────────────────────────────────────────────────────────────────
-# Book 3 — the columbus harness conventions (sibling tree in the monorepo).
-# NOTE: `source` is resolved relative to THIS config file's directory
-# (examples/), so reaching the columbus root takes four `../`.
-# ───────────────────────────────────────────────────────────────────────
-[[book]]
-label       = "Conventions"
-slug        = "conventions"
-source      = "../../../../conventions"
-description = "The columbus harness conventions — commits, code style, testing."
-
-[book.layout]
-order = ["commits.md", "code/"]
-
-# Curate one level deeper: inside code/, surface the python guide first.
-[book.layout.subtree.code]
-order = ["python/"]

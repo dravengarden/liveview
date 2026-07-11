@@ -1,6 +1,6 @@
 // Native shell: the window boots the bundled SPA and resolves reader content
-// through the `lvsync://` custom scheme. The axum + postgres + rustfs backend
-// remains on hawk; native code supplies offline storage, background audio,
+// through the `lvsync://` custom scheme. A configured remote server supplies
+// content; native code adds offline storage, background audio,
 // lock-screen controls, haptics, and app-settings integration that a PWA cannot.
 //
 // The shell also exposes the opener plugin (the error UI's "去设置开启" button →

@@ -25,12 +25,10 @@
 	<array>
 		<string>audio</string>
 	</array>
-	<!-- The UI lives on hawk over the tailnet (a local-network address), so iOS
-	     shows a one-time "Local Network" prompt on first launch. This string is
-	     its explanation; the bundled loader page (frontendDist) survives the
-	     prompt and auto-reconnects once it's granted. -->
+	<!-- A self-hosted LiveView server may use a local-network address, so iOS
+	     shows a one-time Local Network prompt on first launch. -->
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>LiveView connects to its server on your local network (hawk) over Tailscale.</string>
+	<string>LiveView connects to the reading server configured for this app.</string>
 	<!-- No custom crypto; skips the export-compliance prompt on every upload. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>

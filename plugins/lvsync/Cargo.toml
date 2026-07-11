@@ -16,7 +16,9 @@ edition = "2021"
 links = "tauri-plugin-lvsync"
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# The plugin only needs Tauri's API types. The consuming app owns the webview
+# runtime; disabling Tauri's defaults keeps this crate's feature surface explicit.
+tauri = { version = "2", default-features = false, features = [] }
 serde = { version = "1", features = ["derive"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["macros", "sync"] }
@@ -29,7 +31,7 @@ serde_json = "1"
 lv-sync = { path = "../../lv-sync" }
 # Native HTTP fetcher. rustls-tls (pure Rust) works on iOS; the liveview origin
 # is a public Let's Encrypt cert so webpki roots validate it.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["gzip", "rustls-tls"] }
 
 [build-dependencies]
 tauri-plugin = { version = "2", features = ["build"] }

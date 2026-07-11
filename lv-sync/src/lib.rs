@@ -52,17 +52,43 @@ pub struct Resource {
 
 /// The corpus manifest the client mirrors: the Merkle root (an O(1) "anything
 /// changed?" cursor) plus every resource.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub const MANIFEST_PROTOCOL_VERSION: u32 = 1;
+
+fn default_manifest_protocol_version() -> u32 {
+    MANIFEST_PROTOCOL_VERSION
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Manifest {
+    /// Wire format version. Missing means v1 for manifests cached by older apps.
+    #[serde(default = "default_manifest_protocol_version")]
+    pub protocol_version: u32,
     /// Current deploy root hash; when it changes, re-pull the manifest + diff.
     pub root: String,
     pub resources: Vec<Resource>,
 }
 
+impl Default for Manifest {
+    fn default() -> Self {
+        Self {
+            protocol_version: MANIFEST_PROTOCOL_VERSION,
+            root: String::new(),
+            resources: Vec::new(),
+        }
+    }
+}
+
 impl Manifest {
     /// Parse a manifest from the server's JSON.
     pub fn from_json(s: &str) -> Result<Self, String> {
-        serde_json::from_str(s).map_err(|e| format!("manifest parse: {e}"))
+        let manifest: Self = serde_json::from_str(s).map_err(|e| format!("manifest parse: {e}"))?;
+        if manifest.protocol_version > MANIFEST_PROTOCOL_VERSION {
+            return Err(format!(
+                "manifest protocol {} is newer than supported {}",
+                manifest.protocol_version, MANIFEST_PROTOCOL_VERSION
+            ));
+        }
+        Ok(manifest)
     }
 
     /// Total bytes of every resource — the denominator of the offline percentage.
@@ -384,6 +410,7 @@ mod tests {
             let m = Manifest {
                 root: "r".into(),
                 resources: vec![text.clone(), audio],
+                ..Manifest::default()
             };
 
             let mut data = HashMap::new();
@@ -421,6 +448,7 @@ mod tests {
                     bytes: 1,
                     url: "u".into(),
                 }],
+                ..Manifest::default()
             };
             assert_eq!(eng.gc(&m).await, 1);
             assert!(eng.store().has("keep").await);
@@ -441,5 +469,19 @@ mod tests {
             let eng = Engine::new(MemStore::default(), fetcher);
             assert_eq!(eng.resolve(&r).await, Err(ResolveError::Integrity));
         });
+    }
+
+    #[test]
+    fn manifest_protocol_defaults_legacy_and_rejects_future() {
+        let legacy = Manifest::from_json(r#"{"root":"r","resources":[]}"#).unwrap();
+        assert_eq!(legacy.protocol_version, MANIFEST_PROTOCOL_VERSION);
+
+        let future = format!(
+            r#"{{"protocol_version":{},"root":"r","resources":[]}}"#,
+            MANIFEST_PROTOCOL_VERSION + 1
+        );
+        assert!(Manifest::from_json(&future)
+            .unwrap_err()
+            .contains("newer than supported"));
     }
 }

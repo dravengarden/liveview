@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { REMOTE } from "@/apiBase";
 import {
   ensureAutoSync,
+  nativeAudioIndex,
   nativeCacheStats,
   nativeRefreshManifest,
   nativeSyncAvailable,
@@ -76,23 +77,21 @@ export function useAudioPreloadDriver(): void {
       refreshing = true;
       try {
         // Refresh the native content manifest FIRST so newly-added corpus resources
-        // (e.g. audio `spoken` transcripts) are known before we read the dag.
+        // are known before reading its compact audio/marks subset.
         await nativeRefreshManifest();
-        // contentFetch: network-first when online (picks up newly-baked audio),
-        // cache fallback offline + timed (a raw fetch of the ~4 MB dag hung offline).
-        const dag = (await (await contentFetch("/api/dag")).json()) as {
-          resources: { hash: string; kind: string; url: string; path: string }[];
-        };
+        // Read from the plugin's in-memory manifest. The previous path fetched the
+        // whole /api/dag over the network a second time after refresh.
+        const resources = await nativeAudioIndex();
         if (cancelled) return;
         // PERSIST the per-chapter audio + marks hashes to the durable localStorage
         // index FIRST — the offline-playback fix. We're online here (the dag fetch
         // succeeded), which is exactly when audio gets downloaded, so this guarantees
         // "downloaded ⇒ hash available offline" without depending on the manifest
         // still being in the url-cache. (player reads this index before the manifest.)
-        ingestDag(dag.resources);
+        ingestDag(resources);
         // Reassigned ONLY after a successful fetch+parse, so a failed refresh keeps
         // the prior good set instead of clobbering it to [].
-        audioRes = dag.resources
+        audioRes = resources
           .filter((r) => r.kind === "audio")
           .map((r) => ({ hash: r.hash, url: r.url }));
         // Warm each book's /api/manifest into the cache ONCE per session (cache-first
@@ -101,7 +100,7 @@ export function useAudioPreloadDriver(): void {
         // resolve the hash → no offline play. Warming makes EVERY downloaded book
         // playable offline, not only ones played online once.
         const slugs = [
-          ...new Set(dag.resources.map((r) => r.path.split("/")[0] ?? "")),
+          ...new Set(resources.map((r) => r.path.split("/")[0] ?? "")),
         ].filter((s) => s.length > 0 && !warmedManifests.has(s));
         for (const slug of slugs) {
           if (cancelled) break;
@@ -156,7 +155,10 @@ export function useAudioPreloadDriver(): void {
       // dlDisk), free space and the WiFi gate — the on-device signal, queryable
       // without a screenshot. Log BEFORE the WiFi-gate return so a gate-skip round
       // still reports (net/wifi_only reveal a mis-gated fill).
-      const uncached = audioRes.reduce((n, r) => n + (cached.has(r.hash) ? 0 : 1), 0);
+      const uncached = audioRes.reduce(
+        (n, r) => n + (cached.has(r.hash) ? 0 : 1),
+        0,
+      );
       const nowMs = Date.now();
       if (nowMs - lastDlLog > 30_000) {
         lastDlLog = nowMs;

@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "top.thundersparrow.liveview",
   "build": {
-    "devUrl": "https://liveview.hawk.thundersparrow.top",
+    "devUrl": "http://localhost:5173",
     "frontendDist": "../../web/dist-app"
   },
   "app": {

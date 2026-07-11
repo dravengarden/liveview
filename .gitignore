@@ -4,16 +4,17 @@
 # Web frontend
 /web/node_modules
 /web/dist
-/web/deno.lock
 
-# Root dependencies (for Playwright)
+# Root tool dependencies
 /node_modules
-/deno.lock
 
 # Temporary/test files
 /tmp
 *.png
 *.test.js
+
+# Public README artwork is a committed documentation asset.
+!/docs/assets/liveview-hero.png
 
 # ...but the PWA app icons are committed build inputs, not screenshots.
 !web/public/icon-192.png
@@ -32,6 +33,7 @@ web/src/_shell
 # native app (Tauri) build artifacts
 app/src-tauri/target/
 plugins/lvsync/target/
+/plugins/lvsync/permissions/
 app/src-tauri/gen/apple/build/
 app/src-tauri/gen/apple/Externals/
 app/src-tauri/gen/apple/*.xcodeproj/project.xcworkspace/xcuserdata/

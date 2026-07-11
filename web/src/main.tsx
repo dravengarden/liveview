@@ -80,11 +80,11 @@ try {
 // app's index.html + JS/CSS chunks can only load OFFLINE if something serves them
 // from cache — and that something is THIS service worker (navigate = cache-first
 // shell, assets = stale-while-revalidate). It's also exactly what the bundled
-// loader (loader/index.html) probes for on a cold offline launch: it loads
+// native shell probes for on a cold offline launch: it loads
 // REMOTE/favicon.svg as an <img>, which the SW serves from cache with zero
 // network, then hands off to the SW-served SPA. We previously UNREGISTERED the SW
 // on the shell to always load fresh — but that left the shell with no offline
-// copy of itself, so a cold OFFLINE launch dead-ended on "正在连接 hawk…" (this
+// copy of itself, so a cold offline launch dead-ended on the connection screen (this
 // bug). Freshness is preserved without sacrificing offline: the SW is VERSION-
 // stamped (a UI change invalidates its caches), the navigate handler revalidates
 // in the background, and the controllerchange listener below auto-reloads once a

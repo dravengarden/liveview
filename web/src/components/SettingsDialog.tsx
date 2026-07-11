@@ -54,23 +54,6 @@ const BUILD_ID = ((): string => {
   }
 })();
 
-// The build moment, stamped into the bundle by vite (`define: __BUILD_TIME__`,
-// ISO-8601 UTC). Shown next to the hash so "which version" reads as a real date
-// (年月日时分秒), formatted in the device's local time. Empty in `vite dev`.
-declare const __BUILD_TIME__: string | undefined;
-const BUILD_TIME = ((): string => {
-  try {
-    const iso = typeof __BUILD_TIME__ === "string" ? __BUILD_TIME__ : "";
-    if (!iso) return "";
-    const d = new Date(iso);
-    const p = (n: number): string => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
-      `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
-  } catch {
-    return "";
-  }
-})();
-
 // Discrete presets for the reading-layout dropdowns — a slider was fiddly on
 // touch and a number field would pop the keyboard; a small set taps cleanly.
 // Values mirror cowboy's latest (margin = its reading padding) so the two apps'
@@ -534,7 +517,6 @@ export function SettingsButton({
           </Typography>
           <Typography variant="caption" color="text.disabled">
             build {BUILD_ID}
-            {BUILD_TIME && ` · ${BUILD_TIME}`}
           </Typography>
         </Stack>
         </Stack>

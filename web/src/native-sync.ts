@@ -8,6 +8,7 @@
 //   GET lvsync://localhost/resolve?u=<encoded api url>  → bytes (200) | 504 offline
 //   GET lvsync://localhost/stats                        → [cached,total,cb,tb]
 //   GET lvsync://localhost/sync_all                     → bytes-cached (number)
+//   GET lvsync://localhost/audio-index                  → cached audio/marks manifest
 //
 // Off the shell (PWA / browser) the scheme is absent → every helper falls back to a
 // normal `fetch` (the service worker handles offline there).
@@ -37,8 +38,12 @@ export async function contentFetch(
     // audio switch awaits — a network-first stall there hangs playback even though
     // the bytes are local). The url-keyed path is network-first otherwise.
     const cf = opts?.cacheFirst ? "&cf=1" : "";
-    const r = await fetch(`${SCHEME}/resolve?u=${encodeURIComponent(url)}${cf}`);
-    if (r.status === 200) return new Response(await r.arrayBuffer(), { status: 200 });
+    const r = await fetch(
+      `${SCHEME}/resolve?u=${encodeURIComponent(url)}${cf}`,
+    );
+    if (r.status === 200) {
+      return new Response(await r.arrayBuffer(), { status: 200 });
+    }
     return new Response(null, { status: 504, statusText: "offline" });
   } catch {
     // Scheme failed unexpectedly — last resort to the network (online only).
@@ -106,6 +111,22 @@ export async function nativeSyncAll(_wifiOnly = false): Promise<number> {
   const r = await fetch(`${SCHEME}/sync_all`);
   if (r.status !== 200) throw new Error("sync failed");
   return Number(await r.text()) || 0;
+}
+
+export interface NativeAudioResource {
+  hash: string;
+  kind: "audio" | "marks";
+  url: string;
+  path: string;
+}
+
+/** Audio/marks subset of the manifest already refreshed by the Rust plugin. */
+export async function nativeAudioIndex(): Promise<NativeAudioResource[]> {
+  if (!nativeSyncAvailable()) return [];
+  const response = await fetch(`${SCHEME}/audio-index`);
+  if (!response.ok) throw new Error("audio index unavailable");
+  const body = (await response.json()) as { resources?: NativeAudioResource[] };
+  return body.resources ?? [];
 }
 
 /** Tell the native fetcher whether to fast-fail network reads. The plugin's

@@ -26,6 +26,7 @@
       pkgs = import nixpkgs { inherit system; };
       lib = pkgs.lib;
       shared = shared-utils.lib.${system};
+      version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
 
       # Shared UI SDK source tree from the shared-utils `ui` package, re-exposed
       # for local dev to materialize web/src/_shell/ (the build itself stages it
@@ -45,24 +46,24 @@
       # whose outputHash addressed the WHOLE build — so a source-only change
       # silently reused a stale bundle until the hash was hand-rebumped.
       #
-      # installArgs = "--allow-scripts" (NOT "--frozen"): deno.lock is gitignored
-      # here, so a frozen install would fail; --allow-scripts lets esbuild's
-      # lifecycle script link its native binary. The build runs `deno task
+      # The checked-in lockfile makes local and Nix dependency resolution agree;
+      # --allow-scripts lets esbuild's lifecycle script link its native binary.
+      # The build runs `deno task
       # build`, which web/deno.json maps to a vite-only build (no tsc pass), as
       # the old FOD did. shellSrc defaults to the shared-utils ui SDK — exactly
       # what liveview already staged — so it's omitted.
       liveview-web = shared.buildDenoViteApp {
         pname = "liveview";
-        version = "0.1.0";
+        inherit version;
         src = lib.cleanSource ./.;
-        installArgs = "--allow-scripts";
-        depsHash = "sha256-2EvsaHNmzSUqmwbvIpRW4aasEkg0SxUTdlXPLo8F+s0=";
+        installArgs = "--frozen --allow-scripts";
+        depsHash = "sha256-E0EpfeHduBNXW9ne0rayUJJufQRxW9UbKOyCxPS8FIc=";
       };
 
       # ── liveview: axum daemon, embeds the SPA via include_dir! ────────
       liveview = pkgs.rustPlatform.buildRustPackage {
         pname = "liveview";
-        version = "0.1.0";
+        inherit version;
 
         src = lib.cleanSourceWith {
           src = ./.;
@@ -86,6 +87,7 @@
           pkgs.pkg-config
           pkgs.makeWrapper
         ];
+        nativeCheckInputs = [ shared.deno ];
 
         # The audiobook player shells out to `edge-tts`; bake it onto PATH so
         # the deployed binary is self-contained (no unit-level PATH wiring).
@@ -97,7 +99,7 @@
         # + static.crates.io), NOT importCargoLock: this box's omega proxy
         # 403s the crates.io API download endpoint that importCargoLock uses,
         # while static.crates.io returns 200.
-        cargoHash = "sha256-zVtt8aVe0DDFD6MOxIq11qtseS3/NiSIDGk01YgC5aY=";
+        cargoHash = "sha256-FmeDET3+qalwv0vEp1t5b6HOSxIUukx6JfWtKs8tCfo=";
 
         # include_dir!("$CARGO_MANIFEST_DIR/web/dist") is a compile-time
         # lookup — drop the prebuilt SPA there before cargo runs.
@@ -112,8 +114,10 @@
           "liveview"
         ];
 
-        # Tests touch the filesystem / network; not relevant for packaging.
-        doCheck = false;
+        # Hermetic tests run during packaging; integration tests that require
+        # live postgres/S3/VictoriaLogs are explicitly ignored by the suite.
+        doCheck = true;
+        cargoTestFlags = [ "--all-targets" ];
 
         meta = with lib; {
           description = "Live-reloading docs previewer (axum + embedded React SPA)";
@@ -133,6 +137,10 @@
         shared-ui-src = sharedUiSrc;
       };
 
+      checks.${system} = {
+        inherit liveview liveview-web;
+      };
+
       devShells.${system}.default = pkgs.mkShell {
         packages = [
           pkgs.cargo
@@ -146,6 +154,16 @@
           pkgs.pkg-config
           pkgs.sqlite
           edgeTts
+        ];
+        # Tauri's Linux host build compiles the desktop webview backend even
+        # though the primary native target is iOS/macOS. Keeping these here lets
+        # `make verify` type-check and test the plugin on a clean Linux checkout.
+        buildInputs = [
+          pkgs.cairo
+          pkgs.dbus
+          pkgs.gtk3
+          pkgs.libsoup_3
+          pkgs.webkitgtk_4_1
         ];
       };
     };

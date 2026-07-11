@@ -1,6 +1,5 @@
 # dependencies (deno install)
 node_modules
-deno.lock
 
 # output
 out

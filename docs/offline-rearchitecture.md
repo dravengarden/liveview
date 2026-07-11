@@ -29,15 +29,14 @@ the PWA only, and replace the scan-everything stats with a maintained index.
 ## 2. Current architecture (as researched)
 
 - **One build** (`web/`, Vite) → `dist/`, embedded in the liveview server and
-  served at the remote origin `https://liveview.hawk.thundersparrow.top`.
+  served by the configured remote LiveView origin.
 - **PWA / browser**: loads the remote origin; `public/sw.js` is the offline
   layer (cache-first navigate shell, SWR assets, cache-first `/api` content,
   Range-from-cache audio, VERSION-stamped by the `lv-stamp-sw` Vite plugin).
-- **iOS shell** (Tauri/WKWebView): `tauri.conf.json` `frontendDist = ../loader`.
-  A bundled `loader/index.html` probes the remote, survives the iOS Local-Network
-  prompt, then `location.replace(REMOTE)` — so the running webview is the
-  **remote origin**. `main.tsx` then *unregistered* the SW on the shell ("always
-  fresh"), which is exactly what broke cold offline launch.
+- **Legacy iOS shell** (Tauri/WKWebView): a bundled loader once redirected to a
+  remote origin and unregistered the service worker. This historical design is
+  retained here only to explain why the current local-origin architecture was
+  adopted.
 - **Native bridges** (because a remote origin can only call native *plugins*, see
   memory `tauri-remote-ipc-needs-plugin`):
   - `LvSyncController.swift` — text/units/marks/spine content, dir
@@ -182,7 +181,6 @@ liveview/ (main)
 │   └── src/platform/ app|pwa adapters (target.ts + index.ts)
 ├── app/              Tauri native shell — iOS · macOS · Android (see app/README.md)
 │   ├── src-tauri/    gen/apple (iOS Swift), gen/android (future), capabilities, src
-│   └── loader/       legacy remote-probe page (dropped at A3)
 ├── plugins/lvsync/   cross-platform Rust Tauri plugin (offline data layer + SQLite)
 ├── tools/            lvbuild.sh (device) · lvbuild-sim.sh (simulator)
 └── docs/
