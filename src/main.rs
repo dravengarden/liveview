@@ -1950,7 +1950,7 @@ async fn resolve_narration(
             }
         }
     }
-    state
+    let direct = state
         .store
         .get_chapter_fallback(
             &ctx.slug,
@@ -1961,7 +1961,28 @@ async fn resolve_narration(
         )
         .await
         .ok()
+        .flatten();
+    if direct.is_some() || ctx.kind != RenditionKind::Audio {
+        return direct;
+    }
+
+    // Some `book.toml` corpora expose an audiobook spine as virtual
+    // `<id>.spoken.md` paths while storing the generated narration on the source
+    // text chapter (`<id>.md`). Prefer a real curated audio row above, then map
+    // that virtual path back to its text source. Audio, marks, and transcript all
+    // use this same fallback so their sentence indexes stay aligned.
+    let text_path = audio_text_fallback_path(&ctx.rest)?;
+    state
+        .store
+        .get_chapter_fallback(&ctx.slug, "text", &ctx.lang, &ctx.default_lang, &text_path)
+        .await
+        .ok()
         .flatten()
+}
+
+fn audio_text_fallback_path(path: &str) -> Option<String> {
+    path.strip_suffix(".spoken.md")
+        .map(|stem| format!("{stem}.md"))
 }
 
 #[derive(serde::Serialize)]
@@ -2240,13 +2261,7 @@ async fn api_audio(
     let Some(ctx) = resolve_audio(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "audio not available").into_response();
     };
-    let Some((row, _)) = state
-        .store
-        .get_chapter_fallback(&ctx.slug, "audio", &ctx.lang, &ctx.default_lang, &ctx.rest)
-        .await
-        .ok()
-        .flatten()
-    else {
+    let Some((row, _)) = resolve_narration(&state, &ctx).await else {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     };
     let hash = match ensure_chapter_audio(&state, &row).await {
@@ -2306,13 +2321,7 @@ async fn api_marks(
     let Some(ctx) = resolve_audio(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "audio not available").into_response();
     };
-    let Some((row, _)) = state
-        .store
-        .get_chapter_fallback(&ctx.slug, "audio", &ctx.lang, &ctx.default_lang, &ctx.rest)
-        .await
-        .ok()
-        .flatten()
-    else {
+    let Some((row, _)) = resolve_narration(&state, &ctx).await else {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     };
     let hash = match ensure_chapter_audio(&state, &row).await {
@@ -2356,7 +2365,7 @@ async fn ensure_chapter_audio(
         .store
         .set_chapter_audio(
             &row.book_slug,
-            "audio",
+            &row.rendition,
             &row.lang,
             &row.rel_path,
             &audio_hash,
@@ -2575,6 +2584,19 @@ async fn api_raw(
 mod apm_tests {
     use super::*;
     use crate::store::fs::FsStore;
+
+    #[test]
+    fn virtual_audio_path_maps_back_to_text_chapter() {
+        assert_eq!(
+            audio_text_fallback_path("01-why.spoken.md").as_deref(),
+            Some("01-why.md")
+        );
+        assert_eq!(
+            audio_text_fallback_path("part/01-why.spoken.md").as_deref(),
+            Some("part/01-why.md")
+        );
+        assert_eq!(audio_text_fallback_path("01-why.md"), None);
+    }
 
     #[test]
     fn manifest_etag_accepts_strong_weak_and_lists() {

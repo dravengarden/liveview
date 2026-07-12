@@ -13,7 +13,6 @@ import {
   Typography,
 } from "@mui/material";
 import {
-  ArrowBack as BackIcon,
   ChevronRight as ChevronRightIcon,
   Description as FileIcon,
   ExpandMore as ExpandMoreIcon,
@@ -246,9 +245,11 @@ interface SidebarProps {
   bookMode?: boolean;
   langs?: LangInfo[];
   currentLang?: string;
+  /** The persistent desktop pane owns this compact heading; temporary mobile
+   * navigation gets its labelled back/close header from NavShell instead. */
+  showHeader?: boolean;
   onSwitchLang?: (lang: string) => void;
   onSelect: (path: string) => void;
-  onBackToLanding: () => void;
   /** Deploy-time stamps (unix ms) of the open book; 0/undefined ⇒ hidden. */
   createdAt?: number | undefined;
   updatedAt?: number | undefined;
@@ -256,8 +257,8 @@ interface SidebarProps {
 
 // The Sidebar is the nav body inside NavShell, which owns the surrounding frame
 // (panel width / drawer / collapse) and the top bar (title, settings, launcher,
-// the collapse toggle). So this renders only the in-nav controls — back to the
-// bookshelf, expand/collapse-all, reveal current — plus the language switcher
+// the collapse toggle). So this renders only the in-book controls —
+// expand/collapse-all, reveal current — plus the language switcher
 // and the tree, filling whatever container NavShell gives it.
 /** Format a unix-ms deploy stamp as a locale date, or null when unset (0). */
 function fmtDate(ms: number | undefined, lang: string): string | null {
@@ -276,9 +277,9 @@ export function Sidebar({
   bookMode = false,
   langs = [],
   currentLang,
+  showHeader = true,
   onSwitchLang,
   onSelect,
-  onBackToLanding,
   createdAt,
   updatedAt,
 }: SidebarProps): React.JSX.Element {
@@ -373,44 +374,44 @@ export function Sidebar({
         bgcolor: "background.paper",
       }}
     >
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          px: 1,
-          py: 0.5,
-          borderBottom: 1,
-          borderColor: "divider",
-        }}
-      >
-        <Tooltip title={t("sidebar.back")}>
-          <IconButton onClick={onBackToLanding}>
-            <BackIcon />
-          </IconButton>
-        </Tooltip>
-        <Box sx={{ display: "flex", flexShrink: 0 }}>
-          <Tooltip
-            title={t(
-              isAllExpanded ? "sidebar.collapseAll" : "sidebar.expandAll",
-            )}
-          >
-            <IconButton onClick={handleToggleAll}>
-              {isAllExpanded ? <CollapseAllIcon /> : <ExpandAllIcon />}
-            </IconButton>
-          </Tooltip>
-          <Tooltip title={t("sidebar.reveal")}>
-            <span>
-              <IconButton
-                onClick={handleRevealCurrentFile}
-                disabled={!focusPath}
-              >
-                <LocateIcon />
+      {showHeader && (
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            px: 1,
+            py: 0.5,
+            borderBottom: 1,
+            borderColor: "divider",
+          }}
+        >
+          <Typography variant="subtitle2" sx={{ pl: 1, fontWeight: 700 }}>
+            {t("sidebar.contents")}
+          </Typography>
+          <Box sx={{ display: "flex", flexShrink: 0 }}>
+            <Tooltip
+              title={t(
+                isAllExpanded ? "sidebar.collapseAll" : "sidebar.expandAll",
+              )}
+            >
+              <IconButton onClick={handleToggleAll}>
+                {isAllExpanded ? <CollapseAllIcon /> : <ExpandAllIcon />}
               </IconButton>
-            </span>
-          </Tooltip>
+            </Tooltip>
+            <Tooltip title={t("sidebar.reveal")}>
+              <span>
+                <IconButton
+                  onClick={handleRevealCurrentFile}
+                  disabled={!focusPath}
+                >
+                  <LocateIcon />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </Box>
         </Box>
-      </Box>
+      )}
 
       {langs.length > 1 && (
         <Box

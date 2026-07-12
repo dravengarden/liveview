@@ -42,6 +42,9 @@ pub struct Config {
     /// are auto-discovered as `book.toml`-driven books (see `BookManifest`).
     #[serde(default, rename = "shelf")]
     pub shelves: Vec<ShelfCfg>,
+    /// Bounded roots containing repo-owned `docs/liveview.toml` manifests.
+    #[serde(default, rename = "registry")]
+    pub registries: Vec<RegistryCfg>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -132,6 +135,43 @@ pub struct EditionCfg {
 pub struct ShelfCfg {
     /// Directory to scan, relative to the config file (or absolute).
     pub path: PathBuf,
+}
+
+/// A bounded repository registry. `pattern` is matched against paths relative
+/// to `path`; only matching manifest files are parsed.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegistryCfg {
+    pub path: PathBuf,
+    #[serde(default = "default_registry_pattern")]
+    pub pattern: String,
+    #[serde(default = "default_registry_depth")]
+    pub max_depth: usize,
+}
+
+fn default_registry_pattern() -> String {
+    "*/main/docs/liveview.toml".to_string()
+}
+
+fn default_registry_depth() -> usize {
+    4
+}
+
+/// Versioned repo-local manifest for ordinary engineering documentation.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DocManifest {
+    schema: u32,
+    slug: String,
+    title: String,
+    source: PathBuf,
+    description: Option<String>,
+    collection: Option<String>,
+    author: Option<String>,
+    cover: Option<PathBuf>,
+    includes: Option<Vec<String>>,
+    excludes: Option<Vec<String>>,
+    layout: Option<Layout>,
 }
 
 /// `book.toml` — the per-book manifest that lives inside the book directory
@@ -390,8 +430,10 @@ impl Config {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.books.is_empty() && self.shelves.is_empty() {
-            return Err("config: at least one [[book]] or [[shelf]] required".to_string());
+        if self.books.is_empty() && self.shelves.is_empty() && self.registries.is_empty() {
+            return Err(
+                "config: at least one [[book]], [[shelf]], or [[registry]] required".to_string(),
+            );
         }
         let mut seen = HashSet::new();
         for b in &self.books {
@@ -586,6 +628,30 @@ impl Config {
             }
         }
 
+        // Discover repo-owned engineering docs from bounded registries.
+        for registry in &self.registries {
+            let root = if registry.path.is_absolute() {
+                registry.path.clone()
+            } else {
+                config_dir.join(&registry.path)
+            };
+            for book in discover_registry(
+                &root,
+                &registry.pattern,
+                registry.max_depth,
+                &default_includes,
+                &default_excludes,
+            )? {
+                if !seen_slugs.insert(book.slug.clone()) {
+                    return Err(format!(
+                        "duplicate book slug {:?} (from registry)",
+                        book.slug
+                    ));
+                }
+                books.push(book);
+            }
+        }
+
         Ok(Resolved {
             host: self.server.host,
             port: self.server.port,
@@ -594,6 +660,130 @@ impl Config {
             books,
         })
     }
+}
+
+fn discover_registry(
+    root: &Path,
+    pattern: &str,
+    max_depth: usize,
+    default_includes: &[String],
+    default_excludes: &[String],
+) -> Result<Vec<BookState>, String> {
+    let matcher = Glob::new(pattern)
+        .map_err(|e| format!("registry {}: bad pattern {pattern:?}: {e}", root.display()))?
+        .compile_matcher();
+    let mut manifests = Vec::new();
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    while let Some((dir, depth)) = stack.pop() {
+        let entries =
+            std::fs::read_dir(&dir).map_err(|e| format!("registry {}: {e}", dir.display()))?;
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.is_dir() && depth < max_depth {
+                stack.push((path, depth + 1));
+            } else if path.is_file() {
+                let Ok(rel) = path.strip_prefix(root) else {
+                    continue;
+                };
+                if matcher.is_match(rel) {
+                    manifests.push(path);
+                }
+            }
+        }
+    }
+    manifests.sort();
+    manifests
+        .iter()
+        .map(|path| load_doc_manifest(path, default_includes, default_excludes))
+        .collect()
+}
+
+fn load_doc_manifest(
+    manifest_path: &Path,
+    default_includes: &[String],
+    default_excludes: &[String],
+) -> Result<BookState, String> {
+    let raw = std::fs::read_to_string(manifest_path)
+        .map_err(|e| format!("read {}: {e}", manifest_path.display()))?;
+    let manifest: DocManifest =
+        toml::from_str(&raw).map_err(|e| format!("parse {}: {e}", manifest_path.display()))?;
+    if manifest.schema != 1 {
+        return Err(format!(
+            "{}: unsupported schema {}",
+            manifest_path.display(),
+            manifest.schema
+        ));
+    }
+    if manifest.slug.is_empty() || manifest.slug.contains('/') {
+        return Err(format!(
+            "{}: invalid slug {:?}",
+            manifest_path.display(),
+            manifest.slug
+        ));
+    }
+    let base = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    let source_path = if manifest.source.is_absolute() {
+        manifest.source.clone()
+    } else {
+        base.join(&manifest.source)
+    };
+    let source = source_path.canonicalize().map_err(|e| {
+        format!(
+            "{}: source {}: {e}",
+            manifest_path.display(),
+            source_path.display()
+        )
+    })?;
+    if !source.is_dir() {
+        return Err(format!(
+            "{}: source {} is not a directory",
+            manifest_path.display(),
+            source.display()
+        ));
+    }
+    let includes = manifest
+        .includes
+        .unwrap_or_else(|| default_includes.to_vec());
+    let mut excludes = default_excludes.to_vec();
+    if let Some(extra) = manifest.excludes {
+        excludes.extend(extra);
+    }
+    let include_set = build_globset(&includes)
+        .map_err(|e| format!("{}: bad include glob: {e}", manifest_path.display()))?;
+    let exclude_set = build_globset(&excludes)
+        .map_err(|e| format!("{}: bad exclude glob: {e}", manifest_path.display()))?;
+    let cover = manifest.cover.as_deref().and_then(|p| {
+        let path = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            base.join(p)
+        };
+        path.is_file().then_some(path)
+    });
+    Ok(BookState {
+        label: manifest.title,
+        slug: manifest.slug,
+        description: manifest.description,
+        collection: manifest.collection,
+        author: manifest.author,
+        cover,
+        default_rendition: RenditionKind::Text,
+        renditions: vec![RenditionState {
+            kind: RenditionKind::Text,
+            label: "text".to_string(),
+            default_lang: "default".to_string(),
+            voice: None,
+            layout: manifest.layout,
+            manifest: false,
+            editions: vec![EditionState {
+                lang: "default".to_string(),
+                label: "default".to_string(),
+                source,
+                include_set,
+                exclude_set,
+            }],
+        }],
+    })
 }
 
 /// Scan `root`'s immediate subdirectories for `book.toml` manifests, turning
@@ -1030,6 +1220,35 @@ mod tests {
     }
 
     #[test]
+    fn registry_discovers_versioned_repo_doc_manifest() {
+        let root = std::env::temp_dir().join(format!("liveview-registry-{}", std::process::id()));
+        let docs = root.join("cowboy/main/docs");
+        let source = docs.join("architecture");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("00-overview.md"), "# Overview\n").unwrap();
+        std::fs::write(
+            docs.join("liveview.toml"),
+            "schema = 1\nslug = \"cowboy-architecture\"\ntitle = \"Cowboy Architecture\"\nsource = \"architecture\"\n",
+        )
+        .unwrap();
+        let books = discover_registry(
+            &root,
+            "*/main/docs/liveview.toml",
+            4,
+            &builtin_includes(),
+            &builtin_excludes(),
+        )
+        .unwrap();
+        assert_eq!(books.len(), 1);
+        assert_eq!(books[0].slug, "cowboy-architecture");
+        assert_eq!(
+            books[0].renditions[0].editions[0].source,
+            source.canonicalize().unwrap()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn format_from_extension() {
         assert_eq!(
             Format::from_path(Path::new("a.toml")).unwrap(),
@@ -1068,6 +1287,7 @@ mod tests {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
             shelves: vec![],
+            registries: vec![],
             books: vec![],
         };
         assert!(cfg.validate().is_err());
@@ -1079,6 +1299,7 @@ mod tests {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
             shelves: vec![],
+            registries: vec![],
             books: vec![book("Docs", None), book("DOCS", None)],
         };
         let err = cfg.validate().unwrap_err();
@@ -1091,6 +1312,7 @@ mod tests {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
             shelves: vec![],
+            registries: vec![],
             books: vec![book("!!!", None)],
         };
         let err = cfg.validate().unwrap_err();
@@ -1103,6 +1325,7 @@ mod tests {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
             shelves: vec![],
+            registries: vec![],
             books: vec![book("Docs", Some("foo/bar"))],
         };
         let err = cfg.validate().unwrap_err();
@@ -1123,6 +1346,7 @@ mod tests {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
             shelves: vec![],
+            registries: vec![],
             books: vec![b],
         };
         let err = cfg.validate().unwrap_err();
@@ -1137,6 +1361,7 @@ mod tests {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
             shelves: vec![],
+            registries: vec![],
             books: vec![b],
         };
         let err = cfg.validate().unwrap_err();
@@ -1159,6 +1384,7 @@ mod tests {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
             shelves: vec![],
+            registries: vec![],
             books: vec![b],
         };
         let err = cfg.validate().unwrap_err();
@@ -1181,6 +1407,7 @@ mod tests {
             server: ServerCfg::default(),
             defaults: Defaults::default(),
             shelves: vec![],
+            registries: vec![],
             books: vec![b],
         };
         let err = cfg.validate().unwrap_err();

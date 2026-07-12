@@ -1911,6 +1911,10 @@ export function App(): React.JSX.Element {
           {activeSlug !== null && (
             <NavShell
               appKey="liveview"
+              breakpoint={1000}
+              navTitle={t("sidebar.contents")}
+              backLabel={t("sidebar.bookshelf")}
+              onBack={backToLanding}
               barPosition={navbarAtBottom ? "bottom" : "top"}
               // Frosted-overlay bar ONLY on the compact (bottom-bar) tier, where
               // the reader runs full-height and content scrolls under the bar
@@ -1970,12 +1974,12 @@ export function App(): React.JSX.Element {
                   bookMode={bookMode}
                   langs={bookLangs}
                   currentLang={lang}
+                  showHeader={!api.isMobile}
                   onSwitchLang={switchLang}
                   onSelect={(path) => {
                     handleSelect(path);
                     api.closeMobile();
                   }}
-                  onBackToLanding={backToLanding}
                   createdAt={activeBook?.created_at}
                   updatedAt={activeBook?.updated_at}
                 />

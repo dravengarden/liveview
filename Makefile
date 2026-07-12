@@ -4,11 +4,15 @@
 # package (it is NOT committed in this repo — gitignored). Run once after a
 # fresh checkout and whenever the SDK changes; dev/build targets depend on it.
 shell:
-	nix build .#shared-ui-src -o .shell-src
-	mkdir -p web/src/_shell
-	cp -f .shell-src/* web/src/_shell/
-	chmod -R u+w web/src/_shell
-	rm -f .shell-src
+	@if [ -L web/src/_shell ]; then \
+		echo "Using linked shared UI: $$(readlink web/src/_shell)"; \
+	else \
+		nix build .#shared-ui-src -o .shell-src; \
+		mkdir -p web/src/_shell; \
+		cp -f .shell-src/* web/src/_shell/; \
+		chmod -R u+w web/src/_shell; \
+		rm -f .shell-src; \
+	fi
 
 # Development: run frontend and backend in parallel
 dev: shell

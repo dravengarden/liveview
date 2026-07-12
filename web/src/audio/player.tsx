@@ -78,6 +78,8 @@ export interface AudioPlayer {
   nowPlaying: NowPlaying | null;
   /** Read-along sentences of the playing chapter, in spoken order. */
   sentences: string[];
+  /** Transcript fetch finished without usable sentences; audio may still play. */
+  transcriptUnavailable: boolean;
   /** Index of the sentence being spoken, or -1. */
   currentIdx: number;
   playing: boolean;
@@ -283,6 +285,7 @@ export function AudioPlayerProvider(
 
   const [nowPlaying, setNowPlaying] = useState<NowPlaying | null>(null);
   const [sentences, setSentences] = useState<string[]>([]);
+  const [transcriptUnavailable, setTranscriptUnavailable] = useState(false);
   const [currentIdx, setCurrentIdx] = useState(-1);
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -388,6 +391,7 @@ export function AudioPlayerProvider(
       setLoading(true);
       setError(null);
       setSentences([]);
+      setTranscriptUnavailable(false);
       setCurrentIdx(-1);
       setCurrentTime(0);
       setDuration(0);
@@ -399,7 +403,9 @@ export function AudioPlayerProvider(
       // server-side. `q` is the full book spine, so the last index is the book end.
       // Only the audio src carries the flag — read-along data stays clean.
       const isBookEnd = qi === q.length - 1;
-      const saved = Number(localStorage.getItem(posKey(np.chapterPath, np.lang)) ?? "");
+      const saved = Number(
+        localStorage.getItem(posKey(np.chapterPath, np.lang)) ?? "",
+      );
       const position = Number.isFinite(saved) && saved > 0 ? saved : 0;
       // Show the saved scrubber position up front (a PAUSED resume reads right away,
       // before the first tick); the sentence highlight follows once marks load.
@@ -421,21 +427,27 @@ export function AudioPlayerProvider(
             // compressed Opus variant, matching the download → one shared key.
             const origin = REMOTE;
             nativeAudioLoad({
-              url: `${origin}/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`,
+              url: `${origin}/api/audio?${q1}${
+                isBookEnd ? "&tail=bookend" : ""
+              }`,
               ...(media.audioHash ? { hash: media.audioHash } : {}),
               position,
               rate: rateRef.current,
               title: np.chapterLabel,
               artist: np.bookLabel,
               album: np.bookLabel,
-              artworkUrl: `${origin}/api/artwork?book=${encodeURIComponent(np.bookSlug)}`,
+              artworkUrl: `${origin}/api/artwork?book=${
+                encodeURIComponent(np.bookSlug)
+              }`,
             });
             if (autoplay) nativeAudioPlay();
           } else if (audio) {
             // Web <audio>: prefer the immutable content-addressed blob (served from
             // the persistent cache, offline-stable across deploys). The bookend +
             // not-yet-baked + text read-aloud cases have no stable blob → /api/audio.
-            const ah = np.rendition === "audio" && !isBookEnd ? media.audioHash : undefined;
+            const ah = np.rendition === "audio" && !isBookEnd
+              ? media.audioHash
+              : undefined;
             audio.src = ah
               ? `/api/blob/${ah}`
               : `/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`;
@@ -444,11 +456,16 @@ export function AudioPlayerProvider(
             audio.load();
             if (position > 0) audio.currentTime = position;
             if (autoplay) {
-              playAudio(audio, (e) => setError(e instanceof Error ? e.message : String(e)));
+              playAudio(
+                audio,
+                (e) => setError(e instanceof Error ? e.message : String(e)),
+              );
             }
           }
         } catch (e) {
-          if (loadSeq.current === seq) setError(e instanceof Error ? e.message : String(e));
+          if (loadSeq.current === seq) {
+            setError(e instanceof Error ? e.message : String(e));
+          }
         }
         // Audio is dispatched — the UI is no longer "loading" regardless of the
         // read-along fetches below (the native engine reports its own buffering via
@@ -460,13 +477,20 @@ export function AudioPlayerProvider(
         // no highlighting — the audio keeps playing. Run concurrently.
         void (async () => {
           try {
-            const sres = await contentFetch(`/api/spoken?${q1}`, { cacheFirst: true });
+            const sres = await contentFetch(`/api/spoken?${q1}`, {
+              cacheFirst: true,
+            });
             if (loadSeq.current === seq && sres.ok) {
               const sdata = (await sres.json()) as SpokenContent;
-              if (loadSeq.current === seq) setSentences(sdata.sentences);
+              if (loadSeq.current === seq) {
+                setSentences(sdata.sentences);
+                setTranscriptUnavailable(sdata.sentences.length === 0);
+              }
+            } else if (loadSeq.current === seq) {
+              setTranscriptUnavailable(true);
             }
           } catch {
-            // highlighting degrades; audio unaffected
+            if (loadSeq.current === seq) setTranscriptUnavailable(true);
           }
         })();
         void (async () => {
@@ -481,7 +505,9 @@ export function AudioPlayerProvider(
               const mdata = (await mres.json()) as Mark[];
               if (loadSeq.current === seq) {
                 marksRef.current = mdata;
-                if (position > 0) setCurrentIdx(markIndex(mdata, position * 1000));
+                if (position > 0) {
+                  setCurrentIdx(markIndex(mdata, position * 1000));
+                }
               }
             }
           } catch {
@@ -595,7 +621,9 @@ export function AudioPlayerProvider(
       if (next) {
         // contentFetch so the warm-up actually populates the offline cache (a raw
         // fetch on the shell bypasses the native store → next chapter not cached).
-        void contentFetch(`/api/marks?${query(next.path, np.lang, np.rendition)}`)
+        void contentFetch(
+          `/api/marks?${query(next.path, np.lang, np.rendition)}`,
+        )
           .catch(() => {});
       }
     }
@@ -1215,7 +1243,10 @@ export function AudioPlayerProvider(
         case "play": {
           const a = audioRef.current;
           if (a) {
-            playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
+            playAudio(
+              a,
+              (e) => setError(e instanceof Error ? e.message : String(e)),
+            );
           }
           break;
         }
@@ -1256,8 +1287,9 @@ export function AudioPlayerProvider(
       album: nowPlaying.bookLabel,
       // Absolute URL — native URLSession can't resolve a relative path (in EITHER
       // shell mode; remoteUrl("") was "" on the remote origin → relative).
-      artworkUrl:
-        `${REMOTE}/api/artwork?book=${encodeURIComponent(nowPlaying.bookSlug)}`,
+      artworkUrl: `${REMOTE}/api/artwork?book=${
+        encodeURIComponent(nowPlaying.bookSlug)
+      }`,
       duration,
     });
   }, [nowPlaying, duration]);
@@ -1293,6 +1325,7 @@ export function AudioPlayerProvider(
     setNowPlaying(null);
     nowPlayingRef.current = null;
     setSentences([]);
+    setTranscriptUnavailable(false);
     setCurrentIdx(-1);
     setPlaying(false);
     setQueue([]);
@@ -1330,6 +1363,7 @@ export function AudioPlayerProvider(
     () => ({
       nowPlaying,
       sentences,
+      transcriptUnavailable,
       currentIdx,
       playing,
       loading,
@@ -1359,6 +1393,7 @@ export function AudioPlayerProvider(
     [
       nowPlaying,
       sentences,
+      transcriptUnavailable,
       currentIdx,
       playing,
       loading,

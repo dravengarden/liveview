@@ -34,6 +34,7 @@ export function AudiobookPlayer(
   const {
     nowPlaying,
     sentences,
+    transcriptUnavailable,
     currentIdx,
     error,
     seekToSentence,
@@ -172,7 +173,13 @@ export function AudiobookPlayer(
             fontSize: "1.05rem",
           }}
         >
-          {sentences.length === 0
+          {transcriptUnavailable
+            ? (
+              <Alert severity="info">
+                {t("audiobook.transcriptUnavailable")}
+              </Alert>
+            )
+            : sentences.length === 0
             ? (
               // No sentences yet — the chapter's text is still loading (or being
               // synthesized). Show a shimmer skeleton of text lines, NOT a blank
@@ -219,9 +226,10 @@ export function AudiobookPlayer(
                     const weak = alpha(accent, dark ? 0.16 : 0.1);
                     const strong = alpha(accent, dark ? 0.42 : 0.26);
                     const p = Math.round(currentProgress * 1000) / 10; // 0–100
-                    const wipe = `linear-gradient(to right, ${strong} ${p}%, ${weak} ${
-                      Math.min(100, p + 1.5)
-                    }%)`;
+                    const wipe =
+                      `linear-gradient(to right, ${strong} ${p}%, ${weak} ${
+                        Math.min(100, p + 1.5)
+                      }%)`;
                     return {
                       cursor: "pointer",
                       borderRadius: 0.5,
@@ -247,10 +255,12 @@ export function AudiobookPlayer(
         </Box>
       </Box>
 
-      {/* Reliable "back to chapter top": iOS reserves the status-bar tap (and it
+      {
+        /* Reliable "back to chapter top": iOS reserves the status-bar tap (and it
           never reaches an inner scroll container anyway), so the read-along needs
           the same explicit FAB the text reader has. Lifted above BOTH the
-          transport (--lv-transport-h) and the nav bar (--shell-bar-h). */}
+          transport (--lv-transport-h) and the nav bar (--shell-bar-h). */
+      }
       <ScrollToTopButton
         targetRef={scrollRef}
         bottomLift="calc(var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))"

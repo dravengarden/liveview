@@ -18,7 +18,7 @@ use crate::server::renderer;
 use crate::shared::FileType;
 use crate::store::pg::{AudioTaskUpsert, BookUpsert, ChapterRow, PgStore};
 use crate::sync::diff::{plan, Plan};
-use crate::sync::merkle::{Build, Dag, Leaf};
+use crate::sync::merkle::{Build, Dag, Leaf, Node};
 use crate::sync::objstore::ObjStore;
 
 /// Identity-record separator inside a leaf `path` (round-trips on delete).
@@ -329,7 +329,36 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
     // whose content row is actually missing). The book-timestamp stamping below
     // still diffs against the REAL `stored`, so a repair doesn't bump every
     // book's `updated_at`.
-    let plan = if cfg.repair {
+    let auto_repair = if !cfg.repair && new.root == stored.root {
+        let expected: std::collections::HashSet<&str> = new
+            .nodes
+            .values()
+            .filter_map(|node| match node {
+                Node::Leaf(leaf) => Some(leaf.path.as_str()),
+                _ => None,
+            })
+            .collect();
+        let actual: std::collections::HashSet<String> = store
+            .dag_chapters()
+            .await
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .map(|row| leaf_path(&row.book_slug, &row.rendition, &row.lang, &row.rel_path))
+            .collect();
+        let mismatch =
+            expected.len() != actual.len() || expected.iter().any(|path| !actual.contains(*path));
+        if mismatch {
+            tracing::warn!(
+                expected = expected.len(),
+                actual = actual.len(),
+                "chapter registry differs from unchanged Merkle root; auto-repairing"
+            );
+        }
+        mismatch
+    } else {
+        false
+    };
+    let plan = if cfg.repair || auto_repair {
         plan(&new, &Dag::default())
     } else {
         plan(&new, &stored)

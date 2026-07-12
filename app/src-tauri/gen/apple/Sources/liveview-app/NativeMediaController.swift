@@ -121,13 +121,33 @@ import WebKit
     artworkURL = urlString
     URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
       guard let data, let image = UIImage(data: data) else { return }
-      let art = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+      let squareImage = Self.squareArtwork(image)
+      let art = MPMediaItemArtwork(boundsSize: squareImage.size) { _ in squareImage }
       DispatchQueue.main.async {
         guard let self, self.artworkURL == urlString else { return }
         self.nowPlayingInfo[MPMediaItemPropertyArtwork] = art
         MPNowPlayingInfoCenter.default().nowPlayingInfo = self.nowPlayingInfo
       }
     }.resume()
+  }
+
+  /// iOS sizes the lock-screen artwork from `boundsSize`. Passing a portrait book
+  /// cover directly produces a narrow thumbnail, so render an aspect-fill square.
+  private static func squareArtwork(_ image: UIImage) -> UIImage {
+    let size = CGSize(width: 512, height: 512)
+    let scale = max(size.width / image.size.width, size.height / image.size.height)
+    let drawSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+    let drawRect = CGRect(
+      x: (size.width - drawSize.width) / 2,
+      y: (size.height - drawSize.height) / 2,
+      width: drawSize.width,
+      height: drawSize.height
+    )
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+      image.draw(in: drawRect)
+    }
   }
 
   // MARK: native → web (remote commands)

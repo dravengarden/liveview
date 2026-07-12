@@ -6,6 +6,12 @@
 # Password lives only in ~/.lvbuild-kcpw (chmod 600, user-created).
 set -euo pipefail
 
+# Never install a stale DerivedData product after a real compile failure. Tauri's
+# IPA export may fail after xcodebuild has produced a valid .app, so the command
+# remains tolerated below; freshness of the signed bundle is the actual gate.
+BUILD_MARKER="$(mktemp -t liveview-build.XXXXXX)"
+trap 'rm -f "$BUILD_MARKER"' EXIT
+
 KCPW_FILE="$HOME/.lvbuild-kcpw"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
@@ -42,6 +48,10 @@ cargo tauri ios build --target aarch64 || echo "note: cargo tauri ios build retu
 # Install the freshly-signed .app to both paired devices (devicectl works over
 # SSH; only codesign needed the keychain unlock above).
 APP="$(ls -dt "$HOME"/Library/Developer/Xcode/DerivedData/liveview-app-*/Build/Products/release-iphoneos/LiveView.app | head -1)"
+if [[ ! "$APP" -nt "$BUILD_MARKER" ]]; then
+  echo "FATAL: build did not produce a fresh signed LiveView.app" >&2
+  exit 1
+fi
 echo "INSTALLING $APP"
 xcrun devicectl device install app --device 919779F8-8032-5B80-BA56-59646E340761 "$APP" >/dev/null 2>&1 && echo "iPhone: installed" || echo "iPhone: install FAILED"
 xcrun devicectl device install app --device C3C4A814-5DBB-53B7-9B23-EB05F4A77FBE "$APP" >/dev/null 2>&1 && echo "iPad: installed" || echo "iPad: install FAILED"
