@@ -62,3 +62,8 @@ scheme and refreshes it from a configured LiveView server.
 The Tauri app has a separate, tracked Cargo lockfile. `time` is pinned for
 compatibility with the current Tauri dependency graph. The Mac/iOS Simulator is
 the authoritative native UI and background-audio validation target.
+
+Use the repo-local `ios-sim-dev` skill for simulator builds, WKWebView
+inspection, selector-driven interaction, screenshots, and light/dark visual
+verification. Physical-device provisioning is a host operation owned by the
+machine-level `ios-resign` skill.

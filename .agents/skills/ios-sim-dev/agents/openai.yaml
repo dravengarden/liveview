@@ -1,0 +1,4 @@
+interface:
+  display_name: "LiveView iOS Simulator"
+  short_description: "Build and verify the native LiveView app in Simulator"
+  default_prompt: "Use $ios-sim-dev to build, launch, inspect, and visually verify this LiveView native app change."
