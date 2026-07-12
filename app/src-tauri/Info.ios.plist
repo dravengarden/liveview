@@ -29,6 +29,18 @@
 	     shows a one-time Local Network prompt on first launch. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>LiveView connects to the reading server configured for this app.</string>
+	<!-- The reader UI runs inside WKWebView and connects to a user-configured
+	     self-hosted endpoint. Development and LAN deployments commonly use
+	     plain HTTP/WebSocket; without this WebKit-specific ATS exception iOS
+	     blocks fetch() and WebSocket before a packet leaves the device, while
+	     the native Rust sync layer continues to work and masks the failure. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<!-- No custom crypto; skips the export-compliance prompt on every upload. -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
