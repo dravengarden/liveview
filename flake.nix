@@ -57,7 +57,7 @@
         inherit version;
         src = lib.cleanSource ./.;
         installArgs = "--frozen --allow-scripts";
-        depsHash = "sha256-E0EpfeHduBNXW9ne0rayUJJufQRxW9UbKOyCxPS8FIc=";
+        depsHash = "sha256-AUnzqTnVVN1Wt8KCQWEO/v+O8L6OYcNVv9ilhQtRMc0=";
       };
 
       # ── liveview: axum daemon, embeds the SPA via include_dir! ────────
@@ -95,11 +95,28 @@
           wrapProgram $out/bin/liveview --prefix PATH : ${lib.makeBinPath [ edgeTts ]}
         '';
 
-        # Vendor via fetchCargoVendor (cargo's own downloader → sparse index
-        # + static.crates.io), NOT importCargoLock: this box's omega proxy
-        # 403s the crates.io API download endpoint that importCargoLock uses,
-        # while static.crates.io returns 200.
-        cargoHash = "sha256-FmeDET3+qalwv0vEp1t5b6HOSxIUukx6JfWtKs8tCfo=";
+        # crates.io's API download redirect is blocked by this host's egress,
+        # while the official static CDN is reachable. Import each locked crate
+        # from that CDN directly; fetchurl still verifies Cargo.lock's checksum
+        # for every archive, so this changes transport rather than trust.
+        cargoDeps =
+          let
+            imported = pkgs.rustPlatform.importCargoLock {
+              lockFile = ./Cargo.lock;
+              extraRegistries = {
+                "https://github.com/rust-lang/crates.io-index" =
+                  "https://static.crates.io/crates";
+              };
+            };
+          in
+          pkgs.runCommand "cargo-vendor-dir" {
+            passthru.lockFile = ./Cargo.lock;
+          } ''
+            cp -r ${imported} $out
+            chmod -R u+w $out
+            sed -i '/^\[source\."https:\/\/github\.com\/rust-lang\/crates\.io-index"\]$/,+2d' \
+              $out/.cargo/config.toml
+          '';
 
         # include_dir!("$CARGO_MANIFEST_DIR/web/dist") is a compile-time
         # lookup — drop the prebuilt SPA there before cargo runs.
