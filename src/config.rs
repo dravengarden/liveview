@@ -98,6 +98,8 @@ pub struct BookCfg {
     pub slug: Option<String>,
     /// One-line blurb shown on the landing page card. Optional.
     pub description: Option<String>,
+    /// Card artwork, resolved relative to the corpus config file.
+    pub cover: Option<PathBuf>,
     /// Which edition to show first. Defaults to the first edition declared.
     pub default_lang: Option<String>,
     /// Shorthand for a single-edition book: the source dir directly. Mutually
@@ -518,6 +520,14 @@ impl Config {
         let mut books = Vec::with_capacity(self.books.len());
         for b in self.books {
             let slug = b.slug.clone().unwrap_or_else(|| slugify(&b.label));
+            let cover = b.cover.as_deref().and_then(|path| {
+                let path = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    config_dir.join(path)
+                };
+                path.is_file().then_some(path)
+            });
 
             // Normalise to a list of (lang, label, source, includes, excludes).
             // A shorthand `source` becomes a single edition whose lang is
@@ -598,7 +608,7 @@ impl Config {
                 description: b.description,
                 collection: None,
                 author: None,
-                cover: None,
+                cover,
                 default_rendition: RenditionKind::Text,
                 renditions: vec![RenditionState {
                     kind: RenditionKind::Text,
@@ -1272,6 +1282,7 @@ mod tests {
             label: label.to_string(),
             slug: slug.map(str::to_string),
             description: None,
+            cover: None,
             default_lang: None,
             source: Some(PathBuf::from(".")),
             includes: None,
@@ -1291,6 +1302,32 @@ mod tests {
             books: vec![],
         };
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn direct_book_resolves_relative_cover() {
+        let root =
+            std::env::temp_dir().join(format!("liveview-direct-cover-{}", std::process::id()));
+        let source = root.join("docs");
+        std::fs::create_dir_all(&source).unwrap();
+        let cover = root.join("cover.webp");
+        std::fs::write(&cover, b"cover").unwrap();
+
+        let mut direct = book("Docs", None);
+        direct.source = Some(PathBuf::from("docs"));
+        direct.cover = Some(PathBuf::from("cover.webp"));
+        let resolved = Config {
+            server: ServerCfg::default(),
+            defaults: Defaults::default(),
+            shelves: vec![],
+            registries: vec![],
+            books: vec![direct],
+        }
+        .resolve(&root)
+        .unwrap();
+
+        assert_eq!(resolved.books[0].cover.as_deref(), Some(cover.as_path()));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
