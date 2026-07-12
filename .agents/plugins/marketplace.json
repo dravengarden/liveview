@@ -1,0 +1,12 @@
+{
+  "name": "liveview-development",
+  "interface": { "displayName": "LiveView Development" },
+  "plugins": [
+    {
+      "name": "ios-simulator-bridge",
+      "source": { "source": "local", "path": "./plugins/ios-simulator-bridge" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Developer Tools"
+    }
+  ]
+}

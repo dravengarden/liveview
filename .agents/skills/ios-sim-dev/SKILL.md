@@ -7,6 +7,10 @@ description: Build, launch, inspect, and visually verify the liveview Tauri app 
 
 The native app is the primary target. Browser behavior is not sufficient evidence because the bundled Tauri app has a different origin, target, service-worker state, and native data path. Chrome tooling is reserved for book chart review.
 
+Use the installed `ios-simulator-bridge` plugin for generic SSH, Simulator, and
+evidence conventions. This project skill remains authoritative for LiveView's
+source sync, build graph, bundle identity, selectors, and acceptance criteria.
+
 ## Control surface
 
 Drive the Mac helper over SSH:

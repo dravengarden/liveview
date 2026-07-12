@@ -1,0 +1,4 @@
+interface:
+  display_name: "iOS Simulator Bridge"
+  short_description: "Drive a Mac Simulator from a remote Codex host"
+  default_prompt: "Use $ios-simulator-bridge to diagnose and operate this project's Mac-hosted iOS Simulator adapter."

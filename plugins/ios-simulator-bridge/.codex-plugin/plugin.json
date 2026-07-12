@@ -1,0 +1,27 @@
+{
+  "name": "ios-simulator-bridge",
+  "version": "0.1.0+codex.20260712080530",
+  "description": "Drive a Mac-hosted iOS Simulator from a remote Codex host through SSH and project-owned adapters.",
+  "author": {
+    "name": "Draven"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "iOS Simulator Bridge",
+    "shortDescription": "Operate a remote Mac iOS Simulator.",
+    "longDescription": "Provides generic SSH, simctl, WebKit inspection, screenshot, appearance, and diagnostic workflows while projects retain their builds and acceptance contracts.",
+    "developerName": "Draven",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Simulator diagnostics",
+      "Remote app control",
+      "WebView inspection",
+      "Screenshots"
+    ],
+    "defaultPrompt": [
+      "Diagnose the remote iOS Simulator bridge.",
+      "Launch and inspect this app in iOS Simulator.",
+      "Capture light and dark Simulator evidence."
+    ]
+  }
+}

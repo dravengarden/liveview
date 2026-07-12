@@ -1,4 +1,4 @@
-.PHONY: dev dev-web dev-server build build-web install uninstall clean fmt check test verify native-metadata shell
+.PHONY: dev dev-web dev-server build build-web install uninstall clean fmt check test verify native-metadata plugin-check shell
 
 # Materialize the shared-utils ui SDK into web/src/_shell/ from the Nix
 # package (it is NOT committed in this repo — gitignored). Run once after a
@@ -69,7 +69,10 @@ test:
 native-metadata:
 	cargo metadata --locked --manifest-path app/src-tauri/Cargo.toml --format-version 1 >/dev/null
 
-verify: check test build-web native-metadata
+plugin-check:
+	bash tools/check-ios-simulator-plugin.sh
+
+verify: check test build-web native-metadata plugin-check
 
 clean:
 	cargo clean

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (($# < 2)); then
+    echo "usage: ios-sim-remote <remote-helper> <command> [args...]" >&2
+    exit 2
+fi
+
+host="${IOS_SIM_MAC_HOST:-macbook-air}"
+helper="$1"
+shift
+
+exec ssh -o BatchMode=yes "$host" "$helper" "$@"
