@@ -71,8 +71,30 @@ export function recoverCoverImage(
   if (!nativeSyncAvailable()) return false;
   const u = `/api/cover?book=${encodeURIComponent(slug)}`;
   const fallback = `${SCHEME}/resolve?u=${encodeURIComponent(u)}`;
-  if (image.src === fallback) return false;
-  image.src = fallback;
+  if (image.src !== fallback && image.dataset["lvCover"] !== slug) {
+    image.src = fallback;
+    return true;
+  }
+  if (image.dataset["lvCover"] === slug) return false;
+
+  // Some physical WKWebViews reject a custom-scheme URL specifically when it
+  // is assigned to <img src>, although fetch() through the same registered
+  // scheme succeeds. Materialize those bytes as a WebKit-owned blob URL. This
+  // is attempted only after both the ordinary remote URL and direct scheme URL
+  // fail, so normal browsers and healthy native loads keep lazy image loading.
+  image.dataset["lvCover"] = slug;
+  void fetch(fallback)
+    .then((response) => {
+      if (!response.ok) throw new Error(`cover ${response.status}`);
+      return response.blob();
+    })
+    .then((blob) => {
+      image.src = URL.createObjectURL(blob);
+    })
+    .catch((error: unknown) => {
+      console.warn("cover image recovery failed", { slug, error });
+      image.style.display = "none";
+    });
   return true;
 }
 
