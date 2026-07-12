@@ -31,19 +31,55 @@ export function useWebSocket(
     let stopped = false;
     let activeSocket: WebSocket | null = null;
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+    let heartbeatAbort: AbortController | null = null;
+
+    // WKWebView loads the native SPA from the custom `lvsync://` origin. It can
+    // fetch the configured HTTP backend, but rejects a plain `ws://` connection
+    // as mixed content before a packet leaves the device. The native shell does
+    // not need the browser live-edit channel: content synchronization is owned
+    // by lvsync. Use a small HTTP heartbeat for connectivity + OTA instead.
+    const heartbeat = async (): Promise<void> => {
+      if (stopped) return;
+      heartbeatAbort = new AbortController();
+      let delay = 15_000;
+      try {
+        const response = await fetch(`${REMOTE}/api/version`, {
+          cache: "no-store",
+          signal: heartbeatAbort.signal,
+        });
+        if (!response.ok) throw new Error(`heartbeat ${response.status}`);
+        connectionReady();
+        void runOtaCheck();
+      } catch {
+        if (stopped) return;
+        delay = connectionLost();
+      } finally {
+        heartbeatAbort = null;
+      }
+      if (!stopped) {
+        reconnectTimeout = setTimeout(() => {
+          reconnectTimeout = null;
+          void heartbeat();
+        }, delay);
+      }
+    };
+
+    if (BUNDLED) {
+      void heartbeat();
+      return () => {
+        stopped = true;
+        heartbeatAbort?.abort();
+        if (reconnectTimeout !== null) clearTimeout(reconnectTimeout);
+      };
+    }
 
     const connect = (): void => {
       if (stopped) return;
 
-      // BUNDLED (native app, local origin): window.location.host is the LOCAL
-      // origin (tauri://localhost), which has no /ws server — point at the REMOTE
-      // server instead (https→wss). Offline it simply won't connect (live updates
-      // degrade; the reconnect banner handles it). PWA/remote: same-origin /ws.
-      const url = BUNDLED
-        ? `${REMOTE.replace(/^http/, "ws")}/ws`
-        : `${
-          window.location.protocol === "https:" ? "wss:" : "ws:"
-        }//${window.location.host}/ws`;
+      // Browser/PWA: same-origin WebSocket carries live authoring updates.
+      const url = `${
+        window.location.protocol === "https:" ? "wss:" : "ws:"
+      }//${window.location.host}/ws`;
       const ws = new WebSocket(url);
       activeSocket = ws;
 
