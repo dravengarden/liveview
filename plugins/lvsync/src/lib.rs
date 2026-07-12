@@ -851,6 +851,10 @@ async fn stats_inner(state: &LvState) -> (u64, u64, u64, u64) {
 /// Dispatch a `lvsync://localhost/<path>?<query>` request → (HTTP status, body).
 async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<u8>) {
     match path {
+        "/origins" => match serde_json::to_vec(&remote_origins()) {
+            Ok(body) => (200, body),
+            Err(error) => (500, error.to_string().into_bytes()),
+        },
         "/resolve" => {
             let Some(raw) = query_get(query, "u") else {
                 return (400, b"missing u".to_vec());
@@ -1160,7 +1164,11 @@ mod tests {
 
     #[tokio::test]
     async fn audio_index_exposes_only_audio_and_marks() {
-        let unique = format!("liveview-lvsync-test-{}-{}", std::process::id(), now_ms());
+        let unique = format!(
+            "liveview-lvsync-test-audio-{}-{}",
+            std::process::id(),
+            now_ms()
+        );
         let root = std::env::temp_dir().join(unique);
         let data = root.join("plugin");
         std::fs::create_dir_all(&data).unwrap();
@@ -1183,6 +1191,26 @@ mod tests {
         assert!(resources
             .iter()
             .all(|resource| { matches!(resource["kind"].as_str(), Some("audio" | "marks")) }));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn origins_exposes_the_native_backend_configuration() {
+        let unique = format!(
+            "liveview-lvsync-test-origins-{}-{}",
+            std::process::id(),
+            now_ms()
+        );
+        let root = std::env::temp_dir().join(unique);
+        let data = root.join("plugin");
+        std::fs::create_dir_all(&data).unwrap();
+        let state = LvState::new(&data).unwrap();
+
+        let (status, body) = scheme_dispatch(&state, "/origins", "").await;
+        assert_eq!(status, 200);
+        let origins: Vec<String> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(origins, remote_origins());
 
         std::fs::remove_dir_all(root).unwrap();
     }

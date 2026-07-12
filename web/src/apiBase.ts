@@ -22,6 +22,40 @@ const CONFIGURED_REMOTES = (
 const DEFAULT_REMOTE = CONFIGURED_REMOTES[0] ?? "http://127.0.0.1:4160";
 const REMOTE_KEY = "lv.remote.origin";
 
+function normalizeOrigins(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    if (typeof candidate !== "string") return [];
+    const origin = candidate.trim().replace(/\/$/, "");
+    try {
+      const parsed = new URL(origin);
+      return ["http:", "https:"].includes(parsed.protocol) &&
+          parsed.origin === origin
+        ? [origin]
+        : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+/** Native Rust is the deployment-config authority. Web bundles are OTA-updated
+ * independently and must not replace a device's working endpoints with whatever
+ * defaults happened to be present in the server build. Older shells lack this
+ * bridge, so compile-time origins remain a backward-compatible fallback. */
+async function nativeOrigins(): Promise<string[]> {
+  if (!BUNDLED) return [];
+  try {
+    const response = await fetch("lvsync://localhost/origins", {
+      cache: "no-store",
+    });
+    if (!response.ok) return [];
+    return normalizeOrigins(await response.json());
+  } catch {
+    return [];
+  }
+}
+
 /** The selected liveview server. ES-module imports are live bindings, so callers
  *  see the endpoint chosen by selectRemote() before React mounts. */
 export let REMOTE = DEFAULT_REMOTE;
@@ -45,7 +79,11 @@ export async function selectRemote(): Promise<string> {
     // Storage is an optimization only.
   }
   const candidates = [
-    ...new Set([previous, ...CONFIGURED_REMOTES].filter(Boolean)),
+    ...new Set([
+      ...(await nativeOrigins()),
+      previous,
+      ...CONFIGURED_REMOTES,
+    ].filter(Boolean)),
   ] as string[];
   const controller = new AbortController();
   const timer = globalThis.setTimeout(() => controller.abort(), 750);
