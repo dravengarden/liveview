@@ -14,6 +14,7 @@
 // normal `fetch` (the service worker handles offline there).
 
 import { nativeAudioSetWifiOnly, nativeAudioStats } from "@/native-audio";
+import { remoteUrl } from "@/apiBase";
 
 const SCHEME = "lvsync://localhost";
 
@@ -51,18 +52,28 @@ export async function contentFetch(
   }
 }
 
-/** The `src` for a book-cover `<img>`. On the bundled native origin a relative
- *  `/api/cover` would resolve to `tauri://localhost/api/cover` → 404 (the shim
- *  only intercepts `fetch`, not `<img>`), so covers were blank on the shell —
- *  online AND offline. Route them through the lvsync:// scheme instead: the
- *  url-keyed path is NETWORK-FIRST (fresh cover when online) and falls back to the
- *  cached bytes offline, so one online shelf view caches every cover. Off-shell it
- *  stays the plain server URL (the SW handles offline). */
+/** Primary `src` for a book-cover `<img>`. Physical WKWebViews have occasionally
+ *  failed custom-scheme image loads even while fetches through the same scheme
+ *  work. Use the ordinary remote image URL while online and let the image error
+ *  handler fall back to the offline lvsync cache. */
 export function coverSrc(slug: string): string {
   const u = `/api/cover?book=${encodeURIComponent(slug)}`;
-  return nativeSyncAvailable()
-    ? `${SCHEME}/resolve?u=${encodeURIComponent(u)}`
-    : u;
+  return nativeSyncAvailable() ? remoteUrl(u) : u;
+}
+
+/** Offline fallback for a failed native cover request. Returns `true` only when
+ *  it changed the image source, so callers can stop retrying after both routes
+ *  fail and reveal their gradient placeholder. */
+export function recoverCoverImage(
+  image: HTMLImageElement,
+  slug: string,
+): boolean {
+  if (!nativeSyncAvailable()) return false;
+  const u = `/api/cover?book=${encodeURIComponent(slug)}`;
+  const fallback = `${SCHEME}/resolve?u=${encodeURIComponent(u)}`;
+  if (image.src === fallback) return false;
+  image.src = fallback;
+  return true;
 }
 
 /** Per-book offline coverage (not currently surfaced by the panel; kept for the type). */

@@ -1,6 +1,12 @@
 import { rem } from "@/px";
-import { coverSrc } from "@/native-sync";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { coverSrc, recoverCoverImage } from "@/native-sync";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { Box, CircularProgress } from "@mui/material";
 import { Headphones as AudiobookIcon } from "@mui/icons-material";
 import { haptic, useAnyDetentSheetOpen } from "../_shell";
@@ -367,6 +373,7 @@ export function FloatingBubble({
               component="img"
               src={coverSrc(slug)}
               alt=""
+              onError={(event) => recoverCoverImage(event.currentTarget, slug)}
               draggable={false}
               sx={{
                 position: "absolute",

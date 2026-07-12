@@ -1,5 +1,5 @@
 import { rem } from "@/px";
-import { coverSrc } from "@/native-sync";
+import { coverSrc, recoverCoverImage } from "@/native-sync";
 import { Box } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { Headphones as AudiobookIcon } from "@mui/icons-material";
@@ -48,6 +48,7 @@ export function CoverTile({
             component="img"
             src={coverSrc(slug)}
             alt=""
+            onError={(event) => recoverCoverImage(event.currentTarget, slug)}
             sx={{
               position: "absolute",
               inset: 0,
@@ -93,7 +94,9 @@ export function ShelfCardArtwork(
         loading="lazy"
         decoding="async"
         onError={(event) => {
-          event.currentTarget.style.display = "none";
+          if (!recoverCoverImage(event.currentTarget, slug)) {
+            event.currentTarget.style.display = "none";
+          }
         }}
         sx={{
           position: "absolute",

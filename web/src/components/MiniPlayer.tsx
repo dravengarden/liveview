@@ -1,5 +1,5 @@
 import { rem } from "@/px";
-import { coverSrc } from "@/native-sync";
+import { coverSrc, recoverCoverImage } from "@/native-sync";
 import {
   Box,
   ButtonBase,
@@ -129,6 +129,11 @@ export function MiniPlayer(
                   component="img"
                   src={coverSrc(nowPlaying.bookSlug)}
                   alt=""
+                  onError={(event) =>
+                    recoverCoverImage(
+                      event.currentTarget,
+                      nowPlaying.bookSlug,
+                    )}
                   sx={{
                     position: "absolute",
                     inset: 0,

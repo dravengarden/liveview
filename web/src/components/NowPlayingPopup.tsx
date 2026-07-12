@@ -1,5 +1,5 @@
 import { rem } from "@/px";
-import { coverSrc } from "@/native-sync";
+import { coverSrc, recoverCoverImage } from "@/native-sync";
 import { useEffect, useRef, useState } from "react";
 import {
   Box,
@@ -76,6 +76,7 @@ function CoverTile({
             component="img"
             src={coverSrc(slug)}
             alt=""
+            onError={(event) => recoverCoverImage(event.currentTarget, slug)}
             sx={{
               position: "absolute",
               inset: 0,
