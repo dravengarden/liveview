@@ -48,7 +48,6 @@ function coverGradient(slug: string): string {
  *  slug-keyed gradient + headphones glyph. */
 function CoverTile({
   slug,
-  hasCover,
   size,
 }: {
   slug: string;
@@ -70,27 +69,22 @@ function CoverTile({
         justifyContent: "center",
       }}
     >
-      {hasCover
-        ? (
-          <Box
-            component="img"
-            src={coverSrc(slug)}
-            alt=""
-            onError={(event) => recoverCoverImage(event.currentTarget, slug)}
-            sx={{
-              position: "absolute",
-              inset: 0,
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-            }}
-          />
-        )
-        : (
-          <AudiobookIcon
-            sx={{ fontSize: rem(48), color: "rgba(255,255,255,0.92)" }}
-          />
-        )}
+      <AudiobookIcon
+        sx={{ fontSize: rem(48), color: "rgba(255,255,255,0.92)" }}
+      />
+      <Box
+        component="img"
+        src={coverSrc(slug)}
+        alt=""
+        onError={(event) => recoverCoverImage(event.currentTarget, slug)}
+        sx={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+        }}
+      />
     </Box>
   );
 }

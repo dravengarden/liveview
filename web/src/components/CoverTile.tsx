@@ -20,7 +20,6 @@ export function coverGradient(slug: string): string {
  *  (popup, playback sheet) so a book looks identical everywhere. */
 export function CoverTile({
   slug,
-  hasCover,
   size,
 }: {
   slug: string;
@@ -42,27 +41,22 @@ export function CoverTile({
         justifyContent: "center",
       }}
     >
-      {hasCover
-        ? (
-          <Box
-            component="img"
-            src={coverSrc(slug)}
-            alt=""
-            onError={(event) => recoverCoverImage(event.currentTarget, slug)}
-            sx={{
-              position: "absolute",
-              inset: 0,
-              width: "100%",
-              height: "100%",
-              objectFit: "cover",
-            }}
-          />
-        )
-        : (
-          <AudiobookIcon
-            sx={{ fontSize: rem(48), color: "rgba(255,255,255,0.92)" }}
-          />
-        )}
+      <AudiobookIcon
+        sx={{ fontSize: rem(48), color: "rgba(255,255,255,0.92)" }}
+      />
+      <Box
+        component="img"
+        src={coverSrc(slug)}
+        alt=""
+        onError={(event) => recoverCoverImage(event.currentTarget, slug)}
+        sx={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          objectFit: "cover",
+        }}
+      />
     </Box>
   );
 }
@@ -71,12 +65,11 @@ export function CoverTile({
  *  full-height poster. Theme-paper veiling keeps text contrast predictable;
  *  image failure simply reveals the card's slug-keyed gradient beneath. */
 export function ShelfCardArtwork(
-  { slug, hasCover }: {
+  { slug }: {
     slug: string;
     hasCover: boolean;
   },
 ): React.JSX.Element | null {
-  if (!hasCover) return null;
   return (
     <Box
       aria-hidden="true"
