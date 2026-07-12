@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { FileType, TreeNode, WsMessage } from "@/types";
 import { BUNDLED, REMOTE } from "@/apiBase";
 import { connectionLost, connectionReady } from "@/connectionStore";
@@ -19,6 +19,14 @@ interface UseWebSocketOptions {
 export function useWebSocket(
   { onContentUpdate, onTreeUpdate }: UseWebSocketOptions,
 ): void {
+  // Message consumers can change as App state changes. Keep their latest
+  // implementations in refs so those renders never tear down the transport.
+  // A LiveView page owns exactly one socket for its entire mounted lifetime.
+  const onContentUpdateRef = useRef(onContentUpdate);
+  const onTreeUpdateRef = useRef(onTreeUpdate);
+  onContentUpdateRef.current = onContentUpdate;
+  onTreeUpdateRef.current = onTreeUpdate;
+
   useEffect(() => {
     let stopped = false;
     let activeSocket: WebSocket | null = null;
@@ -77,9 +85,14 @@ export function useWebSocket(
             // silently. Off the native shell runOtaCheck is a no-op.
             void runOtaCheck();
           } else if (msg.type === "ContentUpdate") {
-            onContentUpdate(msg.path, msg.lang, msg.file_type, msg.content);
+            onContentUpdateRef.current(
+              msg.path,
+              msg.lang,
+              msg.file_type,
+              msg.content,
+            );
           } else if (msg.type === "TreeUpdate") {
-            onTreeUpdate(msg.tree);
+            onTreeUpdateRef.current(msg.tree);
           } else if (msg.type === "SettingUpdate") {
             // Live cross-device settings push: feed the value to any mirrored
             // store subscribed on this key (it re-reconciles). The client also
@@ -128,5 +141,5 @@ export function useWebSocket(
         activeSocket = null;
       }
     };
-  }, [onContentUpdate, onTreeUpdate]);
+  }, []);
 }
