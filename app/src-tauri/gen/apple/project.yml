@@ -86,6 +86,10 @@ targets:
         # which headless automatic builds resume working.
         DEVELOPMENT_TEAM: 9Z95WKM9DT
         CODE_SIGN_STYLE: Automatic
+        # Forward the deployment endpoints into Xcode's Run Script environment.
+        # A plain parent-process export is not preserved reliably by xcodebuild,
+        # while the Rust plugin embeds this value at compile time.
+        LIVEVIEW_REMOTE_ORIGINS: ${LIVEVIEW_REMOTE_ORIGINS}
       groups: [app]
     dependencies:
       - framework: libapp.a
