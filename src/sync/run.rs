@@ -357,12 +357,17 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                     // (or changing the voice) re-applies the leaf and backfills it.
                     let kind = if is_audio {
                         format!(
-                            "audio:{}:{}",
+                            "audio:{}:{}:{}",
                             cfg.render_version,
-                            voice.as_deref().unwrap_or("")
+                            voice.as_deref().unwrap_or(""),
+                            crate::AUDIO_ENCODING_VERSION,
                         )
                     } else if let Some(tv) = &text_voice {
-                        format!("text:{}:tts:{tv}", cfg.render_version)
+                        format!(
+                            "text:{}:tts:{tv}:{}",
+                            cfg.render_version,
+                            crate::AUDIO_ENCODING_VERSION
+                        )
                     } else if is_text(&ft) {
                         format!("text:{}", cfg.render_version)
                     } else {

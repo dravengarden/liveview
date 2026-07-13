@@ -55,6 +55,10 @@ pub enum Command {
     /// env vars the systemd unit sets.
     Sync(SyncArgs),
 
+    /// Promote legacy MP3-backed chapter audio to canonical content-addressed
+    /// Opus/CAF blobs. Idempotent and safe to resume after interruption.
+    AudioOptimize(AudioOptimizeArgs),
+
     /// Structurally check book content offline, with the *same* engines the
     /// server renders with — so "clean" means "renders". Covers markdown
     /// (dangling/unused footnotes, broken reference links, missing assets),
@@ -326,4 +330,31 @@ pub struct SyncArgs {
     /// read-aloud keeps playing its existing audio.
     #[arg(long, default_value_t = false)]
     pub no_audio: bool,
+}
+
+/// Connection arguments for `liveview audio-optimize`. Source MP3 objects are
+/// deliberately retained; the next successful `liveview sync` verifies the new
+/// DAG and reclaims them through the ordinary orphan-asset GC.
+#[derive(Args, Debug, Clone)]
+pub struct AudioOptimizeArgs {
+    /// `postgres://…` URL for the private liveview db.
+    #[arg(long, env = "DATABASE_URL")]
+    pub database_url: String,
+
+    /// S3-compatible object-store endpoint.
+    #[arg(long, env = "LIVEVIEW_S3_ENDPOINT")]
+    pub s3_endpoint: String,
+
+    /// Bucket for book blobs.
+    #[arg(long, env = "LIVEVIEW_S3_BUCKET", default_value = "liveview")]
+    pub s3_bucket: String,
+
+    #[arg(long, env = "LIVEVIEW_S3_ACCESS_KEY")]
+    pub s3_access_key: Option<String>,
+    #[arg(long, env = "LIVEVIEW_S3_ACCESS_KEY_FILE")]
+    pub s3_access_key_file: Option<PathBuf>,
+    #[arg(long, env = "LIVEVIEW_S3_SECRET_KEY")]
+    pub s3_secret_key: Option<String>,
+    #[arg(long, env = "LIVEVIEW_S3_SECRET_KEY_FILE")]
+    pub s3_secret_key_file: Option<PathBuf>,
 }

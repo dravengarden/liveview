@@ -1,3 +1,4 @@
+mod audio_optimize;
 mod check;
 mod cli;
 mod config;
@@ -283,6 +284,12 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some(Command::AudioOptimize(args)) => {
+            if let Err(e) = rt.block_on(run_audio_optimize(args)) {
+                eprintln!("audio-optimize error: {e}");
+                std::process::exit(1);
+            }
+        }
         // `liveview check` / `targets` are handled (and exit) above, before the
         // runtime is built — they never reach this match.
         Some(Command::Check(_)) => unreachable!("check handled before the tokio runtime"),
@@ -411,6 +418,35 @@ async fn run_sync(args: cli::SyncArgs) -> Result<(), String> {
         report.deleted,
         report.orphans_gc,
         report.check_warnings
+    );
+    Ok(())
+}
+
+async fn run_audio_optimize(args: cli::AudioOptimizeArgs) -> Result<(), String> {
+    let access = read_cred(
+        "access",
+        args.s3_access_key,
+        args.s3_access_key_file.as_deref(),
+    )?;
+    let secret = read_cred(
+        "secret",
+        args.s3_secret_key,
+        args.s3_secret_key_file.as_deref(),
+    )?;
+    let pg = PgStore::open(&args.database_url)
+        .await
+        .map_err(|e| format!("connect postgres: {e}"))?;
+    pg.migrate().await.map_err(|e| format!("migrate: {e}"))?;
+    let obj = ObjStore::connect(&args.s3_endpoint, &access, &secret, &args.s3_bucket);
+    let report = audio_optimize::run(&pg, &obj).await?;
+    println!(
+        "audio-optimize: {} assets / {} chapter refs promoted, {:.2} GiB MP3 -> {:.2} GiB canonical CAF ({} retranscoded, {} tails preserved); run sync to publish the new root and GC source MP3",
+        report.promoted,
+        report.chapters,
+        report.source_bytes as f64 / 1_073_741_824.0,
+        report.canonical_bytes as f64 / 1_073_741_824.0,
+        report.retranscoded,
+        report.tails,
     );
     Ok(())
 }
@@ -835,6 +871,7 @@ async fn api_manifest_book(
                     "hash": c.audio_hash,
                     "marks_hash": c.marks_hash,
                     "bytes": c.audio_size,
+                    "mime": c.audio_mime,
                 },
                 "asset": c.asset_hash.as_ref().map(|h| serde_json::json!({
                     "hash": h, "bytes": c.asset_size,
@@ -996,14 +1033,18 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
             }
         }
         if let Some(h) = &c.audio_hash {
-            // Audio downloads go through /api/audio (NOT the raw /api/blob) — it
-            // ALWAYS serves the compressed variant now (MP3 fully sunset), so the
-            // device stores the small Opus. `hash` stays the SOURCE audio_hash —
-            // the content-address key the player's stream shares — so a downloaded
-            // file is found on offline playback. `bytes` ≈ compressed size (×0.33).
+            // Canonical CAF makes the manifest hash, stored object, served bytes,
+            // native cache key, and integrity identity the SAME value. The legacy
+            // estimate remains only for a migration interrupted mid-run.
+            let canonical = c.audio_mime.as_deref() == Some(AUDIO_VARIANT.mime);
+            let bytes = if canonical {
+                c.audio_size.unwrap_or(0)
+            } else {
+                c.audio_size.unwrap_or(0) * 33 / 100
+            };
             resources.push(serde_json::json!({
                 "path": format!("{doc}#audio"), "hash": h, "kind": "audio",
-                "bytes": c.audio_size.unwrap_or(0) * 33 / 100,
+                "bytes": bytes,
                 "url": format!("/api/audio?{q}"),
             }));
         }
@@ -1072,7 +1113,7 @@ fn artwork_resource(slug: &str, kind: &str, hash: &str, bytes: i64) -> serde_jso
 /// the deploy root, so the Downloads UI gets a TINY response instead of fetching
 /// + parsing the ~4 MB `/api/dag` just to sum sizes. Same byte accounting as the
 ///
-/// dag (audio ≈ source ×0.33 compressed). The client caches this by `root` and
+/// dag (canonical audio uses its exact object size). The client caches this by `root` and
 /// re-fetches only when the root changes; the per-device CACHED progress is the
 /// client's own index — this endpoint is the denominator, not the numerator.
 async fn api_sizes(State(state): State<SharedState>, headers: HeaderMap) -> Response {
@@ -1112,8 +1153,11 @@ async fn api_sizes(State(state): State<SharedState>, headers: HeaderMap) -> Resp
             total.text_count += 1;
         }
         if c.audio_hash.is_some() {
-            // Match the dag's compressed estimate (Opus ≈ source ×0.33).
-            let b = c.audio_size.unwrap_or(0) * 33 / 100;
+            let b = if c.audio_mime.as_deref() == Some(AUDIO_VARIANT.mime) {
+                c.audio_size.unwrap_or(0)
+            } else {
+                c.audio_size.unwrap_or(0) * 33 / 100
+            };
             e.audio_bytes += b;
             e.audio_count += 1;
             total.audio_bytes += b;
@@ -2150,13 +2194,11 @@ fn parse_range(value: &str, total: u64) -> Option<(u64, u64)> {
     (start <= end && end < total).then_some((start, end))
 }
 
-/// The single compressed-audio variant. On-the-fly transcode of the source MP3,
-/// cached in the obj store under "<cachekey>.<TAG>". Audiobook narration is mono
+/// The canonical audio representation. Audiobook narration is mono
 /// speech, so a low-bitrate speech codec is near-transparent at a fraction of the
-/// size (~67% smaller at Opus 16k vs the 48k MP3). iOS AVPlayer MUST support the
-/// container — Opus-in-CAF is the default. To change codec/bitrate, edit these
-/// four fields (and, to reclaim space, drop the old "*.TAG" obj keys); nothing is
-/// re-baked — the next request re-transcodes lazily. Guaranteed-playable fallback
+/// size (~67% smaller at Opus 16k vs the 48k MP3). Opus-in-CAF is the default
+/// because iOS AVPlayer supports that container. The legacy cache tag remains
+/// only for resumable migration and optional book-end derivatives. Fallback
 /// if Opus-CAF ever misbehaves: tag "aac24", mime "audio/mp4", ext "m4a",
 /// args ["-c:a","aac","-b:a","24k","-ac","1"].
 pub struct AudioVariant {
@@ -2180,6 +2222,10 @@ pub const AUDIO_VARIANT: AudioVariant = AudioVariant {
         "voip",
     ],
 };
+
+/// Folded into audio-capable Merkle leaf kinds. Bump whenever the canonical
+/// stored/served representation changes, even if source prose is unchanged.
+pub const AUDIO_ENCODING_VERSION: &str = "caf-opus16-v1";
 
 /// Transcode an MP3 (`src`) per `AUDIO_VARIANT`. ffmpeg reads stdin and writes a
 /// temp file (CAF/MP4 muxers need seekable output), which we read back + delete.
@@ -2216,6 +2262,57 @@ pub async fn transcode_audio(src: Vec<u8>) -> Result<Vec<u8>, String> {
     }
     let bytes = tokio::fs::read(&tmp).await.map_err(|e| e.to_string());
     let _ = tokio::fs::remove_file(&tmp).await;
+    bytes
+}
+
+/// Append an MP3 book-end cue to canonical CAF and re-encode one valid CAF.
+/// ffmpeg needs two seekable inputs for the concat filter, so this rare path
+/// uses private temporary files and removes them before returning.
+async fn transcode_audio_with_tail(caf: &[u8], cue_mp3: &[u8]) -> Result<Vec<u8>, String> {
+    let mut base = std::env::temp_dir();
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    base.push(format!("lvtail-{}-{nonce}", std::process::id()));
+    let chapter = base.with_extension("chapter.caf");
+    let cue = base.with_extension("cue.mp3");
+    let output = base.with_extension(AUDIO_VARIANT.ext);
+    tokio::fs::write(&chapter, caf)
+        .await
+        .map_err(|e| format!("write tail chapter: {e}"))?;
+    tokio::fs::write(&cue, cue_mp3)
+        .await
+        .map_err(|e| format!("write tail cue: {e}"))?;
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.arg("-v")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(&chapter)
+        .arg("-i")
+        .arg(&cue)
+        .arg("-filter_complex")
+        .arg("[0:a][1:a]concat=n=2:v=0:a=1[out]")
+        .arg("-map")
+        .arg("[out]");
+    for arg in AUDIO_VARIANT.args {
+        cmd.arg(arg);
+    }
+    let result = cmd.arg(&output).output().await;
+    let bytes = match result {
+        Ok(out) if out.status.success() => tokio::fs::read(&output)
+            .await
+            .map_err(|e| format!("read tail audio: {e}")),
+        Ok(out) => Err(format!(
+            "ffmpeg tail: {}",
+            String::from_utf8_lossy(&out.stderr)
+        )),
+        Err(e) => Err(format!("spawn ffmpeg tail: {e}")),
+    };
+    for path in [&chapter, &cue, &output] {
+        let _ = tokio::fs::remove_file(path).await;
+    }
     bytes
 }
 
@@ -2299,11 +2396,20 @@ async fn api_audio(
     if query.rendition.as_deref() == Some("text") {
         return match ensure_text_audio(&state, &query).await {
             Ok((audio_hash, _)) => match state.obj.get(&audio_hash).await {
-                // ALWAYS the compressed variant — MP3 is fully sunset client-side
-                // (the source MP3 is only the internal transcode input). One format.
                 Ok(data) => {
-                    let (b, mime) = compressed_audio(&state, &audio_hash, data).await;
-                    serve_audio_range(b, &headers, mime)
+                    let mime = state
+                        .store
+                        .get_asset(&audio_hash)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|a| a.mime);
+                    if mime.as_deref() == Some(AUDIO_VARIANT.mime) {
+                        serve_audio_range(data, &headers, AUDIO_VARIANT.mime)
+                    } else {
+                        let (b, mime) = compressed_audio(&state, &audio_hash, data).await;
+                        serve_audio_range(b, &headers, mime)
+                    }
                 }
                 Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response(),
             },
@@ -2326,7 +2432,7 @@ async fn api_audio(
             return (StatusCode::INTERNAL_SERVER_ERROR, "audio synth").into_response();
         }
     };
-    let Ok(mut data) = state.obj.get(&hash).await else {
+    let Ok(data) = state.obj.get(&hash).await else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response();
     };
     // The book's last chapter carries a spoken "全书完" tail (client sends
@@ -2337,6 +2443,43 @@ async fn api_audio(
     // untouched: the tail sits past the last sentence's end_ms, a silent gap in
     // the read-along. Only the last chapter pays the (tiny) append.
     let is_bookend = query.tail.as_deref() == Some("bookend");
+    let asset_mime = state
+        .store
+        .get_asset(&hash)
+        .await
+        .ok()
+        .flatten()
+        .map(|a| a.mime);
+    if asset_mime.as_deref() == Some(AUDIO_VARIANT.mime) {
+        if is_bookend {
+            let tail_key = format!("{hash}.tail.{}", AUDIO_VARIANT.tag);
+            if let Ok(tail) = state.obj.get(&tail_key).await {
+                return serve_audio_range(tail, &headers, AUDIO_VARIANT.mime);
+            }
+            if let Some(cue) = book_end_cue(&state, &row).await {
+                match transcode_audio_with_tail(&data, &cue).await {
+                    Ok(tail) => {
+                        if let Err(error) = state
+                            .obj
+                            .put_if_absent(&tail_key, tail.clone(), AUDIO_VARIANT.mime)
+                            .await
+                        {
+                            tracing::warn!(%error, "store canonical book-end tail failed");
+                        }
+                        return serve_audio_range(tail, &headers, AUDIO_VARIANT.mime);
+                    }
+                    Err(error) => {
+                        tracing::warn!(audio_hash = hash, %error, "build canonical book-end tail failed");
+                    }
+                }
+            }
+        }
+        return serve_audio_range(data, &headers, AUDIO_VARIANT.mime);
+    }
+
+    // Backward-compatible legacy path while an interrupted migration still has
+    // MP3 chapter pointers.
+    let mut data = data;
     if is_bookend {
         if let Some(cue) = book_end_cue(&state, &row).await {
             data.extend_from_slice(&cue);
@@ -2414,7 +2557,8 @@ async fn ensure_chapter_audio(
     };
     let (mp3, marks) = server::audio::synthesize(&state.tts_cmd, &voice, &sentences).await?;
     let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
-    let audio_hash = store_blob(state, mp3, "audio/mpeg").await?;
+    let caf = transcode_audio(mp3).await?;
+    let audio_hash = store_blob(state, caf, AUDIO_VARIANT.mime).await?;
     let marks_hash = store_blob(state, marks_json, "application/json").await?;
     state
         .store
@@ -2525,7 +2669,8 @@ async fn ensure_text_audio(
     };
     let (mp3, marks) = server::audio::synthesize(&state.tts_cmd, &voice, &texts).await?;
     let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
-    let audio_hash = store_blob(state, mp3, "audio/mpeg").await?;
+    let caf = transcode_audio(mp3).await?;
+    let audio_hash = store_blob(state, caf, AUDIO_VARIANT.mime).await?;
     let marks_hash = store_blob(state, marks_json, "application/json").await?;
     state
         .store

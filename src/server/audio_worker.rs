@@ -171,23 +171,11 @@ async fn generate(
     };
 
     let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
-    let audio_hash = put_blob(pg, obj, mp3.clone(), "audio/mpeg").await?;
-    // PRE-GENERATE the compressed (CAF) variant now, keyed exactly as the serving
-    // path reads it (`<audio_hash>.<tag>`), so /api/audio serves it instantly
-    // instead of transcoding lazily on first request (the cold-cache slowdown).
-    // Best-effort: a transcode failure just leaves the lazy path as fallback.
-    match crate::transcode_audio(mp3).await {
-        Ok(caf) => {
-            let key = format!("{audio_hash}.{}", crate::AUDIO_VARIANT.tag);
-            if let Err(e) = obj
-                .put_if_absent(&key, caf, crate::AUDIO_VARIANT.mime)
-                .await
-            {
-                tracing::warn!(error = %e, "pre-gen CAF store failed");
-            }
-        }
-        Err(e) => tracing::warn!(error = %e, "pre-gen CAF transcode failed"),
-    }
+    // CAF is the canonical audio asset: its blake3 is both the database pointer
+    // and the exact byte hash clients mirror through /api/dag. The synthesized
+    // MP3 exists only as an in-memory encoder input and is never persisted.
+    let caf = crate::transcode_audio(mp3).await?;
+    let audio_hash = put_blob(pg, obj, caf, crate::AUDIO_VARIANT.mime).await?;
     let marks_hash = put_blob(pg, obj, marks_json, "application/json").await?;
     pg.set_chapter_audio(
         &task.book_slug,

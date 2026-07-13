@@ -32,7 +32,7 @@ pub struct ChapterRow {
     pub html: Option<String>,
     pub markdown: Option<String>,
     pub asset_hash: Option<String>,
-    /// audio rendition only — mp3 / sentence-marks blobs in rustfs (→ assets).
+    /// Canonical Opus/CAF audio plus sentence marks (→ assets).
     pub audio_hash: Option<String>,
     pub marks_hash: Option<String>,
     pub content_hash: String,
@@ -44,6 +44,15 @@ pub struct ChapterRow {
 pub struct AssetRow {
     pub content_hash: String,
     pub mime: String,
+    pub size: i64,
+}
+
+/// Legacy source audio still referenced by at least one chapter. Audio
+/// optimization promotes each row to a canonical CAF asset and atomically
+/// rewrites every chapter reference.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct LegacyAudioAsset {
+    pub content_hash: String,
     pub size: i64,
 }
 
@@ -162,6 +171,7 @@ pub struct ManifestChapter {
     pub audio_hash: Option<String>,
     pub marks_hash: Option<String>,
     pub audio_size: Option<i64>,
+    pub audio_mime: Option<String>,
     pub asset_hash: Option<String>,
     pub asset_size: Option<i64>,
     /// Audio task status (queued/running/done/failed) — `None` ⇒ no audio / never
@@ -184,6 +194,7 @@ pub struct DagChapter {
     pub html_bytes: Option<i64>,
     pub audio_hash: Option<String>,
     pub audio_size: Option<i64>,
+    pub audio_mime: Option<String>,
     pub marks_hash: Option<String>,
     pub marks_size: Option<i64>,
     pub asset_hash: Option<String>,
@@ -659,6 +670,34 @@ impl PgStore {
         .await
     }
 
+    pub async fn legacy_audio_assets(&self) -> Result<Vec<LegacyAudioAsset>, sqlx::Error> {
+        sqlx::query_as::<_, LegacyAudioAsset>(
+            "SELECT DISTINCT a.content_hash, a.size
+             FROM assets a
+             JOIN chapters c ON c.audio_hash = a.content_hash
+             WHERE a.mime = 'audio/mpeg'
+             ORDER BY a.content_hash",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Switch all chapter references from a legacy audio asset to its canonical
+    /// replacement. The old asset row remains until normal sync GC, providing a
+    /// rollback window and keeping deletion in the existing verified GC path.
+    pub async fn replace_audio_hash(
+        &self,
+        old_hash: &str,
+        new_hash: &str,
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query("UPDATE chapters SET audio_hash = $2 WHERE audio_hash = $1")
+            .bind(old_hash)
+            .bind(new_hash)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn delete_asset(&self, content_hash: &str) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM assets WHERE content_hash = $1")
             .bind(content_hash)
@@ -771,10 +810,10 @@ impl PgStore {
     // ── Audio task queue ──────────────────────────────────────────────────────
 
     /// Enqueue (or refresh) the audio task for a chapter leaf. Idempotent: if a
-    /// task already exists, a CHANGED `content_hash` re-queues it (new source →
-    /// regenerate); an UNCHANGED one leaves a `running`/`done` task alone (so a
-    /// re-sync doesn't redo finished work) but only refreshes `priority` upward
-    /// (an interactive request can promote a queued backfill task).
+    /// task already exists, a changed source OR transform kind re-queues it. A
+    /// codec-only kind bump does not regenerate audio when the chapter already
+    /// points at the new canonical representation: the worker's existing-audio
+    /// fast path commits the new Merkle leaf and completes the task.
     pub async fn enqueue_audio_task(&self, task: &AudioTaskUpsert<'_>) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO audio_tasks
@@ -785,13 +824,16 @@ impl PgStore {
                  leaf_kind   = EXCLUDED.leaf_kind,
                  voice       = EXCLUDED.voice,
                  priority    = GREATEST(audio_tasks.priority, EXCLUDED.priority),
-                 -- new source ⇒ re-queue from scratch; same source ⇒ keep status.
+                 -- New source or transform ⇒ re-queue; identical task ⇒ keep status.
                  content_hash = EXCLUDED.content_hash,
-                 status      = CASE WHEN audio_tasks.content_hash <> EXCLUDED.content_hash
+                 status      = CASE WHEN audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                                          OR audio_tasks.leaf_kind IS DISTINCT FROM EXCLUDED.leaf_kind
                                     THEN 'queued' ELSE audio_tasks.status END,
-                 attempts    = CASE WHEN audio_tasks.content_hash <> EXCLUDED.content_hash
+                 attempts    = CASE WHEN audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                                          OR audio_tasks.leaf_kind IS DISTINCT FROM EXCLUDED.leaf_kind
                                     THEN 0 ELSE audio_tasks.attempts END,
-                 error       = CASE WHEN audio_tasks.content_hash <> EXCLUDED.content_hash
+                 error       = CASE WHEN audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                                          OR audio_tasks.leaf_kind IS DISTINCT FROM EXCLUDED.leaf_kind
                                     THEN NULL ELSE audio_tasks.error END",
         )
         .bind(task.book_slug)
@@ -975,6 +1017,7 @@ impl PgStore {
             "SELECT c.rendition, c.lang, c.rel_path,
                     c.content_hash, c.file_type,
                     c.audio_hash, c.marks_hash, aa.size AS audio_size,
+                    aa.mime AS audio_mime,
                     c.asset_hash, ab.size AS asset_size, t.status
              FROM chapters c
              LEFT JOIN assets aa ON aa.content_hash = c.audio_hash
@@ -997,7 +1040,7 @@ impl PgStore {
             "SELECT c.book_slug, c.rendition, c.lang, c.rel_path,
                     c.content_hash, c.file_type,
                     length(c.html)::bigint AS html_bytes,
-                    c.audio_hash, aa.size AS audio_size,
+                    c.audio_hash, aa.size AS audio_size, aa.mime AS audio_mime,
                     c.marks_hash, am.size AS marks_size,
                     c.asset_hash, ab.size AS asset_size
              FROM chapters c

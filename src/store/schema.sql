@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS chapters (
     asset_hash     TEXT,               -- → assets.content_hash (binary only)
     -- audio rendition (.spoken.md chapters): edge-tts output, pre-generated at
     -- sync time and stored as content-addressed assets in rustfs.
-    audio_hash     TEXT,               -- → assets.content_hash (mp3)
+    audio_hash     TEXT,               -- → assets.content_hash (canonical Opus/CAF)
     marks_hash     TEXT,               -- → assets.content_hash (sentence marks json)
     content_hash   TEXT    NOT NULL,   -- blake3 of source bytes (Merkle leaf)
     render_version INTEGER NOT NULL DEFAULT 1,
@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS deploy_root (
 -- only ENQUEUES) nor inline in the HTTP request. One row per chapter leaf that
 -- needs audio; `content_hash` ties the task to the source it was queued for, so
 -- a re-edited chapter supersedes its old task. `leaf_kind` is the Merkle leaf's
--- folded kind (e.g. `audio:1:<voice>` / `text:1:tts:<voice>`) so the worker can
+-- folded kind (e.g. `audio:1:<voice>:<codec>` / `text:1:tts:<voice>:<codec>`) so the worker can
 -- commit the exact `merkle_nodes` leaf when done — preserving sync's per-leaf
 -- resume (node present ⇔ audio generated). Status drives the readiness UX +
 -- the manifest's `ready` flag.
