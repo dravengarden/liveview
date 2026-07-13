@@ -66,9 +66,9 @@ export function CoverTile({
   );
 }
 
-/** A real cover used as a restrained card background rather than a literal
- *  full-height poster. Theme-paper veiling keeps text contrast predictable;
- *  image failure simply reveals the card's slug-keyed gradient beneath. */
+/** Purpose-built wide artwork for a shelf card. Theme-paper veiling keeps the
+ *  real title readable over the quiet left side while leaving the identifying
+ *  subject visible on the right; failure reveals the stable gradient beneath. */
 export function ShelfCardArtwork(
   { slug, hasBackdrop }: {
     slug: string;
@@ -99,15 +99,13 @@ export function ShelfCardArtwork(
         }}
         sx={{
           position: "absolute",
-          top: 0,
-          right: 0,
-          width: "64%",
+          inset: 0,
+          width: "100%",
           height: "100%",
           objectFit: "cover",
           objectPosition: "center",
-          opacity: (theme) => theme.palette.mode === "dark" ? 0.62 : 0.7,
-          filter: "saturate(0.88) contrast(0.92)",
-          transform: "scale(1.04)",
+          opacity: (theme) => theme.palette.mode === "dark" ? 0.82 : 0.78,
+          filter: "saturate(0.96) contrast(1.02)",
         }}
       />
       <Box
@@ -115,7 +113,7 @@ export function ShelfCardArtwork(
           position: "absolute",
           inset: 0,
           background: coverGradient(slug),
-          opacity: (theme) => theme.palette.mode === "dark" ? 0.2 : 0.14,
+          opacity: (theme) => theme.palette.mode === "dark" ? 0.12 : 0.08,
           mixBlendMode: "color",
         }}
       />
@@ -126,8 +124,8 @@ export function ShelfCardArtwork(
           background: (theme) =>
             `linear-gradient(90deg, ${
               alpha(theme.palette.background.paper, 0.94)
-            } 0%, ${alpha(theme.palette.background.paper, 0.78)} 52%, ${
-              alpha(theme.palette.background.paper, 0.18)
+            } 0%, ${alpha(theme.palette.background.paper, 0.68)} 46%, ${
+              alpha(theme.palette.background.paper, 0.1)
             } 100%)`,
         }}
       />
