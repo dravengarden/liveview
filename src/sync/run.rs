@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::config::{RenditionKind, Resolved};
+use crate::config::{BookState, Layout, RenditionKind, Resolved};
 use crate::server::renderer;
 use crate::shared::FileType;
 use crate::store::pg::{AudioTaskUpsert, BookUpsert, ChapterRow, PgStore};
@@ -107,6 +107,88 @@ fn is_text(ft: &FileType) -> bool {
             // binary blob, or `/api/file` serves empty content.
             | FileType::InteractiveView
     )
+}
+
+/// Hash the catalog-facing state that lives outside chapter leaves.
+///
+/// Native clients cache `/api/books` and `/api/tree` under the deploy root. If
+/// this metadata is omitted from the DAG, changing artwork, labels, editions,
+/// or layout leaves the root unchanged and a correct client can keep serving a
+/// stale catalog forever. The marker built from this hash is structural (an
+/// empty tree), so it invalidates manifests without pretending metadata is a
+/// chapter that needs to be applied or deleted.
+fn catalog_hash(book: &BookState, cover_hash: Option<&str>, backdrop_hash: Option<&str>) -> String {
+    fn field(hasher: &mut blake3::Hasher, value: &str) {
+        hasher.update(&(value.len() as u64).to_le_bytes());
+        hasher.update(value.as_bytes());
+    }
+
+    fn optional(hasher: &mut blake3::Hasher, value: Option<&str>) {
+        match value {
+            Some(value) => {
+                hasher.update(b"some\0");
+                field(hasher, value);
+            }
+            None => {
+                hasher.update(b"none\0");
+            }
+        };
+    }
+
+    fn layout(hasher: &mut blake3::Hasher, value: &Layout) {
+        hasher.update(b"layout\0");
+        for entry in &value.order {
+            field(hasher, entry);
+        }
+        let mut children: Vec<_> = value.subtree.iter().collect();
+        children.sort_by(|a, b| a.0.cmp(b.0));
+        for (name, child) in children {
+            field(hasher, name);
+            layout(hasher, child);
+        }
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"liveview-book-catalog-v1\0");
+    field(&mut hasher, &book.slug);
+    field(&mut hasher, &book.label);
+    optional(&mut hasher, book.description.as_deref());
+    optional(&mut hasher, book.collection.as_deref());
+    optional(&mut hasher, book.author.as_deref());
+    optional(&mut hasher, cover_hash);
+    optional(&mut hasher, backdrop_hash);
+    field(&mut hasher, book.default_rendition.as_str());
+    for rendition in &book.renditions {
+        field(&mut hasher, rendition.kind.as_str());
+        field(&mut hasher, &rendition.label);
+        field(&mut hasher, &rendition.default_lang);
+        optional(&mut hasher, rendition.voice.as_deref());
+        field(
+            &mut hasher,
+            if rendition.manifest {
+                "manifest"
+            } else {
+                "implicit"
+            },
+        );
+        match &rendition.layout {
+            Some(value) => layout(&mut hasher, value),
+            None => {
+                hasher.update(b"no-layout\0");
+            }
+        };
+        for edition in &rendition.editions {
+            field(&mut hasher, &edition.lang);
+            field(&mut hasher, &edition.label);
+        }
+    }
+    hasher.finalize().to_hex().to_string()
+}
+
+fn catalog_marker(hash: String) -> Build {
+    // The digest is a child name because tree names are identity-bearing. The
+    // empty subtree contributes no leaves to the reconcile apply/delete plan.
+    Build::Tree(vec![(hash, Build::Tree(Vec::new()))])
 }
 
 /// Run a full reconcile. Returns the counts applied.
@@ -315,6 +397,14 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
             }
             rendition_nodes.push((r_kind.to_string(), Build::Tree(edition_nodes)));
         }
+        rendition_nodes.push((
+            "@catalog".to_string(),
+            catalog_marker(catalog_hash(
+                book,
+                cover_hash.as_deref(),
+                backdrop_hash.as_deref(),
+            )),
+        ));
         book_nodes.push((book.slug.clone(), Build::Tree(rendition_nodes)));
     }
 
@@ -817,7 +907,8 @@ fn decode_node(kind: &str, payload: &str) -> Result<crate::sync::merkle::Node, S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, EditionState, RenditionState};
+    use globset::GlobSetBuilder;
     use std::fs;
 
     struct TempDir(PathBuf);
@@ -843,6 +934,91 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn catalog_test_book() -> BookState {
+        let empty_globs = || GlobSetBuilder::new().build().unwrap();
+        BookState {
+            label: "Book".into(),
+            slug: "book".into(),
+            description: Some("Description".into()),
+            collection: Some("Collection".into()),
+            author: Some("Author".into()),
+            cover: None,
+            backdrop: None,
+            default_rendition: RenditionKind::Text,
+            renditions: vec![RenditionState {
+                kind: RenditionKind::Text,
+                label: "Read".into(),
+                default_lang: "en".into(),
+                voice: None,
+                layout: None,
+                manifest: true,
+                editions: vec![EditionState {
+                    lang: "en".into(),
+                    label: "English".into(),
+                    source: PathBuf::from("content"),
+                    include_set: empty_globs(),
+                    exclude_set: empty_globs(),
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn catalog_artwork_changes_deploy_root_without_content_operations() {
+        let book = catalog_test_book();
+        let old = Dag::build(Build::Tree(vec![(
+            book.slug.clone(),
+            Build::Tree(vec![(
+                "@catalog".into(),
+                catalog_marker(catalog_hash(&book, Some("cover"), Some("old-backdrop"))),
+            )]),
+        )]));
+        let new = Dag::build(Build::Tree(vec![(
+            book.slug.clone(),
+            Build::Tree(vec![(
+                "@catalog".into(),
+                catalog_marker(catalog_hash(&book, Some("cover"), Some("new-backdrop"))),
+            )]),
+        )]));
+
+        assert_ne!(
+            old.root, new.root,
+            "backdrop identity must invalidate the catalog"
+        );
+        assert!(
+            plan(&new, &old).is_empty(),
+            "a catalog marker must not become a synthetic chapter operation"
+        );
+    }
+
+    #[test]
+    fn catalog_layout_hash_is_stable_across_map_insertion_order() {
+        let mut left = catalog_test_book();
+        let mut right = catalog_test_book();
+        let a = Layout {
+            order: vec!["01.md".into()],
+            ..Default::default()
+        };
+        let b = Layout {
+            order: vec!["02.md".into()],
+            ..Default::default()
+        };
+        let mut left_layout = Layout::default();
+        left_layout.subtree.insert("a".into(), a.clone());
+        left_layout.subtree.insert("b".into(), b.clone());
+        let mut right_layout = Layout::default();
+        right_layout.subtree.insert("b".into(), b);
+        right_layout.subtree.insert("a".into(), a);
+        left.renditions[0].layout = Some(left_layout);
+        right.renditions[0].layout = Some(right_layout);
+
+        assert_eq!(
+            catalog_hash(&left, None, None),
+            catalog_hash(&right, None, None),
+            "hash-map iteration order must not churn the deploy root"
+        );
     }
 
     /// Build a `SyncCfg` from the gated env, or `None` to skip. Run with:
