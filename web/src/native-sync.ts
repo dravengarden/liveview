@@ -52,7 +52,8 @@ export async function contentFetch(
   }
 }
 
-/** Primary `src` for a book-cover `<img>`. Physical WKWebViews have occasionally
+/** Primary `src` for a book-cover `<img>`. Cover bytes are content-addressed DAG
+ *  resources and auto-sync offline; physical WKWebViews have occasionally
  *  failed custom-scheme image loads even while fetches through the same scheme
  *  work. Use the ordinary remote image URL while online and let the image error
  *  handler fall back to the offline lvsync cache. */
@@ -61,7 +62,7 @@ export function coverSrc(slug: string): string {
   return nativeSyncAvailable() ? remoteUrl(u) : u;
 }
 
-/** Wide, text-free artwork for LiveView cards and hero surfaces. */
+/** Wide, text-free DAG artwork for LiveView cards and hero surfaces. */
 export function backdropSrc(slug: string): string {
   const u = `/api/backdrop?book=${encodeURIComponent(slug)}`;
   return nativeSyncAvailable() ? remoteUrl(u) : u;

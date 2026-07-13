@@ -42,7 +42,8 @@ pub struct Resource {
     pub path: String,
     /// Content address (blake3 hex) — the store key + integrity check.
     pub hash: String,
-    /// Resource class: `text` | `units` | `spoken` | `marks` | `audio` | `asset`.
+    /// Resource class: `cover` | `backdrop` | `text` | `units` | `spoken` |
+    /// `marks` | `audio` | `asset`.
     pub kind: String,
     /// Byte size of the resource (0 if unknown). Drives `offline_fraction`.
     pub bytes: u64,

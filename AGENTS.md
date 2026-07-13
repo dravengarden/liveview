@@ -52,6 +52,10 @@ scheme and refreshes it from a configured LiveView server.
   apply image inversion to theme-native diagrams.
 - Each device owns its playback state. Cross-device progress is a resume hint,
   not a live mutual-exclusion mechanism.
+- Covers and backdrops are first-class content-addressed Merkle DAG resources.
+  Keep their blob hashes in the deploy root and enumerate both in `/api/dag` so
+  native clients can verify, sync, retain, garbage-collect, and serve them offline.
+  Do not regress artwork to a URL-keyed side cache.
 - Background audio and lock-screen controls are native-shell capabilities; do
   not assume a browser PWA can provide the same lifecycle guarantees on iOS.
 - Keep remote-origin selection aligned between `web/src/apiBase.ts` and

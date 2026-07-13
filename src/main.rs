@@ -846,7 +846,7 @@ async fn api_manifest_book(
 }
 
 /// `GET /api/dag` — the WHOLE-corpus manifest the lv-sync client mirrors: the
-/// deploy root + every resource (text / units / spoken / audio / marks / asset)
+/// deploy root + every resource (artwork / text / units / spoken / audio / marks / asset)
 /// as `{ path, hash, kind, bytes, url }`. `hash` is the content address (cache
 /// key); `url` is where to fetch it; `bytes` drives the byte-weighted offline %.
 /// One round-trip → the client has the full content-addressed index.
@@ -937,7 +937,29 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
         Ok(value) => value,
         Err(error) => return store_unavailable("dag_chapters", error),
     };
+    let artwork = match state.store.dag_artwork().await {
+        Ok(value) => value,
+        Err(error) => return store_unavailable("dag_artwork", error),
+    };
     let mut resources: Vec<serde_json::Value> = Vec::new();
+    for book in &artwork {
+        if let Some(hash) = &book.cover_hash {
+            resources.push(artwork_resource(
+                &book.book_slug,
+                "cover",
+                hash,
+                book.cover_size.unwrap_or(0),
+            ));
+        }
+        if let Some(hash) = &book.backdrop_hash {
+            resources.push(artwork_resource(
+                &book.book_slug,
+                "backdrop",
+                hash,
+                book.backdrop_size.unwrap_or(0),
+            ));
+        }
+    }
     for c in &chapters {
         let doc = format!("{}/{}/{}/{}", c.book_slug, c.rendition, c.lang, c.rel_path);
         // Wire path /api/file expects `<slug>/<rel_path>` + lang/rendition query.
@@ -1034,6 +1056,16 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
         body: body.clone(),
     });
     manifest_json_response(&root, body)
+}
+
+fn artwork_resource(slug: &str, kind: &str, hash: &str, bytes: i64) -> serde_json::Value {
+    serde_json::json!({
+        "path": format!("{slug}/@{kind}"),
+        "hash": hash,
+        "kind": kind,
+        "bytes": bytes.max(0),
+        "url": format!("/api/{kind}?book={slug}"),
+    })
 }
 
 /// `GET /api/sizes` — PRECOMPUTED download totals (per-book + global), keyed by
@@ -2631,6 +2663,16 @@ mod apm_tests {
         assert!(manifest_not_modified(&headers, "current"));
         assert!(!manifest_not_modified(&headers, "other"));
         assert!(!manifest_not_modified(&HeaderMap::new(), "current"));
+    }
+
+    #[test]
+    fn artwork_resource_is_content_addressed_and_book_scoped() {
+        let resource = artwork_resource("quant-book", "backdrop", "abc123", 4096);
+        assert_eq!(resource["path"], "quant-book/@backdrop");
+        assert_eq!(resource["hash"], "abc123");
+        assert_eq!(resource["kind"], "backdrop");
+        assert_eq!(resource["bytes"], 4096);
+        assert_eq!(resource["url"], "/api/backdrop?book=quant-book");
     }
 
     /// Minimal AppState over an empty in-memory FsStore (no pg/rustfs, no audio

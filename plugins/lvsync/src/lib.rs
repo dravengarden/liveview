@@ -5,7 +5,7 @@
 //! Requests resolve through the shared [`lv_sync::Engine`] — store-first against a SQLite
 //! content-addressed cache, fetching + caching on a miss. Once read online, a
 //! resource replays OFFLINE with zero network. Scope: NON-audio reader content
-//! (text/units/spoken/marks/assets) + navigation metadata (tree/books/covers,
+//! (covers/backdrops/text/units/spoken/marks/assets) + navigation metadata (tree/books,
 //! url-keyed). Audio stays in NativeAudioController (its own AVPlayer cache).
 //!
 //! Manifest lifecycle: seed from the on-disk `/api/dag` cache at startup
@@ -591,7 +591,7 @@ fn norm(url: &str) -> String {
 
 /// Resolve a content URL → its content as a UTF-8 STRING, offline-safe. A
 /// MANIFEST resource resolves store-first by content hash; any OTHER content URL
-/// (navigation metadata: /api/tree, /api/books, covers) goes through the url-keyed
+/// (navigation metadata: /api/tree, /api/books) goes through the url-keyed
 /// network-first cache so it too works offline. Errors `"offline"` when uncached
 /// + unreachable.
 ///
@@ -599,9 +599,9 @@ fn norm(url: &str) -> String {
 /// origin, where Tauri's custom-protocol IPC is blocked (cross-origin/CSP) and
 /// falls back to the postMessage channel — which is JSON/string only, so raw
 /// bytes come back CORRUPTED (serialized as a number array). A String survives
-/// BOTH IPC transports intact. Every URL routed here is text (JSON/HTML), so
-/// UTF-8 is lossless; binary resources (audio/images) are NOT routed through this
-/// (audio is the native AVPlayer; images load via <img src>).
+/// BOTH IPC transports intact. Every command caller routes text here; binary
+/// artwork uses the custom URL scheme dispatcher below, while audio uses the
+/// native AVPlayer.
 #[tauri::command]
 async fn resolve(state: State<'_, LvState>, url: String) -> Result<String, String> {
     let n = norm(&url);

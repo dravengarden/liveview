@@ -190,6 +190,17 @@ pub struct DagChapter {
     pub asset_size: Option<i64>,
 }
 
+/// One book's visual assets for `/api/dag`. Artwork is first-class offline
+/// content: clients mirror it by blob hash just like chapter assets.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct DagArtwork {
+    pub book_slug: String,
+    pub cover_hash: Option<String>,
+    pub cover_size: Option<i64>,
+    pub backdrop_hash: Option<String>,
+    pub backdrop_size: Option<i64>,
+}
+
 /// One document's saved scroll position (0..1 ratio). Wire-compatible with the
 /// old SQLite `ProgressEntry`.
 #[derive(Clone, Debug, Serialize, sqlx::FromRow)]
@@ -994,6 +1005,23 @@ impl PgStore {
              LEFT JOIN assets am ON am.content_hash = c.marks_hash
              LEFT JOIN assets ab ON ab.content_hash = c.asset_hash
              ORDER BY c.book_slug, c.rendition, c.lang, c.rel_path",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Every book's cover/backdrop hashes + blob sizes. These resources are
+    /// enumerated in the same whole-corpus manifest as chapters so native sync
+    /// can integrity-check, retain, garbage-collect, and serve them offline.
+    pub async fn dag_artwork(&self) -> Result<Vec<DagArtwork>, sqlx::Error> {
+        sqlx::query_as::<_, DagArtwork>(
+            "SELECT b.slug AS book_slug,
+                    b.cover_hash, cover.size AS cover_size,
+                    b.backdrop_hash, backdrop.size AS backdrop_size
+             FROM books b
+             LEFT JOIN assets cover ON cover.content_hash = b.cover_hash
+             LEFT JOIN assets backdrop ON backdrop.content_hash = b.backdrop_hash
+             ORDER BY b.slug",
         )
         .fetch_all(&self.pool)
         .await

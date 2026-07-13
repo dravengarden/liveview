@@ -15,8 +15,8 @@
 use async_trait::async_trait;
 
 use crate::store::pg::{
-    AssetRow, AudioTaskRollup, BookRow, ChapterRow, DagChapter, EditionRow, ManifestChapter,
-    ProgressEntry, RenditionRow,
+    AssetRow, AudioTaskRollup, BookRow, ChapterRow, DagArtwork, DagChapter, EditionRow,
+    ManifestChapter, ProgressEntry, RenditionRow,
 };
 
 /// Catalog structure + chapter/asset access the reader needs. The deployed
@@ -131,6 +131,10 @@ pub trait ContentStore: Send + Sync {
     /// hashes + sizes — the rows behind `/api/dag` (the lv-sync client manifest).
     /// Empty on the preview backend.
     async fn dag_chapters(&self) -> Result<Vec<DagChapter>, String>;
+
+    /// Every book's content-addressed cover/backdrop resources for `/api/dag`.
+    /// Empty on the preview backend, which has no deployed manifest root.
+    async fn dag_artwork(&self) -> Result<Vec<DagArtwork>, String>;
 }
 
 /// Content-addressed blob bytes: rustfs (deployed) or an in-memory map (preview).
@@ -258,6 +262,9 @@ impl ContentStore for PgStore {
     }
     async fn dag_chapters(&self) -> Result<Vec<DagChapter>, String> {
         PgStore::dag_chapters(self).await.map_err(|e| e.to_string())
+    }
+    async fn dag_artwork(&self) -> Result<Vec<DagArtwork>, String> {
+        PgStore::dag_artwork(self).await.map_err(|e| e.to_string())
     }
 }
 
