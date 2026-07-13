@@ -26,6 +26,8 @@ pub struct FsStore {
     books: Vec<BookState>,
     /// slug → cover blob hash (covers are hashed + cached at construction).
     covers: HashMap<String, String>,
+    /// slug → wide LiveView artwork blob hash.
+    backdrops: HashMap<String, String>,
     /// content_hash → (bytes, mime). Covers preloaded; chapter images + any
     /// on-demand audio land here lazily.
     blobs: Mutex<HashMap<String, (Vec<u8>, String)>>,
@@ -64,6 +66,7 @@ impl FsStore {
     /// precompute the per-rendition sidebar trees (cheap; books rarely huge).
     pub fn new(books: Vec<BookState>) -> Self {
         let mut covers = HashMap::new();
+        let mut backdrops = HashMap::new();
         let mut blobs: HashMap<String, (Vec<u8>, String)> = HashMap::new();
         for b in &books {
             if let Some(path) = &b.cover {
@@ -73,6 +76,16 @@ impl FsStore {
                         .first_or_octet_stream()
                         .to_string();
                     covers.insert(b.slug.clone(), hash.clone());
+                    blobs.insert(hash, (bytes, mime));
+                }
+            }
+            if let Some(path) = &b.backdrop {
+                if let Ok(bytes) = std::fs::read(path) {
+                    let hash = blake3_hex(&bytes);
+                    let mime = mime_guess::from_path(path)
+                        .first_or_octet_stream()
+                        .to_string();
+                    backdrops.insert(b.slug.clone(), hash.clone());
                     blobs.insert(hash, (bytes, mime));
                 }
             }
@@ -87,6 +100,7 @@ impl FsStore {
         Self {
             books,
             covers,
+            backdrops,
             blobs: Mutex::new(blobs),
             trees,
         }
@@ -110,6 +124,7 @@ impl ContentStore for FsStore {
                 collection: b.collection.clone(),
                 author: b.author.clone(),
                 cover_hash: self.covers.get(&b.slug).cloned(),
+                backdrop_hash: self.backdrops.get(&b.slug).cloned(),
                 default_rendition: b.default_rendition.as_str().to_string(),
                 created_at: 0,
                 updated_at: 0,

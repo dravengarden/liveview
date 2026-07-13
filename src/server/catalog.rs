@@ -29,6 +29,7 @@ pub struct BookMeta {
     pub collection: Option<String>,
     pub author: Option<String>,
     pub cover_hash: Option<String>,
+    pub backdrop_hash: Option<String>,
     pub default_rendition: RenditionKind,
     pub renditions: Vec<RenditionMeta>,
     /// Deploy-time stamps (unix ms), 0 when unstamped. See `PgStore::mark_book`.
@@ -91,6 +92,7 @@ impl Catalog {
                 collection: b.collection,
                 author: b.author,
                 cover_hash: b.cover_hash,
+                backdrop_hash: b.backdrop_hash,
                 default_rendition: RenditionKind::parse(&b.default_rendition)
                     .unwrap_or(RenditionKind::Text),
                 renditions,

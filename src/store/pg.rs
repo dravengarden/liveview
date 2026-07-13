@@ -56,6 +56,7 @@ pub struct BookRow {
     pub collection: Option<String>,
     pub author: Option<String>,
     pub cover_hash: Option<String>,
+    pub backdrop_hash: Option<String>,
     pub default_rendition: String,
     /// Deploy-time stamps (unix ms); 0 when never stamped. See `mark_book`.
     pub created_at: i64,
@@ -71,6 +72,7 @@ pub struct BookUpsert<'a> {
     pub collection: Option<&'a str>,
     pub author: Option<&'a str>,
     pub cover_hash: Option<&'a str>,
+    pub backdrop_hash: Option<&'a str>,
     pub default_rendition: &'a str,
 }
 
@@ -225,14 +227,15 @@ impl PgStore {
 
     pub async fn upsert_book(&self, book: &BookUpsert<'_>) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO books (slug, label, description, collection, author, cover_hash, default_rendition)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "INSERT INTO books (slug, label, description, collection, author, cover_hash, backdrop_hash, default_rendition)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
              ON CONFLICT (slug) DO UPDATE SET
                  label = EXCLUDED.label,
                  description = EXCLUDED.description,
                  collection = EXCLUDED.collection,
                  author = EXCLUDED.author,
                  cover_hash = EXCLUDED.cover_hash,
+                 backdrop_hash = EXCLUDED.backdrop_hash,
                  default_rendition = EXCLUDED.default_rendition",
         )
         .bind(book.slug)
@@ -241,6 +244,7 @@ impl PgStore {
         .bind(book.collection)
         .bind(book.author)
         .bind(book.cover_hash)
+        .bind(book.backdrop_hash)
         .bind(book.default_rendition)
         .execute(&self.pool)
         .await
@@ -344,7 +348,7 @@ impl PgStore {
 
     pub async fn list_books(&self) -> Result<Vec<BookRow>, sqlx::Error> {
         sqlx::query_as::<_, BookRow>(
-            "SELECT slug, label, description, collection, author, cover_hash, default_rendition, created_at, updated_at
+            "SELECT slug, label, description, collection, author, cover_hash, backdrop_hash, default_rendition, created_at, updated_at
              FROM books ORDER BY slug",
         )
         .fetch_all(&self.pool)
@@ -713,7 +717,9 @@ impl PgStore {
                     OR c.marks_hash = a.content_hash
              )
              AND NOT EXISTS (
-                 SELECT 1 FROM books b WHERE b.cover_hash = a.content_hash
+                 SELECT 1 FROM books b
+                 WHERE b.cover_hash = a.content_hash
+                    OR b.backdrop_hash = a.content_hash
              )",
         )
         .fetch_all(&self.pool)
@@ -1139,6 +1145,7 @@ mod tests {
             collection: None,
             author: None,
             cover_hash: None,
+            backdrop_hash: None,
             default_rendition: "text",
         })
         .await
@@ -1157,6 +1164,7 @@ mod tests {
             collection: None,
             author: None,
             cover_hash: None,
+            backdrop_hash: None,
             default_rendition: "text",
         })
         .await

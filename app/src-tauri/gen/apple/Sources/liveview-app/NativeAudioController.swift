@@ -41,6 +41,7 @@ import MediaPlayer
 import Network
 import UIKit
 import WebKit
+import WidgetKit
 
 @objc(NativeAudioController) public final class NativeAudioController: NSObject, WKScriptMessageHandler, URLSessionDownloadDelegate {
   private static var controllers: [ObjectIdentifier: NativeAudioController] = [:]
@@ -426,7 +427,55 @@ import WebKit
     case "setCap": setCap(d)
     case "setWifiOnly": if let on = d?["on"] as? Bool { applyWifiOnly(on) }
     case "audioStats": audioStats(d)
+    case "widgetSnapshot": publishWidgetSnapshot(d)
     default: break
+    }
+  }
+
+  /// Persist the small state WidgetKit needs. App Group access is optional at
+  /// runtime so Personal Team builds keep working through the widget's network
+  /// path; once the entitlement is provisioned this becomes the offline source.
+  private func publishWidgetSnapshot(_ d: [String: Any]?) {
+    guard let d,
+          let root = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.top.thundersparrow.liveview"
+          ),
+          let defaults = UserDefaults(suiteName: "group.top.thundersparrow.liveview")
+    else { return }
+    let serverURL = d["serverURL"] as? String ?? ""
+    if !serverURL.isEmpty { defaults.set(serverURL, forKey: "serverURL") }
+    let incoming = d["items"] as? [[String: Any]] ?? []
+    let queue = DispatchQueue(label: "lv.widget.snapshot", qos: .utility)
+    queue.async {
+      var items: [[String: Any]] = []
+      for item in incoming.prefix(4) {
+        guard let slug = item["slug"] as? String,
+              let label = item["label"] as? String else { continue }
+        var coverFile: String?
+        if let raw = item["coverURL"] as? String, let url = URL(string: raw),
+           let bytes = try? Data(contentsOf: url) {
+          let safe = slug.map { $0.isLetter || $0.isNumber || $0 == "-" ? $0 : "-" }
+          let name = "widget-cover-\(String(safe)).img"
+          if (try? bytes.write(to: root.appendingPathComponent(name), options: .atomic)) != nil {
+            coverFile = name
+          }
+        }
+        var output: [String: Any] = [
+          "label": label,
+          "slug": slug,
+          "progress": item["progress"] as? Double ?? 0,
+        ]
+        if let coverFile { output["coverFile"] = coverFile }
+        items.append(output)
+      }
+      let payload: [String: Any] = [
+        "updatedAt": Date().timeIntervalSince1970,
+        "items": items,
+      ]
+      if let data = try? JSONSerialization.data(withJSONObject: payload) {
+        defaults.set(data, forKey: "widgetSnapshot")
+        DispatchQueue.main.async { WidgetCenter.shared.reloadAllTimelines() }
+      }
     }
   }
 
@@ -890,8 +939,9 @@ import WebKit
     artworkURL = urlString
     URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
       guard let data, let image = UIImage(data: data) else { return }
-      let squareImage = Self.squareArtwork(image)
-      let art = MPMediaItemArtwork(boundsSize: squareImage.size) { _ in squareImage }
+      let art = MPMediaItemArtwork(boundsSize: image.size) { requestedSize in
+        Self.fittedArtwork(image, requestedSize: requestedSize)
+      }
       DispatchQueue.main.async {
         guard let self, self.artworkURL == urlString else { return }
         self.nowPlayingInfo[MPMediaItemPropertyArtwork] = art
@@ -900,22 +950,29 @@ import WebKit
     }.resume()
   }
 
-  /// iOS sizes the lock-screen artwork from `boundsSize`. Passing a portrait book
-  /// cover directly produces a narrow thumbnail, so render an aspect-fill square.
-  private static func squareArtwork(_ image: UIImage) -> UIImage {
-    let size = CGSize(width: 512, height: 512)
-    let scale = max(size.width / image.size.width, size.height / image.size.height)
-    let drawSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-    let drawRect = CGRect(
-      x: (size.width - drawSize.width) / 2,
-      y: (size.height - drawSize.height) / 2,
-      width: drawSize.width,
-      height: drawSize.height
-    )
+  /// Keep the complete portrait cover and derive the shape requested by iOS.
+  /// A subdued full-bleed copy fills letterbox space; the foreground never crops.
+  private static func fittedArtwork(_ image: UIImage, requestedSize: CGSize) -> UIImage {
+    let size = requestedSize.width > 0 && requestedSize.height > 0
+      ? requestedSize
+      : image.size
+    let fillScale = max(size.width / image.size.width, size.height / image.size.height)
+    let fillSize = CGSize(width: image.size.width * fillScale, height: image.size.height * fillScale)
+    let fillRect = CGRect(x: (size.width - fillSize.width) / 2,
+                          y: (size.height - fillSize.height) / 2,
+                          width: fillSize.width, height: fillSize.height)
+    let fitScale = min(size.width / image.size.width, size.height / image.size.height)
+    let fitSize = CGSize(width: image.size.width * fitScale, height: image.size.height * fitScale)
+    let fitRect = CGRect(x: (size.width - fitSize.width) / 2,
+                         y: (size.height - fitSize.height) / 2,
+                         width: fitSize.width, height: fitSize.height)
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
     return UIGraphicsImageRenderer(size: size, format: format).image { _ in
-      image.draw(in: drawRect)
+      image.draw(in: fillRect, blendMode: .normal, alpha: 0.34)
+      UIColor.black.withAlphaComponent(0.18).setFill()
+      UIRectFill(CGRect(origin: .zero, size: size))
+      image.draw(in: fitRect)
     }
   }
 

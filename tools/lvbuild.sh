@@ -6,6 +6,13 @@
 # Password lives only in ~/.lvbuild-kcpw (chmod 600, user-created).
 set -euo pipefail
 
+# WidgetKit can't read the Tauri web bundle's compile-time origin. Reuse the
+# first configured LiveView origin as an Xcode build setting; an eventual App
+# Group snapshot overrides it at runtime and keeps widgets offline-capable.
+if [[ -z "${LIVEVIEW_WIDGET_SERVER_URL:-}" && -n "${LIVEVIEW_REMOTE_ORIGINS:-}" ]]; then
+  export LIVEVIEW_WIDGET_SERVER_URL="${LIVEVIEW_REMOTE_ORIGINS%%,*}"
+fi
+
 # Never install a stale DerivedData product after a real compile failure. Tauri's
 # IPA export may fail after xcodebuild has produced a valid .app, so the command
 # remains tolerated below; freshness of the signed bundle is the actual gate.

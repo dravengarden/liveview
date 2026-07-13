@@ -140,6 +140,7 @@ library/
 ├── distributed-systems/
 │   ├── book.toml
 │   ├── cover.webp
+│   ├── backdrop.webp
 │   ├── en/
 │   │   ├── 01-introduction.md
 │   │   └── 02-replication.md
@@ -165,6 +166,7 @@ title = "Distributed Systems"
 default_lang = "en"
 default_rendition = "text"
 cover = "cover.webp"
+backdrop = "backdrop.webp"
 
 [langs.en]
 label = "English"

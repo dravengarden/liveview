@@ -100,6 +100,8 @@ pub struct BookCfg {
     pub description: Option<String>,
     /// Card artwork, resolved relative to the corpus config file.
     pub cover: Option<PathBuf>,
+    /// Wide, text-free artwork for LiveView cards and hero surfaces.
+    pub backdrop: Option<PathBuf>,
     /// Which edition to show first. Defaults to the first edition declared.
     pub default_lang: Option<String>,
     /// Shorthand for a single-edition book: the source dir directly. Mutually
@@ -171,6 +173,7 @@ struct DocManifest {
     collection: Option<String>,
     author: Option<String>,
     cover: Option<PathBuf>,
+    backdrop: Option<PathBuf>,
     includes: Option<Vec<String>>,
     excludes: Option<Vec<String>>,
     layout: Option<Layout>,
@@ -198,6 +201,9 @@ pub struct BookManifest {
     /// Cover image, relative to the book dir. When unset, a `cover.{jpg,png,
     /// webp}` in the book dir is auto-detected.
     pub cover: Option<PathBuf>,
+    /// Wide, text-free artwork for LiveView cards. When unset, a
+    /// `backdrop.{jpg,png,webp}` file in the book directory is auto-detected.
+    pub backdrop: Option<PathBuf>,
     /// `[langs.<code>]` → label. The default lang is the base edition; every
     /// other language is an overlay that falls back to it (resolved server-side
     /// for raw assets). In the renditions shape these are the book-wide
@@ -345,6 +351,8 @@ pub struct BookState {
     pub author: Option<String>,
     /// Resolved absolute path to the cover image, when one exists.
     pub cover: Option<PathBuf>,
+    /// Resolved absolute path to the wide LiveView artwork, when one exists.
+    pub backdrop: Option<PathBuf>,
     /// Which rendition opens first.
     pub default_rendition: RenditionKind,
     /// Always non-empty.
@@ -528,6 +536,14 @@ impl Config {
                 };
                 path.is_file().then_some(path)
             });
+            let backdrop = b.backdrop.as_deref().and_then(|path| {
+                let path = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    config_dir.join(path)
+                };
+                path.is_file().then_some(path)
+            });
 
             // Normalise to a list of (lang, label, source, includes, excludes).
             // A shorthand `source` becomes a single edition whose lang is
@@ -609,6 +625,7 @@ impl Config {
                 collection: None,
                 author: None,
                 cover,
+                backdrop,
                 default_rendition: RenditionKind::Text,
                 renditions: vec![RenditionState {
                     kind: RenditionKind::Text,
@@ -770,6 +787,14 @@ fn load_doc_manifest(
         };
         path.is_file().then_some(path)
     });
+    let backdrop = manifest.backdrop.as_deref().and_then(|p| {
+        let path = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            base.join(p)
+        };
+        path.is_file().then_some(path)
+    });
     Ok(BookState {
         label: manifest.title,
         slug: manifest.slug,
@@ -777,6 +802,7 @@ fn load_doc_manifest(
         collection: manifest.collection,
         author: manifest.author,
         cover,
+        backdrop,
         default_rendition: RenditionKind::Text,
         renditions: vec![RenditionState {
             kind: RenditionKind::Text,
@@ -998,6 +1024,7 @@ fn load_book_manifest(
     };
 
     let cover = resolve_cover(book_dir, manifest.cover.as_deref());
+    let backdrop = resolve_backdrop(book_dir, manifest.backdrop.as_deref());
 
     Ok(BookState {
         label: manifest.title,
@@ -1006,6 +1033,7 @@ fn load_book_manifest(
         collection: manifest.collection.clone(),
         author: manifest.author.clone(),
         cover,
+        backdrop,
         default_rendition,
         renditions,
     })
@@ -1045,6 +1073,32 @@ fn resolve_cover(book_dir: &Path, declared: Option<&Path>) -> Option<PathBuf> {
         }
     }
     for name in ["cover.jpg", "cover.png", "cover.webp"] {
+        let p = book_dir.join(name);
+        if let Ok(c) = p.canonicalize() {
+            if c.is_file() {
+                return Some(c);
+            }
+        }
+    }
+    None
+}
+
+/// Resolve a book's wide LiveView artwork: the manifest `backdrop` if it exists,
+/// else the first `backdrop.{jpg,png,webp}` in the book dir, else `None`.
+fn resolve_backdrop(book_dir: &Path, declared: Option<&Path>) -> Option<PathBuf> {
+    if let Some(rel) = declared {
+        let abs = if rel.is_absolute() {
+            rel.to_path_buf()
+        } else {
+            book_dir.join(rel)
+        };
+        if let Ok(p) = abs.canonicalize() {
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    for name in ["backdrop.jpg", "backdrop.png", "backdrop.webp"] {
         let p = book_dir.join(name);
         if let Ok(c) = p.canonicalize() {
             if c.is_file() {
@@ -1115,6 +1169,7 @@ pub fn implicit_resolved(dir: &Path) -> Result<Resolved, String> {
             collection: None,
             author: None,
             cover: None,
+            backdrop: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![RenditionState {
                 kind: RenditionKind::Text,
@@ -1236,9 +1291,11 @@ mod tests {
         let source = docs.join("architecture");
         std::fs::create_dir_all(&source).unwrap();
         std::fs::write(source.join("00-overview.md"), "# Overview\n").unwrap();
+        std::fs::write(docs.join("cover.webp"), b"portrait").unwrap();
+        std::fs::write(docs.join("backdrop.webp"), b"wide").unwrap();
         std::fs::write(
             docs.join("liveview.toml"),
-            "schema = 1\nslug = \"cowboy-architecture\"\ntitle = \"Cowboy Architecture\"\nsource = \"architecture\"\n",
+            "schema = 1\nslug = \"cowboy-architecture\"\ntitle = \"Cowboy Architecture\"\nsource = \"architecture\"\ncover = \"cover.webp\"\nbackdrop = \"backdrop.webp\"\n",
         )
         .unwrap();
         let books = discover_registry(
@@ -1251,6 +1308,14 @@ mod tests {
         .unwrap();
         assert_eq!(books.len(), 1);
         assert_eq!(books[0].slug, "cowboy-architecture");
+        assert_eq!(
+            books[0].cover.as_deref(),
+            Some(docs.join("cover.webp").as_path())
+        );
+        assert_eq!(
+            books[0].backdrop.as_deref(),
+            Some(docs.join("backdrop.webp").as_path())
+        );
         assert_eq!(
             books[0].renditions[0].editions[0].source,
             source.canonicalize().unwrap()
@@ -1283,6 +1348,7 @@ mod tests {
             slug: slug.map(str::to_string),
             description: None,
             cover: None,
+            backdrop: None,
             default_lang: None,
             source: Some(PathBuf::from(".")),
             includes: None,

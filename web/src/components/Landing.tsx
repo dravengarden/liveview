@@ -589,7 +589,7 @@ const ShelfCard = memo(function ShelfCard({
         },
       }}
     >
-      <ShelfCardArtwork slug={b.slug} hasCover={b.cover} />
+      <ShelfCardArtwork slug={b.slug} hasBackdrop={b.backdrop} />
       <CardActionArea
         onClick={() => onOpen(b.slug)}
         sx={{

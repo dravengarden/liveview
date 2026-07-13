@@ -1199,6 +1199,7 @@ fn build_app(state: SharedState) -> Router {
     let api_router = Router::new()
         .route("/api/books", get(api_books))
         .route("/api/cover", get(api_cover))
+        .route("/api/backdrop", get(api_backdrop))
         .route("/api/artwork", get(api_artwork))
         .route("/api/tree", get(api_tree))
         .route("/api/file", get(api_file))
@@ -1543,6 +1544,8 @@ struct BookInfo {
     author: Option<String>,
     /// Whether a cover image is available at `/api/cover?book=<slug>`.
     cover: bool,
+    /// Whether wide LiveView artwork is available at `/api/backdrop?book=<slug>`.
+    backdrop: bool,
     /// Which rendition the book opens in.
     default_rendition: String,
     /// Every reading mode the book offers (always ≥1).
@@ -1590,6 +1593,7 @@ async fn api_books(State(state): State<SharedState>) -> impl IntoResponse {
                 collection: b.collection.clone(),
                 author: b.author.clone(),
                 cover: b.cover_hash.is_some(),
+                backdrop: b.backdrop_hash.is_some(),
                 default_rendition: b.default_rendition.as_str().to_string(),
                 renditions: b
                     .renditions
@@ -1655,6 +1659,25 @@ async fn api_cover(
             None => (StatusCode::NOT_FOUND, "no cover").into_response(),
         },
         None => (StatusCode::NOT_FOUND, "no cover").into_response(),
+    }
+}
+
+/// A book's wide LiveView card/hero artwork. 404 when absent; callers use a
+/// deterministic gradient rather than cropping the portrait cover.
+async fn api_backdrop(
+    State(state): State<SharedState>,
+    Query(q): Query<CoverQuery>,
+) -> impl IntoResponse {
+    let hash = {
+        let cat = state.catalog.read().await;
+        cat.book(&q.book).and_then(|b| b.backdrop_hash.clone())
+    };
+    match hash {
+        Some(h) => match blob_response(&state, &h, "public, max-age=3600").await {
+            Some(resp) => resp,
+            None => (StatusCode::NOT_FOUND, "no backdrop").into_response(),
+        },
+        None => (StatusCode::NOT_FOUND, "no backdrop").into_response(),
     }
 }
 

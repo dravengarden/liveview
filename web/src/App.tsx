@@ -1,5 +1,7 @@
 import { rem } from "@/px";
 import { nativeNavPop, nativeNavPush, nativeNavReady } from "@/native-nav";
+import { remoteUrl } from "@/apiBase";
+import { nativeWidgetPublish } from "@/native-audio";
 import { contentFetch, ensureAutoSync, isLikelyOffline, nativeRefreshManifest } from "@/native-sync";
 import {
   useCallback,
@@ -886,6 +888,40 @@ export function App(): React.JSX.Element {
     }
     return out;
   }, [recentProgress, tree, audioTree, uiLang]);
+
+  // Keep WidgetKit's offline snapshot aligned with the shelf. The native bridge
+  // is absent in browsers and becomes a no-op on Personal Team builds without
+  // App Group access; the extension retains its direct server fallback there.
+  useEffect(() => {
+    const recent = books
+      .flatMap((book) => {
+        const progress = progressBySlug[book.slug];
+        const latest = progress?.text && progress?.audio
+          ? (progress.text.updatedAt >= progress.audio.updatedAt
+            ? progress.text
+            : progress.audio)
+          : (progress?.text ?? progress?.audio);
+        return latest ? [{ book, latest }] : [];
+      })
+      .sort((a, b) => b.latest.updatedAt - a.latest.updatedAt)
+      .slice(0, 4);
+    const recentSlugs = new Set(recent.map(({ book }) => book.slug));
+    const items = [
+      ...recent.map(({ book, latest }) => ({ book, progress: latest.fraction })),
+      ...books
+        .filter((book) => !recentSlugs.has(book.slug))
+        .map((book) => ({ book, progress: 0 })),
+    ].slice(0, 4);
+    nativeWidgetPublish({
+      serverURL: remoteUrl(""),
+      items: items.map(({ book, progress }) => ({
+        label: book.label,
+        slug: book.slug,
+        progress,
+        coverURL: remoteUrl(`/api/cover?book=${encodeURIComponent(book.slug)}`),
+      })),
+    });
+  }, [books, progressBySlug]);
 
   const handleContentUpdate = useCallback(
     (path: string, msgLang: string, fileType: FileType, content: string) => {

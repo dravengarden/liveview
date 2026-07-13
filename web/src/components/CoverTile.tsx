@@ -1,5 +1,10 @@
 import { rem } from "@/px";
-import { coverSrc, recoverCoverImage } from "@/native-sync";
+import {
+  backdropSrc,
+  coverSrc,
+  recoverBackdropImage,
+  recoverCoverImage,
+} from "@/native-sync";
 import { Box } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { Headphones as AudiobookIcon } from "@mui/icons-material";
@@ -65,11 +70,12 @@ export function CoverTile({
  *  full-height poster. Theme-paper veiling keeps text contrast predictable;
  *  image failure simply reveals the card's slug-keyed gradient beneath. */
 export function ShelfCardArtwork(
-  { slug }: {
+  { slug, hasBackdrop }: {
     slug: string;
-    hasCover: boolean;
+    hasBackdrop: boolean;
   },
 ): React.JSX.Element | null {
+  if (!hasBackdrop) return null;
   return (
     <Box
       aria-hidden="true"
@@ -82,12 +88,12 @@ export function ShelfCardArtwork(
     >
       <Box
         component="img"
-        src={coverSrc(slug)}
+        src={backdropSrc(slug)}
         alt=""
         loading="lazy"
         decoding="async"
         onError={(event) => {
-          if (!recoverCoverImage(event.currentTarget, slug)) {
+          if (!recoverBackdropImage(event.currentTarget, slug)) {
             event.currentTarget.style.display = "none";
           }
         }}

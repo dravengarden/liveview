@@ -37,6 +37,16 @@ export interface NativeAudioTrack {
   readonly artworkUrl: string;
 }
 
+export interface NativeWidgetSnapshot {
+  readonly serverURL: string;
+  readonly items: readonly {
+    readonly label: string;
+    readonly slug: string;
+    readonly progress: number;
+    readonly coverURL: string;
+  }[];
+}
+
 /** A state event the native engine reports back so the web UI + read-along track
  *  it (position drives the karaoke wipe; ended advances the chapter; next/prev
  *  are lock-screen track buttons the web's queue must service). */
@@ -75,7 +85,8 @@ type OutMsg =
   | { readonly kind: "unpin"; readonly data: { readonly keys: string[] } }
   | { readonly kind: "setCap"; readonly data: { readonly bytes: number } }
   | { readonly kind: "setWifiOnly"; readonly data: { readonly on: boolean } }
-  | { readonly kind: "audioStats"; readonly data: { readonly id: string } };
+  | { readonly kind: "audioStats"; readonly data: { readonly id: string } }
+  | { readonly kind: "widgetSnapshot"; readonly data: NativeWidgetSnapshot };
 
 interface WebKitHandler {
   postMessage(message: unknown): void;
@@ -144,6 +155,13 @@ export function nativeAudioStop(): boolean {
  *  still-running native player instead of showing a stale paused button. */
 export function nativeAudioRequestState(): boolean {
   return send({ kind: "state" });
+}
+
+/** Publish a compact, cover-backed reading snapshot for WidgetKit. The native
+ * layer writes it to the App Group when that entitlement is available; the
+ * widget independently keeps its network fallback for Personal Team builds. */
+export function nativeWidgetPublish(data: NativeWidgetSnapshot): boolean {
+  return send({ kind: "widgetSnapshot", data });
 }
 
 /** Download a chapter into the offline cache WITHOUT playing it (save-offline).

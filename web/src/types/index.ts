@@ -99,6 +99,8 @@ export interface Book {
   author?: string | null;
   /** Whether a cover image is available at `/api/cover?book=<slug>`. */
   cover: boolean;
+  /** Whether wide artwork is available at `/api/backdrop?book=<slug>`. */
+  backdrop: boolean;
   /** Which rendition kind the book opens in. */
   default_rendition: string;
   /** Every reading mode the book offers (always ≥1). */

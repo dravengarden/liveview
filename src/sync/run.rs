@@ -156,6 +156,15 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
             }
             None => None,
         };
+        let backdrop_hash = match &book.backdrop {
+            Some(p) => {
+                let bytes =
+                    std::fs::read(p).map_err(|e| format!("read backdrop {}: {e}", p.display()))?;
+                let mime = mime_guess::from_path(p).first_or_octet_stream().to_string();
+                Some(put_blob(&obj, &store, bytes, &mime).await?)
+            }
+            None => None,
+        };
         store
             .upsert_book(&BookUpsert {
                 slug: &book.slug,
@@ -164,6 +173,7 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 collection: book.collection.as_deref(),
                 author: book.author.as_deref(),
                 cover_hash: cover_hash.as_deref(),
+                backdrop_hash: backdrop_hash.as_deref(),
                 default_rendition: book.default_rendition.as_str(),
             })
             .await

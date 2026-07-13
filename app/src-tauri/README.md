@@ -10,6 +10,7 @@ The PWA covers normal browser reading. The native shell adds capabilities that
 mobile browsers cannot provide reliably:
 
 - background and lock-screen audiobook playback;
+- cover-first Home Screen and Lock Screen reading widgets;
 - native media controls and haptics;
 - a durable SQLite-backed offline content cache;
 - content-addressed OTA updates for the bundled web UI.
@@ -27,6 +28,12 @@ export LIVEVIEW_REMOTE_ORIGINS="$VITE_LIVEVIEW_ORIGINS"
 Both layers race the configured origins and keep the first healthy route. A
 plain checkout defaults to `http://127.0.0.1:4160` and contains no deployment-
 specific endpoints.
+
+`tools/lvbuild.sh` also compiles the first remote origin into the WidgetKit
+extension. The widget keeps its own last-good cover/progress cache, and uses an
+App Group snapshot opportunistically when that entitlement is available. A
+missing or unreadable cover is the only case that uses the solid-color book
+fallback; landscape `backdrop` artwork is never substituted for a cover.
 
 ## Prerequisites
 

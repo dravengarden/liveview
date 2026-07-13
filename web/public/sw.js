@@ -26,7 +26,7 @@ const AUDIO_CACHE = `${VERSION}-audio`;
 // Content-addressed immutable blobs (/api/blob/<hash>) — NOT version-prefixed,
 // so the offline library survives deploys (an immutable hash never goes stale).
 const BLOB_CACHE = "lv-blobs";
-// Reader CONTENT (text html, spoken, units, marks, tree, books, raw/cover/artwork,
+// Reader CONTENT (text html, spoken, units, marks, tree, books, raw/cover/backdrop/artwork,
 // manifest) — PERSISTENT (NOT version-prefixed), so what you've read stays
 // offline-available ACROSS deploys. Served network-first: fresh when online
 // (an author iterating still sees edits immediately), last-good cache when
@@ -47,6 +47,7 @@ const CONTENT_API = [
   "/api/books",
   "/api/raw",
   "/api/cover",
+  "/api/backdrop",
   "/api/artwork",
   "/api/manifest",
   // Reading progress (shelf % + per-book resume). Mutable, so network-first =

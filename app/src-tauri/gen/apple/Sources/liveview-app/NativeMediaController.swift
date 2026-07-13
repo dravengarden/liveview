@@ -121,8 +121,9 @@ import WebKit
     artworkURL = urlString
     URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
       guard let data, let image = UIImage(data: data) else { return }
-      let squareImage = Self.squareArtwork(image)
-      let art = MPMediaItemArtwork(boundsSize: squareImage.size) { _ in squareImage }
+      let art = MPMediaItemArtwork(boundsSize: image.size) { requestedSize in
+        Self.fittedArtwork(image, requestedSize: requestedSize)
+      }
       DispatchQueue.main.async {
         guard let self, self.artworkURL == urlString else { return }
         self.nowPlayingInfo[MPMediaItemPropertyArtwork] = art
@@ -131,22 +132,31 @@ import WebKit
     }.resume()
   }
 
-  /// iOS sizes the lock-screen artwork from `boundsSize`. Passing a portrait book
-  /// cover directly produces a narrow thumbnail, so render an aspect-fill square.
-  private static func squareArtwork(_ image: UIImage) -> UIImage {
-    let size = CGSize(width: 512, height: 512)
-    let scale = max(size.width / image.size.width, size.height / image.size.height)
-    let drawSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-    let drawRect = CGRect(
-      x: (size.width - drawSize.width) / 2,
-      y: (size.height - drawSize.height) / 2,
-      width: drawSize.width,
-      height: drawSize.height
-    )
+  /// Keep a portrait book cover intact at every Now Playing size. The old code
+  /// aspect-filled a square up front, permanently cropping titles and publisher
+  /// marks. Instead, answer the system's requested rendition: draw a subdued
+  /// full-bleed copy for any letterbox area, then aspect-fit the real cover.
+  private static func fittedArtwork(_ image: UIImage, requestedSize: CGSize) -> UIImage {
+    let size = requestedSize.width > 0 && requestedSize.height > 0
+      ? requestedSize
+      : image.size
+    let fillScale = max(size.width / image.size.width, size.height / image.size.height)
+    let fillSize = CGSize(width: image.size.width * fillScale, height: image.size.height * fillScale)
+    let fillRect = CGRect(x: (size.width - fillSize.width) / 2,
+                          y: (size.height - fillSize.height) / 2,
+                          width: fillSize.width, height: fillSize.height)
+    let fitScale = min(size.width / image.size.width, size.height / image.size.height)
+    let fitSize = CGSize(width: image.size.width * fitScale, height: image.size.height * fitScale)
+    let fitRect = CGRect(x: (size.width - fitSize.width) / 2,
+                         y: (size.height - fitSize.height) / 2,
+                         width: fitSize.width, height: fitSize.height)
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
     return UIGraphicsImageRenderer(size: size, format: format).image { _ in
-      image.draw(in: drawRect)
+      image.draw(in: fillRect, blendMode: .normal, alpha: 0.34)
+      UIColor.black.withAlphaComponent(0.18).setFill()
+      UIRectFill(CGRect(origin: .zero, size: size))
+      image.draw(in: fitRect)
     }
   }
 

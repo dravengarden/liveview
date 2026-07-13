@@ -61,6 +61,12 @@ export function coverSrc(slug: string): string {
   return nativeSyncAvailable() ? remoteUrl(u) : u;
 }
 
+/** Wide, text-free artwork for LiveView cards and hero surfaces. */
+export function backdropSrc(slug: string): string {
+  const u = `/api/backdrop?book=${encodeURIComponent(slug)}`;
+  return nativeSyncAvailable() ? remoteUrl(u) : u;
+}
+
 /** Offline fallback for a failed native cover request. Returns `true` only when
  *  it changed the image source, so callers can stop retrying after both routes
  *  fail and reveal their gradient placeholder. */
@@ -93,6 +99,36 @@ export function recoverCoverImage(
     })
     .catch((error: unknown) => {
       console.warn("cover image recovery failed", { slug, error });
+      image.style.display = "none";
+    });
+  return true;
+}
+
+/** Native offline fallback for wide artwork. Mirrors cover recovery while
+ * keeping the two cache keys and retry guards independent. */
+export function recoverBackdropImage(
+  image: HTMLImageElement,
+  slug: string,
+): boolean {
+  if (!nativeSyncAvailable()) return false;
+  const u = `/api/backdrop?book=${encodeURIComponent(slug)}`;
+  const fallback = `${SCHEME}/resolve?u=${encodeURIComponent(u)}`;
+  if (image.src !== fallback && image.dataset["lvBackdrop"] !== slug) {
+    image.src = fallback;
+    return true;
+  }
+  if (image.dataset["lvBackdrop"] === slug) return false;
+  image.dataset["lvBackdrop"] = slug;
+  void fetch(fallback)
+    .then((response) => {
+      if (!response.ok) throw new Error(`backdrop ${response.status}`);
+      return response.blob();
+    })
+    .then((blob) => {
+      image.src = URL.createObjectURL(blob);
+    })
+    .catch((error: unknown) => {
+      console.warn("backdrop image recovery failed", { slug, error });
       image.style.display = "none";
     });
   return true;

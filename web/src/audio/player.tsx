@@ -1056,12 +1056,11 @@ export function AudioPlayerProvider(
       // blank: /api/artwork returns the real cover when the book has one, else a
       // deterministic gradient PNG. A real server URL (not a data:/blob: URI) is
       // required — iOS Safari is unreliable about rendering inline-encoded
-      // artwork on the lock screen.
+      // artwork on the lock screen. Do not declare a square size or PNG MIME:
+      // real covers are portrait WebP/JPEG and the platform should inspect them.
       artwork: [
         {
           src: `/api/artwork?book=${encodeURIComponent(nowPlaying.bookSlug)}`,
-          sizes: "512x512",
-          type: "image/png",
         },
       ],
     });

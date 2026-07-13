@@ -90,6 +90,8 @@ targets:
     dependencies:
       - framework: libapp.a
         embed: false
+      - target: LiveViewWidgets
+        embed: true
       - sdk: CoreGraphics.framework
       - sdk: Metal.framework
       - sdk: MetalKit.framework
@@ -105,6 +107,7 @@ targets:
       # `xcodegen generate`) if you ever re-init. See src-tauri/README.md.
       - sdk: AVFoundation.framework
       - sdk: MediaPlayer.framework
+      - sdk: WidgetKit.framework
     preBuildScripts:
       - script: cargo tauri ios xcode-script -v --platform ${PLATFORM_DISPLAY_NAME:?} --sdk-root ${SDKROOT:?} --framework-search-paths "${FRAMEWORK_SEARCH_PATHS:?}" --header-search-paths "${HEADER_SEARCH_PATHS:?}" --gcc-preprocessor-definitions "${GCC_PREPROCESSOR_DEFINITIONS:-}" --configuration ${CONFIGURATION:?} ${FORCE_COLOR} ${ARCHS:?}
         name: Build Rust Code
@@ -112,3 +115,31 @@ targets:
         outputFiles:
           - $(SRCROOT)/Externals/x86_64/${CONFIGURATION}/libapp.a
           - $(SRCROOT)/Externals/arm64/${CONFIGURATION}/libapp.a
+  LiveViewWidgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Widgets
+    info:
+      path: Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: LiveView
+        CFBundleShortVersionString: 0.1.0
+        CFBundleVersion: "0.1.0"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+        LiveViewServerURL: $(LIVEVIEW_WIDGET_SERVER_URL)
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true
+    settings:
+      base:
+        PRODUCT_NAME: LiveViewWidgets
+        PRODUCT_BUNDLE_IDENTIFIER: top.thundersparrow.liveview.widgets
+        DEVELOPMENT_TEAM: 9Z95WKM9DT
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "5.0"
+        SKIP_INSTALL: true
+        APPLICATION_EXTENSION_API_ONLY: true
+        LIVEVIEW_WIDGET_SERVER_URL: ${LIVEVIEW_WIDGET_SERVER_URL}

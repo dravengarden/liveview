@@ -363,6 +363,7 @@ mod tests {
             collection: None,
             author: None,
             cover: None,
+            backdrop: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![RenditionState {
                 kind: RenditionKind::Text,
@@ -481,6 +482,7 @@ mod tests {
             collection: None,
             author: None,
             cover: None,
+            backdrop: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![RenditionState {
                 kind: RenditionKind::Text,
@@ -657,6 +659,7 @@ mod tests {
             collection: None,
             author: None,
             cover: None,
+            backdrop: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![
                 RenditionState {

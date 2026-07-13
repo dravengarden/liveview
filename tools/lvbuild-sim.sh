@@ -10,6 +10,7 @@
 # SQLite, offline) without the device. Screenshot is captured to ~/lvsim.png.
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
+export LIVEVIEW_WIDGET_SERVER_URL="${LIVEVIEW_WIDGET_SERVER_URL:-}"
 
 # Default sim: iPhone 17 (was Booted in `simctl list`). Override via $1.
 SIM="${1:-D89613B8-4B25-4486-A690-5A7205AC2788}"
