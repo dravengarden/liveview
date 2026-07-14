@@ -33,6 +33,27 @@ security unlock-keychain -p "$(cat "$KCPW_FILE")" "$KEYCHAIN"
 # plugin is at ../../plugins/lvsync, the bundled SPA at ../../web/dist-app).
 cd "$HOME/liveview/app/src-tauri"
 
+# The SPA and default window icon are compiled into Rust. Cargo does not track
+# those files as normal source dependencies, so invalidate the device target
+# when their bytes change or a successful build can install stale/invalid assets.
+BUNDLE_DIR="$HOME/liveview/web/dist-app"
+BUNDLE_STAMP="gen/apple/.liveview-device-embedded-hash"
+if [[ ! -d "$BUNDLE_DIR" ]]; then
+  echo "FATAL: missing native web bundle: $BUNDLE_DIR" >&2
+  exit 1
+fi
+BUILD_INPUT_HASH="$({
+  find "$BUNDLE_DIR" icons -type f -print | LC_ALL=C sort | while IFS= read -r file; do
+    shasum -a 256 "$file"
+  done
+} | shasum -a 256 | awk '{print $1}')"
+PREVIOUS_BUILD_INPUT_HASH="$(cat "$BUNDLE_STAMP" 2>/dev/null || true)"
+if [[ "$BUILD_INPUT_HASH" != "$PREVIOUS_BUILD_INPUT_HASH" ]]; then
+  echo "embedded frontend or icon changed; invalidating Tauri iOS device artifacts"
+  rm -rf gen/apple/Externals gen/apple/build target/aarch64-apple-ios/release
+  printf '%s\n' "$BUILD_INPUT_HASH" > "$BUNDLE_STAMP"
+fi
+
 # project.yml lists gen/apple/assets (build stages the frontend there); empty dir
 # git can't track → ensure it exists or xcodegen fails.
 mkdir -p gen/apple/assets

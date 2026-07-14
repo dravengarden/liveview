@@ -4,8 +4,8 @@ import { Box, ButtonBase } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { rem } from "@/px";
 
-// A frosted-glass segmented "pill" switch — the 微信读书 / iOS segmented-control
-// shape, MUI-themed: a translucent rounded track with a single filled active pill
+// A quiet segmented "pill" switch — the 微信读书 / iOS segmented-control shape,
+// MUI-themed: a static tonal track with a single filled active pill
 // that SLIDES between segments. Generic + dependency-light; tapping a segment
 // stops pointer propagation so it never starts the host sheet's drag.
 export function SegmentedPill<T extends string>({
@@ -33,8 +33,9 @@ export function SegmentedPill<T extends string>({
         gridTemplateColumns: `repeat(${String(n)}, 1fr)`,
         p: 0.5,
         borderRadius: 999,
-        // Translucent track on the frosted sheet — carries its own light blur so
-        // the page still diffuses through. Dark: a white tint reads as a clear well.
+        // Static track material. Dynamic blur here is surprisingly expensive when
+        // this reusable control appears in a sheet over a scrolling reader.
+        // Dark: a white tint reads as a clear well.
         // Light: a 7%-black tint went MUDDY (near-black warmed by the lavender) and
         // barely defined the control — use a COOL neutral grey well (iOS segmented
         // control) so it stays crisp + neutral against the warm lilac sheet.
@@ -42,8 +43,6 @@ export function SegmentedPill<T extends string>({
           t.palette.mode === "dark"
             ? alpha(t.palette.text.primary, 0.12)
             : "rgba(118,118,128,0.13)",
-        backdropFilter: "blur(16px) saturate(180%)",
-        WebkitBackdropFilter: "blur(16px) saturate(180%)",
         ...sx,
       }}
     >

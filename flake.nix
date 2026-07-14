@@ -168,6 +168,8 @@
           pkgs.rustfmt
           shared.deno
           pkgs.nodejs
+          pkgs.imagemagick
+          pkgs.libicns
           pkgs.pkg-config
           pkgs.sqlite
           edgeTts

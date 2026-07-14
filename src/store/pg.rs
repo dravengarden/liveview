@@ -66,6 +66,7 @@ pub struct BookRow {
     pub author: Option<String>,
     pub cover_hash: Option<String>,
     pub backdrop_hash: Option<String>,
+    pub card_backdrop_hash: Option<String>,
     pub default_rendition: String,
     /// Deploy-time stamps (unix ms); 0 when never stamped. See `mark_book`.
     pub created_at: i64,
@@ -82,6 +83,7 @@ pub struct BookUpsert<'a> {
     pub author: Option<&'a str>,
     pub cover_hash: Option<&'a str>,
     pub backdrop_hash: Option<&'a str>,
+    pub card_backdrop_hash: Option<&'a str>,
     pub default_rendition: &'a str,
 }
 
@@ -201,8 +203,8 @@ pub struct DagChapter {
     pub asset_size: Option<i64>,
 }
 
-/// One book's visual assets for `/api/dag`. Artwork is first-class offline
-/// content: clients mirror it by blob hash just like chapter assets.
+/// One book's visual assets for `/api/dag`. Original and derived artwork are
+/// first-class offline content mirrored by blob hash like chapter assets.
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct DagArtwork {
     pub book_slug: String,
@@ -210,6 +212,8 @@ pub struct DagArtwork {
     pub cover_size: Option<i64>,
     pub backdrop_hash: Option<String>,
     pub backdrop_size: Option<i64>,
+    pub card_backdrop_hash: Option<String>,
+    pub card_backdrop_size: Option<i64>,
 }
 
 /// One document's saved scroll position (0..1 ratio). Wire-compatible with the
@@ -249,8 +253,8 @@ impl PgStore {
 
     pub async fn upsert_book(&self, book: &BookUpsert<'_>) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO books (slug, label, description, collection, author, cover_hash, backdrop_hash, default_rendition)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "INSERT INTO books (slug, label, description, collection, author, cover_hash, backdrop_hash, card_backdrop_hash, default_rendition)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
              ON CONFLICT (slug) DO UPDATE SET
                  label = EXCLUDED.label,
                  description = EXCLUDED.description,
@@ -258,6 +262,7 @@ impl PgStore {
                  author = EXCLUDED.author,
                  cover_hash = EXCLUDED.cover_hash,
                  backdrop_hash = EXCLUDED.backdrop_hash,
+                 card_backdrop_hash = EXCLUDED.card_backdrop_hash,
                  default_rendition = EXCLUDED.default_rendition",
         )
         .bind(book.slug)
@@ -267,6 +272,7 @@ impl PgStore {
         .bind(book.author)
         .bind(book.cover_hash)
         .bind(book.backdrop_hash)
+        .bind(book.card_backdrop_hash)
         .bind(book.default_rendition)
         .execute(&self.pool)
         .await
@@ -370,7 +376,7 @@ impl PgStore {
 
     pub async fn list_books(&self) -> Result<Vec<BookRow>, sqlx::Error> {
         sqlx::query_as::<_, BookRow>(
-            "SELECT slug, label, description, collection, author, cover_hash, backdrop_hash, default_rendition, created_at, updated_at
+            "SELECT slug, label, description, collection, author, cover_hash, backdrop_hash, card_backdrop_hash, default_rendition, created_at, updated_at
              FROM books ORDER BY slug",
         )
         .fetch_all(&self.pool)
@@ -770,6 +776,7 @@ impl PgStore {
                  SELECT 1 FROM books b
                  WHERE b.cover_hash = a.content_hash
                     OR b.backdrop_hash = a.content_hash
+                    OR b.card_backdrop_hash = a.content_hash
              )",
         )
         .fetch_all(&self.pool)
@@ -1053,17 +1060,19 @@ impl PgStore {
         .await
     }
 
-    /// Every book's cover/backdrop hashes + blob sizes. These resources are
+    /// Every book's cover/backdrop/card rendition hashes + blob sizes. These resources are
     /// enumerated in the same whole-corpus manifest as chapters so native sync
     /// can integrity-check, retain, garbage-collect, and serve them offline.
     pub async fn dag_artwork(&self) -> Result<Vec<DagArtwork>, sqlx::Error> {
         sqlx::query_as::<_, DagArtwork>(
             "SELECT b.slug AS book_slug,
                     b.cover_hash, cover.size AS cover_size,
-                    b.backdrop_hash, backdrop.size AS backdrop_size
+                    b.backdrop_hash, backdrop.size AS backdrop_size,
+                    b.card_backdrop_hash, card_backdrop.size AS card_backdrop_size
              FROM books b
              LEFT JOIN assets cover ON cover.content_hash = b.cover_hash
              LEFT JOIN assets backdrop ON backdrop.content_hash = b.backdrop_hash
+             LEFT JOIN assets card_backdrop ON card_backdrop.content_hash = b.card_backdrop_hash
              ORDER BY b.slug",
         )
         .fetch_all(&self.pool)
@@ -1217,6 +1226,7 @@ mod tests {
             author: None,
             cover_hash: None,
             backdrop_hash: None,
+            card_backdrop_hash: None,
             default_rendition: "text",
         })
         .await
@@ -1236,6 +1246,7 @@ mod tests {
             author: None,
             cover_hash: None,
             backdrop_hash: None,
+            card_backdrop_hash: None,
             default_rendition: "text",
         })
         .await

@@ -39,15 +39,20 @@ Prefer selector-driven interaction through `eval` over pixel taps. Use computed 
 From the liveview worktree on hawk:
 
 ```bash
-rsync -a --exclude target/ --exclude gen/apple/build/ app/ macbook-air:liveview/app/
+nix develop -c make build-web
+rsync -a --delete web/dist-app/ macbook-air:liveview/web/dist-app/
+rsync -a --exclude target/ --exclude gen/apple/build/ --exclude gen/apple/Externals/ app/ macbook-air:liveview/app/
 rsync -a --exclude target/ lv-sync/ macbook-air:liveview/lv-sync/
 rsync -a --exclude target/ plugins/lvsync/ macbook-air:liveview/plugins/lvsync/
 ssh macbook-air 'bash -s' < tools/lvbuild-sim.sh
 ```
 
-Sync all three trees. `app/src-tauri` uses path dependencies outside `app/`, so
-syncing only the shell can silently compile stale native code already present on
-the Mac.
+Build and sync the native SPA plus all three native trees. `app/src-tauri` uses
+path dependencies outside `app/`, so syncing only the shell can silently compile
+stale native code already present on the Mac. Tauri embeds `dist-app` in the Rust
+static library; `lvbuild-sim.sh` hashes it and invalidates `gen/apple/Externals`
+when its bytes change. A successful Xcode build without this invalidation can
+still launch an older UI.
 
 Native Swift, Objective-C++, Rust, manifest, or Tauri configuration changes require a rebuild. Pure SPA changes may use the project's documented HMR loop when available.
 

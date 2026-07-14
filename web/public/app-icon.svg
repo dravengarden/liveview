@@ -1,11 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- Full-bleed background so the icon works as a maskable PWA icon and as
-       an opaque iOS apple-touch-icon. -->
-  <rect width="512" height="512" fill="#0d1117"/>
-  <!-- The favicon glyph (32x32) scaled to ~60% and centered, keeping it well
-       inside the maskable safe zone. -->
-  <g transform="translate(102.4,102.4) scale(9.6)">
-    <rect x="6" y="8" width="12" height="16" rx="2" fill="none" stroke="#8b949e" stroke-width="1.5"/>
-    <rect x="14" y="12" width="12" height="12" rx="2" fill="#ffffff"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Platform launchers apply their own mask; keep the source opaque and square. -->
+  <defs>
+    <linearGradient id="knowledge-sprout-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#071b1d"/>
+      <stop offset="1" stop-color="#174f4a"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#knowledge-sprout-bg)"/>
+  <path d="M512 816V450" stroke="#f8f0df" stroke-width="74" stroke-linecap="round"/>
+  <path d="M512 560c-178-18-258-122-234-310 176 18 258 122 234 310z" fill="#f8f0df"/>
+  <path d="M512 650c178-18 258-122 234-310-176 18-258 122-234 310z" fill="#7d61ff"/>
+  <circle cx="512" cy="450" r="54" fill="#ffb51b"/>
 </svg>

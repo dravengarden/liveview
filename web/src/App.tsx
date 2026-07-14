@@ -1871,11 +1871,11 @@ export function App(): React.JSX.Element {
           }}
         />
         {
-          /* Frosted-glass strip over the iOS status-bar / Dynamic Island. In the
+          /* Static material strip under the iOS status-bar / Dynamic Island. In the
             native shell (and a standalone PWA) the reader runs full-height with
             the navbar at the bottom, so content scrolls UNDER the status bar. A
-            blurred + saturated strip over the safe-area-top fixes it the iOS way:
-            the status bar sits on frosted glass and content scrolls under it (the
+            near-opaque strip keeps system chrome legible while content scrolls
+            underneath (the
             reader scrollers' matching ::before inset — index.css — clears it at
             rest). `pointer-events:none` so the tap target above still works; only
             shown in bottom-navbar mode (top mode: the NavShell bar owns that
@@ -1892,13 +1892,10 @@ export function App(): React.JSX.Element {
               height: "env(safe-area-inset-top, 0px)",
               zIndex: (t) => t.zIndex.appBar,
               pointerEvents: "none",
-              bgcolor: (t) => alpha(t.palette.background.default, 0.5),
-              // No saturate() here: over the sepia/warm page the 1.8× boost
-              // amplified the low-saturation content peeking through into a
-              // visible cool/green cast that didn't match the flat page. Plain
-              // blur keeps the frost without tinting. (lv-v203)
-              backdropFilter: "blur(24px)",
-              WebkitBackdropFilter: "blur(24px)",
+              // Near-opaque and deliberately unblurred. A fixed backdrop-filter
+              // forces WKWebView to re-rasterize every frame of the scroller
+              // underneath it, even though the result is barely visible.
+              bgcolor: (t) => alpha(t.palette.background.default, 0.94),
             }}
           />
         )}
@@ -1914,26 +1911,25 @@ export function App(): React.JSX.Element {
         }
         <Box sx={{ position: "relative", flex: 1, minHeight: 0 }}>
           {
-            /* The bookshelf stays mounted (just hidden) while a book is open, so
-              its scroll position survives the round trip — no remount, no
-              restore jump. We hide it with opacity:0 (NOT visibility:hidden):
-              a visibility-hidden subtree is "not relevant to the user", so the
-              cards' `content-visibility:auto` skips rendering them, and on the
-              way back they must render in for a frame (empty intrinsic-size
-              boxes → content pops) — a whole-page flash. opacity:0 keeps the
-              in-viewport cards rendered (just transparent), so returning is a
-              compositor-only opacity flip: instant, flash-free. (Off-screen
-              cards are still skipped by content-visibility, and the scroll
-              offset is preserved.) */
+            /* Keep the bookshelf MOUNTED while a book is open so its inner
+              scroller retains scrollTop, but remove the hidden tree from layout
+              and paint entirely. opacity:0 was visually hidden yet left ~5,200
+              DOM nodes, hundreds of SVGs/shadows, and their WebKit backing-store
+              resources alive behind every reader page; that GPU/tile pressure
+              janked both reader scrolling and any full-screen sheet composite
+              on physical iOS. display:none preserves descendant scrollTop (the
+              nodes are not unmounted) without retaining those rendering costs.
+              On native iOS, nativeNavPop already holds the current-page snapshot
+              until the shelf has painted through double-rAF, so re-enabling the
+              shelf cannot flash. Desktop renders its content-visibility:auto
+              cards synchronously, with off-screen cards still skipped. */
           }
           <Box
             sx={{
               position: "absolute",
               inset: 0,
-              display: "flex",
+              display: activeSlug === null ? "flex" : "none",
               flexDirection: "column",
-              opacity: activeSlug === null ? 1 : 0,
-              pointerEvents: activeSlug === null ? "auto" : "none",
             }}
           >
             <Landing

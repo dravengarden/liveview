@@ -2,6 +2,6 @@
   "nodeModulesDir": "auto",
   "tasks": {
     "build": "deno run -A ./node_modules/vite/bin/vite.js build && deno run -A ./node_modules/vite/bin/vite.js build --mode app && deno run -A ../tools/stage-app-bundle.ts && deno run -A ../tools/check-bundle-budget.ts",
-    "test": "deno test --no-check src/**/*.test.ts"
+    "test": "deno test --allow-read --no-check src/**/*.test.ts"
   }
 }

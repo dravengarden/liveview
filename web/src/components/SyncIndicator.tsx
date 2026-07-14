@@ -172,17 +172,14 @@ export function SyncIndicator(
             // obscured, not bled-through to collide with the label. On mobile the
             // strip overlays the reading content (its space is reserved above),
             // so it must read as solid chrome — near-opaque + a heavy blur. On
-            // desktop it rides over the NavShell bar, so keep the lighter touch.
+            // desktop it rides over the NavShell bar, but a static material keeps
+            // the same component safe when responsive layout changes move it over
+            // the scroller.
             bgcolor: (th) =>
-              alpha(th.palette.background.default, navbarAtBottom ? 0.96 : 0.82),
-            // Mobile: near-opaque (0.96) over the scrolling reader → NO blur
-            // (it would re-rasterize the moving content every frame for an
-            // invisible result = scroll jank). Desktop: translucent (0.82) over
-            // the NavShell bar, not the scroller, so keep its glass blur.
-            ...(navbarAtBottom ? {} : {
-              backdropFilter: "blur(12px)",
-              WebkitBackdropFilter: "blur(12px)",
-            }),
+              alpha(th.palette.background.default, navbarAtBottom ? 0.96 : 0.92),
+            // No backdrop-filter: this fixed status surface can overlap a reader
+            // or shelf after a breakpoint change, and WKWebView otherwise
+            // re-rasterizes the moving page beneath it on every frame.
             borderColor: "divider",
             "@media (hover: hover)": {
               transition: "background-color .15s",

@@ -68,6 +68,12 @@ export function backdropSrc(slug: string): string {
   return nativeSyncAvailable() ? remoteUrl(u) : u;
 }
 
+/** Compact opaque DAG rendition used by scrolling shelf cards. */
+export function cardBackdropSrc(slug: string): string {
+  const u = `/api/card-backdrop?book=${encodeURIComponent(slug)}`;
+  return nativeSyncAvailable() ? remoteUrl(u) : u;
+}
+
 /** Offline fallback for a failed native cover request. Returns `true` only when
  *  it changed the image source, so callers can stop retrying after both routes
  *  fail and reveal their gradient placeholder. */
@@ -133,6 +139,28 @@ export function recoverBackdropImage(
       image.style.display = "none";
     });
   return true;
+}
+
+/** Recover a card rendition through its native DAG cache, then fall back to
+ * the original backdrop for compatibility with servers deployed before the
+ * card-backdrop resource existed. */
+export function recoverCardBackdropImage(
+  image: HTMLImageElement,
+  slug: string,
+): boolean {
+  const cardUrl = `/api/card-backdrop?book=${encodeURIComponent(slug)}`;
+  const stage = image.dataset["lvCardBackdrop"];
+  if (nativeSyncAvailable() && stage === undefined) {
+    image.dataset["lvCardBackdrop"] = "cache";
+    image.src = `${SCHEME}/resolve?u=${encodeURIComponent(cardUrl)}`;
+    return true;
+  }
+  if (stage !== "full") {
+    image.dataset["lvCardBackdrop"] = "full";
+    image.src = backdropSrc(slug);
+    return true;
+  }
+  return recoverBackdropImage(image, slug);
 }
 
 /** Per-book offline coverage (not currently surfaced by the panel; kept for the type). */

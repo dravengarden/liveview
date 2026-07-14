@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS books (
     cover_hash        TEXT,
     -- content_hash of the wide LiveView card/hero artwork, or NULL.
     backdrop_hash     TEXT,
+    -- content_hash of the compact opaque shelf-card rendition, or NULL.
+    card_backdrop_hash TEXT,
     default_rendition TEXT NOT NULL,
     -- Deploy-time stamps (unix ms): created_at = first sync that introduced the
     -- book; updated_at = most recent sync where the book's Merkle subtree
@@ -38,6 +40,7 @@ ALTER TABLE books ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE books ADD COLUMN IF NOT EXISTS collection TEXT;
 ALTER TABLE books ADD COLUMN IF NOT EXISTS author TEXT;
 ALTER TABLE books ADD COLUMN IF NOT EXISTS backdrop_hash TEXT;
+ALTER TABLE books ADD COLUMN IF NOT EXISTS card_backdrop_hash TEXT;
 
 CREATE TABLE IF NOT EXISTS renditions (
     book_slug    TEXT    NOT NULL REFERENCES books(slug) ON DELETE CASCADE,

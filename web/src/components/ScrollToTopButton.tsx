@@ -1,4 +1,4 @@
-import { type RefObject, useEffect, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import { Fab, Fade } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { KeyboardArrowUp as UpIcon } from "@mui/icons-material";
@@ -30,12 +30,19 @@ export function ScrollToTopButton(
 ): React.JSX.Element {
   const { t } = useI18n();
   const [shown, setShown] = useState(false);
+  const shownRef = useRef(false);
 
   useEffect(() => {
     const el = targetRef.current;
     if (!el) return undefined;
     const onScroll = (): void => {
-      setShown(el.scrollTop > SHOW_AFTER_PX);
+      const next = el.scrollTop > SHOW_AFTER_PX;
+      // Scroll can fire every display frame. Do not enqueue a React update when
+      // the threshold state did not change; the FAB only needs two updates for
+      // an entire gesture (entering/leaving the top region).
+      if (next === shownRef.current) return;
+      shownRef.current = next;
+      setShown(next);
     };
     onScroll(); // sync to the current position on mount
     el.addEventListener("scroll", onScroll, { passive: true });

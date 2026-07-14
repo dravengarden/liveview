@@ -1,3 +1,4 @@
+mod artwork;
 mod audio_optimize;
 mod check;
 mod cli;
@@ -996,6 +997,14 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
                 book.backdrop_size.unwrap_or(0),
             ));
         }
+        if let Some(hash) = &book.card_backdrop_hash {
+            resources.push(artwork_resource(
+                &book.book_slug,
+                "card-backdrop",
+                hash,
+                book.card_backdrop_size.unwrap_or(0),
+            ));
+        }
     }
     for c in &chapters {
         let doc = format!("{}/{}/{}/{}", c.book_slug, c.rendition, c.lang, c.rel_path);
@@ -1276,6 +1285,7 @@ fn build_app(state: SharedState) -> Router {
         .route("/api/books", get(api_books))
         .route("/api/cover", get(api_cover))
         .route("/api/backdrop", get(api_backdrop))
+        .route("/api/card-backdrop", get(api_card_backdrop))
         .route("/api/artwork", get(api_artwork))
         .route("/api/tree", get(api_tree))
         .route("/api/file", get(api_file))
@@ -1754,6 +1764,27 @@ async fn api_backdrop(
             None => (StatusCode::NOT_FOUND, "no backdrop").into_response(),
         },
         None => (StatusCode::NOT_FOUND, "no backdrop").into_response(),
+    }
+}
+
+/// A compact, opaque rendition of the wide artwork for scrolling shelf cards.
+/// It is generated at deploy time, content-addressed, and mirrored by native
+/// clients through `/api/dag`; the original backdrop remains available for
+/// larger hero surfaces.
+async fn api_card_backdrop(
+    State(state): State<SharedState>,
+    Query(q): Query<CoverQuery>,
+) -> impl IntoResponse {
+    let hash = {
+        let cat = state.catalog.read().await;
+        cat.book(&q.book).and_then(|b| b.card_backdrop_hash.clone())
+    };
+    match hash {
+        Some(h) => match blob_response(&state, &h, "public, max-age=3600").await {
+            Some(resp) => resp,
+            None => (StatusCode::NOT_FOUND, "no card backdrop").into_response(),
+        },
+        None => (StatusCode::NOT_FOUND, "no card backdrop").into_response(),
     }
 }
 
@@ -2818,6 +2849,13 @@ mod apm_tests {
         assert_eq!(resource["kind"], "backdrop");
         assert_eq!(resource["bytes"], 4096);
         assert_eq!(resource["url"], "/api/backdrop?book=quant-book");
+
+        let card = artwork_resource("quant-book", "card-backdrop", "def456", 1024);
+        assert_eq!(card["path"], "quant-book/@card-backdrop");
+        assert_eq!(card["hash"], "def456");
+        assert_eq!(card["kind"], "card-backdrop");
+        assert_eq!(card["bytes"], 1024);
+        assert_eq!(card["url"], "/api/card-backdrop?book=quant-book");
     }
 
     /// Minimal AppState over an empty in-memory FsStore (no pg/rustfs, no audio

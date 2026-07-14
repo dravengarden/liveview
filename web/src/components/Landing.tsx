@@ -247,11 +247,13 @@ function CoverRenditionSwitch({
           ? {
             flexShrink: 0,
             bgcolor: (theme: Theme) =>
-              alpha(theme.palette.background.paper, 0.58),
+              alpha(
+                theme.palette.background.paper,
+                theme.palette.mode === "dark" ? 0.9 : 0.88,
+              ),
             border: 1,
             borderColor: (theme: Theme) =>
               alpha(theme.palette.text.primary, 0.12),
-            backdropFilter: "blur(12px) saturate(140%)",
           }
           : {
             position: "absolute",
@@ -346,13 +348,12 @@ function ProgressMeter(
         bgcolor: (theme) =>
           alpha(
             theme.palette.background.paper,
-            theme.palette.mode === "dark" ? 0.5 : 0.58,
+            theme.palette.mode === "dark" ? 0.9 : 0.88,
           ),
         border: 1,
         borderColor: (theme) => alpha(theme.palette.text.primary, 0.1),
         display: "flex",
         alignItems: "center",
-        backdropFilter: "blur(12px) saturate(140%)",
         boxShadow: (theme) =>
           `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.12)}`,
       }}
@@ -397,13 +398,13 @@ function ProgressMeter(
 // live-updated over the WS (TreeUpdate) and re-pulls recent progress on open and
 // on book-close, so a manual pull was redundant. See docs/offline-first.md.
 
-/** One collapsible series section: a sticky frosted-glass header (series name +
+/** One collapsible series section: a sticky paper header (series name +
  *  count + a rotating chevron) over a `Collapse` wrapping that group's grid.
  *  The header is a full-width button (mouse + keyboard) toggling the group's
  *  collapsed state; `sticky top:0` pins it to the scrolling shelf as you read
  *  down a long series. Each section keeps a little bottom margin so adjacent
- *  series read as distinct. The frosted material matches the toolbar / sheet
- *  glass (background.default @0.72 + blur+saturate). */
+ *  series read as distinct. Because it overlaps moving cards, the material is
+ *  near-opaque and deliberately unblurred for WKWebView scroll performance. */
 function GroupSection({
   name,
   count,
@@ -446,17 +447,15 @@ function GroupSection({
           py: 1.25,
           mb: 1,
           borderRadius: 2,
-          // A real surface, not bare text: a paper-tinted frosted bar with a
+          // A real surface, not bare text: a near-opaque paper bar with a
           // hairline + soft shadow so it floats above the shelf (the page bg is
           // flat, so a `background.default` wash was invisible — it read as
-          // unstyled text with big gaps). The blur+saturate still kick in when
-          // it's stuck over scrolling cards, layering them as glass.
+          // unstyled text with big gaps). NO backdrop-filter here: this sticky
+          // element overlaps moving artwork and would re-rasterize every frame.
           border: 1,
           borderColor: "divider",
           boxShadow: 1,
-          bgcolor: (t) => alpha(t.palette.background.paper, 0.82),
-          backdropFilter: "blur(20px) saturate(160%)",
-          WebkitBackdropFilter: "blur(20px) saturate(160%)",
+          bgcolor: (t) => alpha(t.palette.background.paper, 0.96),
         }}
       >
         {
@@ -591,6 +590,7 @@ const ShelfCard = memo(function ShelfCard({
     >
       <ShelfCardArtwork slug={b.slug} hasBackdrop={b.backdrop} />
       <CardActionArea
+        disableRipple
         onClick={() => onOpen(b.slug)}
         sx={{
           position: "relative",
@@ -598,6 +598,10 @@ const ShelfCard = memo(function ShelfCard({
           p: 1.75,
           alignItems: "flex-start",
           height: "100%",
+          // This surface is a navigation target, but its dominant gesture is
+          // vertical shelf scrolling. Let WebKit hand the pan straight to the
+          // native scroller instead of starting/cancelling a ButtonBase ripple.
+          touchAction: "pan-y",
         }}
       >
         <Box
@@ -722,11 +726,10 @@ const ShelfCard = memo(function ShelfCard({
                   bgcolor: (theme) =>
                     alpha(
                       theme.palette.background.paper,
-                      theme.palette.mode === "dark" ? 0.5 : 0.62,
+                      theme.palette.mode === "dark" ? 0.9 : 0.88,
                     ),
                   borderColor: (theme) =>
                     alpha(theme.palette.text.primary, 0.2),
-                  backdropFilter: "blur(12px) saturate(140%)",
                 }}
               />
             ))}

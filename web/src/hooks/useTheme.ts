@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createTheme, type Theme as MuiTheme } from "@mui/material/styles";
 import { persisted, useStore } from "@/_store/mod.ts";
+import { LIVEVIEW_BRAND, LIVEVIEW_RADII } from "@/brand";
 import type { Theme, ThemeMode, ThemeVariant } from "@/types";
 import { THEME_VARIANTS } from "@/types";
 
@@ -130,18 +131,18 @@ function getThemeColors(theme: Theme): ThemeColors {
   switch (theme) {
     case "light":
       return {
-        primary: "#0969da",
-        bgDefault: "#ffffff",
-        bgPaper: "#f6f8fa",
-        textPrimary: "#1f2328",
-        textSecondary: "#656d76",
-        divider: "#d0d7de",
+        primary: LIVEVIEW_BRAND.accent,
+        bgDefault: LIVEVIEW_BRAND.paper,
+        bgPaper: LIVEVIEW_BRAND.paperRaised,
+        textPrimary: LIVEVIEW_BRAND.ink,
+        textSecondary: LIVEVIEW_BRAND.muted,
+        divider: "#d8d4cb",
       };
     case "sepia":
       // Warm cream for long-form reading (~25% lower radiance than white).
       // Brown text on cream keeps ~7:1 contrast without the glare of black.
       return {
-        primary: "#9a5b3d",
+        primary: LIVEVIEW_BRAND.accent,
         bgDefault: "#f4ecd8",
         bgPaper: "#ece0c8",
         textPrimary: "#5b4636",
@@ -150,18 +151,18 @@ function getThemeColors(theme: Theme): ThemeColors {
       };
     case "dark":
       return {
-        primary: "#58a6ff",
-        bgDefault: "#0d1117",
-        bgPaper: "#161b22",
-        textPrimary: "#e6edf3",
-        textSecondary: "#8b949e",
-        divider: "#30363d",
+        primary: LIVEVIEW_BRAND.accent,
+        bgDefault: "#0f1012",
+        bgPaper: LIVEVIEW_BRAND.inkRaised,
+        textPrimary: "#f2f0ea",
+        textSecondary: LIVEVIEW_BRAND.darkMuted,
+        divider: "#34363a",
       };
     case "night":
       // Warm, low-blue-light dark for night reading; off-white (not pure
       // white) text to avoid halation, amber accent instead of cool blue.
       return {
-        primary: "#d9a066",
+        primary: LIVEVIEW_BRAND.accent,
         bgDefault: "#1b1714",
         bgPaper: "#241f1a",
         textPrimary: "#d6cbbd",
@@ -172,7 +173,7 @@ function getThemeColors(theme: Theme): ThemeColors {
       // Soft lavender light theme (cowboy's palette): a desaturated pinkish
       // violet page with a violet-600 accent — calm for long reading.
       return {
-        primary: "#7c3aed",
+        primary: LIVEVIEW_BRAND.accent,
         bgDefault: "#f4ecf7",
         bgPaper: "#faf6fd",
         textPrimary: "#1c1428",
@@ -183,7 +184,7 @@ function getThemeColors(theme: Theme): ThemeColors {
       // Deep purple-black dark theme (cowboy's): reads as purple, not black,
       // with a violet-400 accent and soft off-white text.
       return {
-        primary: "#a78bfa",
+        primary: LIVEVIEW_BRAND.accent,
         bgDefault: "#15111d",
         bgPaper: "#1f1a2c",
         textPrimary: "#ede9fe",
@@ -283,7 +284,15 @@ export function useTheme(): UseThemeResult {
     // text. Driving the bar from data-color-scheme-correct vars bypasses that.
     document.documentElement.style.setProperty("--lv-bar-bg", c.bgPaper);
     document.documentElement.style.setProperty("--lv-bar-fg", c.textPrimary);
-    document.documentElement.style.setProperty("--lv-bar-fg-dim", c.textSecondary);
+    document.documentElement.style.setProperty(
+      "--lv-bar-fg-dim",
+      c.textSecondary,
+    );
+    document.documentElement.style.setProperty("--lv-accent", c.primary);
+    document.documentElement.style.setProperty(
+      "--lv-activity",
+      LIVEVIEW_BRAND.activity,
+    );
     // bgPaper is the mobile top nav-bar surface, so the status bar reads as a
     // seamless extension of it.
     applyThemeColor(c.bgPaper);
@@ -309,8 +318,18 @@ export function useTheme(): UseThemeResult {
       },
       typography: {
         fontFamily:
-          '-apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif',
+          'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif',
+        button: {
+          textTransform: "none",
+          fontWeight: 650,
+          letterSpacing: "-0.01em",
+        },
+        h1: { fontWeight: 620, letterSpacing: "-0.045em" },
+        h2: { fontWeight: 620, letterSpacing: "-0.04em" },
+        h3: { fontWeight: 620, letterSpacing: "-0.035em" },
+        h4: { fontWeight: 620, letterSpacing: "-0.03em" },
       },
+      shape: { borderRadius: LIVEVIEW_RADII.control },
       components: {
         MuiCssBaseline: {
           styleOverrides: {
@@ -355,7 +374,18 @@ export function useTheme(): UseThemeResult {
         },
         MuiButton: {
           styleOverrides: {
+            root: { borderRadius: LIVEVIEW_RADII.control },
             sizeSmall: { "@media (pointer: coarse)": { minHeight: 40 } },
+          },
+        },
+        MuiOutlinedInput: {
+          styleOverrides: {
+            root: { borderRadius: LIVEVIEW_RADII.control },
+          },
+        },
+        MuiChip: {
+          styleOverrides: {
+            root: { borderRadius: LIVEVIEW_RADII.pill },
           },
         },
         MuiToggleButton: {

@@ -28,6 +28,8 @@ pub struct FsStore {
     covers: HashMap<String, String>,
     /// slug → wide LiveView artwork blob hash.
     backdrops: HashMap<String, String>,
+    /// slug → compact opaque shelf-card rendition blob hash.
+    card_backdrops: HashMap<String, String>,
     /// content_hash → (bytes, mime). Covers preloaded; chapter images + any
     /// on-demand audio land here lazily.
     blobs: Mutex<HashMap<String, (Vec<u8>, String)>>,
@@ -67,6 +69,7 @@ impl FsStore {
     pub fn new(books: Vec<BookState>) -> Self {
         let mut covers = HashMap::new();
         let mut backdrops = HashMap::new();
+        let mut card_backdrops = HashMap::new();
         let mut blobs: HashMap<String, (Vec<u8>, String)> = HashMap::new();
         for b in &books {
             if let Some(path) = &b.cover {
@@ -86,7 +89,12 @@ impl FsStore {
                         .first_or_octet_stream()
                         .to_string();
                     backdrops.insert(b.slug.clone(), hash.clone());
-                    blobs.insert(hash, (bytes, mime));
+                    blobs.insert(hash, (bytes.clone(), mime));
+                    if let Ok(card_bytes) = crate::artwork::card_backdrop(&bytes) {
+                        let card_hash = blake3_hex(&card_bytes);
+                        card_backdrops.insert(b.slug.clone(), card_hash.clone());
+                        blobs.insert(card_hash, (card_bytes, "image/jpeg".to_string()));
+                    }
                 }
             }
         }
@@ -101,6 +109,7 @@ impl FsStore {
             books,
             covers,
             backdrops,
+            card_backdrops,
             blobs: Mutex::new(blobs),
             trees,
         }
@@ -125,6 +134,7 @@ impl ContentStore for FsStore {
                 author: b.author.clone(),
                 cover_hash: self.covers.get(&b.slug).cloned(),
                 backdrop_hash: self.backdrops.get(&b.slug).cloned(),
+                card_backdrop_hash: self.card_backdrops.get(&b.slug).cloned(),
                 default_rendition: b.default_rendition.as_str().to_string(),
                 created_at: 0,
                 updated_at: 0,

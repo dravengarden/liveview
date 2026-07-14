@@ -47,6 +47,11 @@ scheme and refreshes it from a configured LiveView server.
 
 ## Content and UI behavior
 
+- Follow `docs/design-system.md` for brand, material, responsive, and motion
+  decisions. Keep identity tokens in `web/src/brand.ts`; do not fork logo geometry
+  or palette values inside components.
+- Never add `backdrop-filter`, CSS `filter`, or blend modes to scrolling shelf
+  content or fixed chrome that overlaps it. Preserve the scroll-material test.
 - The checker and renderer should accept the same content formats.
 - Mermaid diagrams are rendered for the active light or dark theme; do not
   apply image inversion to theme-native diagrams.

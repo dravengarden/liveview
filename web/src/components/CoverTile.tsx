@@ -1,8 +1,8 @@
 import { rem } from "@/px";
 import {
-  backdropSrc,
+  cardBackdropSrc,
   coverSrc,
-  recoverBackdropImage,
+  recoverCardBackdropImage,
   recoverCoverImage,
 } from "@/native-sync";
 import { Box } from "@mui/material";
@@ -18,6 +18,15 @@ export function coverGradient(slug: string): string {
   return `linear-gradient(135deg, hsl(${hue} 52% 52%), hsl(${
     (hue + 38) % 360
   } 48% 42%))`;
+}
+
+function coverWash(slug: string, opacity: number): string {
+  let h = 0;
+  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) | 0;
+  const hue = Math.abs(h) % 360;
+  return `linear-gradient(135deg, hsl(${hue} 52% 52% / ${opacity}), hsl(${
+    (hue + 38) % 360
+  } 48% 42% / ${opacity / 2}))`;
 }
 
 /** A square book-cover tile: the real cover image when present, else the
@@ -76,6 +85,7 @@ export function ShelfCardArtwork(
   },
 ): React.JSX.Element | null {
   if (!hasBackdrop) return null;
+
   return (
     <Box
       aria-hidden="true"
@@ -88,12 +98,12 @@ export function ShelfCardArtwork(
     >
       <Box
         component="img"
-        src={backdropSrc(slug)}
+        src={cardBackdropSrc(slug)}
         alt=""
         loading="lazy"
         decoding="async"
         onError={(event) => {
-          if (!recoverBackdropImage(event.currentTarget, slug)) {
+          if (!recoverCardBackdropImage(event.currentTarget, slug)) {
             event.currentTarget.style.display = "none";
           }
         }}
@@ -104,17 +114,6 @@ export function ShelfCardArtwork(
           height: "100%",
           objectFit: "cover",
           objectPosition: "center",
-          opacity: (theme) => theme.palette.mode === "dark" ? 0.82 : 0.78,
-          filter: "saturate(0.96) contrast(1.02)",
-        }}
-      />
-      <Box
-        sx={{
-          position: "absolute",
-          inset: 0,
-          background: coverGradient(slug),
-          opacity: (theme) => theme.palette.mode === "dark" ? 0.12 : 0.08,
-          mixBlendMode: "color",
         }}
       />
       <Box
@@ -122,7 +121,12 @@ export function ShelfCardArtwork(
           position: "absolute",
           inset: 0,
           background: (theme) =>
-            `linear-gradient(90deg, ${
+            `${
+              coverWash(
+                slug,
+                theme.palette.mode === "dark" ? 0.12 : 0.08,
+              )
+            }, linear-gradient(90deg, ${
               alpha(theme.palette.background.paper, 0.94)
             } 0%, ${alpha(theme.palette.background.paper, 0.68)} 46%, ${
               alpha(theme.palette.background.paper, 0.1)

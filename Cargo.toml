@@ -37,6 +37,9 @@ tower-http = { version = "0.6", features = ["compression-gzip", "cors", "fs"] }
 open = "5"
 futures-util = "0.3"
 mime_guess = "2"
+# Deterministic deploy-time card thumbnails. The shelf must not decode full-size
+# hero backdrops while scrolling; original artwork remains a separate DAG blob.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 toml = "0.8"
 serde_yml = "0.0.12"
 # Content + reading-progress store. Runtime-checked queries only (no

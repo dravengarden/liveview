@@ -469,6 +469,13 @@ export function Sidebar({
           // mirroring the sheet body's treatment. No-op on desktop/non-touch.
           WebkitOverflowScrolling: "touch",
           transform: "translateZ(0)",
+          // The shared DetentSheet marks its brief slide/drag phase. Do not keep
+          // this REAL list scroller independently promoted while its ancestor
+          // sheet is moving: physical iOS otherwise relocates nested tiled
+          // layers over the chart-heavy reader every frame and the opening
+          // animation visibly stutters. Once the sheet settles the marker is
+          // removed and this promotion resumes for smooth list momentum.
+          "[data-detent-moving] &": { transform: "none" },
         }}
       >
         <List dense disablePadding>

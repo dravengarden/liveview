@@ -117,7 +117,12 @@ fn is_text(ft: &FileType) -> bool {
 /// stale catalog forever. The marker built from this hash is structural (an
 /// empty tree), so it invalidates manifests without pretending metadata is a
 /// chapter that needs to be applied or deleted.
-fn catalog_hash(book: &BookState, cover_hash: Option<&str>, backdrop_hash: Option<&str>) -> String {
+fn catalog_hash(
+    book: &BookState,
+    cover_hash: Option<&str>,
+    backdrop_hash: Option<&str>,
+    card_backdrop_hash: Option<&str>,
+) -> String {
     fn field(hasher: &mut blake3::Hasher, value: &str) {
         hasher.update(&(value.len() as u64).to_le_bytes());
         hasher.update(value.as_bytes());
@@ -157,6 +162,7 @@ fn catalog_hash(book: &BookState, cover_hash: Option<&str>, backdrop_hash: Optio
     optional(&mut hasher, book.author.as_deref());
     optional(&mut hasher, cover_hash);
     optional(&mut hasher, backdrop_hash);
+    optional(&mut hasher, card_backdrop_hash);
     field(&mut hasher, book.default_rendition.as_str());
     for rendition in &book.renditions {
         field(&mut hasher, rendition.kind.as_str());
@@ -238,14 +244,18 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
             }
             None => None,
         };
-        let backdrop_hash = match &book.backdrop {
+        let (backdrop_hash, card_backdrop_hash) = match &book.backdrop {
             Some(p) => {
                 let bytes =
                     std::fs::read(p).map_err(|e| format!("read backdrop {}: {e}", p.display()))?;
+                let card_bytes = crate::artwork::card_backdrop(&bytes)
+                    .map_err(|e| format!("derive card backdrop {}: {e}", p.display()))?;
                 let mime = mime_guess::from_path(p).first_or_octet_stream().to_string();
-                Some(put_blob(&obj, &store, bytes, &mime).await?)
+                let backdrop_hash = put_blob(&obj, &store, bytes, &mime).await?;
+                let card_backdrop_hash = put_blob(&obj, &store, card_bytes, "image/jpeg").await?;
+                (Some(backdrop_hash), Some(card_backdrop_hash))
             }
-            None => None,
+            None => (None, None),
         };
         store
             .upsert_book(&BookUpsert {
@@ -256,6 +266,7 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 author: book.author.as_deref(),
                 cover_hash: cover_hash.as_deref(),
                 backdrop_hash: backdrop_hash.as_deref(),
+                card_backdrop_hash: card_backdrop_hash.as_deref(),
                 default_rendition: book.default_rendition.as_str(),
             })
             .await
@@ -408,6 +419,7 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 book,
                 cover_hash.as_deref(),
                 backdrop_hash.as_deref(),
+                card_backdrop_hash.as_deref(),
             )),
         ));
         book_nodes.push((book.slug.clone(), Build::Tree(rendition_nodes)));
@@ -977,14 +989,24 @@ mod tests {
             book.slug.clone(),
             Build::Tree(vec![(
                 "@catalog".into(),
-                catalog_marker(catalog_hash(&book, Some("cover"), Some("old-backdrop"))),
+                catalog_marker(catalog_hash(
+                    &book,
+                    Some("cover"),
+                    Some("old-backdrop"),
+                    Some("old-card-backdrop"),
+                )),
             )]),
         )]));
         let new = Dag::build(Build::Tree(vec![(
             book.slug.clone(),
             Build::Tree(vec![(
                 "@catalog".into(),
-                catalog_marker(catalog_hash(&book, Some("cover"), Some("new-backdrop"))),
+                catalog_marker(catalog_hash(
+                    &book,
+                    Some("cover"),
+                    Some("new-backdrop"),
+                    Some("new-card-backdrop"),
+                )),
             )]),
         )]));
 
@@ -995,6 +1017,35 @@ mod tests {
         assert!(
             plan(&new, &old).is_empty(),
             "a catalog marker must not become a synthetic chapter operation"
+        );
+
+        let old_card = Dag::build(Build::Tree(vec![(
+            book.slug.clone(),
+            Build::Tree(vec![(
+                "@catalog".into(),
+                catalog_marker(catalog_hash(
+                    &book,
+                    Some("cover"),
+                    Some("backdrop"),
+                    Some("old-card"),
+                )),
+            )]),
+        )]));
+        let new_card = Dag::build(Build::Tree(vec![(
+            book.slug.clone(),
+            Build::Tree(vec![(
+                "@catalog".into(),
+                catalog_marker(catalog_hash(
+                    &book,
+                    Some("cover"),
+                    Some("backdrop"),
+                    Some("new-card"),
+                )),
+            )]),
+        )]));
+        assert_ne!(
+            old_card.root, new_card.root,
+            "card rendition identity must invalidate the catalog"
         );
     }
 
@@ -1020,8 +1071,8 @@ mod tests {
         right.renditions[0].layout = Some(right_layout);
 
         assert_eq!(
-            catalog_hash(&left, None, None),
-            catalog_hash(&right, None, None),
+            catalog_hash(&left, None, None, None),
+            catalog_hash(&right, None, None, None),
             "hash-map iteration order must not churn the deploy root"
         );
     }

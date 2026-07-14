@@ -285,6 +285,9 @@ impl LvState {
     /// serves the embedded bundle). `index.html` comes from the current version's root
     /// dir; every other path from the shared content-addressed `web/files/`.
     async fn web_get(&self, rel: &str) -> Option<Vec<u8>> {
+        if cfg!(debug_assertions) {
+            return None;
+        }
         let rel = rel.trim_start_matches('/');
         if rel.is_empty() || rel.contains("..") {
             return None;
@@ -312,6 +315,15 @@ impl LvState {
     /// any failure leaves the current/embedded bundle serving. Returns a status string;
     /// "updated:<version>" means a new version is live (the web shows the banner + reloads).
     async fn web_ota_check(&self) -> String {
+        // Debug shells are the authoritative local UI validation target. Letting a
+        // production OTA bundle replace the just-built frontend makes a successful
+        // simulator build silently exercise stale code. Release/device builds keep
+        // the normal OTA path; debug keeps WebSocket/content sync but serves the
+        // embedded dist-app deterministically.
+        if cfg!(debug_assertions) {
+            return "debug-embedded".into();
+        }
+
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(8))
             .timeout(Duration::from_secs(120))

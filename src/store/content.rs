@@ -132,7 +132,7 @@ pub trait ContentStore: Send + Sync {
     /// Empty on the preview backend.
     async fn dag_chapters(&self) -> Result<Vec<DagChapter>, String>;
 
-    /// Every book's content-addressed cover/backdrop resources for `/api/dag`.
+    /// Every book's content-addressed cover/backdrop/card resources for `/api/dag`.
     /// Empty on the preview backend, which has no deployed manifest root.
     async fn dag_artwork(&self) -> Result<Vec<DagArtwork>, String>;
 }
