@@ -66,6 +66,16 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "the compact rendition must have a stable origin URL for native sync",
   );
   assertAbsent(
+    nativeSync,
+    /image\.src\s*=\s*backdropSrc\(slug\)/,
+    "shelf artwork recovery must never decode the full-size hero backdrop",
+  );
+  assertAbsent(
+    landing,
+    /inset 0 1px 0/,
+    "repeated shelf progress meters must not paint per-card inset shadows",
+  );
+  assertAbsent(
     landing,
     /\bcontain\s*:/,
     "per-card paint containment (WKWebView promotes the artwork cards into an expensive scrolling layer set)",

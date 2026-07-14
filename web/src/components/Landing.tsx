@@ -354,8 +354,10 @@ function ProgressMeter(
         borderColor: (theme) => alpha(theme.palette.text.primary, 0.1),
         display: "flex",
         alignItems: "center",
-        boxShadow: (theme) =>
-          `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.12)}`,
+        // No per-meter inset shadow. A large shelf contains hundreds of these
+        // pills; WKWebView repaints every shadow while the image-backed cards
+        // move, turning a decorative 1px highlight into a measurable scroll
+        // cost. Border + fill already communicate the track geometry.
       }}
     >
       <Box

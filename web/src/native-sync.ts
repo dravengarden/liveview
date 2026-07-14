@@ -141,9 +141,14 @@ export function recoverBackdropImage(
   return true;
 }
 
-/** Recover a card rendition through its native DAG cache, then fall back to
- * the original backdrop for compatibility with servers deployed before the
- * card-backdrop resource existed. */
+/** Recover a card rendition through its native DAG cache.
+ *
+ * Never fall back to the full-size backdrop here. The shelf is a scrolling hot
+ * path: decoding a 1600x900 hero image as each card enters the viewport causes
+ * visible main-thread stalls in WKWebView. A missing compact DAG rendition is a
+ * deployment/sync fault, so the card should reveal its deterministic gradient
+ * until the next catalog sync repairs it. Larger hero surfaces may still use
+ * {@link recoverBackdropImage} directly. */
 export function recoverCardBackdropImage(
   image: HTMLImageElement,
   slug: string,
@@ -155,12 +160,7 @@ export function recoverCardBackdropImage(
     image.src = `${SCHEME}/resolve?u=${encodeURIComponent(cardUrl)}`;
     return true;
   }
-  if (stage !== "full") {
-    image.dataset["lvCardBackdrop"] = "full";
-    image.src = backdropSrc(slug);
-    return true;
-  }
-  return recoverBackdropImage(image, slug);
+  return false;
 }
 
 /** Per-book offline coverage (not currently surfaced by the panel; kept for the type). */
