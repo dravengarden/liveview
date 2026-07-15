@@ -181,14 +181,21 @@ import WidgetKit
     let url: String
   }
   private var dlQueue: [DLItem] = []
+  private var dlQueueHead = 0
+  private var dlQueuedKeys: Set<String> = []
   private var dlInflight = 0
   private var dlTimer: Timer?
   private var dlRetries: [String: Int] = [:]
   private let planQueue = DispatchQueue(label: "lv.audio.plan", qos: .utility)
   private var planGeneration = 0
   private var lastPlanRequest: (root: String, baseURL: String)?
-  private var pumpContinuationScheduled = false
   private static let dlSessionCount = 6
+  // Keep only one active bulk task per independent session. Queuing thousands of
+  // URLSession tasks at once made task creation, delegate delivery and SQLite
+  // accounting contend with WKWebView's main thread while the user was scrolling.
+  // Six independent connections preserve the high-latency relay throughput; the
+  // in-memory Merkle queue remains the cheap source of pending work.
+  private static let dlMaxInflight = dlSessionCount
 
   // "Prefetch on WiFi only": enforced NATIVELY on the pool via
   // `allowsCellularAccess`. Persisted in UserDefaults so the pool has the
@@ -214,7 +221,7 @@ import WidgetKit
   /// URLSessionDownloadDelegate methods below.
   private func setupDownloadSessions() {
     guard dlSessions.isEmpty else { return }
-    dlSessions = (0..<Self.dlSessionCount).map { _ in
+    dlSessions = (0..<Self.dlSessionCount).map { index in
       let cfg = URLSessionConfiguration.default
       cfg.httpMaximumConnectionsPerHost = 6
       cfg.allowsCellularAccess = !wifiOnly
@@ -224,7 +231,11 @@ import WidgetKit
       cfg.timeoutIntervalForResource = 24 * 60 * 60
       cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
       cfg.urlCache = nil
-      return URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
+      let delegateQueue = OperationQueue()
+      delegateQueue.name = "lv.audio.download.\(index)"
+      delegateQueue.qualityOfService = .utility
+      delegateQueue.maxConcurrentOperationCount = 1
+      return URLSession(configuration: cfg, delegate: self, delegateQueue: delegateQueue)
     }
   }
 
@@ -517,8 +528,14 @@ import WidgetKit
     }
     savePins()
     // Prepend (skip dups already queued/in-flight).
-    let queued = Set(dlQueue.map(\.key))
-    dlQueue.insert(contentsOf: front.filter { !queued.contains($0.key) && !inFlight.contains($0.key) }, at: 0)
+    let wanted = front.filter { !dlQueuedKeys.contains($0.key) && !inFlight.contains($0.key) }
+    if !wanted.isEmpty {
+      // Manual downloads are rare and explicitly prioritized. Compact once here;
+      // the hot automatic dequeue path below remains O(1).
+      dlQueue = wanted + Array(dlQueue[dlQueueHead...])
+      dlQueueHead = 0
+      dlQueuedKeys.formUnion(wanted.map(\.key))
+    }
     startScheduler()
   }
 
@@ -573,14 +590,14 @@ import WidgetKit
   /// but thousands in one callback visibly stalls WKWebView scrolling.
   private func enqueuePlanItems(_ items: [DLItem], from start: Int, generation: Int) {
     guard generation == planGeneration, start < items.count else {
-      if !dlQueue.isEmpty { startScheduler() }
+      if dlQueueHead < dlQueue.count { startScheduler() }
       return
     }
     let end = min(start + 64, items.count)
-    let queued = Set(dlQueue.map(\.key))
     for item in items[start..<end]
-    where !queued.contains(item.key) && !inFlight.contains(item.key) {
+    where !dlQueuedKeys.contains(item.key) && !inFlight.contains(item.key) {
       dlQueue.append(item)
+      dlQueuedKeys.insert(item.key)
     }
     DispatchQueue.main.async { [weak self] in
       self?.enqueuePlanItems(items, from: end, generation: generation)
@@ -609,26 +626,24 @@ import WidgetKit
     pump()
   }
 
-  /// Hand every queued item to the background pool. The system daemon paces the
-  /// real concurrency (httpMaximumConnectionsPerHost per session); the rest of the
-  /// batch waits in the daemon and drains while the app is suspended. Dedup guards
-  /// against re-resuming an in-flight / on-disk key.
+  /// Keep a small bounded set of real URLSession tasks active. Pending Merkle work
+  /// stays in our O(1) FIFO rather than becoming thousands of Foundation tasks.
+  /// This isolates bulk audio from WKWebView scrolling while retaining one active
+  /// transfer on each independent high-RTT connection.
   private func pump() {
     guard !dlSessions.isEmpty else { return } // pool rebuilding — next tick pumps
-    var started = 0
-    while !dlQueue.isEmpty && started < 8 {
-      let item = dlQueue.removeFirst()
+    while dlInflight < Self.dlMaxInflight, dlQueueHead < dlQueue.count {
+      let item = dlQueue[dlQueueHead]
+      dlQueueHead += 1
+      dlQueuedKeys.remove(item.key)
       if onDisk(item.key) || inFlight.contains(item.key) { continue }
       runScheduled(item)
-      started += 1
     }
-    if !dlQueue.isEmpty && !pumpContinuationScheduled {
-      pumpContinuationScheduled = true
-      DispatchQueue.main.async { [weak self] in
-        guard let self else { return }
-        self.pumpContinuationScheduled = false
-        self.pump()
-      }
+    // Reclaim consumed storage occasionally without shifting the array on every
+    // dequeue. This bounds memory while keeping the steady-state hot path O(1).
+    if dlQueueHead > 1024 && dlQueueHead * 2 > dlQueue.count {
+      dlQueue.removeFirst(dlQueueHead)
+      dlQueueHead = 0
     }
   }
 
@@ -647,16 +662,17 @@ import WidgetKit
 
   /// 2s tick: stop when the queue has fully drained, else keep the budget and pump.
   /// (Budget check lives here, not per-completion, so the used-bytes read runs
-  /// ~every 2s.) The pool's `httpMaximumConnectionsPerHost` paces real concurrency;
-  /// pump() hands it the whole queue.
+  /// ~every 2s.) `pump()` admits at most `dlMaxInflight` real tasks.
   private func schedulerTick() {
-    if dlQueue.isEmpty && dlInflight == 0 {
+    if dlQueueHead >= dlQueue.count && dlInflight == 0 {
       dlTimer?.invalidate()
       dlTimer = nil
       return
     }
     if usedBytes() >= capBytes { // budget full → stop filling + evict to fit
-      dlQueue.removeAll()
+      dlQueue.removeAll(keepingCapacity: true)
+      dlQueueHead = 0
+      dlQueuedKeys.removeAll(keepingCapacity: true)
       enforceCap()
     }
     pump()
@@ -675,11 +691,13 @@ import WidgetKit
     guard let key = downloadTask.taskDescription else { return }
     let code = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
     guard code == 200, let n = publish(location, key) else { return }
+    // LvStore serializes its own SQLite access. Keep the write on this delegate
+    // queue so a burst of completed audio files cannot block WebKit's main runloop.
+    indexPut(key, n)
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       self.dlRetries[key] = nil
       self.dlDone += 1 // diagnostic: completions since launch
-      self.indexPut(key, n) // maintain the SQLite stats index
     }
   }
 
@@ -702,7 +720,11 @@ import WidgetKit
       if !cancelled, !self.onDisk(key), let url {
         if let e = error { self.dlLastErr = (e as NSError).localizedDescription } // diagnostic
         let r = (self.dlRetries[key] ?? 0) + 1
-        if r <= 3 { self.dlRetries[key] = r; self.dlQueue.append(DLItem(url: url, key: key)) }
+        if r <= 3, !self.dlQueuedKeys.contains(key) {
+          self.dlRetries[key] = r
+          self.dlQueue.append(DLItem(url: url, key: key))
+          self.dlQueuedKeys.insert(key)
+        }
       }
       self.pump()
     }
@@ -776,35 +798,17 @@ import WidgetKit
   /// keys→books via the manifest). Replied via `window.__lvAudioResolve(id, json)`.
   private func audioStats(_ d: [String: Any]?) {
     guard let id = d?["id"] as? String else { return }
-    // O(1) from the SQLite index — no contentsOfDirectory + per-file stat (the old
-    // per-poll cost). `cachedCount` lets the web show done/total WITHOUT the full
-    // `cached` array; the array is kept (indexed read) for the current consumers
-    // until they switch to the count.
+    // O(1) from the SQLite index. This response is intentionally constant-size:
+    // it is requested at startup and every 2s while Downloads is visible, so
+    // enumerating thousands of keys/files here causes bridge serialization and
+    // filesystem work to show up as reader animation hitches.
     let (count, used, pinnedBytes) = store?.stats() ?? (0, 0, 0)
-    let cached: [String] = store?.allKeys() ?? []
-    // Diagnostics (temporary): the TRUE on-disk `.caf` count vs the SQLite index
-    // `count` above. If diskCount > cachedCount the index has drifted below disk —
-    // the driver would keep re-sending "uncached" items that native then skips as
-    // already-on-disk, freezing the fill at the index count with no error. Plus the
-    // device's real free space: the fill can't grow past the volume's free bytes no
-    // matter how large the app budget is. contentsOfDirectory is O(files) but only
-    // runs only when the Downloads UI explicitly requests stats.
-    let diskCount = (try? FileManager.default.contentsOfDirectory(
-      at: cacheDir, includingPropertiesForKeys: nil))?
-      .filter { $0.pathExtension == "caf" }.count ?? -1
-    var freeBytes: Int64 = -1
-    if let vals = try? URL(fileURLWithPath: NSHomeDirectory())
-      .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
-      let f = vals.volumeAvailableCapacityForImportantUsage {
-      freeBytes = Int64(f)
-    }
     var obj: [String: Any] = [
       "usedBytes": used, "cap": capBytes, "pinnedBytes": pinnedBytes,
-      "cachedCount": count, "cached": cached, "pinned": Array(pinned),
+      "cachedCount": count, "pinned": Array(pinned),
       "net": netType(),
       // Download diagnostics for the Downloads panel (see dlDone/dlLastErr).
-      "dlInflight": dlInflight, "dlQueued": dlQueue.count, "dlDone": dlDone,
-      "dlDisk": diskCount, "freeBytes": freeBytes,
+      "dlInflight": dlInflight, "dlQueued": dlQueue.count - dlQueueHead, "dlDone": dlDone,
     ]
     if let e = dlLastErr { obj["dlErr"] = e }
     let json = (try? JSONSerialization.data(withJSONObject: obj))

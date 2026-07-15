@@ -191,6 +191,36 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "native queue admission must be split into bounded runloop slices",
   );
   assertPresent(
+    nativeAudio,
+    /private static let dlMaxInflight = dlSessionCount/,
+    "bulk audio must keep a bounded number of real URLSession tasks",
+  );
+  assertPresent(
+    nativeAudio,
+    /let item = dlQueue\[dlQueueHead\]/,
+    "bulk audio dequeue must use an O(1) cursor",
+  );
+  assertAbsent(
+    nativeAudio,
+    /dlQueue\.removeFirst\(\)/,
+    "an O(n) audio queue shift per download",
+  );
+  assertPresent(
+    nativeAudio,
+    /delegateQueue\.qualityOfService = \.utility/,
+    "bulk audio delegate work must not compete at interactive QoS",
+  );
+  assertAbsent(
+    nativeAudio,
+    /let cached: \[String\] = store\?\.allKeys\(\)/,
+    "a full audio-key enumeration in the bridge stats response",
+  );
+  assertAbsent(
+    nativeAudio,
+    /"cached": cached/,
+    "thousands of audio keys serialized through WKWebView stats",
+  );
+  assertPresent(
     syncPlugin,
     /"\/" \| "\/index\.html" \| "\/app" \| "\/app\/" => Some\("index\.html"\)/,
     "native release startup aliases must always resolve to the embedded SPA",

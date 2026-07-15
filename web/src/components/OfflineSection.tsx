@@ -326,22 +326,7 @@ export function OfflineSection(): React.JSX.Element | null {
           >
             dl ▸ inflight {audio.dlInflight} · queued {audio.dlQueued ?? 0} · done{" "}
             {audio.dlDone ?? 0}
-            {audio.dlDisk != null && ` · disk ${audio.dlDisk}`}
             {audio.dlErr ? ` · err: ${audio.dlErr}` : ""}
-          </Typography>
-        )}
-        {/* Device free space (NOT the app budget) — the fill can't exceed it. */}
-        {audio?.freeBytes != null && audio.freeBytes >= 0 && (
-          <Typography
-            variant="caption"
-            sx={{
-              display: "block",
-              mt: 0.25,
-              color: "text.disabled",
-              fontVariantNumeric: "tabular-nums",
-            }}
-          >
-            {zh ? "设备可用 " : "Device free "}{gb(audio.freeBytes)}
           </Typography>
         )}
       </Box>

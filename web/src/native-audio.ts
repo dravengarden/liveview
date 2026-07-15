@@ -225,9 +225,6 @@ export interface AudioStats {
   /** Count of cached blobs — the O(1) SQLite aggregate. Lets the Downloads UI show
    *  done/total WITHOUT diffing the full `cached` array against the manifest. */
   cachedCount: number;
-  /** All cache keys on disk (sanitized content hashes). Still used by the download
-   *  driver to skip already-cached items; the UI prefers `cachedCount`. */
-  cached: string[];
   /** The pinned (protected) subset. */
   pinned: string[];
   /** Live network path type — drives the "prefetch on WiFi only" gate for the large
@@ -240,13 +237,6 @@ export interface AudioStats {
   dlQueued?: number;
   dlDone?: number;
   dlErr?: string;
-  /** TRUE on-disk `.caf` count (diagnostic). If this exceeds `cachedCount` the
-   *  SQLite index has drifted below disk and the fill is wedged (native skips the
-   *  re-sent items as already-on-disk). */
-  dlDisk?: number;
-  /** Device free space in bytes (volumeAvailableCapacityForImportantUsage). The
-   *  fill can't grow past this regardless of the app budget. */
-  freeBytes?: number;
 }
 
 const audioPending = new Map<string, (json: string) => void>();
@@ -285,16 +275,13 @@ export async function nativeAudioStats(): Promise<AudioStats | null> {
       usedBytes: o.usedBytes ?? 0,
       cap: o.cap ?? 0,
       pinnedBytes: o.pinnedBytes ?? 0,
-      cachedCount: o.cachedCount ?? (o.cached?.length ?? 0),
-      cached: o.cached ?? [],
+      cachedCount: o.cachedCount ?? 0,
       pinned: o.pinned ?? [],
       net: o.net ?? "wifi",
       ...(o.dlInflight != null ? { dlInflight: o.dlInflight } : {}),
       ...(o.dlQueued != null ? { dlQueued: o.dlQueued } : {}),
       ...(o.dlDone != null ? { dlDone: o.dlDone } : {}),
       ...(o.dlErr != null ? { dlErr: o.dlErr } : {}),
-      ...(o.dlDisk != null ? { dlDisk: o.dlDisk } : {}),
-      ...(o.freeBytes != null ? { freeBytes: o.freeBytes } : {}),
     };
   } catch {
     return null;
