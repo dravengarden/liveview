@@ -5,23 +5,23 @@
 - Use Deno 2.x for JavaScript and TypeScript work.
 - The pinned Nix development shell owns Rust, Deno, and native build tools.
   Run project commands from the repository root through it, for example
-  `nix develop -c make verify`; do not probe host tools first.
+  `nix develop -c just verify`; do not probe host tools first.
 - Keep Rust, Deno, and native dependency lockfiles checked in.
 - Write code, comments, documentation, and commit messages in English.
 
 ## Common commands
 
 ```bash
-make dev              # start the web and server development processes
-make build            # build the embedded release binary
-make check            # formatting, linting, and type checks
-make test             # Rust, plugin, and web tests
-make verify           # the complete local quality gate
+just dev              # start the web and server development processes
+just build            # build the embedded release binary
+just check            # formatting, linting, and type checks
+just test             # Rust, plugin, and web tests
+just verify           # the complete local quality gate
 nix build             # reproducible package build
 ```
 
 The native dependency graph can be checked without an Apple toolchain with
-`make native-metadata`. Simulator and device validation still require Xcode.
+`just native-metadata`. Simulator and device validation still require Xcode.
 
 ## Project boundaries
 
@@ -38,7 +38,7 @@ scheme and refreshes it from a configured LiveView server.
 
 ## Development rules
 
-- Run `make verify` before committing.
+- Run `just verify` before committing.
 - Preserve unrelated working-tree changes.
 - Add tests for protocol, parser, cache, and synchronization behavior changes.
 - Keep protocol additions backward compatible and bump the protocol version

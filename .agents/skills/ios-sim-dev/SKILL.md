@@ -39,7 +39,7 @@ Prefer selector-driven interaction through `eval` over pixel taps. Use computed 
 From the liveview worktree on hawk:
 
 ```bash
-nix develop -c make build-web
+nix develop -c just build-web
 rsync -a --delete web/dist-app/ macbook-air:liveview/web/dist-app/
 rsync -a --exclude target/ --exclude gen/apple/build/ --exclude gen/apple/Externals/ app/ macbook-air:liveview/app/
 rsync -a --exclude target/ lv-sync/ macbook-air:liveview/lv-sync/

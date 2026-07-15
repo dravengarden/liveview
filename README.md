@@ -94,7 +94,7 @@ Clone the repository and build the embedded reader:
 git clone https://github.com/dravengarden/liveview.git
 cd liveview
 nix develop
-make build
+just build
 ```
 
 Preview the repository itself:
@@ -296,11 +296,11 @@ nix develop
 Common commands:
 
 ```bash
-make dev          # Start the frontend and backend development servers
-make build        # Build the embedded release binary
-make check        # Formatting, Clippy, and TypeScript checks
-make test         # Rust test suites
-make verify       # Full local verification gate
+just dev          # Start the frontend and backend development servers
+just build        # Build the embedded release binary
+just check        # Formatting, Clippy, and TypeScript checks
+just test         # Rust test suites
+just verify       # Full local verification gate
 ```
 
 The main components are:
@@ -321,7 +321,7 @@ Issues, focused pull requests, documentation improvements, and reproducible bug 
 Before submitting a change:
 
 ```bash
-nix develop -c make verify
+nix develop -c just verify
 ```
 
 For a substantial feature or protocol change, open an issue first so the design and compatibility impact can be discussed before implementation.

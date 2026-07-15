@@ -152,7 +152,7 @@
         inherit liveview liveview-web;
         default = liveview;
         # The shared-utils ui SDK source, re-exposed so local dev can materialize
-        # web/src/_shell/ via `make shell` (it isn't committed). Pinned by the
+        # web/src/_shell/ via `just shell` (it isn't committed). Pinned by the
         # same locked shared-utils input the web build uses.
         shared-ui-src = sharedUiSrc;
       };
@@ -165,7 +165,8 @@
         packages = [
           pkgs.cargo
           pkgs.rustc
-          # clippy + rustfmt match this rustc, so `make check` (cargo clippy /
+          pkgs.just
+          # clippy + rustfmt match this rustc, so `just check` (cargo clippy /
           # cargo fmt) doesn't fall back to a mismatched rustup toolchain.
           pkgs.clippy
           pkgs.rustfmt
@@ -179,7 +180,7 @@
         ];
         # Tauri's Linux host build compiles the desktop webview backend even
         # though the primary native target is iOS/macOS. Keeping these here lets
-        # `make verify` type-check and test the plugin on a clean Linux checkout.
+        # `just verify` type-check and test the plugin on a clean Linux checkout.
         buildInputs = [
           pkgs.cairo
           pkgs.dbus

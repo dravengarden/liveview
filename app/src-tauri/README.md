@@ -47,7 +47,7 @@ iOS and macOS builds require a Mac with:
 Build the app-mode frontend from the repository root before invoking Tauri:
 
 ```sh
-nix develop -c make build-web
+nix develop -c just build-web
 cd app/src-tauri
 cargo tauri dev
 cargo tauri build
