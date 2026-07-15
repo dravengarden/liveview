@@ -260,21 +260,13 @@ export function MarkdownViewer({
   footer,
 }: MarkdownViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
-  // Wrapper that hosts the reading-progress bar; carries the --lv-read-progress
-  // CSS var (0..1) the bar scales to, set imperatively on scroll (no re-render).
-  const wrapperRef = useRef<HTMLDivElement>(null);
   // Suppresses the scroll handler while we programmatically restore position,
   // so restoring doesn't immediately overwrite the saved value with itself.
   const restoringRef = useRef(false);
-  // rAF handle coalescing scroll bursts into one layout read per frame.
-  const scrollRafRef = useRef<number | null>(null);
   // Progress persistence is deliberately NOT part of the display-frame path.
-  // mirroredStore.set() still performs reconciliation/timer work even though
-  // its network write is debounced upstream. Running that for every iOS scroll
-  // frame makes the native scroller contend with JS. Keep only the latest ratio
-  // and commit it after the gesture settles (or on the native scrollend event).
+  // Modern WebKit emits `scrollend`, so the hot scroll path stays entirely
+  // native. The timer is only used as a compatibility fallback on older engines.
   const scrollSaveTimerRef = useRef<number | null>(null);
-  const pendingScrollRef = useRef<number | null>(null);
   // Ordered list of zoomable images in the doc + which one the lightbox shows.
   const [images, setImages] = useState<
     { src: string; alt: string; themed?: boolean }[]
@@ -777,79 +769,55 @@ export function MarkdownViewer({
     };
   }, []);
 
-  // Persist scroll position (as a 0..1 ratio, robust to reflow) while reading.
-  //
-  // The read is deferred to a single requestAnimationFrame, NOT done inline.
-  // Why: reading scrollHeight/clientHeight inside the scroll event forces a
-  // synchronous reflow. A scroll burst (momentum scrolling, or the column
-  // collapsing on teardown) would otherwise re-measure the tall .markdown-body
-  // on every event. Coalescing to one read per frame — and bailing if the node
-  // has since detached — keeps the scroll handler off the layout-thrash path.
-  const handleScroll = useCallback(() => {
+  // Persist scroll position (as a 0..1 ratio, robust to reflow) once scrolling
+  // has settled. The visual progress bar below is driven by a native CSS scroll
+  // timeline and needs no JavaScript on display frames.
+  const saveScrollPosition = useCallback(() => {
     if (restoringRef.current || !currentPath) return;
-    if (scrollRafRef.current !== null) return; // a read is already queued
-    scrollRafRef.current = requestAnimationFrame(() => {
-      scrollRafRef.current = null;
-      const el = containerRef.current;
-      if (!el || restoringRef.current || !currentPath) return;
-      const max = el.scrollHeight - el.clientHeight;
-      if (max <= 0) return; // not scrollable yet — don't clobber with 0
-      // CLAMP to [0,1]: on iOS the rubber-band overscroll drives scrollTop
-      // NEGATIVE at the top and PAST max at the bottom, so the raw ratio goes
-      // <0 / >1. Fed into the progress bar's scaleX that flipped/mirrored the bar
-      // at the top (鬼畜) and overshot it at the bottom (抖动), oscillating every
-      // frame through the bounce. Clamping pins the bar at its ends instead.
-      const ratio = Math.min(1, Math.max(0, el.scrollTop / max));
-      // Drive the progress bar via a CSS var (no React re-render per scroll).
-      wrapperRef.current?.style.setProperty(
-        "--lv-read-progress",
-        ratio.toFixed(4),
-      );
-      pendingScrollRef.current = ratio;
+    const el = containerRef.current;
+    if (!el) return;
+    const max = el.scrollHeight - el.clientHeight;
+    if (max <= 0) return;
+    const ratio = Math.min(1, Math.max(0, el.scrollTop / max));
+    onSaveScroll?.(currentPath, ratio);
+  }, [currentPath, onSaveScroll]);
+
+  // Do not attach a per-frame scroll listener on current WebKit. Older engines
+  // without scrollend get a small trailing debounce as a fallback.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return undefined;
+    // Reflect.has avoids TypeScript narrowing the legacy branch to `never`
+    // now that its DOM library declares onscrollend on every HTMLElement.
+    const supportsScrollEnd = Reflect.has(el, "onscrollend");
+    const fallbackScroll = (): void => {
       if (scrollSaveTimerRef.current !== null) {
         clearTimeout(scrollSaveTimerRef.current);
       }
       scrollSaveTimerRef.current = window.setTimeout(() => {
         scrollSaveTimerRef.current = null;
-        const pending = pendingScrollRef.current;
-        pendingScrollRef.current = null;
-        if (pending !== null) onSaveScroll?.(currentPath, pending);
+        saveScrollPosition();
       }, 180);
-    });
-  }, [currentPath, onSaveScroll]);
-
-  // React's onScroll wiring keeps bookkeeping on the hot path. Attach the
-  // reader listener directly and explicitly passive so WKWebView can leave the
-  // pan gesture with its native scroller. `scrollend` flushes the trailing
-  // progress value immediately on engines that support it; the timer remains a
-  // compatible fallback.
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return undefined;
-    const flush = (): void => {
+    };
+    if (supportsScrollEnd) {
+      el.addEventListener("scrollend", saveScrollPosition, { passive: true });
+    } else {
+      el.addEventListener("scroll", fallbackScroll, { passive: true });
+    }
+    return () => {
+      el.removeEventListener("scroll", fallbackScroll);
+      el.removeEventListener("scrollend", saveScrollPosition);
       if (scrollSaveTimerRef.current !== null) {
         clearTimeout(scrollSaveTimerRef.current);
         scrollSaveTimerRef.current = null;
       }
-      const pending = pendingScrollRef.current;
-      pendingScrollRef.current = null;
-      if (pending !== null && currentPath) onSaveScroll?.(currentPath, pending);
+      saveScrollPosition();
     };
-    el.addEventListener("scroll", handleScroll, { passive: true });
-    el.addEventListener("scrollend", flush, { passive: true });
-    return () => {
-      el.removeEventListener("scroll", handleScroll);
-      el.removeEventListener("scrollend", flush);
-      flush();
-    };
-  }, [currentPath, handleScroll, onSaveScroll]);
+  }, [saveScrollPosition]);
 
-  // Cancel any queued scroll read on unmount so it can't fire after teardown.
+  // Cancel the legacy fallback timer on unmount.
   useEffect(() => {
     return () => {
-      if (scrollRafRef.current !== null) {
-        cancelAnimationFrame(scrollRafRef.current);
-      }
       if (scrollSaveTimerRef.current !== null) {
         clearTimeout(scrollSaveTimerRef.current);
       }
@@ -953,7 +921,6 @@ export function MarkdownViewer({
   return (
     <>
       <Box
-        ref={wrapperRef}
         // `view-transition-name` scopes the chapter cross-fade (App.loadFile) to
         // the reader area, so the sidebar/chrome don't animate. Only one element
         // may carry a given name, and one MarkdownViewer is mounted at a time.
@@ -967,8 +934,8 @@ export function MarkdownViewer({
         }}
       >
         {
-          /* Reading-progress bar: scales with scroll via --lv-read-progress (set
-          imperatively in handleScroll). Pinned to the top edge of the reader. */
+          /* Reading progress is driven by the reader's native CSS scroll
+          timeline. No per-frame JavaScript touches the markdown tree. */
         }
         <Box
           aria-hidden
@@ -980,7 +947,9 @@ export function MarkdownViewer({
             height: "3px",
             zIndex: 4,
             transformOrigin: "left center",
-            transform: "scaleX(var(--lv-read-progress, 0))",
+            transform: "scaleX(0)",
+            animation: "lv-reader-progress linear both",
+            animationTimeline: "--lv-reader-scroll",
             bgcolor: "primary.main",
             opacity: 0.85,
             pointerEvents: "none",
@@ -997,6 +966,8 @@ export function MarkdownViewer({
             // iOS, where there's no trackpad to mask it).
             minHeight: 0,
             overflow: "auto",
+            scrollTimelineName: "--lv-reader-scroll",
+            scrollTimelineAxis: "block",
             // Vertical padding fixed; horizontal padding IS the reading margin.
             pt: { xs: 2, md: 4 },
             // Foot padding ADDS the two frosted overlays the text scrolls under:

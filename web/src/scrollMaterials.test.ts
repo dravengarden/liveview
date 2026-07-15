@@ -120,11 +120,21 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   assertAbsent(
     markdownViewer,
     /onScroll=\{handleScroll\}/,
-    "the reader must use a passive native scroll listener",
+    "the reader must not use React scroll bookkeeping",
+  );
+  assertAbsent(
+    markdownViewer,
+    /--lv-read-progress/,
+    "scrolling must not invalidate an inherited progress variable",
   );
   assertPresent(
     markdownViewer,
-    /addEventListener\("scroll", handleScroll, \{ passive: true \}\)/,
-    "the reader scroll listener must be explicitly passive",
+    /scrollTimelineName: "--lv-reader-scroll"/,
+    "reading progress must use the native CSS scroll timeline",
+  );
+  assertPresent(
+    markdownViewer,
+    /Reflect\.has\(el, "onscrollend"\)/,
+    "current WebKit must persist progress only after scrolling ends",
   );
 });
