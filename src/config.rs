@@ -168,7 +168,15 @@ struct DocManifest {
     schema: u32,
     slug: String,
     title: String,
-    source: PathBuf,
+    /// Shorthand for a single-language document set. Mutually exclusive with
+    /// `[[edition]]`.
+    source: Option<PathBuf>,
+    /// Edition opened by default. Single-language manifests retain the legacy
+    /// `default` language when this is omitted.
+    default_lang: Option<String>,
+    /// Language overlays sharing one logical chapter layout.
+    #[serde(default, rename = "edition")]
+    editions: Vec<EditionCfg>,
     description: Option<String>,
     collection: Option<String>,
     author: Option<String>,
@@ -749,36 +757,110 @@ fn load_doc_manifest(
         ));
     }
     let base = manifest_path.parent().unwrap_or_else(|| Path::new("."));
-    let source_path = if manifest.source.is_absolute() {
-        manifest.source.clone()
-    } else {
-        base.join(&manifest.source)
-    };
-    let source = source_path.canonicalize().map_err(|e| {
-        format!(
-            "{}: source {}: {e}",
-            manifest_path.display(),
-            source_path.display()
-        )
-    })?;
-    if !source.is_dir() {
+    if manifest.source.is_some() != manifest.editions.is_empty() {
         return Err(format!(
-            "{}: source {} is not a directory",
-            manifest_path.display(),
-            source.display()
+            "{}: specify exactly one of `source` or one or more [[edition]] entries",
+            manifest_path.display()
         ));
     }
-    let includes = manifest
+    let inherited_includes = manifest
         .includes
+        .clone()
         .unwrap_or_else(|| default_includes.to_vec());
-    let mut excludes = default_excludes.to_vec();
-    if let Some(extra) = manifest.excludes {
-        excludes.extend(extra);
+    let mut inherited_excludes = default_excludes.to_vec();
+    if let Some(extra) = manifest.excludes.clone() {
+        inherited_excludes.extend(extra);
     }
-    let include_set = build_globset(&includes)
-        .map_err(|e| format!("{}: bad include glob: {e}", manifest_path.display()))?;
-    let exclude_set = build_globset(&excludes)
-        .map_err(|e| format!("{}: bad exclude glob: {e}", manifest_path.display()))?;
+
+    let edition_cfgs = if let Some(source) = manifest.source.clone() {
+        let lang = manifest
+            .default_lang
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        vec![EditionCfg {
+            label: Some(lang.clone()),
+            lang,
+            source,
+            includes: None,
+            excludes: None,
+        }]
+    } else {
+        manifest.editions
+    };
+    let default_lang = manifest
+        .default_lang
+        .clone()
+        .unwrap_or_else(|| edition_cfgs[0].lang.clone());
+    if !edition_cfgs
+        .iter()
+        .any(|edition| edition.lang == default_lang)
+    {
+        return Err(format!(
+            "{}: default_lang {:?} is not one of its editions",
+            manifest_path.display(),
+            default_lang
+        ));
+    }
+    let mut seen_langs = HashSet::new();
+    let mut editions = Vec::with_capacity(edition_cfgs.len());
+    for edition in edition_cfgs {
+        if edition.lang.is_empty() || !seen_langs.insert(edition.lang.clone()) {
+            return Err(format!(
+                "{}: invalid or duplicate edition language {:?}",
+                manifest_path.display(),
+                edition.lang
+            ));
+        }
+        let source_path = if edition.source.is_absolute() {
+            edition.source.clone()
+        } else {
+            base.join(&edition.source)
+        };
+        let source = source_path.canonicalize().map_err(|e| {
+            format!(
+                "{}: edition {:?} source {}: {e}",
+                manifest_path.display(),
+                edition.lang,
+                source_path.display()
+            )
+        })?;
+        if !source.is_dir() {
+            return Err(format!(
+                "{}: edition {:?} source {} is not a directory",
+                manifest_path.display(),
+                edition.lang,
+                source.display()
+            ));
+        }
+        let includes = edition
+            .includes
+            .unwrap_or_else(|| inherited_includes.clone());
+        let mut excludes = inherited_excludes.clone();
+        if let Some(extra) = edition.excludes {
+            excludes.extend(extra);
+        }
+        let include_set = build_globset(&includes).map_err(|e| {
+            format!(
+                "{}: edition {:?} has bad include glob: {e}",
+                manifest_path.display(),
+                edition.lang
+            )
+        })?;
+        let exclude_set = build_globset(&excludes).map_err(|e| {
+            format!(
+                "{}: edition {:?} has bad exclude glob: {e}",
+                manifest_path.display(),
+                edition.lang
+            )
+        })?;
+        editions.push(EditionState {
+            label: edition.label.unwrap_or_else(|| edition.lang.clone()),
+            lang: edition.lang,
+            source,
+            include_set,
+            exclude_set,
+        });
+    }
     let cover = manifest.cover.as_deref().and_then(|p| {
         let path = if p.is_absolute() {
             p.to_path_buf()
@@ -807,17 +889,11 @@ fn load_doc_manifest(
         renditions: vec![RenditionState {
             kind: RenditionKind::Text,
             label: "text".to_string(),
-            default_lang: "default".to_string(),
+            default_lang,
             voice: None,
             layout: manifest.layout,
             manifest: false,
-            editions: vec![EditionState {
-                lang: "default".to_string(),
-                label: "default".to_string(),
-                source,
-                include_set,
-                exclude_set,
-            }],
+            editions,
         }],
     })
 }
@@ -1320,6 +1396,52 @@ mod tests {
             books[0].renditions[0].editions[0].source,
             source.canonicalize().unwrap()
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn registry_discovers_multilingual_repo_doc_manifest() {
+        let root = std::env::temp_dir().join(format!("liveview-doc-i18n-{}", std::process::id()));
+        let docs = root.join("veil/main/docs");
+        let en = docs.join("content/en");
+        let zh = docs.join("content/zh");
+        std::fs::create_dir_all(&en).unwrap();
+        std::fs::create_dir_all(&zh).unwrap();
+        std::fs::write(en.join("00.md"), "# English\n").unwrap();
+        std::fs::write(zh.join("00.md"), "# 中文\n").unwrap();
+        std::fs::write(
+            docs.join("liveview.toml"),
+            r#"schema = 1
+slug = "veil-design"
+title = "Veil Design"
+default_lang = "en"
+
+[[edition]]
+lang = "en"
+label = "English"
+source = "content/en"
+
+[[edition]]
+lang = "zh"
+label = "中文"
+source = "content/zh"
+"#,
+        )
+        .unwrap();
+        let books = discover_registry(
+            &root,
+            "*/main/docs/liveview.toml",
+            4,
+            &builtin_includes(),
+            &builtin_excludes(),
+        )
+        .unwrap();
+        let rendition = &books[0].renditions[0];
+        assert_eq!(rendition.default_lang, "en");
+        assert_eq!(rendition.editions.len(), 2);
+        assert_eq!(rendition.editions[0].lang, "en");
+        assert_eq!(rendition.editions[1].lang, "zh");
+        assert_eq!(rendition.editions[1].label, "中文");
         std::fs::remove_dir_all(root).unwrap();
     }
 
