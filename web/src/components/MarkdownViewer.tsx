@@ -232,14 +232,18 @@ function decodeEntities(s: string): string {
  *  interactive view into its placeholder. A portal keeps the view inside React's
  *  tree (so it inherits the theme and its updates commit reliably) while its DOM
  *  lives at a stable anchor the imperative markdown passes never touch. */
-function splitForPortals(html: string | null): { processedHtml: string; fences: string[] } {
+function splitForPortals(
+  html: string | null,
+): { processedHtml: string; fences: string[] } {
   if (!html) return { processedHtml: "", fences: [] };
   const re = /<pre[^>]*\blang="interactive-view"[^>]*>([\s\S]*?)<\/pre>/g;
   const fences: string[] = [];
   const processedHtml = html.replace(re, (_full, inner: string) => {
     const code = /<code[^>]*>([\s\S]*?)<\/code>/.exec(inner);
     fences.push(decodeEntities(code ? (code[1] ?? "") : inner));
-    return `<div data-iv-slot="${fences.length - 1}" class="lv-interactive-view"></div>`;
+    return `<div data-iv-slot="${
+      fences.length - 1
+    }" class="lv-interactive-view"></div>`;
   });
   return { processedHtml, fences };
 }
@@ -264,6 +268,13 @@ export function MarkdownViewer({
   const restoringRef = useRef(false);
   // rAF handle coalescing scroll bursts into one layout read per frame.
   const scrollRafRef = useRef<number | null>(null);
+  // Progress persistence is deliberately NOT part of the display-frame path.
+  // mirroredStore.set() still performs reconciliation/timer work even though
+  // its network write is debounced upstream. Running that for every iOS scroll
+  // frame makes the native scroller contend with JS. Keep only the latest ratio
+  // and commit it after the gesture settles (or on the native scrollend event).
+  const scrollSaveTimerRef = useRef<number | null>(null);
+  const pendingScrollRef = useRef<number | null>(null);
   // Ordered list of zoomable images in the doc + which one the lightbox shows.
   const [images, setImages] = useState<
     { src: string; alt: string; themed?: boolean }[]
@@ -282,7 +293,9 @@ export function MarkdownViewer({
   // Interactive-view fences → placeholder divs + their JSON payloads (memoized on
   // `html` so payloads keep a stable identity). Each is portalled into its
   // placeholder after the html commits; `slots` holds the resolved anchor nodes.
-  const { processedHtml, fences } = useMemo(() => splitForPortals(html), [html]);
+  const { processedHtml, fences } = useMemo(() => splitForPortals(html), [
+    html,
+  ]);
   const [slots, setSlots] = useState<(HTMLElement | null)[]>([]);
 
   // Keep the screen awake while a chapter is open — a reader may not touch the
@@ -474,7 +487,11 @@ export function MarkdownViewer({
   // placeholders) changes.
   useEffect(() => {
     const c = containerRef.current;
-    setSlots(fences.map((_, i) => c?.querySelector<HTMLElement>(`[data-iv-slot="${i}"]`) ?? null));
+    setSlots(
+      fences.map((_, i) =>
+        c?.querySelector<HTMLElement>(`[data-iv-slot="${i}"]`) ?? null
+      ),
+    );
   }, [processedHtml, fences]);
 
   // Two reactions to root-level changes, both watching documentElement:
@@ -715,8 +732,7 @@ export function MarkdownViewer({
         // enlarges the whole diagram — overflowing into the .lv-diagram-scroll
         // wrapper's horizontal scroll — instead of being normalized back. The
         // var updates on a font change with no re-render (see the observer).
-        svg.style.width =
-          `calc(${rendered}px * var(--lv-chart-scale, 1))`;
+        svg.style.width = `calc(${rendered}px * var(--lv-chart-scale, 1))`;
         svg.style.maxWidth = "none";
         svg.style.height = "auto";
       }
@@ -762,7 +778,6 @@ export function MarkdownViewer({
   }, []);
 
   // Persist scroll position (as a 0..1 ratio, robust to reflow) while reading.
-  // Upstream debounces the network write; here we just report on each scroll.
   //
   // The read is deferred to a single requestAnimationFrame, NOT done inline.
   // Why: reading scrollHeight/clientHeight inside the scroll event forces a
@@ -790,15 +805,53 @@ export function MarkdownViewer({
         "--lv-read-progress",
         ratio.toFixed(4),
       );
-      onSaveScroll?.(currentPath, ratio);
+      pendingScrollRef.current = ratio;
+      if (scrollSaveTimerRef.current !== null) {
+        clearTimeout(scrollSaveTimerRef.current);
+      }
+      scrollSaveTimerRef.current = window.setTimeout(() => {
+        scrollSaveTimerRef.current = null;
+        const pending = pendingScrollRef.current;
+        pendingScrollRef.current = null;
+        if (pending !== null) onSaveScroll?.(currentPath, pending);
+      }, 180);
     });
   }, [currentPath, onSaveScroll]);
+
+  // React's onScroll wiring keeps bookkeeping on the hot path. Attach the
+  // reader listener directly and explicitly passive so WKWebView can leave the
+  // pan gesture with its native scroller. `scrollend` flushes the trailing
+  // progress value immediately on engines that support it; the timer remains a
+  // compatible fallback.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return undefined;
+    const flush = (): void => {
+      if (scrollSaveTimerRef.current !== null) {
+        clearTimeout(scrollSaveTimerRef.current);
+        scrollSaveTimerRef.current = null;
+      }
+      const pending = pendingScrollRef.current;
+      pendingScrollRef.current = null;
+      if (pending !== null && currentPath) onSaveScroll?.(currentPath, pending);
+    };
+    el.addEventListener("scroll", handleScroll, { passive: true });
+    el.addEventListener("scrollend", flush, { passive: true });
+    return () => {
+      el.removeEventListener("scroll", handleScroll);
+      el.removeEventListener("scrollend", flush);
+      flush();
+    };
+  }, [currentPath, handleScroll, onSaveScroll]);
 
   // Cancel any queued scroll read on unmount so it can't fire after teardown.
   useEffect(() => {
     return () => {
       if (scrollRafRef.current !== null) {
         cancelAnimationFrame(scrollRafRef.current);
+      }
+      if (scrollSaveTimerRef.current !== null) {
+        clearTimeout(scrollSaveTimerRef.current);
       }
     };
   }, []);
@@ -937,7 +990,6 @@ export function MarkdownViewer({
           ref={containerRef}
           data-lv-scroller="reader"
           onClick={handleClick}
-          onScroll={handleScroll}
           sx={{
             flex: 1,
             // Without min-height:0 a flex child won't shrink below its content, so
@@ -955,8 +1007,10 @@ export function MarkdownViewer({
             // still scrolls UNDER them. Restore-by-ratio is unaffected (it reads
             // scrollHeight after this padding is in).
             pb: {
-              xs: "calc(16px + var(--lv-syncbar-h, 0px) + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
-              md: "calc(32px + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
+              xs:
+                "calc(16px + var(--lv-syncbar-h, 0px) + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
+              md:
+                "calc(32px + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
             },
             // Keep the spoken-line auto-centre (read-aloud follow) from parking the
             // narrated sentence UNDER the bar near the chapter's end.
@@ -989,22 +1043,34 @@ export function MarkdownViewer({
             },
           }}
         >
-          {/* One node (fence placeholders included) — keeps the structure the
-              read-along highlight + sourcepos anchors depend on. */}
+          {
+            /* One node (fence placeholders included) — keeps the structure the
+              read-along highlight + sourcepos anchors depend on. */
+          }
           <Box
             className="markdown-body"
             sx={innerSx}
             dangerouslySetInnerHTML={{ __html: processedHtml }}
           />
-          {/* Portal each interactive view into its placeholder: it stays in
+          {
+            /* Portal each interactive view into its placeholder: it stays in
               React's tree (theme + reliable commits) while its DOM anchor sits
-              in the injected html, untouched by the imperative markdown passes. */}
+              in the injected html, untouched by the imperative markdown passes. */
+          }
           {fences.map((json, i) => {
             const node = slots[i];
-            return node ? createPortal(<InteractiveViewInline content={json} />, node, String(i)) : null;
+            return node
+              ? createPortal(
+                <InteractiveViewInline content={json} />,
+                node,
+                String(i),
+              )
+              : null;
           })}
-          {/* Prev/next chapter pager — same centred reading column as the text
-              above, so it lines up; scrolls with the content. */}
+          {
+            /* Prev/next chapter pager — same centred reading column as the text
+              above, so it lines up; scrolls with the content. */
+          }
           {footer && (
             <Box sx={{ maxWidth: `${READING_COLUMN_MAX}px`, mx: "auto" }}>
               {footer}

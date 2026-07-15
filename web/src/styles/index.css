@@ -91,10 +91,24 @@ textarea,
 /* Mobile: keep wide content (tables, code, images) inside the viewport
    instead of forcing the whole page to scroll sideways. */
 @media (max-width: 900px) {
-  .markdown-body table {
-    display: block;
+  /* A normal prose table should participate in the reader's ONE vertical
+     scroller. Turning every table into overflow:auto creates a nested
+     UIScrollView in WKWebView; iOS then pauses each vertical flick over the
+     table while its gesture recognizer decides whether the user meant to pan
+     sideways. Most book tables have only two or three columns and read better
+     by wrapping cells to the viewport. Keep horizontal scrolling only for
+     genuinely tabular 4+ column data where wrapping would destroy the shape. */
+  .markdown-body table:not(:has(tr > :nth-child(4))) {
+    display: table;
     width: 100%;
-    overflow-x: auto;
+    max-width: 100%;
+    overflow: visible;
+    table-layout: auto;
+  }
+
+  .markdown-body table:not(:has(tr > :nth-child(4))) th,
+  .markdown-body table:not(:has(tr > :nth-child(4))) td {
+    overflow-wrap: anywhere;
   }
 
   .markdown-body pre {

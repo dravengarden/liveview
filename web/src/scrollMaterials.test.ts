@@ -36,6 +36,8 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const sidebar = await source("components/Sidebar.tsx");
   const nativeSync = await source("native-sync.ts");
   const shell = await source("App.tsx");
+  const markdownViewer = await source("components/MarkdownViewer.tsx");
+  const mobileStyles = await source("styles/index.css");
 
   const backdropFilter = /\b(?:backdropFilter|WebkitBackdropFilter)\s*:/;
   assertAbsent(landing, backdropFilter, "Landing shelf");
@@ -109,5 +111,20 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     shell,
     /opacity: activeSlug === null \? 1 : 0/,
     "the hidden bookshelf must not retain thousands of painted nodes behind the reader",
+  );
+  assertPresent(
+    mobileStyles,
+    /table:not\(:has\(tr > :nth-child\(4\)\)\)/,
+    "phone-sized prose tables must not become nested horizontal scrollers",
+  );
+  assertAbsent(
+    markdownViewer,
+    /onScroll=\{handleScroll\}/,
+    "the reader must use a passive native scroll listener",
+  );
+  assertPresent(
+    markdownViewer,
+    /addEventListener\("scroll", handleScroll, \{ passive: true \}\)/,
+    "the reader scroll listener must be explicitly passive",
   );
 });
