@@ -49,6 +49,9 @@ scheme and refreshes it from a configured LiveView server.
 
 ## Content and UI behavior
 
+- Treat [docs/core-requirements.md](docs/core-requirements.md) as a product gate.
+  A functionally correct feature is incomplete if it regresses scrolling,
+  transitions, sheets, or playback responsiveness under background work.
 - Follow `docs/design-system.md` for brand, material, responsive, and motion
   decisions. Keep identity tokens in `web/src/brand.ts`; do not fork logo geometry
   or palette values inside components.

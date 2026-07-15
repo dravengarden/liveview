@@ -40,6 +40,10 @@ forces RGBA output because Tauri rejects grayscale-plus-alpha PNGs at startup.
 
 ## Motion and performance
 
+Fluid interaction is a product invariant, not a visual polish pass. Follow the
+[performance architecture and acceptance gate](core-requirements.md#reading-must-stay-fluid)
+for every feature that can affect rendering or background work.
+
 - Motion communicates navigation, progress, or state change; it is never ambient
   decoration.
 - Never use `backdrop-filter`, CSS `filter`, or blend modes inside a scrolling

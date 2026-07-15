@@ -20,6 +20,10 @@ LiveView turns a directory of authored content into a polished reading experienc
 > [!NOTE]
 > LiveView is currently pre-1.0. The content format is usable today, but command-line and protocol details may still evolve.
 
+LiveView's non-negotiable product invariants—including interaction performance,
+offline verification, and native lifecycle behavior—are defined in
+[the core requirements](docs/core-requirements.md).
+
 ## Why LiveView?
 
 Most Markdown tools stop at rendering a single document. LiveView treats a collection as a real publication:
