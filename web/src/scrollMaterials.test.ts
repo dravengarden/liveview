@@ -44,6 +44,10 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     ),
     "utf8",
   );
+  const syncPlugin = await readFile(
+    new URL("../../plugins/lvsync/src/lib.rs", ROOT),
+    "utf8",
+  );
   const shell = await source("App.tsx");
   const markdownViewer = await source("components/MarkdownViewer.tsx");
   const mobileStyles = await source("styles/index.css");
@@ -185,6 +189,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     nativeAudio,
     /min\(start \+ 64, items\.count\)/,
     "native queue admission must be split into bounded runloop slices",
+  );
+  assertPresent(
+    syncPlugin,
+    /"\/" \| "\/index\.html" \| "\/app" \| "\/app\/" => Some\("index\.html"\)/,
+    "native release startup aliases must always resolve to the embedded SPA",
   );
   assertPresent(
     nativeSync,

@@ -1094,7 +1094,11 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
                 // install / offline always works. The app keeps the tauri://localhost
                 // origin (IPC intact); a bootstrap loads from /app/. index.html is
                 // no-store (a new bundle is never masked), hashed assets immutable.
-                if let Some(rel0) = path.strip_prefix("/app/") {
+                let app_rel = match path.as_str() {
+                    "/" | "/index.html" | "/app" | "/app/" => Some("index.html"),
+                    _ => path.strip_prefix("/app/"),
+                };
+                if let Some(rel0) = app_rel {
                     let rel = if rel0.is_empty() { "index.html" } else { rel0 };
                     let state = app.state::<LvState>();
                     let body = state
