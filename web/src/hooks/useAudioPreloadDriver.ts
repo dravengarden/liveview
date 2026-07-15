@@ -4,6 +4,7 @@ import {
   ensureAutoSync,
   nativeAudioIndex,
   nativeCacheStats,
+  nativeNetworkClass,
   nativeRefreshManifest,
   nativeSyncAvailable,
   offlineWifiOnly,
@@ -12,11 +13,9 @@ import {
   nativeAudioPreload,
   nativeAudioSetCap,
   nativeAudioSetWifiOnly,
-  nativeAudioStats,
 } from "@/native-audio";
 import { contentFetch } from "@/native-sync";
 import { ingestDag } from "@/audioMediaIndex";
-import { logEvent } from "@/apm";
 
 // Mirror of OfflineSection's storage budget key (the Settings → Downloads
 // "Max storage" select writes it). Read live each tick so a change takes effect
@@ -36,8 +35,8 @@ function maxBytes(): number {
  * 自动运行"). This hook is mounted once at the app root instead.
  *
  * Native shell only. Heuristically gated: it skips a round while the WiFi-only
- * preference is on and the device is on cellular. Each round feeds the next chunk
- * of not-yet-cached chapters to the native scheduler (which dedups what's already
+ * preference is on and the device is on cellular. Each round feeds a rotating
+ * chapter window to the native scheduler (which dedups what's already
  * queued / in-flight / on-disk and adapts its own concurrency), so a stalled fill
  * self-heals on the next tick. Text is handled separately by ensureAutoSync.
  */
@@ -52,9 +51,7 @@ export function useAudioPreloadDriver(): void {
     // Reentrancy guard: refreshWorkingSet fires from mount, the pump (when the set
     // is empty) AND every foreground, so it must not overlap itself.
     let refreshing = false;
-    // Throttle for the dl_stats telemetry (below) so it emits ~every 30s, not every
-    // 3s pump tick.
-    let lastDlLog = 0;
+    let preloadCursor = 0;
 
     nativeAudioSetCap(maxBytes());
     // Seed the native downloader's WiFi-only policy at startup so its background
@@ -143,45 +140,10 @@ export function useAudioPreloadDriver(): void {
       }
       // Re-read the budget each round so a Settings change applies live.
       nativeAudioSetCap(maxBytes());
-      // WiFi-only heuristic: don't auto-fill the bulk audio on cellular when the
-      // pref is set. Unknown network → proceed (best effort).
-      const a = await nativeAudioStats();
-      if (cancelled || !a) return;
-      const cached = new Set(a.cached);
-      // Telemetry → APM/VictoriaLogs (throttled ~30s). The native download
-      // scheduler was never instrumented, so a silent stall was invisible to APM.
-      // Emit the whole download state each round: `event_type:dl_stats` in VL then
-      // shows inflight/queued/done/err, the index-vs-disk drift (cachedCount vs
-      // dlDisk), free space and the WiFi gate — the on-device signal, queryable
-      // without a screenshot. Log BEFORE the WiFi-gate return so a gate-skip round
-      // still reports (net/wifi_only reveal a mis-gated fill).
-      const uncached = audioRes.reduce(
-        (n, r) => n + (cached.has(r.hash) ? 0 : 1),
-        0,
-      );
-      const nowMs = Date.now();
-      if (nowMs - lastDlLog > 30_000) {
-        lastDlLog = nowMs;
-        logEvent("dl_stats", {
-          total: audioRes.length,
-          cached_count: a.cachedCount,
-          dl_disk: a.dlDisk ?? -1,
-          uncached,
-          inflight: a.dlInflight ?? -1,
-          queued: a.dlQueued ?? -1,
-          done: a.dlDone ?? -1,
-          used_gb: Math.round(a.usedBytes / 1e8) / 10,
-          free_gb: a.freeBytes != null && a.freeBytes >= 0
-            ? Math.round(a.freeBytes / 1e8) / 10
-            : -1,
-          net: a.net,
-          wifi_only: offlineWifiOnly(),
-          err: a.dlErr ?? "",
-        });
-      }
-      // WiFi-only gate reads net from the AUDIO layer now (it owns the WiFi-gated
-      // big download); the content store (nativeCacheStats) is Rust + not net-aware.
-      if (offlineWifiOnly() && a.net !== "wifi") return;
+      // WiFi-only gating uses the shared native NWPathMonitor push state. Never
+      // poll audioStats here: it enumerates thousands of cache/index entries and
+      // its recurring WKWebView bridge response caused visible scroll hitches.
+      if (offlineWifiOnly() && nativeNetworkClass() !== "wifi") return;
       // NOTE: an orphan-GC (delete cached audio whose hash isn't in the manifest)
       // was REMOVED here. It was meant to tidy the "3391/3388" count, but it could
       // MASS-DELETE the user's downloaded audio: if the server's corpus re-keyed any
@@ -190,21 +152,15 @@ export function useAudioPreloadDriver(): void {
       // dead across whole books. The cosmetic count is already handled by the
       // Downloads panel's min(cached,total) clamp; deleting the user's 5GB to fix a
       // label is the wrong trade. Orphans (rare) just age out via the LRU cap.
-      // Feed a WIDE window, not a narrow front slice. `cached` is the native
-      // INDEX (store.allKeys); native's own preload dedups against DISK. If the
-      // index has drifted BELOW disk (orphan .caf files with no row — a
-      // completion whose index write was lost to an app suspend), those orphans
-      // sit at the front of this filtered list, native skips them all (already on
-      // disk), and a narrow slice (was 300) never reaches the truly-missing
-      // chapters past the orphan cluster — the fill wedges at the index count
-      // with inflight/queued/done all 0. A large window spans past any realistic
-      // orphan cluster into the real gaps; native dedups the on-disk ones for
-      // free. (The durable fix is native reconcileIndex adopting orphans so the
-      // index is truthful; this keeps the fill self-healing regardless.)
-      const items = audioRes
-        .filter((r) => !cached.has(r.hash))
-        .slice(0, 1500)
+      // Native owns dedup against queued, in-flight and on-disk resources. Feed a
+      // rotating window so every resource is eventually offered without pulling
+      // the full cached-hash index over the web/native bridge every three seconds.
+      const windowSize = Math.min(1500, audioRes.length);
+      const items = Array.from({ length: windowSize }, (_, offset) =>
+        audioRes[(preloadCursor + offset) % audioRes.length])
+        .filter((r): r is NonNullable<typeof r> => r !== undefined)
         .map((r) => ({ url: `${REMOTE}${r.url}`, hash: r.hash }));
+      preloadCursor = (preloadCursor + windowSize) % audioRes.length;
       if (items.length > 0) nativeAudioPreload(items);
     };
 

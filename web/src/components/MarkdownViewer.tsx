@@ -260,6 +260,7 @@ export function MarkdownViewer({
   footer,
 }: MarkdownViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
+  const progressBarRef = useRef<HTMLDivElement>(null);
   // Suppresses the scroll handler while we programmatically restore position,
   // so restoring doesn't immediately overwrite the saved value with itself.
   const restoringRef = useRef(false);
@@ -770,8 +771,8 @@ export function MarkdownViewer({
   }, []);
 
   // Persist scroll position (as a 0..1 ratio, robust to reflow) once scrolling
-  // has settled. The visual progress bar below is driven by a native CSS scroll
-  // timeline and needs no JavaScript on display frames.
+  // has settled. The visual progress bar snaps to that saved value at the same
+  // time, so it also does no work on display frames.
   const saveScrollPosition = useCallback(() => {
     if (restoringRef.current || !currentPath) return;
     const el = containerRef.current;
@@ -779,6 +780,9 @@ export function MarkdownViewer({
     const max = el.scrollHeight - el.clientHeight;
     if (max <= 0) return;
     const ratio = Math.min(1, Math.max(0, el.scrollTop / max));
+    if (progressBarRef.current) {
+      progressBarRef.current.style.transform = `scaleX(${ratio})`;
+    }
     onSaveScroll?.(currentPath, ratio);
   }, [currentPath, onSaveScroll]);
 
@@ -843,6 +847,9 @@ export function MarkdownViewer({
     const apply = (): void => {
       const max = el.scrollHeight - el.clientHeight;
       el.scrollTop = max > 0 ? ratio * max : 0;
+      if (progressBarRef.current) {
+        progressBarRef.current.style.transform = `scaleX(${ratio})`;
+      }
     };
     apply();
     const t1 = setTimeout(apply, 250);
@@ -934,10 +941,11 @@ export function MarkdownViewer({
         }}
       >
         {
-          /* Reading progress is driven by the reader's native CSS scroll
-          timeline. No per-frame JavaScript touches the markdown tree. */
+          /* Reading progress updates only after the gesture settles. No
+          scroll-linked animation or per-frame JavaScript touches the reader. */
         }
         <Box
+          ref={progressBarRef}
           aria-hidden
           sx={{
             position: "absolute",
@@ -948,8 +956,7 @@ export function MarkdownViewer({
             zIndex: 4,
             transformOrigin: "left center",
             transform: "scaleX(0)",
-            animation: "lv-reader-progress linear both",
-            animationTimeline: "--lv-reader-scroll",
+            transition: "transform 120ms ease-out",
             bgcolor: "primary.main",
             opacity: 0.85,
             pointerEvents: "none",
@@ -966,8 +973,6 @@ export function MarkdownViewer({
             // iOS, where there's no trackpad to mask it).
             minHeight: 0,
             overflow: "auto",
-            scrollTimelineName: "--lv-reader-scroll",
-            scrollTimelineAxis: "block",
             // Vertical padding fixed; horizontal padding IS the reading margin.
             pt: { xs: 2, md: 4 },
             // Foot padding ADDS the two frosted overlays the text scrolls under:

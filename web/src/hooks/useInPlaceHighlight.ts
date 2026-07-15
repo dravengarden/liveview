@@ -447,7 +447,11 @@ export function useInPlaceHighlight(
   currentPath: string | null,
 ): ReadAlongFollow {
   const { nowPlaying, currentIdx, playing, seekToSentence } = useAudioPlayer();
-  const { currentTime } = useAudioTime();
+  const active = nowPlaying?.rendition === "text" &&
+    nowPlaying.chapterPath === currentPath;
+  // A background audiobook still ticks ~4 times per second. Do not make an
+  // unrelated text chapter re-render its entire markdown tree for that clock.
+  const { currentTime } = useAudioTime(active);
   const [units, setUnits] = useState<Unit[]>([]);
   const [marks, setMarks] = useState<Mark[]>([]);
   // Sticky follow: auto-scroll keeps the spoken line in view; a manual scroll
@@ -516,9 +520,6 @@ export function useInPlaceHighlight(
     }
     return locatedRef.current;
   }, [units]);
-
-  const active = nowPlaying?.rendition === "text" &&
-    nowPlaying.chapterPath === currentPath;
 
   // Fetch units + marks for the active chapter (both cheap / already cached by
   // the engine's own load). Cleared when inactive.

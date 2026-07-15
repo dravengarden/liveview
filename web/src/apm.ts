@@ -24,8 +24,10 @@
 //      `error` events are de-duplicated + capped so an error storm can't flood it;
 //      connectivity transitions are logged ONCE per flip, never one-per-retry.
 
-import { nativeSyncAvailable } from "@/native-sync";
-import { nativeAudioStats } from "@/native-audio";
+import {
+  nativeSyncAvailable,
+  onNativeNetworkClass,
+} from "@/native-sync";
 import { REMOTE } from "@/apiBase";
 
 const SCHEME = "lvsync://localhost";
@@ -253,21 +255,11 @@ export function startApm(): void {
   globalThis.addEventListener?.("online", () => void flushApm());
   globalThis.setInterval?.(() => void flushApm(), FLUSH_MS);
 
-  // Keep the OS network-class hint fresh (2s, like startOfflineFlagSync) so events
-  // carry the class they happened under. (Reachability is tracked separately, above.)
-  let inFlight = false;
-  globalThis.setInterval?.(() => {
-    if (inFlight) return;
-    inFlight = true;
-    void nativeAudioStats()
-      .then((a) => {
-        if (a) netHint = a.net;
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        inFlight = false;
-      });
-  }, 2000);
+  // Share the native NWPathMonitor push stream with offline handling. APM must
+  // never create its own recurring native bridge work on the scroll hot path.
+  onNativeNetworkClass((net) => {
+    netHint = net;
+  });
 
   void flushApm(); // drain anything left from a prior offline session
 }

@@ -35,6 +35,8 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const scrollToTop = await source("components/ScrollToTopButton.tsx");
   const sidebar = await source("components/Sidebar.tsx");
   const nativeSync = await source("native-sync.ts");
+  const apm = await source("apm.ts");
+  const preloadDriver = await source("hooks/useAudioPreloadDriver.ts");
   const shell = await source("App.tsx");
   const markdownViewer = await source("components/MarkdownViewer.tsx");
   const mobileStyles = await source("styles/index.css");
@@ -127,14 +129,34 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /--lv-read-progress/,
     "scrolling must not invalidate an inherited progress variable",
   );
-  assertPresent(
+  assertAbsent(
     markdownViewer,
     /scrollTimelineName: "--lv-reader-scroll"/,
-    "reading progress must use the native CSS scroll timeline",
+    "the reader must not run a scroll-linked animation while moving",
   );
   assertPresent(
     markdownViewer,
     /Reflect\.has\(el, "onscrollend"\)/,
     "current WebKit must persist progress only after scrolling ends",
+  );
+  assertPresent(
+    await source("hooks/useInPlaceHighlight.ts"),
+    /useAudioTime\(active\)/,
+    "an unrelated audio clock must not re-render the reader while scrolling",
+  );
+  assertAbsent(
+    apm,
+    /nativeAudioStats/,
+    "APM must share pushed native network state instead of polling audio stats",
+  );
+  assertAbsent(
+    preloadDriver,
+    /nativeAudioStats/,
+    "background preload must not enumerate the native audio cache on a timer",
+  );
+  assertPresent(
+    nativeSync,
+    /event\.type === "network"/,
+    "native connectivity must arrive through NWPathMonitor push events",
   );
 });

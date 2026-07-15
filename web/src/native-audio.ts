@@ -58,6 +58,10 @@ export type NativeAudioEvent =
   | { readonly type: "ended" }
   | { readonly type: "waiting" }
   | { readonly type: "canplay" }
+  | {
+    readonly type: "network";
+    readonly net: "wifi" | "cell" | "none";
+  }
   | { readonly type: "next" }
   | { readonly type: "prev" }
   | { readonly type: "error"; readonly message: string };

@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import type { Mark, SpokenContent } from "@/types";
 import { chapterMedia } from "@/audioHash";
@@ -275,7 +276,12 @@ function markIndex(marks: Mark[], ms: number): number {
 }
 
 const Ctx = createContext<AudioPlayer | null>(null);
-const TimeCtx = createContext<AudioTime | null>(null);
+interface AudioTimeStore {
+  getSnapshot: () => AudioTime;
+  subscribe: (listener: () => void) => () => void;
+}
+const TimeCtx = createContext<AudioTimeStore | null>(null);
+const NOOP_SUBSCRIBE = (): (() => void) => () => undefined;
 
 export function AudioPlayerProvider(
   { children }: { children: React.ReactNode },
@@ -296,6 +302,21 @@ export function AudioPlayerProvider(
   });
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const timeSnapshotRef = useRef<AudioTime>({
+    currentTime: 0,
+    duration: 0,
+    currentProgress: 0,
+  });
+  const timeListenersRef = useRef(new Set<() => void>());
+  const timeStore = useMemo<AudioTimeStore>(() => ({
+    getSnapshot: () => timeSnapshotRef.current,
+    subscribe: (listener) => {
+      timeListenersRef.current.add(listener);
+      return () => {
+        timeListenersRef.current.delete(listener);
+      };
+    },
+  }), []);
   const [queue, setQueue] = useState<Track[]>([]);
   const [queueIndex, setQueueIndex] = useState(-1);
   // Raised once when a fresh load adopts a newer resume point from another
@@ -798,6 +819,9 @@ export function AudioPlayerProvider(
           break;
         case "prev":
           prevChapter();
+          break;
+        case "network":
+          // Consumed centrally by native-sync; playback has no work to do.
           break;
         case "error":
           // Clear the spinner + the playing state so the UI never sits on an
@@ -1418,16 +1442,21 @@ export function AudioPlayerProvider(
     ],
   );
 
-  // The fast-ticking clock lives in its own memo + provider so a `currentTime`
-  // tick re-renders ONLY the `useAudioTime()` consumers, never the `value` tree.
-  const timeValue = useMemo<AudioTime>(
-    () => ({ currentTime, duration, currentProgress }),
-    [currentTime, duration, currentProgress],
-  );
+  const previousTime = timeSnapshotRef.current;
+  if (
+    previousTime.currentTime !== currentTime ||
+    previousTime.duration !== duration ||
+    previousTime.currentProgress !== currentProgress
+  ) {
+    timeSnapshotRef.current = { currentTime, duration, currentProgress };
+  }
+  useEffect(() => {
+    for (const listener of timeListenersRef.current) listener();
+  }, [currentTime, duration, currentProgress]);
 
   return (
     <Ctx.Provider value={value}>
-      <TimeCtx.Provider value={timeValue}>
+      <TimeCtx.Provider value={timeStore}>
         {children}
         {
           /* The single, always-mounted narration element — never unmounts, so
@@ -1453,10 +1482,14 @@ export function useAudioPlayer(): AudioPlayer {
  *  Read it ONLY where you actually render the moving value (scrubbers, progress
  *  dots, the read-along wipe) — subscribing here re-renders ~4×/s while playing,
  *  whereas `useAudioPlayer()` stays still through a tick. */
-export function useAudioTime(): AudioTime {
-  const ctx = useContext(TimeCtx);
-  if (!ctx) {
+export function useAudioTime(enabled = true): AudioTime {
+  const store = useContext(TimeCtx);
+  if (!store) {
     throw new Error("useAudioTime must be used within an AudioPlayerProvider");
   }
-  return ctx;
+  return useSyncExternalStore(
+    enabled ? store.subscribe : NOOP_SUBSCRIBE,
+    store.getSnapshot,
+    store.getSnapshot,
+  );
 }

@@ -13,7 +13,11 @@
 // Off the shell (PWA / browser) the scheme is absent → every helper falls back to a
 // normal `fetch` (the service worker handles offline there).
 
-import { nativeAudioSetWifiOnly, nativeAudioStats } from "@/native-audio";
+import {
+  nativeAudioSetWifiOnly,
+  nativeAudioStats,
+  onNativeAudioEvent,
+} from "@/native-audio";
 import { remoteUrl } from "@/apiBase";
 
 const SCHEME = "lvsync://localhost";
@@ -245,17 +249,33 @@ function setNativeOffline(on: boolean): void {
 /** Keep the native fast-fail flag in sync with connectivity so offline navigation
  *  never eats the per-request connect timeout.
  *
- *  TWO signals, because `navigator.onLine` is UNRELIABLE in WKWebView (it often
+ *  Two signals, because `navigator.onLine` is unreliable in WKWebView (it often
  *  stays `true` in airplane mode, so it alone never flips the flag — that was why
  *  the audiobook jump stayed laggy):
  *   - navigator.onLine + online/offline events: instant WHEN they fire.
- *   - a 2s poll of the native NWPathMonitor (`nativeAudioStats().net === "none"`):
- *     the RELIABLE signal — the OS path monitor knows airplane mode for sure.
+ *   - native NWPathMonitor push events: the reliable airplane-mode signal.
  *  Plus the plugin's own OFFLINE_UNTIL backstop catches anything these miss. */
-/** Last-known RELIABLE offline state, kept fresh by startOfflineFlagSync's
- *  NWPathMonitor poll. Read this instead of `navigator.onLine`, which is unreliable
+/** Last-known reliable offline state, kept fresh by NWPathMonitor events. Read
+ *  this instead of `navigator.onLine`, which is unreliable
  *  in WKWebView (commonly stays `true` in airplane mode). */
 let knownOffline = false;
+export type NativeNetworkClass = "wifi" | "cell" | "none" | "unknown";
+let knownNetworkClass: NativeNetworkClass = "unknown";
+const networkListeners = new Set<(net: NativeNetworkClass) => void>();
+
+export function nativeNetworkClass(): NativeNetworkClass {
+  return knownNetworkClass;
+}
+
+export function onNativeNetworkClass(
+  listener: (net: NativeNetworkClass) => void,
+): () => void {
+  networkListeners.add(listener);
+  listener(knownNetworkClass);
+  return () => {
+    networkListeners.delete(listener);
+  };
+}
 
 /** Whether the device is (reliably) offline. On the shell this is the NWPathMonitor-
  *  derived flag; off-shell it falls back to `navigator.onLine` (reliable there). */
@@ -273,23 +293,23 @@ export function startOfflineFlagSync(): void {
     last = offline;
     setNativeOffline(offline);
   };
+  const applyNetwork = (net: NativeNetworkClass): void => {
+    if (knownNetworkClass === net) return;
+    knownNetworkClass = net;
+    for (const listener of networkListeners) listener(net);
+    apply(net === "none");
+  };
   apply(!navigator.onLine);
   globalThis.addEventListener("online", () => apply(false));
   globalThis.addEventListener("offline", () => apply(true));
-  // Reliable poll: the native net state from NWPathMonitor (via the audio layer).
-  let inFlight = false;
-  globalThis.setInterval(() => {
-    if (inFlight) return;
-    inFlight = true;
-    void nativeAudioStats()
-      .then((a) => {
-        if (a) apply(a.net === "none");
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        inFlight = false;
-      });
-  }, 2000);
+  // One startup snapshot closes the race where NWPathMonitor emitted before the
+  // SPA installed its listener. Subsequent changes are native push events.
+  void nativeAudioStats().then((a) => {
+    if (a) applyNetwork(a.net);
+  }).catch(() => undefined);
+  onNativeAudioEvent((event) => {
+    if (event.type === "network") applyNetwork(event.net);
+  });
 }
 
 /** Re-pull /api/dag → refresh the native content manifest. MUST run on every app

@@ -386,7 +386,14 @@ import WidgetKit
     // and playImmediately, playback stalls forever at 0:00 — the "this chapter
     // won't play" bug on a chapter resumed near its end.
     player.automaticallyWaitsToMinimizeStalling = true
-    netMonitor.pathUpdateHandler = { [weak self] p in self?.netPath = p }
+    netMonitor.pathUpdateHandler = { [weak self] p in
+      guard let self else { return }
+      self.netPath = p
+      // Push path changes once instead of making JavaScript poll audioStats every
+      // two seconds. audioStats enumerates the audio index and filesystem; two
+      // synchronized web polls were periodically blocking WKWebView scrolling.
+      self.emit("{type:'network',net:'\(self.netType())'}")
+    }
     netMonitor.start(queue: DispatchQueue(label: "lv.net"))
     // Force the cache dir's lazy init on THIS (main) thread before any download
     // session exists: a transfer's didFinishDownloadingTo → publish runs on the
