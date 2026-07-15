@@ -272,6 +272,16 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
             .await
             .map_err(|e| format!("upsert book {}: {e}", book.slug))?;
 
+        let desired_renditions: Vec<String> = book
+            .renditions
+            .iter()
+            .map(|rendition| rendition.kind.as_str().to_string())
+            .collect();
+        store
+            .retain_renditions(&book.slug, &desired_renditions)
+            .await
+            .map_err(|e| format!("prune renditions {}: {e}", book.slug))?;
+
         let mut rendition_nodes: Vec<(String, Build)> = Vec::new();
         for (r_ord, rend) in book.renditions.iter().enumerate() {
             let r_kind = rend.kind.as_str();
@@ -287,6 +297,16 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 )
                 .await
                 .map_err(|e| format!("upsert rendition {}/{r_kind}: {e}", book.slug))?;
+
+            let desired_editions: Vec<String> = rend
+                .editions
+                .iter()
+                .map(|edition| edition.lang.clone())
+                .collect();
+            store
+                .retain_editions(&book.slug, r_kind, &desired_editions)
+                .await
+                .map_err(|e| format!("prune editions {}/{r_kind}: {e}", book.slug))?;
 
             let mut edition_nodes: Vec<(String, Build)> = Vec::new();
             for (e_ord, ed) in rend.editions.iter().enumerate() {

@@ -372,6 +372,45 @@ impl PgStore {
         .map(|_| ())
     }
 
+    /// Remove rendition metadata no longer declared by the current corpus.
+    /// Chapters are reconciled by the Merkle plan; edition rows cascade here.
+    pub async fn retain_renditions(
+        &self,
+        book_slug: &str,
+        kinds: &[String],
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "DELETE FROM renditions
+             WHERE book_slug = $1 AND NOT (kind = ANY($2))",
+        )
+        .bind(book_slug)
+        .bind(kinds)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+    }
+
+    /// Remove language metadata no longer declared for one rendition.
+    /// This keeps the reader's language switcher equal to the manifest.
+    pub async fn retain_editions(
+        &self,
+        book_slug: &str,
+        rendition: &str,
+        langs: &[String],
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "DELETE FROM editions
+             WHERE book_slug = $1 AND rendition = $2
+               AND NOT (lang = ANY($3))",
+        )
+        .bind(book_slug)
+        .bind(rendition)
+        .bind(langs)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+    }
+
     // ── Catalog readers (server side) ────────────────────────────────────────
 
     pub async fn list_books(&self) -> Result<Vec<BookRow>, sqlx::Error> {
