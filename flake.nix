@@ -9,7 +9,10 @@
 {
   description = "liveview — book reader (axum + embedded React SPA, pg + rustfs backed)";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  # Match the NixOS release used by the production host. The frontend's Deno
+  # dependency cache is produced through nixpkgs, so the standalone and host
+  # builds must use the same release generation for depsHash to stay valid.
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
   # The shared @shared-utils/ui SDK (business- and portal-free React + MUI
   # primitives), referenced as a Nix package and staged into the web build below
@@ -57,7 +60,7 @@
         inherit version;
         src = lib.cleanSource ./.;
         installArgs = "--frozen --allow-scripts";
-        depsHash = "sha256-AUnzqTnVVN1Wt8KCQWEO/v+O8L6OYcNVv9ilhQtRMc0=";
+        depsHash = "sha256-wcjOFWiGOKuPklz+ZHJbl/hWjd4lAm2ahzjcyTM2jLw=";
       };
 
       # ── liveview: axum daemon, embeds the SPA via include_dir! ────────
