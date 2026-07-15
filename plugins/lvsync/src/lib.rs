@@ -561,7 +561,12 @@ impl LvState {
         let m = Manifest::from_json(&json)?;
         let root = m.root.clone();
         let idx = index(&m);
-        let _ = std::fs::write(&self.manifest_file, &json);
+        // Swift's audio coordinator reads this same durable manifest off-main.
+        // Publish atomically so it can never observe a partially-written DAG.
+        let temporary = self.manifest_file.with_extension("json.tmp");
+        if std::fs::write(&temporary, &json).is_ok() {
+            let _ = std::fs::rename(&temporary, &self.manifest_file);
+        }
         *self.by_url.write().await = idx;
         *self.manifest.write().await = m;
         Ok(root)

@@ -319,15 +319,17 @@ export function startOfflineFlagSync(): void {
  *  sync never fires, and those chapters stay blank offline. After this returns the
  *  sync pump (useAudioPreloadDriver) downloads whatever's newly listed. No-op
  *  off-shell; never throws. */
-export async function nativeRefreshManifest(): Promise<void> {
-  if (!nativeSyncAvailable()) return;
+export async function nativeRefreshManifest(): Promise<string> {
+  if (!nativeSyncAvailable()) return "";
   // Skip offline: refresh re-fetches /api/dag (its own 4s connect timeout), wasted
   // when we know there's no network. The next foreground (online) retries.
-  if (!navigator.onLine) return;
+  if (!navigator.onLine) return "";
   try {
-    await fetch(`${SCHEME}/refresh`);
+    const response = await fetch(`${SCHEME}/refresh`);
+    return response.ok ? await response.text() : "";
   } catch {
     /* offline / transient — the next foreground retries */
+    return "";
   }
 }
 

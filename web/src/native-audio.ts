@@ -83,8 +83,8 @@ type OutMsg =
     readonly data: { readonly items: { url: string; hash: string }[] };
   }
   | {
-    readonly kind: "preload";
-    readonly data: { readonly items: { url: string; hash: string }[] };
+    readonly kind: "reconcile";
+    readonly data: { readonly root: string; readonly baseURL: string };
   }
   | { readonly kind: "unpin"; readonly data: { readonly keys: string[] } }
   | { readonly kind: "setCap"; readonly data: { readonly bytes: number } }
@@ -186,9 +186,10 @@ export function nativeAudioPin(items: { url: string; hash: string }[]): boolean 
   return send({ kind: "pin", data: { items } });
 }
 
-/** AUTO preload: fill the storage budget with these chapters (evictable, LRU). */
-export function nativeAudioPreload(items: { url: string; hash: string }[]): boolean {
-  return send({ kind: "preload", data: { items } });
+/** Reconcile automatic downloads from lv-sync's durable Merkle manifest.
+ * This constant-size command replaces recurring resource arrays over WKWebView. */
+export function nativeAudioReconcile(root: string, baseURL: string): boolean {
+  return send({ kind: "reconcile", data: { root, baseURL } });
 }
 
 /** Set the audio storage budget (bytes); native evicts evictable audio to fit. */

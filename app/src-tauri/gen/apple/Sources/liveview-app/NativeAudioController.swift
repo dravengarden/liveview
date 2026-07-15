@@ -49,10 +49,7 @@ import WidgetKit
   private static let skip: NSNumber = 15
 
   private weak var webView: WKWebView?
-  // Live network-path type so the WiFi-only download gate (web: useAudioPreloadDriver
-  // reads `net` from the audio stats) honours "prefetch on WiFi only" for the large
-  // audio download. Moved here from the retired LvSyncController — audio IS the
-  // WiFi-gated download, so net belongs with it.
+  // Live network-path type for the native WiFi-only audio-download policy.
   private let netMonitor = NWPathMonitor()
   private var netPath: NWPath?
   private let player = AVPlayer()
@@ -174,15 +171,27 @@ import WidgetKit
   // N parallel windows, restoring the ~tens-of-MB/s fill.
   // `httpMaximumConnectionsPerHost` per session bounds the real concurrency.
   private struct DLItem { let url: URL; let key: String }
+  private struct DagPlan: Decodable {
+    let root: String
+    let resources: [DagPlanResource]
+  }
+  private struct DagPlanResource: Decodable {
+    let hash: String
+    let kind: String
+    let url: String
+  }
   private var dlQueue: [DLItem] = []
   private var dlInflight = 0
   private var dlTimer: Timer?
   private var dlRetries: [String: Int] = [:]
+  private let planQueue = DispatchQueue(label: "lv.audio.plan", qos: .utility)
+  private var planGeneration = 0
+  private var lastPlanRequest: (root: String, baseURL: String)?
+  private var pumpContinuationScheduled = false
   private static let dlSessionCount = 6
 
   // "Prefetch on WiFi only": enforced NATIVELY on the pool via
-  // `allowsCellularAccess`, a belt-and-braces backstop to the web's own WiFi gate
-  // (which only stops ENQUEUING). Persisted in UserDefaults so the pool has the
+  // `allowsCellularAccess`. Persisted in UserDefaults so the pool has the
   // right cellular policy from the first task at launch, before the web re-pushes
   // it. Default true (never surprise-burn cellular).
   private static let wifiOnlyKey = "lv.audio.wifiOnly"
@@ -231,7 +240,7 @@ import WidgetKit
   /// new `allowsCellularAccess` takes effect (config is immutable). `.default`
   /// sessions carry no shared identifier, so the new pool can be built immediately;
   /// the old sessions' cancelled tasks fire didCompleteWithError(.cancelled), which
-  /// we skip-retry, and the web pump re-feeds the (still-uncached) items next round.
+  /// we skip-retry; the durable Merkle plan reconciles the missing item again.
   private func applyWifiOnly(_ on: Bool) {
     if dlSessions.isEmpty { // first push at launch — just build with the right policy
       if on != wifiOnly { wifiOnly = on; UserDefaults.standard.set(on, forKey: Self.wifiOnlyKey) }
@@ -393,6 +402,9 @@ import WidgetKit
       // two seconds. audioStats enumerates the audio index and filesystem; two
       // synchronized web polls were periodically blocking WKWebView scrolling.
       self.emit("{type:'network',net:'\(self.netType())'}")
+      if p.status == .satisfied {
+        DispatchQueue.main.async { [weak self] in self?.reconcileLastAudioPlan() }
+      }
     }
     netMonitor.start(queue: DispatchQueue(label: "lv.net"))
     // Force the cache dir's lazy init on THIS (main) thread before any download
@@ -429,7 +441,7 @@ import WidgetKit
         downloadToCache(u, cacheKey(forURL: u, hash: d?["hash"] as? String))
       }
     case "pin": pin(d)
-    case "preload": preload(d)
+    case "reconcile": reconcileAudioPlan(d)
     case "unpin": unpin(d)
     case "setCap": setCap(d)
     case "setWifiOnly": if let on = d?["on"] as? Bool { applyWifiOnly(on) }
@@ -510,19 +522,78 @@ import WidgetKit
     startScheduler()
   }
 
-  /// AUTO preload (fill the budget): enqueue EVICTABLE (not pinned) at the BACK.
-  private func preload(_ d: [String: Any]?) {
-    guard let items = d?["items"] as? [[String: Any]] else { return }
-    let queued = Set(dlQueue.map(\.key))
-    var seen = queued
-    for it in items {
-      guard let s = it["url"] as? String, let u = URL(string: s) else { continue }
-      let key = cacheKey(forURL: u, hash: it["hash"] as? String)
-      if onDisk(key) || inFlight.contains(key) || seen.contains(key) { continue }
-      seen.insert(key)
-      dlQueue.append(DLItem(url: u, key: key))
+  /// Reconcile automatic downloads from lv-sync's durable `dag.json`. The web
+  /// sends only a root + origin; reading, decoding and disk diffing stay off the
+  /// WKWebView/main thread. The Rust plugin remains the sole manifest owner.
+  private func reconcileAudioPlan(_ d: [String: Any]?) {
+    guard let root = d?["root"] as? String,
+          let baseURL = d?["baseURL"] as? String,
+          !root.isEmpty, URL(string: baseURL) != nil else { return }
+    lastPlanRequest = (root, baseURL)
+    planGeneration &+= 1
+    let generation = planGeneration
+    let appSupport = FileManager.default.urls(
+      for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    let appID = Bundle.main.bundleIdentifier ?? "top.thundersparrow.liveview"
+    let manifestURL = appSupport
+      .appendingPathComponent(appID, isDirectory: true)
+      .appendingPathComponent("dag.json")
+    let audioDir = cacheDir
+
+    planQueue.async { [weak self] in
+      guard let self,
+            let data = try? Data(contentsOf: manifestURL),
+            let plan = try? JSONDecoder().decode(DagPlan.self, from: data),
+            plan.root == root,
+            let origin = URL(string: baseURL) else { return }
+      let fm = FileManager.default
+      var items: [DLItem] = []
+      items.reserveCapacity(plan.resources.count / 3)
+      for resource in plan.resources where resource.kind == "audio" {
+        let key = self.cacheKeyForPlan(resource.hash, resource.url)
+        let caf = audioDir.appendingPathComponent(key + ".caf")
+        let legacy = audioDir.appendingPathComponent(key)
+        if fm.fileExists(atPath: caf.path) || fm.fileExists(atPath: legacy.path) { continue }
+        guard let url = URL(string: resource.url, relativeTo: origin)?.absoluteURL else { continue }
+        items.append(DLItem(url: url, key: key))
+      }
+      DispatchQueue.main.async { [weak self] in
+        guard let self, generation == self.planGeneration else { return }
+        self.enqueuePlanItems(items, from: 0, generation: generation)
+      }
     }
-    startScheduler()
+  }
+
+  private func reconcileLastAudioPlan() {
+    guard let request = lastPlanRequest else { return }
+    reconcileAudioPlan(["root": request.root, "baseURL": request.baseURL])
+  }
+
+  /// Keep each main-runloop slice bounded. URLSession task construction is cheap
+  /// but thousands in one callback visibly stalls WKWebView scrolling.
+  private func enqueuePlanItems(_ items: [DLItem], from start: Int, generation: Int) {
+    guard generation == planGeneration, start < items.count else {
+      if !dlQueue.isEmpty { startScheduler() }
+      return
+    }
+    let end = min(start + 64, items.count)
+    let queued = Set(dlQueue.map(\.key))
+    for item in items[start..<end]
+    where !queued.contains(item.key) && !inFlight.contains(item.key) {
+      dlQueue.append(item)
+    }
+    DispatchQueue.main.async { [weak self] in
+      self?.enqueuePlanItems(items, from: end, generation: generation)
+    }
+  }
+
+  /// Pure key derivation for the background plan queue. Manifest audio always has
+  /// a content hash; retain the URL fallback for protocol compatibility.
+  private func cacheKeyForPlan(_ hash: String, _ rawURL: String) -> String {
+    if !hash.isEmpty {
+      return hash.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+    }
+    return "u" + stableDigest(rawURL)
   }
 
   // MARK: adaptive download scheduler
@@ -544,10 +615,20 @@ import WidgetKit
   /// against re-resuming an in-flight / on-disk key.
   private func pump() {
     guard !dlSessions.isEmpty else { return } // pool rebuilding — next tick pumps
-    while !dlQueue.isEmpty {
+    var started = 0
+    while !dlQueue.isEmpty && started < 8 {
       let item = dlQueue.removeFirst()
       if onDisk(item.key) || inFlight.contains(item.key) { continue }
       runScheduled(item)
+      started += 1
+    }
+    if !dlQueue.isEmpty && !pumpContinuationScheduled {
+      pumpContinuationScheduled = true
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.pumpContinuationScheduled = false
+        self.pump()
+      }
     }
   }
 
@@ -615,8 +696,8 @@ import WidgetKit
       guard let self else { return }
       self.dlInflight = max(0, self.dlInflight - 1)
       self.inFlight.remove(key)
-      // A cancel is a deliberate pool teardown (WiFi-only rebuild); the web pump
-      // re-feeds the item, so don't burn its retry budget. Otherwise success ==
+      // A cancel is a deliberate pool teardown (WiFi-only rebuild); Merkle-plan
+      // reconciliation re-feeds it, so don't burn its retry budget. Otherwise success ==
       // the file is on disk (didFinishDownloadingTo published it before this fires).
       if !cancelled, !self.onDisk(key), let url {
         if let e = error { self.dlLastErr = (e as NSError).localizedDescription } // diagnostic
@@ -707,7 +788,7 @@ import WidgetKit
     // already-on-disk, freezing the fill at the index count with no error. Plus the
     // device's real free space: the fill can't grow past the volume's free bytes no
     // matter how large the app budget is. contentsOfDirectory is O(files) but only
-    // runs on an explicit stats poll (~every 2-3s), acceptable for diagnosis.
+    // runs only when the Downloads UI explicitly requests stats.
     let diskCount = (try? FileManager.default.contentsOfDirectory(
       at: cacheDir, includingPropertiesForKeys: nil))?
       .filter { $0.pathExtension == "caf" }.count ?? -1

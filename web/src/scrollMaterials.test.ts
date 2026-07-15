@@ -37,6 +37,13 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const nativeSync = await source("native-sync.ts");
   const apm = await source("apm.ts");
   const preloadDriver = await source("hooks/useAudioPreloadDriver.ts");
+  const nativeAudio = await readFile(
+    new URL(
+      "../../app/src-tauri/gen/apple/Sources/liveview-app/NativeAudioController.swift",
+      ROOT,
+    ),
+    "utf8",
+  );
   const shell = await source("App.tsx");
   const markdownViewer = await source("components/MarkdownViewer.tsx");
   const mobileStyles = await source("styles/index.css");
@@ -153,6 +160,31 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     preloadDriver,
     /nativeAudioStats/,
     "background preload must not enumerate the native audio cache on a timer",
+  );
+  assertAbsent(
+    preloadDriver,
+    /setInterval/,
+    "audio synchronization must be lifecycle and Merkle-root driven",
+  );
+  assertAbsent(
+    await source("native-audio.ts"),
+    /kind: "preload"/,
+    "the bridge must not expose the old unbounded resource-array command",
+  );
+  assertPresent(
+    preloadDriver,
+    /nativeAudioReconcile\(root, REMOTE\)/,
+    "the web must submit only a constant-size native reconciliation signal",
+  );
+  assertPresent(
+    nativeAudio,
+    /planQueue\.async/,
+    "native manifest decoding and disk diffing must stay off the main thread",
+  );
+  assertPresent(
+    nativeAudio,
+    /min\(start \+ 64, items\.count\)/,
+    "native queue admission must be split into bounded runloop slices",
   );
   assertPresent(
     nativeSync,

@@ -31,7 +31,6 @@ export {
   nativeAudioPause,
   nativeAudioPin,
   nativeAudioPlay,
-  nativeAudioPreload,
   nativeAudioRequestState,
   nativeAudioSeek,
   nativeAudioSetCap,
