@@ -23,7 +23,9 @@ import { alpha, type Theme } from "@mui/material/styles";
 import {
   Article as DocsIcon,
   Clear as ClearIcon,
+  UnfoldLess as CollapseAllIcon,
   ExpandMore as ExpandMoreIcon,
+  UnfoldMore as ExpandAllIcon,
   Headphones as AudiobookIcon,
   MenuBook as BookIcon,
   Search as SearchIcon,
@@ -41,6 +43,7 @@ import {
 import type { Book, BookProgress, ReadingProgress } from "@/types";
 import {
   setShelfGroup,
+  setGroupsCollapsed,
   setShelfSort,
   type ShelfGroup,
   type ShelfSort,
@@ -412,12 +415,14 @@ function GroupSection({
   count,
   collapsed,
   onToggle,
+  instant,
   children,
 }: {
   name: string;
   count: number;
   collapsed: boolean;
   onToggle: () => void;
+  instant?: boolean;
   children: ReactNode;
 }): React.JSX.Element {
   const hue = slugHue(name);
@@ -511,7 +516,7 @@ function GroupSection({
           }}
         />
       </Box>
-      <Collapse in={!collapsed} timeout="auto" unmountOnExit={false}>
+      <Collapse in={!collapsed} timeout={instant ? 0 : 180} unmountOnExit={false}>
         {children}
       </Collapse>
     </Box>
@@ -797,6 +802,10 @@ export function Landing({
   // The combined Sort & Filter sheet (one toolbar control for both the shelf order
   // and the kind narrowing — the two list-organizing concerns in one place).
   const [sfOpen, setSfOpen] = useState(false);
+  // Bulk folding must not animate dozens of card grids at once: doing so creates
+  // a large layout/paint burst in WKWebView. Individual sections still use a
+  // short transition; expand/collapse-all applies in one frame.
+  const [bulkGroupChange, setBulkGroupChange] = useState(false);
 
   // One card per book (audio rides along as a badge on text+audio books),
   // ordered by the Settings → Library → Sort preference. Default "updated":
@@ -870,6 +879,20 @@ export function Landing({
         : [],
     [group, visible, t, lang],
   );
+  const visibleGroupNames = useMemo(
+    () => groupSections.map((section) => section.name),
+    [groupSections],
+  );
+  const anyVisibleGroupCollapsed = visibleGroupNames.some((name) =>
+    collapsed.has(name)
+  );
+  const allVisibleGroupsCollapsed = visibleGroupNames.length > 0 &&
+    visibleGroupNames.every((name) => collapsed.has(name));
+  const setVisibleGroupsCollapsed = (nextCollapsed: boolean): void => {
+    setBulkGroupChange(true);
+    setGroupsCollapsed(visibleGroupNames, nextCollapsed);
+    requestAnimationFrame(() => setBulkGroupChange(false));
+  };
 
   // The kind segments only make sense when the shelf has BOTH books and docs;
   // otherwise All/Books/Docs would narrow to the same set.
@@ -1321,20 +1344,53 @@ export function Landing({
               )
               : group === "collection"
               ? (
-                // Grouped shelf: one collapsible series section per collection,
-                // in the curated order (PREFERRED_GROUP_ORDER → others A→Z →
-                // Other last). Each section uses the same responsive cover grid.
-                groupSections.map((g) => (
-                  <GroupSection
-                    key={g.name}
-                    name={g.name}
-                    count={g.entries.length}
-                    collapsed={collapsed.has(g.name)}
-                    onToggle={() => toggleGroupCollapsed(g.name)}
+                <>
+                  {/* These controls belong to the grouped result, not the
+                    persistent shelf toolbar. On phones they share the width for
+                    reliable touch targets; wider layouts keep them compact and
+                    right-aligned above the sections they affect. */}
+                  <Stack
+                    direction="row"
+                    spacing={1}
+                    justifyContent={{ xs: "stretch", sm: "flex-end" }}
+                    sx={{ mb: 1.25 }}
                   >
-                    {renderGrid(g.entries)}
-                  </GroupSection>
-                ))
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<ExpandAllIcon />}
+                      disabled={!anyVisibleGroupCollapsed}
+                      onClick={() => setVisibleGroupsCollapsed(false)}
+                      sx={{ flex: { xs: 1, sm: "0 0 auto" }, minHeight: 40 }}
+                    >
+                      {t("landing.expandAllSeries")}
+                    </Button>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<CollapseAllIcon />}
+                      disabled={allVisibleGroupsCollapsed}
+                      onClick={() => setVisibleGroupsCollapsed(true)}
+                      sx={{ flex: { xs: 1, sm: "0 0 auto" }, minHeight: 40 }}
+                    >
+                      {t("landing.collapseAllSeries")}
+                    </Button>
+                  </Stack>
+                  {/* Grouped shelf: curated series order, each retaining the
+                    same responsive card grid as the flat shelf. */}
+                  {groupSections.map((g) => (
+                    <GroupSection
+                      key={g.name}
+                      name={g.name}
+                      count={g.entries.length}
+                      collapsed={collapsed.has(g.name)}
+                      onToggle={() => toggleGroupCollapsed(g.name)}
+                      instant={bulkGroupChange}
+                    >
+                      {renderGrid(g.entries)}
+                    </GroupSection>
+                  ))}
+                </>
               )
               : (
                 // Flat shelf: one responsive cover grid over all visible entries.

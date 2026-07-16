@@ -35,3 +35,18 @@ export function toggleGroupCollapsed(name: string): void {
   else next.add(name);
   collapsedGroupsStore.set(next);
 }
+
+/** Set several groups to the same folded state while preserving groups outside
+ * the supplied scope. This lets filtered shelf views provide predictable bulk
+ * actions without silently changing series that are currently hidden. */
+export function setGroupsCollapsed(
+  names: Iterable<string>,
+  collapsed: boolean,
+): void {
+  const next = new Set(collapsedGroupsStore.get());
+  for (const name of names) {
+    if (collapsed) next.add(name);
+    else next.delete(name);
+  }
+  collapsedGroupsStore.set(next);
+}
