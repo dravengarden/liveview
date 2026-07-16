@@ -8,6 +8,7 @@ mod server;
 mod shared;
 mod store;
 mod sync;
+mod taxonomy;
 
 use axum::{
     body::Body,
@@ -1283,6 +1284,7 @@ async fn api_ingest(
 fn build_app(state: SharedState) -> Router {
     let api_router = Router::new()
         .route("/api/books", get(api_books))
+        .route("/api/taxonomy", get(api_taxonomy))
         .route("/api/cover", get(api_cover))
         .route("/api/backdrop", get(api_backdrop))
         .route("/api/card-backdrop", get(api_card_backdrop))
@@ -1624,6 +1626,8 @@ struct BookInfo {
     label: String,
     slug: String,
     description: Option<String>,
+    /// Controlled taxonomy IDs used for local search and faceted discovery.
+    tags: Vec<String>,
     /// Optional shelf grouping key (book.toml top-level `collection`).
     collection: Option<String>,
     /// Optional credit line shown on the shelf card (book.toml top-level `author`).
@@ -1676,6 +1680,7 @@ async fn api_books(State(state): State<SharedState>) -> impl IntoResponse {
                 label: b.label.clone(),
                 slug: b.slug.clone(),
                 description: b.description.clone(),
+                tags: b.tags.clone(),
                 collection: b.collection.clone(),
                 author: b.author.clone(),
                 cover: b.cover_hash.is_some(),
@@ -1701,6 +1706,10 @@ async fn api_books(State(state): State<SharedState>) -> impl IntoResponse {
         })
         .collect();
     axum::Json(books)
+}
+
+async fn api_taxonomy() -> axum::Json<&'static crate::taxonomy::Taxonomy> {
+    axum::Json(crate::taxonomy::taxonomy())
 }
 
 #[derive(serde::Deserialize)]

@@ -23,13 +23,13 @@ import { alpha, type Theme } from "@mui/material/styles";
 import {
   Article as DocsIcon,
   Clear as ClearIcon,
-  UnfoldLess as CollapseAllIcon,
   ExpandMore as ExpandMoreIcon,
-  UnfoldMore as ExpandAllIcon,
   Headphones as AudiobookIcon,
   MenuBook as BookIcon,
   Search as SearchIcon,
   Tune as TuneIcon,
+  UnfoldLess as CollapseAllIcon,
+  UnfoldMore as ExpandAllIcon,
 } from "@mui/icons-material";
 import { BottomSheet } from "@/_shell";
 import {
@@ -42,8 +42,8 @@ import {
 } from "react";
 import type { Book, BookProgress, ReadingProgress } from "@/types";
 import {
-  setShelfGroup,
   setGroupsCollapsed,
+  setShelfGroup,
   setShelfSort,
   type ShelfGroup,
   type ShelfSort,
@@ -54,6 +54,14 @@ import {
 } from "@/hooks";
 import { useI18n } from "@/i18n";
 import { useSyncStatus } from "@/syncStore";
+import {
+  LIBRARY_TAXONOMY,
+  matchesTagFacets,
+  type ReadingFilter,
+  readingState,
+  searchScore,
+  TAG_BY_ID,
+} from "@/libraryDiscovery";
 import { ShelfCardArtwork } from "./CoverTile";
 import { ScrollToTopButton } from "./ScrollToTopButton";
 
@@ -516,7 +524,11 @@ function GroupSection({
           }}
         />
       </Box>
-      <Collapse in={!collapsed} timeout={instant ? 0 : 180} unmountOnExit={false}>
+      <Collapse
+        in={!collapsed}
+        timeout={instant ? 0 : 180}
+        unmountOnExit={false}
+      >
         {children}
       </Collapse>
     </Box>
@@ -799,6 +811,10 @@ export function Landing({
   // Single-choice kind filter ("all" = no narrowing). Audio-only books fall under
   // "book" — they share the card, so they're never a separate filter.
   const [kind, setKind] = useState<FilterKind>("all");
+  const [readingFilter, setReadingFilter] = useState<ReadingFilter>("all");
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(() =>
+    new Set()
+  );
   // The combined Sort & Filter sheet (one toolbar control for both the shelf order
   // and the kind narrowing — the two list-organizing concerns in one place).
   const [sfOpen, setSfOpen] = useState(false);
@@ -806,6 +822,12 @@ export function Landing({
   // a large layout/paint burst in WKWebView. Individual sections still use a
   // short transition; expand/collapse-all applies in one frame.
   const [bulkGroupChange, setBulkGroupChange] = useState(false);
+  // Search/filter-driven expansion is intentionally ephemeral. It reveals every
+  // matching series without destroying the reader's saved browsing layout; once
+  // discovery clears, the prior persisted collapse state returns exactly.
+  const [discoveryCollapsed, setDiscoveryCollapsed] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   // One card per book (audio rides along as a badge on text+audio books),
   // ordered by the Settings → Library → Sort preference. Default "updated":
@@ -853,17 +875,74 @@ export function Landing({
 
   // The shelf after both narrowing controls: kind filter AND name search.
   const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return entries.filter((e) => {
-      if (kind !== "all" && !matchesKind(e, kind)) return false;
+    const q = query.trim();
+    const ranked: Array<{ entry: ShelfEntry; score: number }> = [];
+    for (const entry of entries) {
+      const e = entry;
+      if (kind !== "all" && !matchesKind(e, kind)) continue;
       if (
-        q && !e.book.label.toLowerCase().includes(q) &&
-        !e.book.slug.toLowerCase().includes(q)
-      ) return false;
-      return true;
-    });
+        readingFilter !== "all" &&
+        readingState(progress[e.book.slug]) !== readingFilter
+      ) {
+        continue;
+      }
+      if (!matchesTagFacets(e.book, selectedTags)) continue;
+      const score = searchScore(e.book, q);
+      if (score == null) continue;
+      ranked.push({ entry: e, score });
+    }
+    if (q) ranked.sort((a, b) => b.score - a.score);
+    return ranked.map(({ entry }) => entry);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries, kind, query]);
+  }, [entries, kind, query, readingFilter, selectedTags, progress]);
+
+  const discoveryActive = query.trim().length > 0 || selectedTags.size > 0 ||
+    kind !== "all" || readingFilter !== "all";
+  const activeFilterCount = selectedTags.size + (kind === "all" ? 0 : 1) +
+    (readingFilter === "all" ? 0 : 1);
+  const discoverySignature = `${query}\0${kind}\0${readingFilter}\0${
+    [...selectedTags].sort().join(",")
+  }`;
+  useEffect(() => setDiscoveryCollapsed(new Set()), [discoverySignature]);
+
+  const toggleTag = (id: string): void => {
+    setSelectedTags((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const clearDiscoveryFilters = (): void => {
+    setSelectedTags(new Set());
+    setKind("all");
+    setReadingFilter("all");
+  };
+
+  // Disjunctive facet counts preview adding each candidate. Existing choices
+  // in the same facet remain because facet values are ORed; other facets stay
+  // as AND constraints.
+  const tagCounts = useMemo(() => {
+    const result = new Map<string, number>();
+    for (const tag of LIBRARY_TAXONOMY.tags) {
+      const candidate = new Set(selectedTags);
+      candidate.add(tag.id);
+      let count = 0;
+      for (const entry of entries) {
+        if (kind !== "all" && !matchesKind(entry, kind)) continue;
+        if (
+          readingFilter !== "all" &&
+          readingState(progress[entry.book.slug]) !== readingFilter
+        ) continue;
+        if (searchScore(entry.book, query) == null) continue;
+        if (matchesTagFacets(entry.book, candidate)) count += 1;
+      }
+      result.set(tag.id, count);
+    }
+    return result;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entries, selectedTags, kind, readingFilter, progress, query]);
 
   // The ordered series sections (only when grouping by collection). Order:
   // curated PREFERRED_GROUP_ORDER first, then other collections A→Z, then the
@@ -883,15 +962,34 @@ export function Landing({
     () => groupSections.map((section) => section.name),
     [groupSections],
   );
+  const effectiveCollapsed = discoveryActive ? discoveryCollapsed : collapsed;
   const anyVisibleGroupCollapsed = visibleGroupNames.some((name) =>
-    collapsed.has(name)
+    effectiveCollapsed.has(name)
   );
   const allVisibleGroupsCollapsed = visibleGroupNames.length > 0 &&
-    visibleGroupNames.every((name) => collapsed.has(name));
+    visibleGroupNames.every((name) => effectiveCollapsed.has(name));
   const setVisibleGroupsCollapsed = (nextCollapsed: boolean): void => {
     setBulkGroupChange(true);
-    setGroupsCollapsed(visibleGroupNames, nextCollapsed);
+    if (discoveryActive) {
+      setDiscoveryCollapsed(
+        nextCollapsed ? new Set(visibleGroupNames) : new Set(),
+      );
+    } else {
+      setGroupsCollapsed(visibleGroupNames, nextCollapsed);
+    }
     requestAnimationFrame(() => setBulkGroupChange(false));
+  };
+  const toggleVisibleGroup = (name: string): void => {
+    if (!discoveryActive) {
+      toggleGroupCollapsed(name);
+      return;
+    }
+    setDiscoveryCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
   };
 
   // The kind segments only make sense when the shelf has BOTH books and docs;
@@ -1160,8 +1258,8 @@ export function Landing({
               }
               <Badge
                 color="primary"
-                variant="dot"
-                invisible={kind === "all"}
+                badgeContent={activeFilterCount}
+                invisible={activeFilterCount === 0}
                 sx={{ flexShrink: 0 }}
               >
                 <Button
@@ -1178,7 +1276,9 @@ export function Landing({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {t(`sort.${sort}`)}
+                  {activeFilterCount > 0
+                    ? t("landing.filtersN", { n: activeFilterCount })
+                    : t(`sort.${sort}`)}
                 </Button>
               </Badge>
             </>
@@ -1206,8 +1306,90 @@ export function Landing({
         open={sfOpen}
         onClose={() => setSfOpen(false)}
         title={t("landing.sortFilter")}
+        wide
+        actions={
+          <>
+            <Button
+              onClick={clearDiscoveryFilters}
+              disabled={activeFilterCount === 0}
+            >
+              {t("landing.clearFilters")}
+            </Button>
+            <Button variant="contained" onClick={() => setSfOpen(false)}>
+              {t("landing.showResults", { n: visible.length })}
+            </Button>
+          </>
+        }
       >
         <Stack spacing={3} sx={{ pb: 1 }}>
+          {selectedTags.size > 0 && (
+            <Stack spacing={1}>
+              <Typography variant="overline" color="text.secondary">
+                {t("landing.selectedFilters")}
+              </Typography>
+              <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
+                {[...selectedTags].map((id) => {
+                  const tag = TAG_BY_ID.get(id);
+                  return (
+                    <Chip
+                      key={id}
+                      label={tag?.labels[lang] ?? id}
+                      color="primary"
+                      onDelete={() => toggleTag(id)}
+                    />
+                  );
+                })}
+              </Stack>
+            </Stack>
+          )}
+          {LIBRARY_TAXONOMY.facets.map((facet) => (
+            <Stack key={facet.id} spacing={1}>
+              <Typography variant="overline" color="text.secondary">
+                {facet.labels[lang]}
+              </Typography>
+              <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
+                {LIBRARY_TAXONOMY.tags.filter((tag) =>
+                  tag.facet === facet.id
+                )
+                  .map((tag) => {
+                    const selected = selectedTags.has(tag.id);
+                    const count = tagCounts.get(tag.id) ?? 0;
+                    return (
+                      <Chip
+                        key={tag.id}
+                        label={`${tag.labels[lang]} · ${count}`}
+                        color={selected ? "primary" : "default"}
+                        variant={selected ? "filled" : "outlined"}
+                        disabled={!selected && count === 0}
+                        onClick={() => toggleTag(tag.id)}
+                        sx={{ minHeight: 40 }}
+                      />
+                    );
+                  })}
+              </Stack>
+            </Stack>
+          ))}
+          <Stack spacing={1}>
+            <Typography variant="overline" color="text.secondary">
+              {t("landing.readingState")}
+            </Typography>
+            <ToggleButtonGroup
+              exclusive
+              fullWidth
+              size="small"
+              value={readingFilter}
+              onChange={(_e, value: ReadingFilter | null) =>
+                value && setReadingFilter(value)}
+            >
+              {(["all", "unread", "progress", "finished"] as const).map((
+                value,
+              ) => (
+                <ToggleButton key={value} value={value}>
+                  {t(`reading.${value}`)}
+                </ToggleButton>
+              ))}
+            </ToggleButtonGroup>
+          </Stack>
           <Stack spacing={0.5}>
             <Typography variant="overline" color="text.secondary">
               {t("landing.sortBy")}
@@ -1330,6 +1512,44 @@ export function Landing({
           }}
         >
           <Box sx={{ width: "100%", mx: "auto" }}>
+            {activeFilterCount > 0 && (
+              <Stack
+                direction="row"
+                useFlexGap
+                gap={0.75}
+                sx={{ mb: 1.25, overflowX: "auto", pb: 0.25 }}
+              >
+                {[...selectedTags].map((id) => (
+                  <Chip
+                    key={id}
+                    size="small"
+                    label={TAG_BY_ID.get(id)?.labels[lang] ?? id}
+                    onDelete={() => toggleTag(id)}
+                  />
+                ))}
+                {readingFilter !== "all" && (
+                  <Chip
+                    size="small"
+                    label={t(`reading.${readingFilter}`)}
+                    onDelete={() => setReadingFilter("all")}
+                  />
+                )}
+                {kind !== "all" && (
+                  <Chip
+                    size="small"
+                    label={t(FILTER_KIND_LABEL[kind])}
+                    onDelete={() => setKind("all")}
+                  />
+                )}
+                <Button
+                  size="small"
+                  onClick={clearDiscoveryFilters}
+                  sx={{ flexShrink: 0 }}
+                >
+                  {t("landing.clearFilters")}
+                </Button>
+              </Stack>
+            )}
             {books.length === 0
               ? (
                 <Typography color="text.secondary">
@@ -1345,10 +1565,12 @@ export function Landing({
               : group === "collection"
               ? (
                 <>
-                  {/* These controls belong to the grouped result, not the
+                  {
+                    /* These controls belong to the grouped result, not the
                     persistent shelf toolbar. On phones they share the width for
                     reliable touch targets; wider layouts keep them compact and
-                    right-aligned above the sections they affect. */}
+                    right-aligned above the sections they affect. */
+                  }
                   <Stack
                     direction="row"
                     spacing={1}
@@ -1376,15 +1598,17 @@ export function Landing({
                       {t("landing.collapseAllSeries")}
                     </Button>
                   </Stack>
-                  {/* Grouped shelf: curated series order, each retaining the
-                    same responsive card grid as the flat shelf. */}
+                  {
+                    /* Grouped shelf: curated series order, each retaining the
+                    same responsive card grid as the flat shelf. */
+                  }
                   {groupSections.map((g) => (
                     <GroupSection
                       key={g.name}
                       name={g.name}
                       count={g.entries.length}
-                      collapsed={collapsed.has(g.name)}
-                      onToggle={() => toggleGroupCollapsed(g.name)}
+                      collapsed={effectiveCollapsed.has(g.name)}
+                      onToggle={() => toggleVisibleGroup(g.name)}
                       instant={bulkGroupChange}
                     >
                       {renderGrid(g.entries)}

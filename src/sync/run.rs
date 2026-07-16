@@ -154,10 +154,17 @@ fn catalog_hash(
     }
 
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"liveview-book-catalog-v1\0");
+    hasher.update(b"liveview-book-catalog-v3\0");
+    // Taxonomy is part of catalog identity, not merely a web bundle detail.
+    // Any controlled-vocabulary change therefore advances the deploy root and
+    // invalidates native catalog caches together with the tagged book metadata.
+    field(&mut hasher, include_str!("../../taxonomy.json"));
     field(&mut hasher, &book.slug);
     field(&mut hasher, &book.label);
     optional(&mut hasher, book.description.as_deref());
+    for tag in &book.tags {
+        field(&mut hasher, tag);
+    }
     optional(&mut hasher, book.collection.as_deref());
     optional(&mut hasher, book.author.as_deref());
     optional(&mut hasher, cover_hash);
@@ -262,6 +269,7 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 slug: &book.slug,
                 label: &book.label,
                 description: book.description.as_deref(),
+                tags: &book.tags,
                 collection: book.collection.as_deref(),
                 author: book.author.as_deref(),
                 cover_hash: cover_hash.as_deref(),
@@ -979,6 +987,7 @@ mod tests {
             label: "Book".into(),
             slug: "book".into(),
             description: Some("Description".into()),
+            tags: vec!["topic.ai".into()],
             collection: Some("Collection".into()),
             author: Some("Author".into()),
             cover: None,
@@ -1066,6 +1075,38 @@ mod tests {
         assert_ne!(
             old_card.root, new_card.root,
             "card rendition identity must invalidate the catalog"
+        );
+    }
+
+    #[test]
+    fn catalog_tags_change_deploy_root_without_content_operations() {
+        let mut old_book = catalog_test_book();
+        let mut new_book = old_book.clone();
+        old_book.tags = vec!["rust".into()];
+        new_book.tags = vec!["rust".into(), "agent-systems".into()];
+
+        let old = Dag::build(Build::Tree(vec![(
+            old_book.slug.clone(),
+            Build::Tree(vec![(
+                "@catalog".into(),
+                catalog_marker(catalog_hash(&old_book, None, None, None)),
+            )]),
+        )]));
+        let new = Dag::build(Build::Tree(vec![(
+            new_book.slug.clone(),
+            Build::Tree(vec![(
+                "@catalog".into(),
+                catalog_marker(catalog_hash(&new_book, None, None, None)),
+            )]),
+        )]));
+
+        assert_ne!(
+            old.root, new.root,
+            "tag identity must invalidate the catalog"
+        );
+        assert!(
+            plan(&new, &old).is_empty(),
+            "tag metadata must not become a synthetic chapter operation"
         );
     }
 

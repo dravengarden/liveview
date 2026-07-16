@@ -130,6 +130,7 @@ impl ContentStore for FsStore {
                 slug: b.slug.clone(),
                 label: b.label.clone(),
                 description: b.description.clone(),
+                tags: b.tags.clone(),
                 collection: b.collection.clone(),
                 author: b.author.clone(),
                 cover_hash: self.covers.get(&b.slug).cloned(),

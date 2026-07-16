@@ -83,3 +83,23 @@ is a resume hint.
 Authored books use documented, renderer-checked formats. The checker and reader
 must agree on accepted content, and protocol evolution remains backward
 compatible unless the protocol version is deliberately changed.
+
+## A production library remains discoverable
+
+Collection is editorial series structure, not the only navigation model. Every
+published book or registered documentation set declares useful lowercase
+keywords in its manifest. Search covers title, tags, collection, author,
+description, and slug; faceted filtering uses the controlled definitions in
+`taxonomy.json` with OR semantics inside one facet and AND semantics across
+facets.
+
+Manifest keywords remain open vocabulary so a book can retain precise concepts
+such as protocols, libraries, and techniques. The taxonomy maps a curated subset
+of those keywords onto stable Topic, Technology, and Level facets; authors must
+not replace precise keywords with UI labels. Taxonomy and manifest-tag changes
+are catalog metadata changes and therefore advance the deploy Merkle root so
+native offline clients cannot keep a stale bookshelf index.
+
+During active search or filtering, matching series expand in an ephemeral view.
+Clearing discovery restores the reader's persisted series-collapse choices.
+Core Spotlight indexing is intentionally outside this requirement.

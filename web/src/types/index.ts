@@ -90,6 +90,8 @@ export interface Book {
   label: string;
   slug: string;
   description?: string | null;
+  /** Controlled taxonomy IDs used by search and faceted library discovery. */
+  tags?: string[];
   /** The series/collection this book belongs to (e.g. "AI & Agents"), used by
    *  the shelf's optional group-by-series view. Null/empty ⇒ ungrouped. */
   collection?: string | null;

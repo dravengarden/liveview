@@ -62,6 +62,7 @@ pub struct BookRow {
     pub slug: String,
     pub label: String,
     pub description: Option<String>,
+    pub tags: Vec<String>,
     pub collection: Option<String>,
     pub author: Option<String>,
     pub cover_hash: Option<String>,
@@ -79,6 +80,7 @@ pub struct BookUpsert<'a> {
     pub slug: &'a str,
     pub label: &'a str,
     pub description: Option<&'a str>,
+    pub tags: &'a [String],
     pub collection: Option<&'a str>,
     pub author: Option<&'a str>,
     pub cover_hash: Option<&'a str>,
@@ -253,11 +255,12 @@ impl PgStore {
 
     pub async fn upsert_book(&self, book: &BookUpsert<'_>) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO books (slug, label, description, collection, author, cover_hash, backdrop_hash, card_backdrop_hash, default_rendition)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            "INSERT INTO books (slug, label, description, tags, collection, author, cover_hash, backdrop_hash, card_backdrop_hash, default_rendition)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
              ON CONFLICT (slug) DO UPDATE SET
                  label = EXCLUDED.label,
                  description = EXCLUDED.description,
+                 tags = EXCLUDED.tags,
                  collection = EXCLUDED.collection,
                  author = EXCLUDED.author,
                  cover_hash = EXCLUDED.cover_hash,
@@ -268,6 +271,7 @@ impl PgStore {
         .bind(book.slug)
         .bind(book.label)
         .bind(book.description)
+        .bind(book.tags)
         .bind(book.collection)
         .bind(book.author)
         .bind(book.cover_hash)
@@ -415,7 +419,7 @@ impl PgStore {
 
     pub async fn list_books(&self) -> Result<Vec<BookRow>, sqlx::Error> {
         sqlx::query_as::<_, BookRow>(
-            "SELECT slug, label, description, collection, author, cover_hash, backdrop_hash, card_backdrop_hash, default_rendition, created_at, updated_at
+            "SELECT slug, label, description, tags, collection, author, cover_hash, backdrop_hash, card_backdrop_hash, default_rendition, created_at, updated_at
              FROM books ORDER BY slug",
         )
         .fetch_all(&self.pool)
@@ -1256,11 +1260,13 @@ mod tests {
     #[tokio::test]
     async fn book_rendition_edition_roundtrip() {
         let Some(s) = store().await else { return };
+        let tags = vec!["agent-systems".to_string(), "rust".to_string()];
         s.delete_book("t-book").await.unwrap();
         s.upsert_book(&BookUpsert {
             slug: "t-book",
             label: "T Book",
             description: Some("blurb"),
+            tags: &tags,
             collection: None,
             author: None,
             cover_hash: None,
@@ -1276,11 +1282,20 @@ mod tests {
         s.upsert_edition("t-book", "text", "zh", "中文", 0)
             .await
             .unwrap();
+        let books = s.list_books().await.unwrap();
+        assert_eq!(
+            books
+                .iter()
+                .find(|book| book.slug == "t-book")
+                .map(|book| book.tags.as_slice()),
+            Some(tags.as_slice())
+        );
         // Re-upsert (idempotent) then cascade-delete.
         s.upsert_book(&BookUpsert {
             slug: "t-book",
             label: "T Book v2",
             description: None,
+            tags: &[],
             collection: None,
             author: None,
             cover_hash: None,

@@ -1,0 +1,39 @@
+{
+  "facets": [
+    { "id": "topic", "labels": { "en": "Topic", "zh": "主题" } },
+    { "id": "technology", "labels": { "en": "Technology", "zh": "技术" } },
+    { "id": "audience", "labels": { "en": "Level", "zh": "难度" } }
+  ],
+  "tags": [
+    { "id": "topic.ai", "facet": "topic", "labels": { "en": "AI", "zh": "人工智能" }, "aliases": ["ai", "llm", "artificial intelligence", "artificial-intelligence", "large-language-models"] },
+    { "id": "topic.agents", "facet": "topic", "labels": { "en": "Agents", "zh": "智能体" }, "aliases": ["agent", "agents", "agentic", "llm-agent", "llm-agents", "ai-agent", "ai-agents", "coding-agent", "coding-agents", "agent-systems"] },
+    { "id": "topic.crypto", "facet": "topic", "labels": { "en": "Crypto", "zh": "加密与区块链" }, "aliases": ["crypto", "crypto-mev", "blockchain", "web3"] },
+    { "id": "topic.mev", "facet": "topic", "labels": { "en": "MEV", "zh": "MEV" }, "aliases": ["mev", "searcher", "searcher-bot", "mev-bot"] },
+    { "id": "topic.defi", "facet": "topic", "labels": { "en": "DeFi", "zh": "DeFi" }, "aliases": ["defi", "decentralized finance"] },
+    { "id": "topic.quant", "facet": "topic", "labels": { "en": "Quant", "zh": "量化" }, "aliases": ["quant", "quant-trading", "quantitative", "quantitative-trading", "quantitative-finance"] },
+    { "id": "topic.trading", "facet": "topic", "labels": { "en": "Trading", "zh": "交易" }, "aliases": ["trading", "algorithmic-trading", "systematic-trading", "execution", "market-microstructure"] },
+    { "id": "topic.systems", "facet": "topic", "labels": { "en": "Systems", "zh": "系统工程" }, "aliases": ["systems", "systems-infra", "infra", "infrastructure", "distributed systems", "distributed-systems", "systems-programming", "system-design"] },
+    { "id": "topic.cs", "facet": "topic", "labels": { "en": "Computer Science", "zh": "计算机科学" }, "aliases": ["cs", "cs-foundations", "computer-science", "algorithms", "theory", "theory-of-computation", "data-structures"] },
+    { "id": "topic.machine-learning", "facet": "topic", "labels": { "en": "Machine Learning", "zh": "机器学习" }, "aliases": ["ml", "machine-learning", "deep learning", "deep-learning", "neural-networks"] },
+    { "id": "topic.generative-ai", "facet": "topic", "labels": { "en": "Generative AI", "zh": "生成式 AI" }, "aliases": ["generative-ai", "image generation", "image-generation", "text to image", "text-to-image", "diffusion"] },
+    { "id": "topic.mathematics", "facet": "topic", "labels": { "en": "Mathematics", "zh": "数学" }, "aliases": ["math", "probability", "statistics"] },
+    { "id": "topic.security", "facet": "topic", "labels": { "en": "Security", "zh": "安全" }, "aliases": ["security", "vulnerability", "fuzzing", "cryptography", "smart-contract-security", "bug-bounty"] },
+    { "id": "topic.data", "facet": "topic", "labels": { "en": "Data", "zh": "数据" }, "aliases": ["data", "data-engineering", "analytics", "storage", "data-systems"] },
+
+    { "id": "technology.rust", "facet": "technology", "labels": { "en": "Rust", "zh": "Rust" }, "aliases": ["rust"] },
+    { "id": "technology.julia", "facet": "technology", "labels": { "en": "Julia", "zh": "Julia" }, "aliases": ["julia"] },
+    { "id": "technology.python", "facet": "technology", "labels": { "en": "Python", "zh": "Python" }, "aliases": ["python"] },
+    { "id": "technology.scala", "facet": "technology", "labels": { "en": "Scala", "zh": "Scala" }, "aliases": ["scala", "scala-3"] },
+    { "id": "technology.solidity", "facet": "technology", "labels": { "en": "Solidity / EVM", "zh": "Solidity / EVM" }, "aliases": ["evm", "ethereum"] },
+    { "id": "technology.databases", "facet": "technology", "labels": { "en": "Databases", "zh": "数据库" }, "aliases": ["postgresql", "sqlite", "clickhouse", "timescaledb"] },
+    { "id": "technology.cloudflare", "facet": "technology", "labels": { "en": "Cloudflare", "zh": "Cloudflare" }, "aliases": ["cloudflare", "cloudflare-r2", "cloudflare-d1", "workers", "durable-objects"] },
+    { "id": "technology.linux", "facet": "technology", "labels": { "en": "Linux", "zh": "Linux" }, "aliases": ["linux", "nixos", "systemd"] },
+    { "id": "technology.blockchain", "facet": "technology", "labels": { "en": "Blockchain", "zh": "区块链" }, "aliases": ["ethereum", "solana", "sui"] },
+    { "id": "technology.nautilus-trader", "facet": "technology", "labels": { "en": "NautilusTrader", "zh": "NautilusTrader" }, "aliases": ["nautilus", "nautilus-trader", "nautilustrader"] },
+    { "id": "technology.hyperliquid", "facet": "technology", "labels": { "en": "Hyperliquid", "zh": "Hyperliquid" }, "aliases": ["hyperliquid", "hypercore", "hyperevm"] },
+
+    { "id": "audience.intro", "facet": "audience", "labels": { "en": "Foundations", "zh": "入门与基础" }, "aliases": ["beginner", "getting-started", "first principles", "first-principles", "essentials", "from scratch", "from-scratch", "foundations"] },
+    { "id": "audience.intermediate", "facet": "audience", "labels": { "en": "Intermediate", "zh": "进阶" }, "aliases": ["intermediate", "for-engineers", "practical-guide", "architecture"] },
+    { "id": "audience.advanced", "facet": "audience", "labels": { "en": "Advanced", "zh": "高级" }, "aliases": ["advanced", "internals", "research", "advanced-research"] }
+  ]
+}

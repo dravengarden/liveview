@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS books (
     slug              TEXT PRIMARY KEY,
     label             TEXT NOT NULL,
     description       TEXT,
+    -- Sorted search keywords from book.toml/liveview.toml.
+    tags               TEXT[] NOT NULL DEFAULT '{}',
     -- Optional shelf grouping key (book.toml top-level `collection`).
     collection        TEXT,
     -- Optional credit line shown on the shelf card (book.toml top-level `author`).
@@ -37,6 +39,7 @@ CREATE TABLE IF NOT EXISTS books (
 -- EXISTS won't add columns to an already-present `books`).
 ALTER TABLE books ADD COLUMN IF NOT EXISTS created_at BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE books ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE books ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}';
 ALTER TABLE books ADD COLUMN IF NOT EXISTS collection TEXT;
 ALTER TABLE books ADD COLUMN IF NOT EXISTS author TEXT;
 ALTER TABLE books ADD COLUMN IF NOT EXISTS backdrop_hash TEXT;

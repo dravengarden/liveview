@@ -70,6 +70,11 @@ scheme and refreshes it from a configured LiveView server.
   not assume a browser PWA can provide the same lifecycle guarantees on iOS.
 - Keep remote-origin selection aligned between `web/src/apiBase.ts` and
   `plugins/lvsync`.
+- Treat manifest `tags` as author-owned, lowercase search keywords. Keep them
+  precise and portable; `taxonomy.json` maps selected aliases onto the stable
+  Topic, Technology, and Level discovery facets. Taxonomy aliases, labels, and
+  IDs are product schema: update Rust and web consistency tests together, and
+  keep taxonomy plus book tags in the catalog Merkle identity.
 
 ## Native shell
 

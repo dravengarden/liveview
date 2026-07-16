@@ -98,6 +98,9 @@ pub struct BookCfg {
     pub slug: Option<String>,
     /// One-line blurb shown on the landing page card. Optional.
     pub description: Option<String>,
+    /// Open-vocabulary keywords used by shelf search and faceted discovery.
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// Card artwork, resolved relative to the corpus config file.
     pub cover: Option<PathBuf>,
     /// Wide, text-free artwork for LiveView cards and hero surfaces.
@@ -178,6 +181,8 @@ struct DocManifest {
     #[serde(default, rename = "edition")]
     editions: Vec<EditionCfg>,
     description: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
     collection: Option<String>,
     author: Option<String>,
     cover: Option<PathBuf>,
@@ -203,6 +208,9 @@ pub struct BookManifest {
     pub slug: Option<String>,
     pub title: String,
     pub default_lang: String,
+    /// Open-vocabulary keywords used by shelf search and faceted discovery.
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// Which rendition opens first. Defaults to `text`; must name a declared
     /// (or, in legacy shape, the synthesised) rendition.
     pub default_rendition: Option<RenditionKind>,
@@ -353,6 +361,7 @@ pub struct BookState {
     pub label: String,
     pub slug: String,
     pub description: Option<String>,
+    pub tags: Vec<String>,
     /// Optional shelf grouping key from the manifest's top-level `collection`.
     pub collection: Option<String>,
     /// Optional credit line from the manifest's top-level `author`.
@@ -623,6 +632,8 @@ impl Config {
             }
 
             let default_lang = b.default_lang.unwrap_or_else(|| editions[0].lang.clone());
+            let tags = crate::taxonomy::normalize_tags(b.tags)
+                .map_err(|e| format!("book {:?}: {e}", b.label))?;
 
             // A `[[book]]`/`[[mount]]` is a single `text` rendition over the
             // filesystem tree — no audio, no manifest spine.
@@ -630,6 +641,7 @@ impl Config {
                 label: b.label,
                 slug,
                 description: b.description,
+                tags,
                 collection: None,
                 author: None,
                 cover,
@@ -881,6 +893,8 @@ fn load_doc_manifest(
         label: manifest.title,
         slug: manifest.slug,
         description: manifest.description,
+        tags: crate::taxonomy::normalize_tags(manifest.tags)
+            .map_err(|e| format!("{}: {e}", manifest_path.display()))?,
         collection: manifest.collection,
         author: manifest.author,
         cover,
@@ -1106,6 +1120,8 @@ fn load_book_manifest(
         label: manifest.title,
         slug,
         description: None,
+        tags: crate::taxonomy::normalize_tags(manifest.tags.clone())
+            .map_err(|e| format!("{}: {e}", manifest_path.display()))?,
         collection: manifest.collection.clone(),
         author: manifest.author.clone(),
         cover,
@@ -1242,6 +1258,7 @@ pub fn implicit_resolved(dir: &Path) -> Result<Resolved, String> {
             label,
             slug,
             description: None,
+            tags: vec![],
             collection: None,
             author: None,
             cover: None,
@@ -1469,6 +1486,7 @@ source = "content/zh"
             label: label.to_string(),
             slug: slug.map(str::to_string),
             description: None,
+            tags: vec![],
             cover: None,
             backdrop: None,
             default_lang: None,
