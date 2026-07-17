@@ -200,6 +200,7 @@
         packages = [
           rustToolchain
           pkgs.sccache
+          pkgs.cargo-sweep
           pkgs.cargo-nextest
           pkgs.cargo-deny
           pkgs.cargo-machete

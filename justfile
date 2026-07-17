@@ -115,6 +115,16 @@ build-cached:
 cache-stats:
   sccache --show-stats
 
+# Preview bounded local artifact cleanup while preserving recently used builds.
+cache-prune-dry root-max="20GB" workspace-max="4GB":
+  cargo sweep --dry-run --maxsize {{root-max}} .
+  cargo sweep --dry-run --maxsize {{workspace-max}} lv-sync plugins/lvsync app/src-tauri
+
+# Bound long-lived local artifact caches without forcing a complete rebuild.
+cache-prune root-max="20GB" workspace-max="4GB":
+  cargo sweep --maxsize {{root-max}} .
+  cargo sweep --maxsize {{workspace-max}} lv-sync plugins/lvsync app/src-tauri
+
 # Verify the installed iOS Simulator bridge plugin.
 plugin-check:
   bash tools/check-ios-simulator-plugin.sh
