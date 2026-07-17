@@ -17,6 +17,7 @@ name = "liveview-app"
 version = "0.1.0"
 description = "LiveView native shell with offline reading and background audio"
 edition = "2021"
+rust-version = "1.95"
 
 # Mobile (iOS/Android) links the app as a shared/static lib loaded by the
 # platform entry point; desktop uses the rlib + the main.rs binary. All three
@@ -44,3 +45,16 @@ tauri-plugin-haptics = "2"
 # to the bundled SPA via the `lvsync://` URI scheme because iOS webview-to-plugin
 # IPC is unreliable. Cross-compiles to aarch64-apple-ios (verified).
 tauri-plugin-lvsync = { path = "../../plugins/lvsync" }
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[profile.dev]
+debug = "line-tables-only"

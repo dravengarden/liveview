@@ -13,6 +13,7 @@
 name = "tauri-plugin-lvsync"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.95"
 links = "tauri-plugin-lvsync"
 
 [dependencies]
@@ -35,3 +36,16 @@ reqwest = { version = "0.12", default-features = false, features = ["gzip", "rus
 
 [build-dependencies]
 tauri-plugin = { version = "2", features = ["build"] }
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[profile.dev]
+debug = "line-tables-only"

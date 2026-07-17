@@ -44,11 +44,11 @@ build-web: shell
 
 # Build the release binary with the embedded SPA.
 build: build-web
-  cargo build --release --features embedded
+  cargo build --release --features embedded --locked
 
 # Install the embedded release binary with Cargo.
 install: build-web
-  cargo install --path . --features embedded
+  cargo install --locked --path . --features embedded
 
 # Uninstall the Cargo binary.
 uninstall:
@@ -60,16 +60,19 @@ fmt:
   cargo fmt --manifest-path lv-sync/Cargo.toml
   cargo fmt --manifest-path plugins/lvsync/Cargo.toml
   cargo fmt --manifest-path app/src-tauri/Cargo.toml
+  nixfmt flake.nix
 
 # Run formatting, linting, and type checks.
 check:
   cargo fmt --check
-  cargo clippy --all-targets -- -D warnings
+  cargo clippy --locked --all-targets -- -D warnings
   cargo fmt --manifest-path lv-sync/Cargo.toml --check
-  cargo clippy --manifest-path lv-sync/Cargo.toml --all-targets -- -D warnings
+  cargo clippy --locked --manifest-path lv-sync/Cargo.toml --all-targets -- -D warnings
   cargo fmt --manifest-path plugins/lvsync/Cargo.toml --check
   cargo clippy --locked --manifest-path plugins/lvsync/Cargo.toml --all-targets -- -D warnings
   cargo fmt --manifest-path app/src-tauri/Cargo.toml --check
+  cargo clippy --locked --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings
+  nixfmt --check flake.nix
   cd web && deno task typecheck
 
 # Run all Rust and web tests.
@@ -81,7 +84,21 @@ test:
 
 # Check the native dependency graph without requiring an Apple toolchain.
 native-metadata:
-  cargo metadata --locked --manifest-path app/src-tauri/Cargo.toml --format-version 1 >/dev/null
+  cargo tree --locked --manifest-path app/src-tauri/Cargo.toml --depth 0 >/dev/null
+
+# Faster inner loop; the complete gate retains cargo test for doctests.
+test-fast:
+  cargo nextest run --locked --all-targets
+  cargo nextest run --locked --manifest-path lv-sync/Cargo.toml
+  cargo nextest run --locked --manifest-path plugins/lvsync/Cargo.toml --all-targets
+
+# Opt-in clean-rebuild cache until representative A/B measurements justify a
+# default wrapper for this repository.
+check-cached:
+  RUSTC_WRAPPER=sccache cargo check --locked --all-targets
+
+cache-stats:
+  sccache --show-stats
 
 # Verify the installed iOS Simulator bridge plugin.
 plugin-check:

@@ -12,6 +12,7 @@
 name = "lv-sync"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.95"
 description = "Merkle/sync/storage core for the liveview native (iOS/Mac) client"
 license = "MIT"
 
@@ -38,6 +39,13 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 
 [lints.rust]
 warnings = "deny"
+unsafe_code = "forbid"
 
 [lints.clippy]
-all = "warn"
+all = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[profile.dev]
+debug = "line-tables-only"

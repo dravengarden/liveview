@@ -13,6 +13,11 @@
   # dependency cache is produced through nixpkgs, so the standalone and host
   # builds must use the same release generation for depsHash to stay valid.
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
+  inputs.rust-overlay = {
+    url = "github:oxalica/rust-overlay";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+  inputs.crane.url = "github:ipetkov/crane";
 
   # The shared @shared-utils/ui SDK (business- and portal-free React + MUI
   # primitives), referenced as a Nix package and staged into the web build below
@@ -23,13 +28,71 @@
   inputs.shared-utils.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs =
-    { self, nixpkgs, shared-utils }:
+    {
+      self,
+      nixpkgs,
+      rust-overlay,
+      crane,
+      shared-utils,
+    }:
     let
       system = "x86_64-linux";
-      pkgs = import nixpkgs { inherit system; };
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [ rust-overlay.overlays.default ];
+      };
       lib = pkgs.lib;
       shared = shared-utils.lib.${system};
       version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
+      rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+      craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+      rootRustFilter =
+        path: type:
+        let
+          root = toString ./.;
+          pathString = toString path;
+          relative = lib.removePrefix "${root}/" pathString;
+          excludedTrees = [
+            "app"
+            "lv-sync"
+            "plugins"
+          ];
+          excluded = lib.any (tree: relative == tree || lib.hasPrefix "${tree}/" relative) excludedTrees;
+        in
+        pathString == root || (!excluded && craneLib.filterCargoSources path type);
+      cargoSrc = lib.cleanSourceWith {
+        src = lib.cleanSource ./.;
+        filter = rootRustFilter;
+        name = "liveview-cargo-source";
+      };
+      rustSrc = lib.cleanSourceWith {
+        src = lib.cleanSource ./.;
+        filter =
+          path: type:
+          rootRustFilter path type
+          || (
+            type == "regular"
+            && builtins.elem (baseNameOf (toString path)) [
+              "schema.sql"
+              "taxonomy.json"
+            ]
+          );
+        name = "liveview-rust-source";
+      };
+      webBuildSrc = lib.cleanSourceWith {
+        src = lib.cleanSource ./.;
+        filter =
+          path: type:
+          let
+            root = toString ./.;
+            pathString = toString path;
+            relative = lib.removePrefix "${root}/" pathString;
+            inWeb = relative == "web" || lib.hasPrefix "web/" relative;
+            inTools = relative == "tools" || lib.hasPrefix "tools/" relative;
+          in
+          pathString == root || inWeb || inTools || (type == "regular" && relative == "taxonomy.json");
+        name = "liveview-web-source";
+      };
 
       # Shared UI SDK source tree from the shared-utils `ui` package, re-exposed
       # for local dev to materialize web/src/_shell/ (the build itself stages it
@@ -58,30 +121,32 @@
       liveview-web = shared.buildDenoViteApp {
         pname = "liveview";
         inherit version;
-        src = lib.cleanSource ./.;
+        src = webBuildSrc;
         installArgs = "--frozen --allow-scripts";
         depsHash = "sha256-wcjOFWiGOKuPklz+ZHJbl/hWjd4lAm2ahzjcyTM2jLw=";
       };
 
+      # Compile the locked dependency graph independently from application
+      # source. Ordinary Rust edits reuse this derivation; Cargo graph changes
+      # invalidate it. The final package below supplies compile-time data and
+      # the prebuilt SPA separately.
+      cargoArtifacts = craneLib.buildDepsOnly {
+        pname = "liveview-deps";
+        inherit version;
+        src = cargoSrc;
+        strictDeps = true;
+        cargoExtraArgs = "--locked --features embedded --bin liveview";
+        nativeBuildInputs = [ pkgs.pkg-config ];
+      };
+
       # ── liveview: axum daemon, embeds the SPA via include_dir! ────────
-      liveview = pkgs.rustPlatform.buildRustPackage {
+      liveview = craneLib.buildPackage {
         pname = "liveview";
         inherit version;
-
-        src = lib.cleanSourceWith {
-          src = ./.;
-          filter =
-            path: _type:
-            let
-              base = baseNameOf (toString path);
-            in
-            !(builtins.elem base [
-              "target"
-              "result"
-              "node_modules"
-              "dist"
-            ]);
-        };
+        src = rustSrc;
+        inherit cargoArtifacts;
+        strictDeps = true;
+        cargoExtraArgs = "--locked --features embedded --bin liveview";
 
         # makeWrapper puts edge-tts on PATH. sqlx is postgres-only (pure-Rust
         # driver, no libpq) and the S3 client uses rustls, so no system libs are
@@ -90,36 +155,12 @@
           pkgs.pkg-config
           pkgs.makeWrapper
         ];
-        nativeCheckInputs = [ shared.deno ];
 
         # The audiobook player shells out to `edge-tts`; bake it onto PATH so
         # the deployed binary is self-contained (no unit-level PATH wiring).
         postInstall = ''
           wrapProgram $out/bin/liveview --prefix PATH : ${lib.makeBinPath [ edgeTts ]}
         '';
-
-        # crates.io's API download redirect is blocked by this host's egress,
-        # while the official static CDN is reachable. Import each locked crate
-        # from that CDN directly; fetchurl still verifies Cargo.lock's checksum
-        # for every archive, so this changes transport rather than trust.
-        cargoDeps =
-          let
-            imported = pkgs.rustPlatform.importCargoLock {
-              lockFile = ./Cargo.lock;
-              extraRegistries = {
-                "https://github.com/rust-lang/crates.io-index" =
-                  "https://static.crates.io/crates";
-              };
-            };
-          in
-          pkgs.runCommand "cargo-vendor-dir" {
-            passthru.lockFile = ./Cargo.lock;
-          } ''
-            cp -r ${imported} $out
-            chmod -R u+w $out
-            sed -i '/^\[source\."https:\/\/github\.com\/rust-lang\/crates\.io-index"\]$/,+2d' \
-              $out/.cargo/config.toml
-          '';
 
         # include_dir!("$CARGO_MANIFEST_DIR/web/dist") is a compile-time
         # lookup — drop the prebuilt SPA there before cargo runs.
@@ -128,16 +169,10 @@
           cp -r ${liveview-web}/. web/dist/
         '';
 
-        buildFeatures = [ "embedded" ];
-        cargoBuildFlags = [
-          "--bin"
-          "liveview"
-        ];
-
         # Hermetic tests run during packaging; integration tests that require
         # live postgres/S3/VictoriaLogs are explicitly ignored by the suite.
         doCheck = true;
-        cargoTestFlags = [ "--all-targets" ];
+        cargoTestExtraArgs = "--all-targets";
 
         meta = with lib; {
           description = "Live-reloading docs previewer (axum + embedded React SPA)";
@@ -163,13 +198,12 @@
 
       devShells.${system}.default = pkgs.mkShell {
         packages = [
-          pkgs.cargo
-          pkgs.rustc
+          rustToolchain
+          pkgs.sccache
+          pkgs.cargo-nextest
+          pkgs.rust-analyzer
           pkgs.just
-          # clippy + rustfmt match this rustc, so `just check` (cargo clippy /
-          # cargo fmt) doesn't fall back to a mismatched rustup toolchain.
-          pkgs.clippy
-          pkgs.rustfmt
+          pkgs.nixfmt
           shared.deno
           pkgs.nodejs
           pkgs.imagemagick

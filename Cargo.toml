@@ -2,6 +2,7 @@
 name = "liveview"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.95"
 description = "Fast live-reloading file previewer for Markdown, images, PDFs and more"
 license = "MIT"
 repository = "https://github.com/dravengarden/liveview"
@@ -81,6 +82,13 @@ embedded = ["dep:include_dir"]
 
 [lints.rust]
 warnings = "deny"
+unsafe_code = "forbid"
 
 [lints.clippy]
-all = "warn"
+all = { level = "warn", priority = -1 }
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+
+[profile.dev]
+debug = "line-tables-only"
