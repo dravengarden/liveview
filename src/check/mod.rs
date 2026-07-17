@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use walkdir::{DirEntry, WalkDir};
 
-use crate::check::diagnostic::{render_human, render_json, worst_severity, Diagnostic, Severity};
+use crate::check::diagnostic::{Diagnostic, Severity, render_human, render_json, worst_severity};
 use crate::cli::OutputFormat;
 use crate::shared::FileType;
 
@@ -193,10 +193,11 @@ fn collect_files(paths: &[PathBuf]) -> Result<Vec<CheckFile>, String> {
             {
                 let entry = entry.map_err(|e| format!("walk {}: {e}", p.display()))?;
                 let path = entry.path();
-                if path.is_file() && is_checkable(path) {
-                    if let Some(f) = load_file(path, path)? {
-                        out.push(f);
-                    }
+                if path.is_file()
+                    && is_checkable(path)
+                    && let Some(f) = load_file(path, path)?
+                {
+                    out.push(f);
                 }
             }
         } else {

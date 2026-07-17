@@ -201,6 +201,8 @@
           rustToolchain
           pkgs.sccache
           pkgs.cargo-nextest
+          pkgs.cargo-deny
+          pkgs.cargo-machete
           pkgs.rust-analyzer
           pkgs.just
           pkgs.nixfmt

@@ -49,7 +49,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use comrak::nodes::{AstNode, NodeValue, Sourcepos};
-use comrak::{parse_document, Arena};
+use comrak::{Arena, parse_document};
 use regex::Regex;
 
 use crate::check::diagnostic::{Diagnostic, Severity};

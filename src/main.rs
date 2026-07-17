@@ -11,16 +11,16 @@ mod sync;
 mod taxonomy;
 
 use axum::{
+    Extension, Router,
     body::Body,
     extract::{DefaultBodyLimit, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
-    Extension, Router,
 };
 use clap::Parser;
 use cli::{Cli, Command};
-use config::{auto_discover, implicit_resolved, Config, RenditionKind, Resolved};
+use config::{Config, RenditionKind, Resolved, auto_discover, implicit_resolved};
 use server::catalog::Catalog;
 use server::state::{ApmSink, AppState, CachedJson, SharedState};
 use shared::{FileContent, FileType, TreeNode, WsMessage};
@@ -29,15 +29,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use store::pg::{PgStore, ProgressEntry};
 use sync::objstore::ObjStore;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{RwLock, broadcast};
 use tracing_subscriber::EnvFilter;
 
 #[cfg(feature = "embedded")]
 mod embedded_assets {
     use axum::extract::Path;
-    use axum::http::{header, StatusCode};
+    use axum::http::{StatusCode, header};
     use axum::response::{Html, IntoResponse};
-    use include_dir::{include_dir, Dir};
+    use include_dir::{Dir, include_dir};
 
     static DIST_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web/dist");
 
@@ -65,7 +65,7 @@ mod embedded_assets {
         }
     }
 
-    fn serve_file(path: &str) -> impl IntoResponse {
+    fn serve_file(path: &str) -> impl IntoResponse + use<> {
         match DIST_DIR.get_file(path) {
             Some(file) => {
                 let mime = mime_guess::from_path(path).first_or_octet_stream();
@@ -606,12 +606,11 @@ fn spawn_reload_listener(state: SharedState, database_url: String) {
 /// Broadcast the current text sidebar tree as a `TreeUpdate` (the same shape
 /// the old file-watcher sent) so connected clients refresh after a sync.
 async fn broadcast_tree(state: &AppState) {
-    if let Ok(Some(json)) = state.store.get_site_tree("text").await {
-        if let Ok(tree) = serde_json::from_str::<Vec<TreeNode>>(&json) {
-            if let Ok(s) = serde_json::to_string(&WsMessage::TreeUpdate { tree }) {
-                let _ = state.tx.send(s);
-            }
-        }
+    if let Ok(Some(json)) = state.store.get_site_tree("text").await
+        && let Ok(tree) = serde_json::from_str::<Vec<TreeNode>>(&json)
+        && let Ok(s) = serde_json::to_string(&WsMessage::TreeUpdate { tree })
+    {
+        let _ = state.tx.send(s);
     }
 }
 
@@ -1811,10 +1810,10 @@ async fn api_artwork(
             None => return (StatusCode::NOT_FOUND, "no such book").into_response(),
         }
     };
-    if let Some(h) = hash {
-        if let Some(resp) = blob_response(&state, &h, "public, max-age=3600").await {
-            return resp;
-        }
+    if let Some(h) = hash
+        && let Some(resp) = blob_response(&state, &h, "public, max-age=3600").await
+    {
+        return resp;
     }
     // No (readable) cover: synthesize the slug's gradient as a PNG.
     let png = gradient_png(&q.book);
@@ -2077,16 +2076,16 @@ async fn resolve_narration(
     state: &AppState,
     ctx: &ReqCtx,
 ) -> Option<(store::pg::ChapterRow, String)> {
-    if ctx.kind == RenditionKind::Text {
-        if let Some(stem) = ctx.rest.strip_suffix(".md") {
-            let spoken = format!("{stem}.spoken.md");
-            if let Ok(Some(hit)) = state
-                .store
-                .get_chapter_fallback(&ctx.slug, "text", &ctx.lang, &ctx.default_lang, &spoken)
-                .await
-            {
-                return Some(hit);
-            }
+    if ctx.kind == RenditionKind::Text
+        && let Some(stem) = ctx.rest.strip_suffix(".md")
+    {
+        let spoken = format!("{stem}.spoken.md");
+        if let Ok(Some(hit)) = state
+            .store
+            .get_chapter_fallback(&ctx.slug, "text", &ctx.lang, &ctx.default_lang, &spoken)
+            .await
+        {
+            return Some(hit);
         }
     }
     let direct = state
@@ -2520,10 +2519,8 @@ async fn api_audio(
     // Backward-compatible legacy path while an interrupted migration still has
     // MP3 chapter pointers.
     let mut data = data;
-    if is_bookend {
-        if let Some(cue) = book_end_cue(&state, &row).await {
-            data.extend_from_slice(&cue);
-        }
+    if is_bookend && let Some(cue) = book_end_cue(&state, &row).await {
+        data.extend_from_slice(&cue);
     }
     // ALWAYS the compressed variant — MP3 is fully sunset client-side (one format;
     // the source MP3 is only the internal transcode input). Cached by the source
@@ -2675,10 +2672,9 @@ async fn ensure_text_audio(
             &ctx.rest,
         )
         .await
+        && let (Some(a), Some(m)) = (fresh.audio_hash, fresh.marks_hash)
     {
-        if let (Some(a), Some(m)) = (fresh.audio_hash, fresh.marks_hash) {
-            return Ok((a, m));
-        }
+        return Ok((a, m));
     }
     let md = row.markdown.clone().unwrap_or_default();
     let units = server::spoken::spoken_units(&md);

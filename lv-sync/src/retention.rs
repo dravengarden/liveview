@@ -141,10 +141,10 @@ pub fn plan_audio(input: &PlanInput) -> Plan {
     // EVICT: cached audio whose book isn't kept.
     let mut evict = Vec::new();
     for hash in input.cached {
-        if let Some(slug) = hash_book.get(hash) {
-            if !kept.contains(slug) {
-                evict.push(hash.clone());
-            }
+        if let Some(slug) = hash_book.get(hash)
+            && !kept.contains(slug)
+        {
+            evict.push(hash.clone());
         }
     }
     evict.sort();

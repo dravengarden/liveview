@@ -21,7 +21,7 @@
 //! rather than breaking the page — it's wrong, not fatal.
 
 use comrak::nodes::NodeValue;
-use comrak::{parse_document, Arena};
+use comrak::{Arena, parse_document};
 use regex::Regex;
 use std::sync::LazyLock;
 

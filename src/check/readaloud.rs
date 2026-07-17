@@ -16,11 +16,11 @@ use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
-use crate::check::diagnostic::{render_human, render_json, Diagnostic, Severity};
+use crate::check::diagnostic::{Diagnostic, Severity, render_human, render_json};
 use crate::cli::OutputFormat;
 use crate::server::narration::{NarrationStore, Sidecar};
-use crate::server::speakable::{plan, Speech, MIN_ALT_CHARS};
-use crate::server::spoken::{spoken_units, Unit, UnitKind};
+use crate::server::speakable::{MIN_ALT_CHARS, Speech, plan};
+use crate::server::spoken::{Unit, UnitKind, spoken_units};
 use crate::shared::FileType;
 
 pub type MarkdownSource = (String, String);

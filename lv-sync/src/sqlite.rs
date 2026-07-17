@@ -342,7 +342,7 @@ mod tests {
             batch,
             vec!["{\"event_id\":\"e1\"}", "{\"event_id\":\"e2\"}"]
         ); // FIFO, deduped
-           // Limit is honored (oldest first).
+        // Limit is honored (oldest first).
         assert_eq!(s.apm_drain(1), vec!["{\"event_id\":\"e1\"}"]);
         // Ack drops only the acked ids; the rest stay for the next flush.
         s.apm_ack(&["e1".to_string()]);

@@ -468,14 +468,13 @@ impl LvState {
                     let _ = std::fs::remove_dir_all(e.path());
                     continue;
                 }
-                if let Ok(t) = std::fs::read_to_string(e.path().join("manifest.json")) {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&t) {
-                        if let Some(arr) = v.get("assets").and_then(|a| a.as_array()) {
-                            for a in arr {
-                                if let Some(s) = a.as_str() {
-                                    keep_assets.insert(s.to_string());
-                                }
-                            }
+                if let Ok(t) = std::fs::read_to_string(e.path().join("manifest.json"))
+                    && let Ok(v) = serde_json::from_str::<serde_json::Value>(&t)
+                    && let Some(arr) = v.get("assets").and_then(|a| a.as_array())
+                {
+                    for a in arr {
+                        if let Some(s) = a.as_str() {
+                            keep_assets.insert(s.to_string());
                         }
                     }
                 }
@@ -497,10 +496,10 @@ impl LvState {
             let p = e.path();
             if p.is_dir() {
                 Self::prune_files(base, &p, keep);
-            } else if let Ok(rel) = p.strip_prefix(base) {
-                if !keep.contains(&rel.to_string_lossy().to_string()) {
-                    let _ = std::fs::remove_file(&p);
-                }
+            } else if let Ok(rel) = p.strip_prefix(base)
+                && !keep.contains(&rel.to_string_lossy().to_string())
+            {
+                let _ = std::fs::remove_file(&p);
             }
         }
     }
@@ -802,7 +801,21 @@ fn sniff_content_type(body: &[u8]) -> &'static str {
         [0xFF, 0xD8, 0xFF, ..] => "image/jpeg",
         [b'G', b'I', b'F', b'8', ..] => "image/gif",
         // WEBP: "RIFF" .... "WEBP"
-        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => "image/webp",
+        [
+            b'R',
+            b'I',
+            b'F',
+            b'F',
+            _,
+            _,
+            _,
+            _,
+            b'W',
+            b'E',
+            b'B',
+            b'P',
+            ..,
+        ] => "image/webp",
         // SVG (text) — match a leading "<?xml" or "<svg" after optional BOM/space.
         _ if {
             let s = &body[..body.len().min(64)];
@@ -1178,9 +1191,11 @@ mod tests {
             r#"{{"protocol_version":{},"root":"r"}}"#,
             lv_sync::MANIFEST_PROTOCOL_VERSION + 1
         );
-        assert!(RootResponse::from_json(&future)
-            .unwrap_err()
-            .contains("newer than supported"));
+        assert!(
+            RootResponse::from_json(&future)
+                .unwrap_err()
+                .contains("newer than supported")
+        );
     }
 
     #[tokio::test]
@@ -1209,9 +1224,11 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let resources = json["resources"].as_array().unwrap();
         assert_eq!(resources.len(), 2);
-        assert!(resources
-            .iter()
-            .all(|resource| { matches!(resource["kind"].as_str(), Some("audio" | "marks")) }));
+        assert!(
+            resources
+                .iter()
+                .all(|resource| { matches!(resource["kind"].as_str(), Some("audio" | "marks")) })
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }

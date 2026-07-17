@@ -479,7 +479,7 @@ impl Parser {
                         other => {
                             return Err(ExprError::new(format!(
                                 "expected field name after `.`, found {other:?}"
-                            )))
+                            )));
                         }
                     };
                     e = Ast::Field(Box::new(e), name);
@@ -603,10 +603,10 @@ impl<'a> TypeChecker<'a> {
         name: &str,
         local_cols: Option<&BTreeMap<String, ColumnType>>,
     ) -> Result<Ty, ExprError> {
-        if let Some(cols) = local_cols {
-            if let Some(ct) = cols.get(name) {
-                return Ok(Ty::Column(S::of_column(*ct)));
-            }
+        if let Some(cols) = local_cols
+            && let Some(ct) = cols.get(name)
+        {
+            return Ok(Ty::Column(S::of_column(*ct)));
         }
         if let Some(st) = self.env.signals.get(name) {
             self.refs.signal_refs.insert(name.to_string());
@@ -710,7 +710,7 @@ impl<'a> TypeChecker<'a> {
                         return Err(ExprError::new(format!(
                             "`filter`'s first argument must be a dataset, got {}",
                             other.describe()
-                        )))
+                        )));
                     }
                 };
                 // The predicate is checked with the dataset's columns in scope.
@@ -744,7 +744,7 @@ impl<'a> TypeChecker<'a> {
                         return Err(ExprError::new(format!(
                             "`with`'s first argument must be a dataset, got {}",
                             other.describe()
-                        )))
+                        )));
                     }
                 };
                 let mut i = 1;
@@ -754,7 +754,7 @@ impl<'a> TypeChecker<'a> {
                         _ => {
                             return Err(ExprError::new(
                                 "`with` column name must be a string literal",
-                            ))
+                            ));
                         }
                     };
                     let t = self.check(&args[i + 1], Some(&cols))?;

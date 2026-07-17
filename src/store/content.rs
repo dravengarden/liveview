@@ -56,13 +56,12 @@ pub trait ContentStore: Send + Sync {
         {
             return Ok(Some((c, lang.to_string())));
         }
-        if lang != default_lang {
-            if let Some(c) = self
+        if lang != default_lang
+            && let Some(c) = self
                 .get_chapter(book_slug, rendition, default_lang, rel_path)
                 .await?
-            {
-                return Ok(Some((c, default_lang.to_string())));
-            }
+        {
+            return Ok(Some((c, default_lang.to_string())));
         }
         Ok(None)
     }

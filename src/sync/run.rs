@@ -17,7 +17,7 @@ use crate::config::{BookState, Layout, RenditionKind, Resolved};
 use crate::server::renderer;
 use crate::shared::FileType;
 use crate::store::pg::{AudioTaskUpsert, BookUpsert, ChapterRow, PgStore};
-use crate::sync::diff::{plan, Plan};
+use crate::sync::diff::{Plan, plan};
 use crate::sync::merkle::{Build, Dag, Leaf, Node};
 use crate::sync::objstore::ObjStore;
 
@@ -331,25 +331,22 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 // each non-prose resource's spoken text by key — no model in the
                 // deploy path. Only the TEXT rendition has read-aloud narration;
                 // idempotent (ON CONFLICT), so re-syncs are cheap no-ops.
-                if r_kind == "text" {
-                    if let Some(book_root) = ed.source.parent() {
-                        match crate::server::narration::Sidecar::load(book_root, &ed.lang) {
-                            Ok(sc) => {
-                                for (key, e) in &sc.entries {
-                                    store
-                                        .upsert_narration(key, &e.kind, &ed.lang, &e.text)
-                                        .await
-                                        .map_err(|err| {
-                                            format!(
-                                                "upsert narration {}/{}: {err}",
-                                                book.slug, ed.lang
-                                            )
-                                        })?;
-                                }
+                if r_kind == "text"
+                    && let Some(book_root) = ed.source.parent()
+                {
+                    match crate::server::narration::Sidecar::load(book_root, &ed.lang) {
+                        Ok(sc) => {
+                            for (key, e) in &sc.entries {
+                                store
+                                    .upsert_narration(key, &e.kind, &ed.lang, &e.text)
+                                    .await
+                                    .map_err(|err| {
+                                        format!("upsert narration {}/{}: {err}", book.slug, ed.lang)
+                                    })?;
                             }
-                            Err(e) => {
-                                tracing::warn!("narration sidecar {}/{}: {e}", book.slug, ed.lang)
-                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("narration sidecar {}/{}: {e}", book.slug, ed.lang)
                         }
                     }
                 }

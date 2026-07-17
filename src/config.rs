@@ -451,7 +451,7 @@ impl Config {
     fn parse(raw: &str, format: Format) -> Result<Self, String> {
         match format {
             Format::Toml => toml::from_str(raw).map_err(|e| e.to_string()),
-            Format::Yaml => serde_yml::from_str(raw).map_err(|e| e.to_string()),
+            Format::Yaml => serde_norway::from_str(raw).map_err(|e| e.to_string()),
             Format::Json => serde_json::from_str(raw).map_err(|e| e.to_string()),
         }
     }
@@ -515,13 +515,13 @@ impl Config {
 
             // `default_lang`, if set, must name a real edition (or, for a
             // shorthand book, it labels the synthesised edition — any value ok).
-            if let (Some(dl), false) = (b.default_lang.as_deref(), b.editions.is_empty()) {
-                if !b.editions.iter().any(|e| e.lang == dl) {
-                    return Err(format!(
-                        "book {:?}: default_lang {:?} is not one of its editions",
-                        b.label, dl
-                    ));
-                }
+            if let (Some(dl), false) = (b.default_lang.as_deref(), b.editions.is_empty())
+                && !b.editions.iter().any(|e| e.lang == dl)
+            {
+                return Err(format!(
+                    "book {:?}: default_lang {:?} is not one of its editions",
+                    b.label, dl
+                ));
             }
         }
         Ok(())
@@ -1158,18 +1158,18 @@ fn resolve_cover(book_dir: &Path, declared: Option<&Path>) -> Option<PathBuf> {
         } else {
             book_dir.join(rel)
         };
-        if let Ok(p) = abs.canonicalize() {
-            if p.is_file() {
-                return Some(p);
-            }
+        if let Ok(p) = abs.canonicalize()
+            && p.is_file()
+        {
+            return Some(p);
         }
     }
     for name in ["cover.jpg", "cover.png", "cover.webp"] {
         let p = book_dir.join(name);
-        if let Ok(c) = p.canonicalize() {
-            if c.is_file() {
-                return Some(c);
-            }
+        if let Ok(c) = p.canonicalize()
+            && c.is_file()
+        {
+            return Some(c);
         }
     }
     None
@@ -1184,18 +1184,18 @@ fn resolve_backdrop(book_dir: &Path, declared: Option<&Path>) -> Option<PathBuf>
         } else {
             book_dir.join(rel)
         };
-        if let Ok(p) = abs.canonicalize() {
-            if p.is_file() {
-                return Some(p);
-            }
+        if let Ok(p) = abs.canonicalize()
+            && p.is_file()
+        {
+            return Some(p);
         }
     }
     for name in ["backdrop.jpg", "backdrop.png", "backdrop.webp"] {
         let p = book_dir.join(name);
-        if let Ok(c) = p.canonicalize() {
-            if c.is_file() {
-                return Some(c);
-            }
+        if let Ok(c) = p.canonicalize()
+            && c.is_file()
+        {
+            return Some(c);
         }
     }
     None
@@ -1239,11 +1239,7 @@ pub fn implicit_resolved(dir: &Path) -> Result<Resolved, String> {
         .to_string();
     let slug = {
         let s = slugify(&label);
-        if s.is_empty() {
-            "root".to_string()
-        } else {
-            s
-        }
+        if s.is_empty() { "root".to_string() } else { s }
     };
     let include_set = build_globset(&builtin_includes())
         .map_err(|e| format!("implicit config: bad built-in include glob: {e}"))?;

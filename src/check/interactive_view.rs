@@ -28,7 +28,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use comrak::nodes::NodeValue;
-use comrak::{parse_document, Arena};
+use comrak::{Arena, parse_document};
 
 use crate::check::diagnostic::{Diagnostic, Severity};
 use crate::check::{CheckCtx, CheckFile, Validator};
@@ -575,15 +575,15 @@ impl<'a> Checker<'a> {
                 controls,
                 readouts,
             } => {
-                if let Some(t) = title {
-                    if t.chars().count() > MAX_LABEL_LEN {
-                        self.warn(
-                            "interactive-view/label-long",
-                            format!("chart group title exceeds {MAX_LABEL_LEN} chars"),
-                            None,
-                            self.locate(t),
-                        );
-                    }
+                if let Some(t) = title
+                    && t.chars().count() > MAX_LABEL_LEN
+                {
+                    self.warn(
+                        "interactive-view/label-long",
+                        format!("chart group title exceeds {MAX_LABEL_LEN} chars"),
+                        None,
+                        self.locate(t),
+                    );
                 }
                 if charts.is_empty() {
                     self.err(
@@ -642,15 +642,15 @@ impl<'a> Checker<'a> {
             }
             Block::Input { signal, widget } => self.check_input(signal.as_deref(), widget.as_ref()),
             Block::Panel { title, children } => {
-                if let Some(t) = title {
-                    if t.chars().count() > MAX_LABEL_LEN {
-                        self.warn(
-                            "interactive-view/label-long",
-                            format!("panel title exceeds {MAX_LABEL_LEN} chars"),
-                            None,
-                            self.locate(t),
-                        );
-                    }
+                if let Some(t) = title
+                    && t.chars().count() > MAX_LABEL_LEN
+                {
+                    self.warn(
+                        "interactive-view/label-long",
+                        format!("panel title exceeds {MAX_LABEL_LEN} chars"),
+                        None,
+                        self.locate(t),
+                    );
                 }
                 self.check_container(doc, children, depth);
             }
@@ -715,15 +715,15 @@ impl<'a> Checker<'a> {
         overlays: &[Overlay],
         title: Option<&str>,
     ) {
-        if let Some(t) = title {
-            if t.chars().count() > MAX_LABEL_LEN {
-                self.warn(
-                    "interactive-view/label-long",
-                    format!("chart title exceeds {MAX_LABEL_LEN} chars"),
-                    None,
-                    self.locate(t),
-                );
-            }
+        if let Some(t) = title
+            && t.chars().count() > MAX_LABEL_LEN
+        {
+            self.warn(
+                "interactive-view/label-long",
+                format!("chart title exceeds {MAX_LABEL_LEN} chars"),
+                None,
+                self.locate(t),
+            );
         }
 
         // Clone the schema so column reads don't borrow `self` while diagnostics
@@ -1306,29 +1306,29 @@ impl<'a> Checker<'a> {
                         self.locate(owner),
                     );
                 }
-                if let Some(s) = step {
-                    if *s <= 0.0 {
-                        self.err(
-                            "interactive-view/slider-step",
-                            format!("slider `{owner}` step must be > 0"),
-                            None,
-                            self.locate(owner),
-                        );
-                    }
+                if let Some(s) = step
+                    && *s <= 0.0
+                {
+                    self.err(
+                        "interactive-view/slider-step",
+                        format!("slider `{owner}` step must be > 0"),
+                        None,
+                        self.locate(owner),
+                    );
                 }
             }
             _ => {}
         }
 
-        if let Some(label) = widget_label(w) {
-            if label.chars().count() > MAX_LABEL_LEN {
-                self.warn(
-                    "interactive-view/label-long",
-                    format!("widget label exceeds {MAX_LABEL_LEN} chars"),
-                    None,
-                    self.locate(label),
-                );
-            }
+        if let Some(label) = widget_label(w)
+            && label.chars().count() > MAX_LABEL_LEN
+        {
+            self.warn(
+                "interactive-view/label-long",
+                format!("widget label exceeds {MAX_LABEL_LEN} chars"),
+                None,
+                self.locate(label),
+            );
         }
     }
 
@@ -1582,20 +1582,21 @@ fn extract_interpolation_signals(template: &str) -> Vec<String> {
     let bytes = template.as_bytes();
     let mut i = 0;
     while i + 1 < bytes.len() {
-        if bytes[i] == b'{' && bytes[i + 1] == b'{' {
-            if let Some(end) = template[i + 2..].find("}}") {
-                let inner = &template[i + 2..i + 2 + end];
-                let head = inner.split('|').next().unwrap_or("").trim();
-                let name: String = head
-                    .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                    .collect();
-                if !name.is_empty() {
-                    out.push(name);
-                }
-                i = i + 2 + end + 2;
-                continue;
+        if bytes[i] == b'{'
+            && bytes[i + 1] == b'{'
+            && let Some(end) = template[i + 2..].find("}}")
+        {
+            let inner = &template[i + 2..i + 2 + end];
+            let head = inner.split('|').next().unwrap_or("").trim();
+            let name: String = head
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                out.push(name);
             }
+            i = i + 2 + end + 2;
+            continue;
         }
         i += 1;
     }

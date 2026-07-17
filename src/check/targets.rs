@@ -10,7 +10,7 @@
 //! renders.
 
 use comrak::nodes::NodeValue;
-use comrak::{parse_document, Arena};
+use comrak::{Arena, parse_document};
 use serde::Serialize;
 
 use crate::check::svg::svg_spans;
@@ -74,15 +74,15 @@ pub fn charts_in(source: &str) -> Vec<ChartHit> {
     let mut m = 0u32;
     for node in root.descendants() {
         let data = node.data.borrow();
-        if let NodeValue::CodeBlock(cb) = &data.value {
-            if cb.info.split_whitespace().next() == Some("mermaid") {
-                hits.push(ChartHit {
-                    kind: ChartKind::Mermaid,
-                    line: data.sourcepos.start.line as u32,
-                    nth: m,
-                });
-                m += 1;
-            }
+        if let NodeValue::CodeBlock(cb) = &data.value
+            && cb.info.split_whitespace().next() == Some("mermaid")
+        {
+            hits.push(ChartHit {
+                kind: ChartKind::Mermaid,
+                line: data.sourcepos.start.line as u32,
+                nth: m,
+            });
+            m += 1;
         }
     }
 

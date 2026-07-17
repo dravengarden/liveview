@@ -1,7 +1,7 @@
 use axum::{
     extract::{
-        ws::{Message, WebSocket},
         State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
     },
     response::IntoResponse,
 };
@@ -25,14 +25,12 @@ async fn handle_ws(socket: WebSocket, state: SharedState) {
         // = server restart = every client reconnects = a fresh push, so the native
         // shell picks up a new web bundle instantly (it runs the OTA check on
         // receipt). `None` in dev builds (no embedded bundle) → nothing to push.
-        if let Some(version) = crate::app_version() {
-            if let Ok(json) =
+        if let Some(version) = crate::app_version()
+            && let Ok(json) =
                 serde_json::to_string(&crate::shared::WsMessage::AppVersion { version })
-            {
-                if sender.send(Message::Text(json.into())).await.is_err() {
-                    return;
-                }
-            }
+            && sender.send(Message::Text(json.into())).await.is_err()
+        {
+            return;
         }
         while let Ok(msg) = rx.recv().await {
             if sender.send(Message::Text(msg.into())).await.is_err() {
@@ -42,7 +40,11 @@ async fn handle_ws(socket: WebSocket, state: SharedState) {
     });
 
     let recv_task = tokio::spawn(async move {
-        while let Some(Ok(_msg)) = receiver.next().await {
+        loop {
+            let next = receiver.next().await;
+            let Some(Ok(_msg)) = next else {
+                break;
+            };
             // Client messages handled here if needed
         }
     });

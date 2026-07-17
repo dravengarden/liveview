@@ -12,7 +12,9 @@
 [package]
 name = "tauri-plugin-lvsync"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+license = "MIT"
+publish = false
 rust-version = "1.95"
 links = "tauri-plugin-lvsync"
 
@@ -36,6 +38,10 @@ reqwest = { version = "0.12", default-features = false, features = ["gzip", "rus
 
 [build-dependencies]
 tauri-plugin = { version = "2", features = ["build"] }
+
+[package.metadata.cargo-machete]
+# Referenced from build.rs, which cargo-machete does not inspect.
+ignored = ["tauri-plugin"]
 
 [lints.rust]
 warnings = "deny"

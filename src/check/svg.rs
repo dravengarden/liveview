@@ -19,7 +19,7 @@
 use std::ops::Range;
 
 use comrak::nodes::NodeValue;
-use comrak::{parse_document, Arena};
+use comrak::{Arena, parse_document};
 
 use crate::check::diagnostic::{Diagnostic, Severity};
 use crate::check::{CheckCtx, CheckFile, Validator};

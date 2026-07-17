@@ -467,13 +467,12 @@ impl PgStore {
         {
             return Ok(Some((c, lang.to_string())));
         }
-        if lang != default_lang {
-            if let Some(c) = self
+        if lang != default_lang
+            && let Some(c) = self
                 .get_chapter(book_slug, rendition, default_lang, rel_path)
                 .await?
-            {
-                return Ok(Some((c, default_lang.to_string())));
-            }
+        {
+            return Ok(Some((c, default_lang.to_string())));
         }
         Ok(None)
     }
@@ -991,8 +990,12 @@ impl PgStore {
         book_slug: Option<&str>,
     ) -> Result<u64, sqlx::Error> {
         let q = match book_slug {
-            Some(_) => "UPDATE audio_tasks SET status='queued', attempts=0, error=NULL WHERE status='failed' AND book_slug=$1",
-            None => "UPDATE audio_tasks SET status='queued', attempts=0, error=NULL WHERE status='failed'",
+            Some(_) => {
+                "UPDATE audio_tasks SET status='queued', attempts=0, error=NULL WHERE status='failed' AND book_slug=$1"
+            }
+            None => {
+                "UPDATE audio_tasks SET status='queued', attempts=0, error=NULL WHERE status='failed'"
+            }
         };
         let mut query = sqlx::query(q);
         if let Some(s) = book_slug {
@@ -1338,11 +1341,12 @@ mod tests {
         s.delete_chapter("t-book", "text", "zh", "00.md")
             .await
             .unwrap();
-        assert!(s
-            .get_chapter("t-book", "text", "zh", "00.md")
-            .await
-            .unwrap()
-            .is_none());
+        assert!(
+            s.get_chapter("t-book", "text", "zh", "00.md")
+                .await
+                .unwrap()
+                .is_none()
+        );
         s.delete_asset("habc").await.unwrap();
         assert!(s.get_asset("habc").await.unwrap().is_none());
     }
@@ -1363,15 +1367,16 @@ mod tests {
         let Some(s) = store().await else { return };
         s.progress_upsert("bk/01", 0.42, Some(1000)).await.unwrap();
         s.progress_upsert("bk/01", 0.55, Some(2000)).await.unwrap(); // newer ts wins
-                                                                     // A STALE replay (older ts) must NOT clobber the newer value — last-write-
-                                                                     // wins is what lets an offline device flush without overwriting a fresher
-                                                                     // edit made on another device meanwhile.
+        // A STALE replay (older ts) must NOT clobber the newer value — last-write-
+        // wins is what lets an offline device flush without overwriting a fresher
+        // edit made on another device meanwhile.
         let stale = s.progress_upsert("bk/01", 0.10, Some(1500)).await.unwrap();
         assert!(!stale, "an older-ts progress write must be rejected");
         let rows = s.progress_for_book("bk").await.unwrap();
-        assert!(rows
-            .iter()
-            .any(|r| r.path == "bk/01" && (r.scroll - 0.55).abs() < 1e-9));
+        assert!(
+            rows.iter()
+                .any(|r| r.path == "bk/01" && (r.scroll - 0.55).abs() < 1e-9)
+        );
         // A text + audio chapter for the same book must BOTH survive the
         // per-rendition dedup (the shelf shows reading and listening progress
         // side by side), while two text chapters collapse to the newest.

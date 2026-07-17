@@ -13,7 +13,7 @@
 use std::sync::LazyLock;
 
 use comrak::nodes::{AstNode, NodeValue};
-use comrak::{parse_document, Arena};
+use comrak::{Arena, parse_document};
 use regex::Regex;
 use serde::Serialize;
 

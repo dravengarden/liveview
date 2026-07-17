@@ -75,6 +75,16 @@ check:
   nixfmt --check flake.nix
   cd web && deno task typecheck
 
+# Audit each independently locked Rust workspace that can be resolved on Linux.
+dependencies:
+  cargo deny check
+  cargo machete --with-metadata
+  cargo deny --manifest-path lv-sync/Cargo.toml check
+  cargo machete --with-metadata lv-sync
+  cargo deny --manifest-path plugins/lvsync/Cargo.toml check --config deny-native.toml
+  cargo machete --with-metadata plugins/lvsync
+  cargo deny --manifest-path app/src-tauri/Cargo.toml check --config deny-native.toml
+
 # Run all Rust and web tests.
 test:
   cargo test --locked --all-targets
@@ -105,7 +115,7 @@ plugin-check:
   bash tools/check-ios-simulator-plugin.sh
 
 # Run the complete local quality gate.
-verify: check test build-web native-metadata plugin-check
+verify: check dependencies test build-web native-metadata plugin-check
 
 # Remove generated Rust and web build output.
 clean:

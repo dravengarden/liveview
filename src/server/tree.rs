@@ -316,7 +316,7 @@ fn matches_layout(pattern: &str, name: &str, is_dir: bool) -> bool {
 mod tests {
     use super::*;
     use crate::config::{
-        build_globset, BookState, EditionState, Layout, RenditionKind, RenditionState,
+        BookState, EditionState, Layout, RenditionKind, RenditionState, build_globset,
     };
     use std::fs;
     use std::path::PathBuf;

@@ -6,7 +6,7 @@
 //! own blake3 hash, registers them as an asset, verifies the object, then rewrites
 //! every chapter reference. Source MP3 assets remain for ordinary sync GC.
 
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::{StreamExt, TryStreamExt, stream};
 
 use crate::store::pg::{LegacyAudioAsset, PgStore};
 use crate::sync::objstore::ObjStore;
@@ -127,10 +127,8 @@ async fn promote_one(
     if let Err(error) = obj.delete(&derived_key).await {
         tracing::warn!(key = derived_key, %error, "delete legacy audio derivative failed");
     }
-    if tail {
-        if let Err(error) = obj.delete(&old_tail).await {
-            tracing::warn!(key = old_tail, %error, "delete legacy tail derivative failed");
-        }
+    if tail && let Err(error) = obj.delete(&old_tail).await {
+        tracing::warn!(key = old_tail, %error, "delete legacy tail derivative failed");
     }
 
     Ok(Promoted {

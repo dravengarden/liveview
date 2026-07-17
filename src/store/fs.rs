@@ -72,29 +72,29 @@ impl FsStore {
         let mut card_backdrops = HashMap::new();
         let mut blobs: HashMap<String, (Vec<u8>, String)> = HashMap::new();
         for b in &books {
-            if let Some(path) = &b.cover {
-                if let Ok(bytes) = std::fs::read(path) {
-                    let hash = blake3_hex(&bytes);
-                    let mime = mime_guess::from_path(path)
-                        .first_or_octet_stream()
-                        .to_string();
-                    covers.insert(b.slug.clone(), hash.clone());
-                    blobs.insert(hash, (bytes, mime));
-                }
+            if let Some(path) = &b.cover
+                && let Ok(bytes) = std::fs::read(path)
+            {
+                let hash = blake3_hex(&bytes);
+                let mime = mime_guess::from_path(path)
+                    .first_or_octet_stream()
+                    .to_string();
+                covers.insert(b.slug.clone(), hash.clone());
+                blobs.insert(hash, (bytes, mime));
             }
-            if let Some(path) = &b.backdrop {
-                if let Ok(bytes) = std::fs::read(path) {
-                    let hash = blake3_hex(&bytes);
-                    let mime = mime_guess::from_path(path)
-                        .first_or_octet_stream()
-                        .to_string();
-                    backdrops.insert(b.slug.clone(), hash.clone());
-                    blobs.insert(hash, (bytes.clone(), mime));
-                    if let Ok(card_bytes) = crate::artwork::card_backdrop(&bytes) {
-                        let card_hash = blake3_hex(&card_bytes);
-                        card_backdrops.insert(b.slug.clone(), card_hash.clone());
-                        blobs.insert(card_hash, (card_bytes, "image/jpeg".to_string()));
-                    }
+            if let Some(path) = &b.backdrop
+                && let Ok(bytes) = std::fs::read(path)
+            {
+                let hash = blake3_hex(&bytes);
+                let mime = mime_guess::from_path(path)
+                    .first_or_octet_stream()
+                    .to_string();
+                backdrops.insert(b.slug.clone(), hash.clone());
+                blobs.insert(hash, (bytes.clone(), mime));
+                if let Ok(card_bytes) = crate::artwork::card_backdrop(&bytes) {
+                    let card_hash = blake3_hex(&card_bytes);
+                    card_backdrops.insert(b.slug.clone(), card_hash.clone());
+                    blobs.insert(card_hash, (card_bytes, "image/jpeg".to_string()));
                 }
             }
         }

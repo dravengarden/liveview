@@ -481,8 +481,10 @@ mod tests {
             r#"{{"protocol_version":{},"root":"r","resources":[]}}"#,
             MANIFEST_PROTOCOL_VERSION + 1
         );
-        assert!(Manifest::from_json(&future)
-            .unwrap_err()
-            .contains("newer than supported"));
+        assert!(
+            Manifest::from_json(&future)
+                .unwrap_err()
+                .contains("newer than supported")
+        );
     }
 }

@@ -16,7 +16,9 @@
 name = "liveview-app"
 version = "0.1.0"
 description = "LiveView native shell with offline reading and background audio"
-edition = "2021"
+edition = "2024"
+license = "MIT"
+publish = false
 rust-version = "1.95"
 
 # Mobile (iOS/Android) links the app as a shared/static lib loaded by the
@@ -28,6 +30,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+
+[package.metadata.cargo-machete]
+# Referenced from build.rs, which cargo-machete does not inspect.
+ignored = ["tauri-build"]
 
 [dependencies]
 tauri = { version = "2", features = [] }

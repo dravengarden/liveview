@@ -1,7 +1,7 @@
 [package]
 name = "liveview"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 rust-version = "1.95"
 description = "Fast live-reloading file previewer for Markdown, images, PDFs and more"
 license = "MIT"
@@ -26,11 +26,9 @@ async-trait = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["io"] }
 axum = { version = "0.8", features = ["ws"] }
-comrak = "0.36"
+comrak = { version = "0.36", default-features = false }
 regex = "1"
-notify-debouncer-full = "0.4"
 globset = "0.4"
 # Directory recursion for `liveview check` (expand a dir into its *.md files).
 walkdir = "2"
@@ -42,7 +40,7 @@ mime_guess = "2"
 # hero backdrops while scrolling; original artwork remains a separate DAG blob.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 toml = "0.8"
-serde_yml = "0.0.12"
+serde_norway = "0.9"
 # Content + reading-progress store. Runtime-checked queries only (no
 # compile-time macros) so the Nix build needs no DATABASE_URL. postgres-only —
 # the server read-path is fully off the filesystem (pg + rustfs).
@@ -53,8 +51,7 @@ blake3 = "1"
 
 # S3 client for the private rustfs object store (book blobs: images, PDFs,
 # covers, audio mp3 + marks). Talks to rustfs's S3 API over loopback HTTP.
-aws-sdk-s3 = "1"
-aws-smithy-runtime-api = "1"
+aws-sdk-s3 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 
 # Minimal HTTP client for the APM ingest → VictoriaLogs forwarder (POST NDJSON to
 # the host VL on loopback). default-features=false: no TLS/http2/proxy — the target

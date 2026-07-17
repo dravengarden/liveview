@@ -8,10 +8,10 @@
 //! explicit credentials, a dummy region, path-style addressing, and the given
 //! `http://…` endpoint (no AWS env/credential-chain scanning).
 
+use aws_sdk_s3::Client;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::Client;
 
 pub type Result<T> = std::result::Result<T, String>;
 
@@ -117,7 +117,8 @@ impl ObjStore {
             .collect()
             .await
             .map_err(|e| format!("read body {key}: {e}"))?;
-        Ok(data.into_bytes().to_vec())
+        let bytes = data.into_bytes().to_vec();
+        Ok(bytes)
     }
 
     /// Remove an object (idempotent — deleting a missing key is not an error).

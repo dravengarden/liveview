@@ -180,10 +180,11 @@ fn discover_books(paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
             .filter_entry(super::should_walk)
         {
             let entry = entry.map_err(|e| format!("walk {}: {e}", path.display()))?;
-            if entry.file_type().is_file() && entry.file_name() == "book.toml" {
-                if let Some(parent) = entry.path().parent() {
-                    roots.insert(parent.to_path_buf());
-                }
+            if entry.file_type().is_file()
+                && entry.file_name() == "book.toml"
+                && let Some(parent) = entry.path().parent()
+            {
+                roots.insert(parent.to_path_buf());
             }
         }
     }
