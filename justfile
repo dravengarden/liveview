@@ -1,5 +1,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+native-target-dir := "target/native"
+
 # Show the available project commands.
 default:
   @just --list
@@ -67,11 +69,11 @@ check:
   cargo fmt --check
   cargo clippy --locked --all-targets -- -D warnings
   cargo fmt --manifest-path lv-sync/Cargo.toml --check
-  cargo clippy --locked --manifest-path lv-sync/Cargo.toml --all-targets -- -D warnings
+  CARGO_TARGET_DIR={{native-target-dir}} cargo clippy --locked --manifest-path lv-sync/Cargo.toml --all-targets -- -D warnings
   cargo fmt --manifest-path plugins/lvsync/Cargo.toml --check
-  cargo clippy --locked --manifest-path plugins/lvsync/Cargo.toml --all-targets -- -D warnings
+  CARGO_TARGET_DIR={{native-target-dir}} cargo clippy --locked --manifest-path plugins/lvsync/Cargo.toml --all-targets -- -D warnings
   cargo fmt --manifest-path app/src-tauri/Cargo.toml --check
-  cargo clippy --locked --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings
+  CARGO_TARGET_DIR={{native-target-dir}} cargo clippy --locked --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings
   nixfmt --check flake.nix
   cd web && deno task typecheck
 
@@ -88,8 +90,8 @@ dependencies:
 # Run all Rust and web tests.
 test:
   cargo test --locked --all-targets
-  cargo test --locked --manifest-path lv-sync/Cargo.toml
-  cargo test --locked --manifest-path plugins/lvsync/Cargo.toml --all-targets
+  CARGO_TARGET_DIR={{native-target-dir}} cargo test --locked --manifest-path lv-sync/Cargo.toml
+  CARGO_TARGET_DIR={{native-target-dir}} cargo test --locked --manifest-path plugins/lvsync/Cargo.toml --all-targets
   cd web && deno task test
 
 # Check the native dependency graph without requiring an Apple toolchain.
@@ -102,8 +104,8 @@ check-fast:
 
 test-fast:
   cargo nextest run --locked --all-targets
-  cargo nextest run --locked --manifest-path lv-sync/Cargo.toml
-  cargo nextest run --locked --manifest-path plugins/lvsync/Cargo.toml --all-targets
+  CARGO_TARGET_DIR={{native-target-dir}} cargo nextest run --locked --manifest-path lv-sync/Cargo.toml
+  CARGO_TARGET_DIR={{native-target-dir}} cargo nextest run --locked --manifest-path plugins/lvsync/Cargo.toml --all-targets
 
 # Opt-in clean-rebuild cache until representative A/B measurements justify a
 # default wrapper for this repository.
@@ -123,4 +125,7 @@ verify: check dependencies test build-web native-metadata plugin-check
 # Remove generated Rust and web build output.
 clean:
   cargo clean
+  cargo clean --manifest-path lv-sync/Cargo.toml
+  cargo clean --manifest-path plugins/lvsync/Cargo.toml
+  cargo clean --manifest-path app/src-tauri/Cargo.toml
   rm -rf web/dist web/node_modules
