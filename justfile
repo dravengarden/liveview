@@ -104,8 +104,8 @@ test-fast:
 
 # Opt-in clean-rebuild cache until representative A/B measurements justify a
 # default wrapper for this repository.
-check-cached:
-  RUSTC_WRAPPER=sccache cargo check --locked --all-targets
+build-cached:
+  RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0 cargo build --locked --all-targets
 
 cache-stats:
   sccache --show-stats
