@@ -36,7 +36,7 @@ dev-web:
 
 # Start only the backend development server.
 dev-server:
-  cargo run -- --port 4159
+  cargo run --locked -- --port 4159
 
 # Build the frontend SPA and native bundle.
 build-web: shell
@@ -97,6 +97,9 @@ native-metadata:
   cargo tree --locked --manifest-path app/src-tauri/Cargo.toml --depth 0 >/dev/null
 
 # Faster inner loop; the complete gate retains cargo test for doctests.
+check-fast:
+  cargo check --locked --bin liveview
+
 test-fast:
   cargo nextest run --locked --all-targets
   cargo nextest run --locked --manifest-path lv-sync/Cargo.toml
