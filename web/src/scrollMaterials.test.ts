@@ -36,6 +36,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const sidebar = await source("components/Sidebar.tsx");
   const navShell = await source("_shell/nav-shell.tsx");
   const detentSheet = await source("_shell/detent-sheet.tsx");
+  const lightboxGestures = await source("_shell/image-lightbox-gestures.ts");
   const nativeSync = await source("native-sync.ts");
   const apm = await source("apm.ts");
   const preloadDriver = await source("hooks/useAudioPreloadDriver.ts");
@@ -142,6 +143,26 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     detentSheet,
     /yRef\.current \+ \(projectVelocity \? vy \* PROJECTION_MS : 0\)/,
     "an interrupted DetentSheet drag must snap from its actual position without stale velocity projection",
+  );
+  assertPresent(
+    lightboxGestures,
+    /g\.current\.lastX = remaining\.x;[\s\S]{0,80}g\.current\.lastY = remaining\.y;/,
+    "ending a lightbox pinch must rebase panning to the surviving finger",
+  );
+  assertPresent(
+    lightboxGestures,
+    /if \(st\.pinched\) \{[\s\S]{0,180}constrainPan\(\);[\s\S]{0,80}applyTransform\(true\);/,
+    "a completed lightbox pinch must settle within the viewport instead of becoming a tap",
+  );
+  assertPresent(
+    lightboxGestures,
+    /tf\.current\.x \+= midX - st\.pinchMidX;[\s\S]{0,120}tf\.current\.y \+= midY - st\.pinchMidY;/,
+    "lightbox pinch translation must follow the moving two-finger midpoint",
+  );
+  assertPresent(
+    lightboxGestures,
+    /overlayRect\.left \+ overlay\.clientWidth \/ 2 \+ tf\.current\.x/,
+    "lightbox zoom anchoring must use the live transform instead of a stale painted image rect",
   );
   assertPresent(
     shell,
