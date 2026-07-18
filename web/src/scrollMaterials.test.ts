@@ -53,6 +53,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const shell = await source("App.tsx");
   const markdownViewer = await source("components/MarkdownViewer.tsx");
   const mobileStyles = await source("styles/index.css");
+  const markdownStyles = await source("styles/markdown.css");
 
   const backdropFilter = /\b(?:backdropFilter|WebkitBackdropFilter)\s*:/;
   assertAbsent(landing, backdropFilter, "Landing shelf");
@@ -152,10 +153,15 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /opacity: activeSlug === null \? 1 : 0/,
     "the hidden bookshelf must not retain thousands of painted nodes behind the reader",
   );
-  assertPresent(
+  assertAbsent(
     mobileStyles,
-    /table:not\(:has\(tr > :nth-child\(4\)\)\)/,
-    "phone-sized prose tables must not become nested horizontal scrollers",
+    /\.markdown-body table[^}]*overflow-wrap:\s*anywhere/s,
+    "mobile markdown tables (words must remain intact)",
+  );
+  assertPresent(
+    markdownStyles,
+    /\.markdown-body table\s*\{[^}]*width:\s*max-content;[^}]*max-width:\s*100%;[^}]*overflow-x:\s*auto;[^}]*overflow-y:\s*hidden;[^}]*-webkit-overflow-scrolling:\s*touch;/s,
+    "wide markdown tables must scroll horizontally with iOS momentum without capturing vertical overflow",
   );
   assertAbsent(
     markdownViewer,
