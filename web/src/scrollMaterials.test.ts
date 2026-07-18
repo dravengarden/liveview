@@ -138,6 +138,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "the DetentSheet must settle rather than strand a system-cancelled iOS drag",
   );
   assertPresent(
+    detentSheet,
+    /yRef\.current \+ \(projectVelocity \? vy \* PROJECTION_MS : 0\)/,
+    "an interrupted DetentSheet drag must snap from its actual position without stale velocity projection",
+  );
+  assertPresent(
     shell,
     /display: activeSlug === null \? "flex" : "none"/,
     "the mounted bookshelf must leave layout and paint while a reader is open",
