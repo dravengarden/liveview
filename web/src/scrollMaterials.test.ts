@@ -34,6 +34,8 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const syncIndicator = await source("components/SyncIndicator.tsx");
   const scrollToTop = await source("components/ScrollToTopButton.tsx");
   const sidebar = await source("components/Sidebar.tsx");
+  const navShell = await source("_shell/nav-shell.tsx");
+  const detentSheet = await source("_shell/detent-sheet.tsx");
   const nativeSync = await source("native-sync.ts");
   const apm = await source("apm.ts");
   const preloadDriver = await source("hooks/useAudioPreloadDriver.ts");
@@ -114,6 +116,21 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     sidebar,
     /"\[data-detent-moving\] &": \{ transform: "none" \}/,
     "the Contents scroller must collapse its promoted layer while its DetentSheet moves",
+  );
+  assertPresent(
+    navShell,
+    /peekDetent=\{false\}/,
+    "the Contents sheet must not strand the reader and navigation at a half-height detent",
+  );
+  assertPresent(
+    detentSheet,
+    /pendingYRef\.current = y;/,
+    "the DetentSheet drag loop must retain the latest coalesced pointer position",
+  );
+  assertPresent(
+    detentSheet,
+    /if \(pendingY !== null\) \{\s+paint\(pendingY, false\);/,
+    "the DetentSheet drag loop must paint its latest pointer position",
   );
   assertPresent(
     shell,
