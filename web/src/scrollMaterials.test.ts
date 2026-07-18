@@ -155,7 +155,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertAbsent(
     `${mobileStyles}\n${markdownStyles}`,
-    /\.markdown-body[^{}]*table[^{}]*\{[^}]*(?:overflow-wrap:\s*anywhere|word-break:\s*break-all|hyphens:\s*auto)/s,
+    /\.markdown-body[^{}]*(?:table|th|td)[^{}]*\{[^}]*(?:overflow-wrap:\s*anywhere|word-break:\s*break-all|hyphens:\s*auto)/s,
     "markdown tables and cells (terms must not be split inside words)",
   );
   assertPresent(
