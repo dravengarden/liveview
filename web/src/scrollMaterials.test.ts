@@ -185,6 +185,16 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "lightbox image load and viewport resize must remeasure and settle zoom bounds",
   );
   assertPresent(
+    lightboxGestures,
+    /addEventListener\("resize", settleGeometry\)[\s\S]{0,120}removeEventListener\("resize", settleGeometry\)/,
+    "lightbox viewport changes must invoke geometry settling and clean up the listener",
+  );
+  assertPresent(
+    `${lightboxGestures}\n${await source("_shell/image-lightbox.tsx")}`,
+    /onImageLoad: settleGeometry[\s\S]{0,12000}onLoad=\{onImageLoad\}/,
+    "lightbox image decode must refresh cached geometry before gestures",
+  );
+  assertPresent(
     shell,
     /display: activeSlug === null \? "flex" : "none"/,
     "the mounted bookshelf must leave layout and paint while a reader is open",
