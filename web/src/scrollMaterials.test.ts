@@ -154,9 +154,9 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "the hidden bookshelf must not retain thousands of painted nodes behind the reader",
   );
   assertAbsent(
-    mobileStyles,
-    /\.markdown-body table[^}]*overflow-wrap:\s*anywhere/s,
-    "mobile markdown tables (words must remain intact)",
+    `${mobileStyles}\n${markdownStyles}`,
+    /\.markdown-body[^{}]*table[^{}]*\{[^}]*(?:overflow-wrap:\s*anywhere|word-break:\s*break-all|hyphens:\s*auto)/s,
+    "markdown tables and cells (terms must not be split inside words)",
   );
   assertPresent(
     markdownStyles,
