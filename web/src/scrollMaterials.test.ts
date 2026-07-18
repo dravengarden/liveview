@@ -171,6 +171,16 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     lightboxGestures,
+    /img\.style\.willChange = scale <= 1 \? "transform" : "auto";/,
+    "zoomed lightbox panning must not pin a low-resolution iOS compositor texture",
+  );
+  assertAbsent(
+    await source("_shell/image-lightbox.tsx"),
+    /willChange:\s*"transform"/,
+    "the lightbox image must not be permanently promoted before its zoom scale is known",
+  );
+  assertPresent(
+    lightboxGestures,
     /const onPointerCancel = useCallback[\s\S]{0,600}pointers\.current\.delete\(e\.pointerId\);[\s\S]{0,600}(?:reset\(true\)|constrainPan\(\));/,
     "cancelled lightbox gestures must only clean up and settle",
   );
