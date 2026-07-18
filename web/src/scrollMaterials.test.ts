@@ -161,8 +161,23 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     lightboxGestures,
-    /overlayRect\.left \+ overlay\.clientWidth \/ 2 \+ tf\.current\.x/,
-    "lightbox zoom anchoring must use the live transform instead of a stale painted image rect",
+    /const centerX = box\.centerX \+ tf\.current\.x;/,
+    "lightbox zoom anchoring must use cached geometry plus the live transform",
+  );
+  assertPresent(
+    lightboxGestures,
+    /paintFrame\.current = requestAnimationFrame\([\s\S]{0,120}paintTransform\(\);/,
+    "lightbox gesture painting must coalesce high-rate pointer samples to one frame",
+  );
+  assertPresent(
+    lightboxGestures,
+    /const onPointerCancel = useCallback[\s\S]{0,600}pointers\.current\.delete\(e\.pointerId\);[\s\S]{0,600}(?:reset\(true\)|constrainPan\(\));/,
+    "cancelled lightbox gestures must only clean up and settle",
+  );
+  assertPresent(
+    await source("_shell/image-lightbox.tsx"),
+    /onPointerCancel=\{onPointerCancel\}[\s\S]{0,80}onLostPointerCapture=\{onPointerCancel\}/,
+    "the lightbox must settle system-cancelled and capture-lost gestures",
   );
   assertPresent(
     shell,
