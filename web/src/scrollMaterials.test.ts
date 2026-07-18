@@ -129,8 +129,13 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     detentSheet,
-    /if \(pendingY !== null\) \{\s+paint\(pendingY, false\);/,
-    "the DetentSheet drag loop must paint its latest pointer position",
+    /const finishDrag = useCallback[\s\S]{0,250}flushPendingDragFrame\(\);/,
+    "the DetentSheet release path must flush its final coalesced pointer position",
+  );
+  assertPresent(
+    detentSheet,
+    /onPointerCancel=\{onPointerCancel\}[\s\S]{0,80}onLostPointerCapture=\{onPointerCancel\}/,
+    "the DetentSheet must settle rather than strand a system-cancelled iOS drag",
   );
   assertPresent(
     shell,
