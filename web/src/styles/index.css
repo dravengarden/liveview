@@ -258,7 +258,6 @@ textarea,
 [data-theme="dark"] .hljs-attribute,
 [data-theme="dark"] .hljs-symbol,
 [data-theme="dark"] .hljs-bullet,
-[data-theme="dark"] .hljs-addition,
 [data-theme="dark"] .hljs-variable,
 [data-theme="dark"] .hljs-template-tag,
 [data-theme="dark"] .hljs-template-variable {
@@ -273,6 +272,16 @@ textarea,
 [data-theme="dark"] .hljs-built_in,
 [data-theme="dark"] .hljs-class .hljs-title {
   color: #ffa657;
+}
+
+[data-theme="dark"] .hljs-addition {
+  color: #aff5b4;
+  background-color: rgba(46, 160, 67, 0.22);
+}
+
+[data-theme="dark"] .hljs-deletion {
+  color: #ffdcd7;
+  background-color: rgba(248, 81, 73, 0.22);
 }
 
 /* ========== Sepia Theme (warm cream, long-form reading) ========== */
@@ -473,6 +482,16 @@ textarea,
 [data-theme="night"] .hljs-number,
 [data-theme="night"] .hljs-literal {
   color: #d3a0b0;
+}
+
+[data-theme="night"] .hljs-addition {
+  color: #c3c79a;
+  background-color: rgba(112, 128, 74, 0.24);
+}
+
+[data-theme="night"] .hljs-deletion {
+  color: #efb0aa;
+  background-color: rgba(166, 79, 73, 0.24);
 }
 
 /* ========== Lavender Theme (soft light purple, cowboy palette, light) ========== */
@@ -698,7 +717,6 @@ textarea,
 [data-theme="plum"] .hljs-attribute,
 [data-theme="plum"] .hljs-symbol,
 [data-theme="plum"] .hljs-bullet,
-[data-theme="plum"] .hljs-addition,
 [data-theme="plum"] .hljs-variable,
 [data-theme="plum"] .hljs-template-tag,
 [data-theme="plum"] .hljs-template-variable {
@@ -713,4 +731,14 @@ textarea,
 [data-theme="plum"] .hljs-built_in,
 [data-theme="plum"] .hljs-class .hljs-title {
   color: #ffa657;
+}
+
+[data-theme="plum"] .hljs-addition {
+  color: #c4f1c7;
+  background-color: rgba(67, 130, 88, 0.28);
+}
+
+[data-theme="plum"] .hljs-deletion {
+  color: #ffd2d0;
+  background-color: rgba(170, 68, 76, 0.28);
 }

@@ -56,6 +56,23 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const mobileStyles = await source("styles/index.css");
   const markdownStyles = await source("styles/markdown.css");
 
+  for (const theme of ["dark", "night", "plum"]) {
+    assertPresent(
+      mobileStyles,
+      new RegExp(
+        `\\[data-theme="${theme}"\\] \\.hljs-addition \\{[^}]*background-color:[^}]*\\}`,
+      ),
+      `${theme} syntax additions must override the vendored light-theme background`,
+    );
+    assertPresent(
+      mobileStyles,
+      new RegExp(
+        `\\[data-theme="${theme}"\\] \\.hljs-deletion \\{[^}]*background-color:[^}]*\\}`,
+      ),
+      `${theme} syntax deletions must override the vendored light-theme background`,
+    );
+  }
+
   const backdropFilter = /\b(?:backdropFilter|WebkitBackdropFilter)\s*:/;
   assertAbsent(landing, backdropFilter, "Landing shelf");
   assertAbsent(shell, backdropFilter, "fixed application shell");
