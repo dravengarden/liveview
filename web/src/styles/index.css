@@ -241,8 +241,17 @@ textarea,
   background: #161b22;
 }
 
+[data-theme="dark"] .hljs-subst,
+[data-theme="dark"] .hljs-emphasis,
+[data-theme="dark"] .hljs-strong,
+[data-theme="dark"] .hljs-punctuation {
+  color: #e6edf3;
+}
+
 [data-theme="dark"] .hljs-comment,
-[data-theme="dark"] .hljs-quote {
+[data-theme="dark"] .hljs-quote,
+[data-theme="dark"] .hljs-code,
+[data-theme="dark"] .hljs-formula {
   color: #8b949e;
 }
 
@@ -252,6 +261,8 @@ textarea,
 }
 
 [data-theme="dark"] .hljs-string,
+[data-theme="dark"] .hljs-regexp,
+[data-theme="dark"] .hljs-meta .hljs-string,
 [data-theme="dark"] .hljs-title,
 [data-theme="dark"] .hljs-name,
 [data-theme="dark"] .hljs-type,
@@ -265,7 +276,8 @@ textarea,
 }
 
 [data-theme="dark"] .hljs-number,
-[data-theme="dark"] .hljs-literal {
+[data-theme="dark"] .hljs-literal,
+[data-theme="dark"] .hljs-operator {
   color: #79c0ff;
 }
 
@@ -452,8 +464,17 @@ textarea,
   background: #241f1a;
 }
 
+[data-theme="night"] .hljs-subst,
+[data-theme="night"] .hljs-emphasis,
+[data-theme="night"] .hljs-strong,
+[data-theme="night"] .hljs-punctuation {
+  color: #d6cbbd;
+}
+
 [data-theme="night"] .hljs-comment,
-[data-theme="night"] .hljs-quote {
+[data-theme="night"] .hljs-quote,
+[data-theme="night"] .hljs-code,
+[data-theme="night"] .hljs-formula {
   color: #8a7d6b;
 }
 
@@ -463,6 +484,8 @@ textarea,
 }
 
 [data-theme="night"] .hljs-string,
+[data-theme="night"] .hljs-regexp,
+[data-theme="night"] .hljs-meta .hljs-string,
 [data-theme="night"] .hljs-title,
 [data-theme="night"] .hljs-name {
   color: #b8bb8c;
@@ -475,7 +498,8 @@ textarea,
 }
 
 [data-theme="night"] .hljs-attribute,
-[data-theme="night"] .hljs-variable {
+[data-theme="night"] .hljs-variable,
+[data-theme="night"] .hljs-operator {
   color: #d9a066;
 }
 
@@ -700,8 +724,17 @@ textarea,
   background: #1f1a2c;
 }
 
+[data-theme="plum"] .hljs-subst,
+[data-theme="plum"] .hljs-emphasis,
+[data-theme="plum"] .hljs-strong,
+[data-theme="plum"] .hljs-punctuation {
+  color: #ede9fe;
+}
+
 [data-theme="plum"] .hljs-comment,
-[data-theme="plum"] .hljs-quote {
+[data-theme="plum"] .hljs-quote,
+[data-theme="plum"] .hljs-code,
+[data-theme="plum"] .hljs-formula {
   color: #a899c4;
 }
 
@@ -711,6 +744,8 @@ textarea,
 }
 
 [data-theme="plum"] .hljs-string,
+[data-theme="plum"] .hljs-regexp,
+[data-theme="plum"] .hljs-meta .hljs-string,
 [data-theme="plum"] .hljs-title,
 [data-theme="plum"] .hljs-name,
 [data-theme="plum"] .hljs-type,
@@ -724,7 +759,8 @@ textarea,
 }
 
 [data-theme="plum"] .hljs-number,
-[data-theme="plum"] .hljs-literal {
+[data-theme="plum"] .hljs-literal,
+[data-theme="plum"] .hljs-operator {
   color: #79c0ff;
 }
 

@@ -71,6 +71,15 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
       ),
       `${theme} syntax deletions must override the vendored light-theme background`,
     );
+    for (const token of ["regexp", "operator", "punctuation", "subst"]) {
+      assertPresent(
+        mobileStyles,
+        new RegExp(
+          `\\[data-theme="${theme}"\\] \\.hljs-${token}(?:,| \\{)`,
+        ),
+        `${theme} syntax ${token} tokens must not inherit the vendored light-theme color`,
+      );
+    }
   }
 
   const backdropFilter = /\b(?:backdropFilter|WebkitBackdropFilter)\s*:/;
