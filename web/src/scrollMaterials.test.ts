@@ -192,8 +192,23 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     lightboxGestures,
-    /paintFrame\.current = requestAnimationFrame\([\s\S]{0,120}paintTransform\(\);/,
-    "lightbox gesture painting must coalesce high-rate pointer samples to one frame",
+    /const applyTransform = useCallback[\s\S]{0,180}paintTransform\(animate\);/,
+    "lightbox gesture painting must not add a frame of input latency",
+  );
+  assertAbsent(
+    lightboxGestures,
+    /paintFrame|requestAnimationFrame/,
+    "lightbox panning must not queue a second frame after WebKit pointer delivery",
+  );
+  assertPresent(
+    lightboxGestures,
+    /st\.panX \+= dx;[\s\S]{0,180}constrainPan\(true\);[\s\S]{0,80}applyTransform\(\);/,
+    "zoomed lightbox panning must use elastic edge resistance while the finger is down",
+  );
+  assertPresent(
+    lightboxGestures,
+    /const isDoubleTap =[\s\S]{0,300}if \(isDoubleTap\) \{[\s\S]{0,240}(?:reset\(true\)|zoomAt\()/,
+    "lightbox image taps must require a deliberate double tap before changing zoom",
   );
   assertPresent(
     lightboxGestures,
