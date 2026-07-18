@@ -180,6 +180,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "the lightbox must settle system-cancelled and capture-lost gestures",
   );
   assertPresent(
+    lightboxGestures,
+    /const settleGeometry = useCallback[\s\S]{0,300}measureGeometry\(\);[\s\S]{0,180}constrainPan\(\);[\s\S]{0,80}applyTransform\(true\);/,
+    "lightbox image load and viewport resize must remeasure and settle zoom bounds",
+  );
+  assertPresent(
     shell,
     /display: activeSlug === null \? "flex" : "none"/,
     "the mounted bookshelf must leave layout and paint while a reader is open",
