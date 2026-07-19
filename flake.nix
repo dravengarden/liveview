@@ -154,12 +154,18 @@
         nativeBuildInputs = [
           pkgs.pkg-config
           pkgs.makeWrapper
+          pkgs.ffmpeg
         ];
 
-        # The audiobook player shells out to `edge-tts`; bake it onto PATH so
-        # the deployed binary is self-contained (no unit-level PATH wiring).
+        # Audio generation shells out to edge-tts and ffmpeg; bake both onto
+        # PATH so the deployed binary is self-contained (no unit-level wiring).
         postInstall = ''
-          wrapProgram $out/bin/liveview --prefix PATH : ${lib.makeBinPath [ edgeTts ]}
+          wrapProgram $out/bin/liveview --prefix PATH : ${
+            lib.makeBinPath [
+              edgeTts
+              pkgs.ffmpeg
+            ]
+          }
         '';
 
         # include_dir!("$CARGO_MANIFEST_DIR/web/dist") is a compile-time
