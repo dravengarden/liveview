@@ -177,7 +177,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     lightboxGestures,
-    /if \(st\.pinched\) \{[\s\S]{0,180}constrainPan\(\);[\s\S]{0,80}applyTransform\(true\);/,
+    /if \(st\.pinched\) \{[\s\S]{0,500}constrainPan\(\);[\s\S]{0,80}applyTransform\(true, true\);/,
     "a completed lightbox pinch must settle within the viewport instead of becoming a tap",
   );
   assertPresent(
@@ -222,8 +222,8 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     lightboxGestures,
-    /applyTransform\(true\);[\s\S]{0,80}schedulePanLayer\(240\);/,
-    "a completed pinch must settle before baking its final scale",
+    /if \(st\.pinched\) \{[\s\S]{0,700}bakePanLayer\(\);[\s\S]{0,80}constrainPan\(\);[\s\S]{0,80}applyTransform\(true, true\);/,
+    "a completed pinch must bake its final scale before release animation",
   );
   assertPresent(
     lightboxGestures,
@@ -232,7 +232,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     lightboxGestures,
-    /img\.style\.width = `\$\{box\.imageWidth \* tf\.current\.scale\}px`;[\s\S]{0,220}bakedScale\.current = tf\.current\.scale;[\s\S]{0,80}paintTransform\(false, true\);/,
+    /const bakePanLayer = useCallback[\s\S]{0,500}img\.style\.width = `\$\{box\.imageWidth \* tf\.current\.scale\}px`;[\s\S]{0,220}bakedScale\.current = tf\.current\.scale;[\s\S]{0,80}paintTransform\(false, true\);/,
     "settled lightbox zoom must bake scale into layout before 1:1 panning",
   );
   assertAbsent(
