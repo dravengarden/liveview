@@ -192,7 +192,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     lightboxGestures,
-    /const applyTransform = useCallback[\s\S]{0,180}paintTransform\(animate\);/,
+    /const applyTransform = useCallback[\s\S]{0,220}paintTransform\(animate, panLayer\);/,
     "lightbox gesture painting must not add a frame of input latency",
   );
   assertAbsent(
@@ -202,7 +202,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     lightboxGestures,
-    /st\.panX \+= dx;[\s\S]{0,180}constrainPan\(true\);[\s\S]{0,80}applyTransform\(\);/,
+    /st\.panX \+= dx;[\s\S]{0,180}constrainPan\(true\);[\s\S]{0,80}applyTransform\(false, true\);/,
     "zoomed lightbox panning must use elastic edge resistance while the finger is down",
   );
   assertPresent(
@@ -212,8 +212,18 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     lightboxGestures,
-    /img\.style\.willChange = scale <= 1 \? "transform" : "auto";/,
-    "zoomed lightbox panning must not pin a low-resolution iOS compositor texture",
+    /img\.style\.willChange = scale <= 1 \|\| panLayer \? "transform" : "auto";/,
+    "lightbox scaling must re-rasterize while final-scale panning uses a stable compositor layer",
+  );
+  assertPresent(
+    lightboxGestures,
+    /applyTransform\(false, true\);/,
+    "zoomed lightbox panning must reuse its sharp final-scale compositor layer",
+  );
+  assertPresent(
+    lightboxGestures,
+    /applyTransform\(true\);[\s\S]{0,80}schedulePanLayer\(240\);/,
+    "a completed pinch must promote only after its final-scale transform has painted",
   );
   assertAbsent(
     await source("_shell/image-lightbox.tsx"),
