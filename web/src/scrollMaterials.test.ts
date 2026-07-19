@@ -213,17 +213,27 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   assertPresent(
     lightboxGestures,
     /img\.style\.willChange = scale <= 1 \|\| panLayer \? "transform" : "auto";/,
-    "lightbox scaling must re-rasterize while final-scale panning uses a stable compositor layer",
+    "lightbox scaling must re-rasterize while settled panning uses a stable compositor layer",
   );
   assertPresent(
     lightboxGestures,
     /applyTransform\(false, true\);/,
-    "zoomed lightbox panning must reuse its sharp final-scale compositor layer",
+    "zoomed lightbox panning must reuse its sharp settled compositor layer",
   );
   assertPresent(
     lightboxGestures,
     /applyTransform\(true\);[\s\S]{0,80}schedulePanLayer\(240\);/,
-    "a completed pinch must promote only after its final-scale transform has painted",
+    "a completed pinch must settle before baking its final scale",
+  );
+  assertPresent(
+    lightboxGestures,
+    /const visualScale = scale \/ bakedScale\.current;[\s\S]{0,160}scale\(\$\{visualScale\}\)/,
+    "lightbox transforms must account for scale already baked into CSS dimensions",
+  );
+  assertPresent(
+    lightboxGestures,
+    /img\.style\.width = `\$\{box\.imageWidth \* tf\.current\.scale\}px`;[\s\S]{0,220}bakedScale\.current = tf\.current\.scale;[\s\S]{0,80}paintTransform\(false, true\);/,
+    "settled lightbox zoom must bake scale into layout before 1:1 panning",
   );
   assertAbsent(
     await source("_shell/image-lightbox.tsx"),
