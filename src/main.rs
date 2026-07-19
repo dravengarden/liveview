@@ -2235,11 +2235,10 @@ fn parse_range(value: &str, total: u64) -> Option<(u64, u64)> {
 
 /// The canonical audio representation. Audiobook narration is mono
 /// speech, so a low-bitrate speech codec is near-transparent at a fraction of the
-/// size (~67% smaller at Opus 16k vs the 48k MP3). Opus-in-CAF is the default
-/// because iOS AVPlayer supports that container. The legacy cache tag remains
-/// only for resumable migration and optional book-end derivatives. Fallback
-/// if Opus-CAF ever misbehaves: tag "aac24", mime "audio/mp4", ext "m4a",
-/// args ["-c:a","aac","-b:a","24k","-ac","1"].
+/// source size. CAF is retained because the native offline cache uses that
+/// container; MPEG Layer III is used because FFmpeg's CAF muxer does not support
+/// Opus or AAC. The legacy cache tag remains only for resumable migration and
+/// optional book-end derivatives.
 pub struct AudioVariant {
     pub tag: &'static str,
     pub mime: &'static str,
@@ -2247,24 +2246,15 @@ pub struct AudioVariant {
     args: &'static [&'static str],
 }
 pub const AUDIO_VARIANT: AudioVariant = AudioVariant {
-    tag: "op16c",
+    tag: "mp324c",
     mime: "audio/x-caf",
     ext: "caf",
-    args: &[
-        "-c:a",
-        "libopus",
-        "-b:a",
-        "16k",
-        "-ac",
-        "1",
-        "-application",
-        "voip",
-    ],
+    args: &["-c:a", "libmp3lame", "-b:a", "24k", "-ac", "1"],
 };
 
 /// Folded into audio-capable Merkle leaf kinds. Bump whenever the canonical
 /// stored/served representation changes, even if source prose is unchanged.
-pub const AUDIO_ENCODING_VERSION: &str = "caf-opus16-v1";
+pub const AUDIO_ENCODING_VERSION: &str = "caf-mp324-v1";
 
 /// Transcode an MP3 (`src`) per `AUDIO_VARIANT`. ffmpeg reads stdin and writes a
 /// temp file (CAF/MP4 muxers need seekable output), which we read back + delete.
@@ -2290,14 +2280,25 @@ pub async fn transcode_audio(src: Vec<u8>) -> Result<Vec<u8>, String> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped());
     let mut child = cmd.spawn().map_err(|e| format!("spawn ffmpeg: {e}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(&src).await.map_err(|e| e.to_string())?;
+    let write_error = if let Some(mut stdin) = child.stdin.take() {
+        let result = stdin.write_all(&src).await.err();
         drop(stdin);
-    }
+        result
+    } else {
+        None
+    };
     let out = child.wait_with_output().await.map_err(|e| e.to_string())?;
     if !out.status.success() {
         let _ = tokio::fs::remove_file(&tmp).await;
-        return Err(format!("ffmpeg: {}", String::from_utf8_lossy(&out.stderr)));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(match write_error {
+            Some(error) => format!("ffmpeg stdin: {error}; ffmpeg: {stderr}"),
+            None => format!("ffmpeg: {stderr}"),
+        });
+    }
+    if let Some(error) = write_error {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(format!("ffmpeg stdin: {error}"));
     }
     let bytes = tokio::fs::read(&tmp).await.map_err(|e| e.to_string());
     let _ = tokio::fs::remove_file(&tmp).await;
@@ -2820,6 +2821,35 @@ async fn api_raw(
 mod apm_tests {
     use super::*;
     use crate::store::fs::FsStore;
+
+    #[tokio::test]
+    async fn canonical_audio_variant_is_muxable_by_ffmpeg() {
+        let source = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=0.1",
+                "-f",
+                "mp3",
+                "pipe:1",
+            ])
+            .output()
+            .await
+            .expect("ffmpeg should generate the MP3 fixture");
+        assert!(
+            source.status.success(),
+            "fixture ffmpeg failed: {}",
+            String::from_utf8_lossy(&source.stderr)
+        );
+
+        let canonical = transcode_audio(source.stdout)
+            .await
+            .expect("canonical audio configuration must be supported by ffmpeg");
+        assert!(canonical.starts_with(b"caff"));
+    }
 
     #[test]
     fn virtual_audio_path_maps_back_to_text_chapter() {
