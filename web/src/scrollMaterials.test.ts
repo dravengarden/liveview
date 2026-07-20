@@ -33,6 +33,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const segmented = await source("components/SegmentedPill.tsx");
   const syncIndicator = await source("components/SyncIndicator.tsx");
   const scrollToTop = await source("components/ScrollToTopButton.tsx");
+  const floatingBubble = await source("components/FloatingBubble.tsx");
   const sidebar = await source("components/Sidebar.tsx");
   const navShell = await source("_shell/nav-shell.tsx");
   const detentSheet = await source("_shell/detent-sheet.tsx");
@@ -139,6 +140,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     scrollToTop,
     /if \(next === shownRef\.current\) return/,
     "scroll listeners must not enqueue unchanged React state every frame",
+  );
+  assertPresent(
+    floatingBubble,
+    /if \(!nowPlaying \|\| !playing \|\| onPlayingPage \|\| suppressed\) return null/,
+    "the floating playback bubble must stay out of the reader while playback is paused",
   );
   assertPresent(
     sidebar,
