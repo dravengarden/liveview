@@ -6,6 +6,9 @@ native-target-dir := "target/native"
 default:
   @just --list
 
+toolchain-check:
+  actual="$(rustc --version --verbose | awk '/^release:/ { print $2 }')"; for manifest in Cargo.toml lv-sync/Cargo.toml plugins/lvsync/Cargo.toml app/src-tauri/Cargo.toml; do required="$(cargo metadata --manifest-path "$manifest" --no-deps --format-version 1 | jq -r '.packages[0].rust_version')"; test "$required" = "$actual" || { echo "$manifest rust-version $required does not match pinned rustc $actual" >&2; exit 1; }; done
+
 # Materialize the shared UI SDK when the checkout does not use a development link.
 shell:
   @if [[ -L web/src/_shell ]]; then \
@@ -130,7 +133,7 @@ plugin-check:
   bash tools/check-ios-simulator-plugin.sh
 
 # Run the complete local quality gate.
-verify: check dependencies test build-web native-metadata plugin-check
+verify: toolchain-check check dependencies test build native-metadata plugin-check
 
 # Remove generated Rust and web build output.
 clean:

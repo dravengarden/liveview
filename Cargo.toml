@@ -2,7 +2,7 @@
 name = "liveview"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.95.0"
 description = "Fast live-reloading file previewer for Markdown, images, PDFs and more"
 license = "MIT"
 repository = "https://github.com/dravengarden/liveview"

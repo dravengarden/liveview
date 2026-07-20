@@ -19,7 +19,7 @@ description = "LiveView native shell with offline reading and background audio"
 edition = "2024"
 license = "MIT"
 publish = false
-rust-version = "1.95"
+rust-version = "1.95.0"
 
 # Mobile (iOS/Android) links the app as a shared/static lib loaded by the
 # platform entry point; desktop uses the rlib + the main.rs binary. All three
