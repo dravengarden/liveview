@@ -84,5 +84,7 @@ the authoritative native UI and background-audio validation target.
 
 Use the repo-local `ios-sim-dev` skill for simulator builds, WKWebView
 inspection, selector-driven interaction, screenshots, and light/dark visual
-verification. Physical-device provisioning is a host operation owned by the
-machine-level `ios-resign` skill.
+verification. Physical-device releases are a host operation owned by the
+machine-level `ios-resign` skill. Publish normal iPhone/iPad updates through
+its private SideStore source workflow; direct `devicectl` installation is
+recovery-only.

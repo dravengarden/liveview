@@ -73,14 +73,16 @@ export PATH="/opt/homebrew/bin:$PATH"
 # signed .app instead. (A REAL build failure leaves no fresh .app → install no-ops.)
 cargo tauri ios build --target aarch64 || echo "note: cargo tauri ios build returned non-zero (IPA export failure is expected; using the signed DerivedData .app)"
 
-# Install the freshly-signed .app to both paired devices (devicectl works over
-# SSH; only codesign needed the keychain unlock above).
+# This legacy helper proves that Xcode produced a fresh signed development app.
+# It deliberately does not install it: normal physical-device releases are
+# built and published through Hawk's machine-owned ios-resign skill, then
+# installed and refreshed by SideStore. Direct devicectl installs bypass source
+# ownership and are reserved for recovery.
 APP="$(ls -dt "$HOME"/Library/Developer/Xcode/DerivedData/liveview-app-*/Build/Products/release-iphoneos/LiveView.app | head -1)"
 if [[ ! "$APP" -nt "$BUILD_MARKER" ]]; then
   echo "FATAL: build did not produce a fresh signed LiveView.app" >&2
   exit 1
 fi
-echo "INSTALLING $APP"
-xcrun devicectl device install app --device 919779F8-8032-5B80-BA56-59646E340761 "$APP" >/dev/null 2>&1 && echo "iPhone: installed" || echo "iPhone: install FAILED"
-xcrun devicectl device install app --device C3C4A814-5DBB-53B7-9B23-EB05F4A77FBE "$APP" >/dev/null 2>&1 && echo "iPad: installed" || echo "iPad: install FAILED"
-echo "LVBUILD_OK"
+echo "BUILT $APP"
+echo "Next: run 'resign.sh build-and-publish liveview' on hawk."
+echo "LVBUILD_OK (not installed; SideStore owns device installation)"
