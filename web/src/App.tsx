@@ -62,7 +62,7 @@ import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { useAutoUpdate } from "@/hooks/useAutoUpdate";
 import { useAudioPreloadDriver } from "@/hooks/useAudioPreloadDriver";
 import { applyUpdate, useConnectionBanner } from "@/connectionStore";
-import { NavShell } from "./_shell";
+import { NativeReleaseUpdatePrompt, NavShell } from "./_shell";
 import type {
   Book,
   BookProgress,
@@ -2116,6 +2116,10 @@ export function App(): React.JSX.Element {
               rendition !== nowPlaying.rendition)
           ? goToNowPlaying
           : undefined}
+      />
+      <NativeReleaseUpdatePrompt
+        appId="top.thundersparrow.liveview"
+        manifestUrl={remoteUrl("/native-release.json")}
       />
       <Snackbar
         open={notice !== null}

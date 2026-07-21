@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "app_id": "top.thundersparrow.liveview",
+  "latest_version": "0.1.0",
+  "minimum_version": "0.1.0",
+  "release_notes": "Open SideStore to review and install the latest LiveView release.",
+  "preferred_channel": "sidestore",
+  "channels": [
+    {
+      "kind": "sidestore",
+      "url": "sidestore://source?url=https%3A%2F%2Fsidestore.hawk.thundersparrow.top%2Fsource.json",
+      "label": "Open SideStore"
+    }
+  ]
+}
