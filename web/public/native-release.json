@@ -8,7 +8,7 @@
   "channels": [
     {
       "kind": "sidestore",
-      "url": "sidestore://source?url=https%3A%2F%2Fsidestore.hawk.thundersparrow.top%2Fsource.json",
+      "url": "sidestore://source?url=https%3A%2F%2Fsidestore.stormbird.xyz%2Fsource.json",
       "label": "Open SideStore"
     }
   ]
