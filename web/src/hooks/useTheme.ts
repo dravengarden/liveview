@@ -277,6 +277,10 @@ export function useTheme(): UseThemeResult {
     // Colouring documentElement (html) seals that gap.
     const c = getThemeColors(theme);
     document.documentElement.style.backgroundColor = c.bgDefault;
+    // Markdown is rendered by authored CSS outside MUI's `sx` token resolver.
+    // Publish the page surface once so its centred column never falls back to a
+    // hard-coded white card on tinted light themes.
+    document.documentElement.style.setProperty("--lv-page-bg", c.bgDefault);
     // Publish the bar surface + foreground as CSS vars, computed HERE in JS where
     // the active theme is unambiguous. The shared NavShell's bottom bar reads these
     // instead of `theme.palette.*`, because its MUI palette.mode was resolving to

@@ -56,6 +56,18 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const markdownViewer = await source("components/MarkdownViewer.tsx");
   const mobileStyles = await source("styles/index.css");
   const markdownStyles = await source("styles/markdown.css");
+  const themeHook = await source("hooks/useTheme.ts");
+
+  assertPresent(
+    themeHook,
+    /setProperty\("--lv-page-bg", c\.bgDefault\)/,
+    "the active theme must publish its page surface for authored reader CSS",
+  );
+  assertPresent(
+    markdownStyles,
+    /background-color:\s*var\(--lv-page-bg,\s*#ffffff\)/,
+    "the Markdown column must share the themed page instead of becoming a white card",
+  );
 
   for (const theme of ["dark", "night", "plum"]) {
     assertPresent(

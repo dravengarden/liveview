@@ -11,7 +11,11 @@
   margin: 0;
   font-weight: 400;
   color: #1f2328;
-  background-color: #ffffff;
+  /* Stay on the same themed page surface as the reader scroller. A fixed white
+     background turns the centred Markdown column into a glaring card on the
+     brand-paper Light theme. useTheme publishes this token before content is
+     painted; white remains only a defensive pre-mount fallback. */
+  background-color: var(--lv-page-bg, #ffffff);
   /* The selected reading font (set by useFont via --lv-reading-font); falls
      back to a neutral system stack before the font system mounts. Code blocks
      below override this with a monospace stack. */
