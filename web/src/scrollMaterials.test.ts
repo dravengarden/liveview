@@ -54,6 +54,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   const shell = await source("App.tsx");
   const markdownViewer = await source("components/MarkdownViewer.tsx");
+  const viteConfig = await source("../vite.config.ts");
   const mobileStyles = await source("styles/index.css");
   const markdownStyles = await source("styles/markdown.css");
   const themeHook = await source("hooks/useTheme.ts");
@@ -67,6 +68,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     markdownStyles,
     /background-color:\s*var\(--lv-page-bg,\s*#ffffff\)/,
     "the Markdown column must share the themed page instead of becoming a white card",
+  );
+  assertPresent(
+    viteConfig,
+    /outputDir = resolve\(config\.root, config\.build\.outDir\)/,
+    "post-build plugins must honor the effective Vite output directory used by Nix",
   );
 
   for (const theme of ["dark", "night", "plum"]) {

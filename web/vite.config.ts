@@ -149,12 +149,18 @@ function splashInjector(): Plugin {
 // is missing, so a future SW refactor that renames them can't silently ship an
 // unstamped (manual-VERSION, incomplete-shell) worker. See web/public/sw.js.
 function stampServiceWorker(): Plugin {
+  let outputDir = resolve(import.meta.dirname, "dist");
   return {
     name: "lv-stamp-sw",
     apply: "build",
+    configResolved(config) {
+      // Nix's shared builder overrides Vite's outDir to the derivation output.
+      // Resolve the effective value instead of assuming the local `dist/`
+      // default, otherwise source builds pass locally but fail in the sandbox.
+      outputDir = resolve(config.root, config.build.outDir);
+    },
     closeBundle() {
-      const dist = resolve(import.meta.dirname, "dist");
-      const html = readFileSync(resolve(dist, "index.html"), "utf8");
+      const html = readFileSync(resolve(outputDir, "index.html"), "utf8");
       const assets = [
         ...new Set(
           [...html.matchAll(/\/assets\/[^"']+\.(?:js|css)/g)].map((m) => m[0]),
@@ -172,7 +178,7 @@ function stampServiceWorker(): Plugin {
           0,
           12,
         );
-      const swPath = resolve(dist, "sw.js");
+      const swPath = resolve(outputDir, "sw.js");
       const out = readFileSync(swPath, "utf8")
         .replace(
           'const VERSION = "lv-dev";',
@@ -198,12 +204,16 @@ function stampServiceWorker(): Plugin {
 // App build only: the native (iOS/macOS) bundle has NO service worker — the
 // shell serves its own offline layer. Drop the precached sw.js from dist-app.
 function stripServiceWorker(): Plugin {
+  let outputDir = resolve(import.meta.dirname, "dist-app");
   return {
     name: "lv-strip-sw",
     apply: "build",
+    configResolved(config) {
+      outputDir = resolve(config.root, config.build.outDir);
+    },
     closeBundle() {
       try {
-        rmSync(resolve(import.meta.dirname, "dist-app", "sw.js"));
+        rmSync(resolve(outputDir, "sw.js"));
       } catch {
         // not emitted — fine.
       }
