@@ -159,7 +159,7 @@ function stampServiceWorker(): Plugin {
       // default, otherwise source builds pass locally but fail in the sandbox.
       outputDir = resolve(config.root, config.build.outDir);
     },
-    closeBundle() {
+    writeBundle() {
       const html = readFileSync(resolve(outputDir, "index.html"), "utf8");
       const assets = [
         ...new Set(
@@ -211,7 +211,7 @@ function stripServiceWorker(): Plugin {
     configResolved(config) {
       outputDir = resolve(config.root, config.build.outDir);
     },
-    closeBundle() {
+    writeBundle() {
       try {
         rmSync(resolve(outputDir, "sw.js"));
       } catch {

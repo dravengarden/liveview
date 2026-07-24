@@ -74,6 +74,16 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /outputDir = resolve\(config\.root, config\.build\.outDir\)/,
     "post-build plugins must honor the effective Vite output directory used by Nix",
   );
+  assertAbsent(
+    viteConfig,
+    /closeBundle\(\)/,
+    "output-mutating Vite plugins must not run before files are guaranteed to be written",
+  );
+  assertPresent(
+    viteConfig,
+    /name: "lv-stamp-sw"[\s\S]{0,500}writeBundle\(\)/,
+    "service-worker stamping must run only after Vite writes the output bundle",
+  );
 
   for (const theme of ["dark", "night", "plum"]) {
     assertPresent(
