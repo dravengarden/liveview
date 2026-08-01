@@ -188,6 +188,34 @@ fn default_protocol_version() -> u32 {
     lv_sync::MANIFEST_PROTOCOL_VERSION
 }
 
+fn entry_bundle(html: &str) -> Option<&str> {
+    let start = html.find("assets/index-")?;
+    let end = html[start..].find(".js")?;
+    Some(&html[start..start + end + 3])
+}
+
+/// An installed shell update must get one chance to boot its embedded SPA. OTA files
+/// live in Application Support and survive an update, so without this boundary a stale
+/// `web/current` can mask a newer IPA forever when the old bundle's updater is broken.
+/// The newly embedded SPA immediately runs the normal OTA check and may replace itself
+/// with an even newer server bundle.
+fn activate_embedded_upgrade(data_dir: &Path, embedded_index: &[u8]) {
+    let Some(version) = std::str::from_utf8(embedded_index)
+        .ok()
+        .and_then(entry_bundle)
+    else {
+        return;
+    };
+    let web_root = data_dir.join("web");
+    let marker = web_root.join("embedded-current");
+    if std::fs::read_to_string(&marker).ok().as_deref() == Some(version) {
+        return;
+    }
+    let _ = std::fs::create_dir_all(&web_root);
+    let _ = std::fs::remove_file(web_root.join("current"));
+    let _ = std::fs::write(marker, version);
+}
+
 impl RootResponse {
     fn from_json(json: &str) -> Result<Self, String> {
         let response: Self =
@@ -1062,6 +1090,9 @@ async fn scheme_dispatch(state: &LvState, path: &str, query: &str) -> (u16, Vec<
 fn setup_state<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&data_dir).map_err(|e| e.to_string())?;
+    if let Some(index) = app.asset_resolver().get("index.html".to_string()) {
+        activate_embedded_upgrade(&data_dir, &index.bytes);
+    }
     let state = LvState::new(&data_dir)?;
     app.manage(state);
     let handle = app.clone();
@@ -1196,6 +1227,36 @@ mod tests {
                 .unwrap_err()
                 .contains("newer than supported")
         );
+    }
+
+    #[test]
+    fn shell_upgrade_retires_a_stale_ota_overlay_once() {
+        let root = std::env::temp_dir().join(format!(
+            "liveview-lvsync-test-embedded-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let web = root.join("web");
+        std::fs::create_dir_all(&web).unwrap();
+        std::fs::write(web.join("current"), "assets/index-old.js").unwrap();
+
+        let index = br#"<script type="module" src="./assets/index-new.js"></script>"#;
+        activate_embedded_upgrade(&root, index);
+        assert!(!web.join("current").exists());
+        assert_eq!(
+            std::fs::read_to_string(web.join("embedded-current")).unwrap(),
+            "assets/index-new.js"
+        );
+
+        // A normal relaunch of the same shell must preserve the OTA selection.
+        std::fs::write(web.join("current"), "assets/index-server.js").unwrap();
+        activate_embedded_upgrade(&root, index);
+        assert_eq!(
+            std::fs::read_to_string(web.join("current")).unwrap(),
+            "assets/index-server.js"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
