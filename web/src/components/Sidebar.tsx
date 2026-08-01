@@ -461,21 +461,13 @@ export function Sidebar({
         sx={{
           flex: 1,
           overflow: "auto",
-          // iOS rubber-band + async momentum. This inner list is the REAL
-          // scroller (in the mobile DetentSheet the sheet body fits the Sidebar
-          // exactly, so its own bounce never fires — the overscroll has to live
-          // here). It's nested under the sheet root's transform, which would
-          // demote it off the compositor; give it its own layer + touch momentum,
-          // mirroring the sheet body's treatment. No-op on desktop/non-touch.
+          // iOS rubber-band + async momentum. This is the navigation pane's real
+          // scroller, so keep it independently promoted on touch devices.
           WebkitOverflowScrolling: "touch",
           transform: "translateZ(0)",
-          // The shared DetentSheet marks its brief slide/drag phase. Do not keep
-          // this REAL list scroller independently promoted while its ancestor
-          // sheet is moving: physical iOS otherwise relocates nested tiled
-          // layers over the chart-heavy reader every frame and the opening
-          // animation visibly stutters. Once the sheet settles the marker is
-          // removed and this promotion resumes for smooth list momentum.
-          "[data-detent-moving] &": { transform: "none" },
+          // Avoid retaining a second tiled compositor layer while the whole
+          // reader surface is being directly manipulated by the spatial drawer.
+          "[data-spatial-drawer-moving] &": { transform: "none" },
         }}
       >
         <List dense disablePadding>

@@ -1944,6 +1944,9 @@ export function App(): React.JSX.Element {
             <NavShell
               appKey="liveview"
               breakpoint={1000}
+              // Contents is a Cowboy-style full-height side rail on touch
+              // layouts. It is navigation, not a transient bottom sheet.
+              mobilePresentation="sidebar"
               navTitle={t("sidebar.contents")}
               backLabel={t("sidebar.bookshelf")}
               onBack={backToLanding}

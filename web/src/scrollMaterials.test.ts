@@ -34,8 +34,9 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const syncIndicator = await source("components/SyncIndicator.tsx");
   const scrollToTop = await source("components/ScrollToTopButton.tsx");
   const floatingBubble = await source("components/FloatingBubble.tsx");
-  const sidebar = await source("components/Sidebar.tsx");
   const navShell = await source("_shell/nav-shell.tsx");
+  const spatialDrawer = await source("_shell/spatial-drawer.ts");
+  const sidebar = await source("components/Sidebar.tsx");
   const detentSheet = await source("_shell/detent-sheet.tsx");
   const lightboxGestures = await source("_shell/image-lightbox-gestures.ts");
   const nativeSync = await source("native-sync.ts");
@@ -44,6 +45,13 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const nativeAudio = await readFile(
     new URL(
       "../../app/src-tauri/gen/apple/Sources/liveview-app/NativeAudioController.swift",
+      ROOT,
+    ),
+    "utf8",
+  );
+  const nativeTweaks = await readFile(
+    new URL(
+      "../../app/src-tauri/gen/apple/Sources/liveview-app/LiveviewNativeTweaks.mm",
       ROOT,
     ),
     "utf8",
@@ -175,14 +183,49 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "the floating playback bubble must stay out of the reader while playback is paused",
   );
   assertPresent(
-    sidebar,
-    /"\[data-detent-moving\] &": \{ transform: "none" \}/,
-    "the Contents scroller must collapse its promoted layer while its DetentSheet moves",
+    navShell,
+    /data-spatial-drawer[\s\S]{0,500}width: \{ xs: "min\(84%, 360px\)", sm: "min\(52%, 440px\)" \}/,
+    "mobile Contents must use Cowboy's full-height spatial side navigation proportions",
+  );
+  assertPresent(
+    spatialDrawer,
+    /requestAnimationFrame\(\(frameAt\)[\s\S]{0,180}predictSpatialDrawerOffset/,
+    "the spatial drawer must coalesce direct manipulation into animation frames with bounded prediction",
   );
   assertPresent(
     navShell,
-    /peekDetent=\{false\}/,
-    "the Contents sheet must not strand the reader and navigation at a half-height detent",
+    /onPrepareThreshold:\s*prepareSelectionHaptic[\s\S]{0,100}onThreshold:\s*selectionHaptic/,
+    "the spatial drawer must prewarm and fire the native selection generator around its threshold",
+  );
+  assertPresent(
+    nativeTweaks,
+    /UISelectionFeedbackGenerator[\s\S]{0,900}prepare-selection[\s\S]{0,300}selectionChanged/,
+    "the native shell must retain and prewarm a selection generator for the spatial drawer",
+  );
+  assertPresent(
+    spatialDrawer,
+    /predictSpatialDrawerOffset[\s\S]{0,220}pendingThresholdHaptic[\s\S]{0,100}onThreshold\?\.\(\)/,
+    "the spatial drawer must align Cowboy-style selection haptics with the painted threshold frame",
+  );
+  assertPresent(
+    spatialDrawer,
+    /if \(pendingThresholdHaptic\) \{[\s\S]{0,120}requestAnimationFrame\(\(\) => onThreshold\?\.\(\)\)/,
+    "the spatial drawer release path must preserve a threshold haptic pending behind the final frame",
+  );
+  assertPresent(
+    spatialDrawer,
+    /removeProperty\("will-change"\)/,
+    "the spatial drawer must release temporary compositor hints after movement settles",
+  );
+  assertPresent(
+    sidebar,
+    /\[data-spatial-drawer-moving\] &[\s\S]{0,80}transform:\s*"none"/,
+    "the sidebar must collapse its nested tiled layer during direct drawer manipulation",
+  );
+  assertPresent(
+    shell,
+    /mobilePresentation="sidebar"/,
+    "the LiveView reader must explicitly opt into side navigation",
   );
   assertPresent(
     detentSheet,

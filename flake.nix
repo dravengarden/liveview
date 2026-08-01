@@ -123,7 +123,7 @@
         inherit version;
         src = webBuildSrc;
         installArgs = "--frozen --allow-scripts";
-        depsHash = "sha256-BXHr2hhX7eKHQ+vHSnXBfFeTBKSNA1G6T2k8F1WCC1g=";
+        depsHash = "sha256-vrdOGRmYqym5YtJtF1OZgbZn4QNz51jxJeYDtbqI0qk=";
       };
 
       # Compile the locked dependency graph independently from application

@@ -79,7 +79,55 @@ __attribute__((constructor)) static void liveviewStripKeyboardAccessoryBar(void)
 // included) gets it on; the constructor runs at image load, before any webview
 // is created.
 static id (*lv_orig_wk_init)(id, SEL, CGRect, id) = NULL;
+
+@interface LiveviewSelectionHapticHandler : NSObject <WKScriptMessageHandler>
+@end
+
+@implementation LiveviewSelectionHapticHandler {
+    UISelectionFeedbackGenerator *_selectionGenerator;
+}
+- (instancetype)init {
+    if ((self = [super init])) {
+        // Keep one generator alive for the WebView lifetime. Preparing this at
+        // touch-down gives the Taptic Engine time to wake before the drawer
+        // reaches its magnetic commit threshold.
+        _selectionGenerator = [[UISelectionFeedbackGenerator alloc] init];
+    }
+    return self;
+}
+- (void)userContentController:(WKUserContentController *)controller
+      didReceiveScriptMessage:(WKScriptMessage *)message {
+    (void)controller;
+    if ([message.body isEqual:@"prepare-selection"]) {
+        [_selectionGenerator prepare];
+        return;
+    }
+    if ([message.body isEqual:@"selection"]) {
+        [_selectionGenerator selectionChanged];
+        // Keep reversals across the same magnetic threshold responsive.
+        [_selectionGenerator prepare];
+    }
+}
+@end
+
 static id lv_wk_init(id self, SEL _cmd, CGRect frame, id configuration) {
+    WKWebViewConfiguration *webConfiguration = (WKWebViewConfiguration *)configuration;
+    WKUserContentController *contentController = webConfiguration.userContentController;
+    LiveviewSelectionHapticHandler *hapticHandler =
+        [[LiveviewSelectionHapticHandler alloc] init];
+    [contentController addScriptMessageHandler:hapticHandler
+                                          name:@"liveviewSelectionHaptic"];
+    NSString *hapticBridge =
+        @"window.__nativePrepareSelectionHaptic=function(){try{"
+         "window.webkit.messageHandlers.liveviewSelectionHaptic.postMessage("
+         "'prepare-selection')}catch(e){}};"
+         "window.__nativeSelectionHaptic=function(){try{"
+         "window.webkit.messageHandlers.liveviewSelectionHaptic.postMessage("
+         "'selection')}catch(e){}};";
+    [contentController addUserScript:[[WKUserScript alloc]
+        initWithSource:hapticBridge
+         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+      forMainFrameOnly:YES]];
     id wv = lv_orig_wk_init(self, _cmd, frame, configuration);
     if (wv) {
         // DEBUG ONLY: make the webview show up in Safari's Web Inspector AND to
