@@ -22,9 +22,9 @@
   # The shared @shared-utils/ui SDK (business- and portal-free React + MUI
   # primitives), referenced as a Nix package and staged into the web build below
   # — NOT vendored into this repo's git tree (web/src/_shell/ is gitignored and
-  # materialized from here). Lives in the public shared-utils monorepo, exposed
+  # materialized from here). Lives in the shared-utils monorepo, exposed
   # as that flake's `ui` package.
-  inputs.shared-utils.url = "github:dravengarden/shared-utils";
+  inputs.shared-utils.url = "git+ssh://git@github.com/dravengarden/shared-utils.git?ref=main";
   inputs.shared-utils.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs =
