@@ -36,6 +36,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const floatingBubble = await source("components/FloatingBubble.tsx");
   const navShell = await source("_shell/nav-shell.tsx");
   const spatialDrawer = await source("_shell/spatial-drawer.ts");
+  const temporaryNav = await source("_shell/temporary-nav.tsx");
   const sidebar = await source("components/Sidebar.tsx");
   const detentSheet = await source("_shell/detent-sheet.tsx");
   const lightboxGestures = await source("_shell/image-lightbox-gestures.ts");
@@ -186,6 +187,16 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     navShell,
     /data-spatial-drawer[\s\S]{0,500}width: \{ xs: "min\(84%, 360px\)", sm: "min\(52%, 440px\)" \}/,
     "mobile Contents must use Cowboy's full-height spatial side navigation proportions",
+  );
+  assertPresent(
+    temporaryNav,
+    /position: "absolute"[\s\S]{0,240}bottom: "max\(env\(safe-area-inset-bottom, 0px\), 12px\)"/,
+    "the spatial close island must overlay the scroll region without reserving layout space",
+  );
+  assertAbsent(
+    temporaryNav,
+    /calc\(76px \+ env\(safe-area-inset-bottom/,
+    "the spatial navigation scroll region",
   );
   assertPresent(
     spatialDrawer,
