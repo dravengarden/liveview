@@ -188,6 +188,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /data-spatial-drawer[\s\S]{0,500}width: \{ xs: "min\(84%, 360px\)", sm: "min\(52%, 440px\)" \}/,
     "mobile Contents must use Cowboy's full-height spatial side navigation proportions",
   );
+  assertAbsent(
+    navShell.match(/data-spatial-drawer[\s\S]{0,700}/)?.[0] ?? "",
+    /borderRight/,
+    "the Cowboy-style spatial rail edge",
+  );
   assertPresent(
     temporaryNav,
     /position: "absolute"[\s\S]{0,240}bottom: "max\(env\(safe-area-inset-bottom, 0px\), 12px\)"/,
@@ -207,6 +212,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     sidebar,
     /pb: "var\(--temporary-nav-overlay-clearance, 0px\)"[\s\S]{0,120}scrollPaddingBottom:/,
     "the final navigation row must scroll clear of the floating dismiss island",
+  );
+  assertPresent(
+    sidebar,
+    /\[data-spatial-drawer\] &[\s\S]{0,40}display: "none"/,
+    "mobile spatial navigation must not render the desktop deploy-time footer seam",
   );
   assertPresent(
     spatialDrawer,

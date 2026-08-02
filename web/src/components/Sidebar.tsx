@@ -515,6 +515,10 @@ export function Sidebar({
                 py: 0.75,
                 borderTop: 1,
                 borderColor: "divider",
+                // Cowboy's spatial rail is one continuous material. Deploy
+                // timestamps are useful in the persistent desktop sidebar, but
+                // become a hard footer seam in the temporary mobile drawer.
+                "[data-spatial-drawer] &": { display: "none" },
               }}
             >
               <Typography
