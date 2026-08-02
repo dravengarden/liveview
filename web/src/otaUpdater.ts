@@ -11,6 +11,7 @@
 // the WS connects. Off the native shell this is inert.
 
 import { nativeSyncAvailable } from "@/native-sync";
+import { otaReloadUrl } from "./otaReloadUrl.ts";
 
 let applying = false;
 
@@ -20,11 +21,19 @@ export async function runOtaCheck(): Promise<void> {
   if (applying || !nativeSyncAvailable()) return;
   try {
     const r = await fetch("lvsync://localhost/ota-check");
-    if ((await r.text()).trim().startsWith("updated:")) {
+    const status = (await r.text()).trim();
+    if (status.startsWith("updated:")) {
       applying = true;
       // Download completed server-side + `current` flipped; reload picks it up. No
-      // banner — the reload is brief and the app restores its state.
-      globalThis.location.reload();
+      // banner — the reload is brief and the app restores its state. Use a
+      // versioned navigation URL instead of reload(): WKWebView may satisfy a
+      // custom-scheme reload from its current navigation cache even after the
+      // native `web/current` pointer has moved, leaving old JavaScript resident.
+      const version = status.slice("updated:".length).split(" ", 1)[0] ??
+        "updated";
+      globalThis.location.replace(
+        otaReloadUrl(globalThis.location.href, version),
+      );
     }
   } catch {
     // offline / transient / not the native shell — ignore
