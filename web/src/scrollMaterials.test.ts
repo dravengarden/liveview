@@ -205,8 +205,13 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     temporaryNav,
-    /aria-label=\{backLabel\}[\s\S]{0,240}width: 40,[\s\S]{0,80}height: 40/,
-    "the spatial navigation back affordance must stay compact and icon-led",
+    /key: "back"[\s\S]{0,100}label: backLabel[\s\S]{0,100}icon: <ChevronLeftIcon/,
+    "the spatial navigation back affordance must live in the bottom action island",
+  );
+  assertPresent(
+    temporaryNav,
+    /!spatial && onBack && backLabel/,
+    "the spatial header must not duplicate the bottom back action",
   );
   assertPresent(
     sidebar,
