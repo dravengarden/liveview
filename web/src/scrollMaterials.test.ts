@@ -199,6 +199,16 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "the spatial navigation scroll region",
   );
   assertPresent(
+    temporaryNav,
+    /aria-label=\{backLabel\}[\s\S]{0,240}width: 40,[\s\S]{0,80}height: 40/,
+    "the spatial navigation back affordance must stay compact and icon-led",
+  );
+  assertPresent(
+    sidebar,
+    /pb: "var\(--temporary-nav-overlay-clearance, 0px\)"[\s\S]{0,120}scrollPaddingBottom:/,
+    "the final navigation row must scroll clear of the floating dismiss island",
+  );
+  assertPresent(
     spatialDrawer,
     /requestAnimationFrame\(\(frameAt\)[\s\S]{0,180}predictSpatialDrawerOffset/,
     "the spatial drawer must coalesce direct manipulation into animation frames with bounded prediction",

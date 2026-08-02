@@ -465,6 +465,11 @@ export function Sidebar({
           // scroller, so keep it independently promoted on touch devices.
           WebkitOverflowScrolling: "touch",
           transform: "translateZ(0)",
+          // The spatial drawer's Close island floats over this scroller. Keep
+          // normal rows flowing behind it, but provide enough trailing content
+          // clearance for the final row to scroll fully above the island.
+          pb: "var(--temporary-nav-overlay-clearance, 0px)",
+          scrollPaddingBottom: "var(--temporary-nav-overlay-clearance, 0px)",
           // Avoid retaining a second tiled compositor layer while the whole
           // reader surface is being directly manipulated by the spatial drawer.
           "[data-spatial-drawer-moving] &": { transform: "none" },
