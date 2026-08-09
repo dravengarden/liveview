@@ -68,7 +68,7 @@ fmt:
   nixfmt flake.nix
 
 # Run formatting, linting, and type checks.
-check:
+check: shell
   cargo fmt --check
   cargo clippy --locked --all-targets -- -D warnings
   cargo fmt --manifest-path lv-sync/Cargo.toml --check

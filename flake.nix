@@ -123,7 +123,7 @@
         inherit version;
         src = webBuildSrc;
         installArgs = "--frozen --allow-scripts";
-        depsHash = "sha256-vrdOGRmYqym5YtJtF1OZgbZn4QNz51jxJeYDtbqI0qk=";
+        depsHash = "sha256-gCG2lhBxdorEYgPRn25852pwG0gJ+TGeIiIBUujOHeo=";
       };
 
       # Compile the locked dependency graph independently from application
@@ -212,9 +212,11 @@
           pkgs.cargo-machete
           pkgs.rust-analyzer
           pkgs.just
+          pkgs.jq
           pkgs.nixfmt
           shared.deno
           pkgs.nodejs
+          pkgs.ffmpeg
           pkgs.imagemagick
           pkgs.libicns
           pkgs.pkg-config
