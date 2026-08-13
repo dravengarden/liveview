@@ -38,6 +38,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const spatialDrawer = await source("_shell/spatial-drawer.ts");
   const temporaryNav = await source("_shell/temporary-nav.tsx");
   const sidebar = await source("components/Sidebar.tsx");
+  const playbackBar = await source("components/PlaybackBar.tsx");
   const detentSheet = await source("_shell/detent-sheet.tsx");
   const lightboxGestures = await source("_shell/image-lightbox-gestures.ts");
   const nativeSync = await source("native-sync.ts");
@@ -262,6 +263,16 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     shell,
     /mobilePresentation="sidebar"/,
     "the LiveView reader must explicitly opt into side navigation",
+  );
+  assertPresent(
+    playbackBar,
+    /data-lv-playback-bar="true"/,
+    "the playback transport must expose an app-owned marker for mobile drawer chrome",
+  );
+  assertPresent(
+    mobileStyles,
+    /\[data-spatial-drawer\]\[aria-hidden="false"\][\s\S]{0,100}~\s*\[data-spatial-drawer-surface\][\s\S]{0,100}\[data-lv-playback-bar="true"\][\s\S]{0,160}visibility:\s*hidden;[\s\S]{0,80}pointer-events:\s*none;/,
+    "the playback transport must disappear from the trailing spatial-drawer preview",
   );
   assertPresent(
     detentSheet,
