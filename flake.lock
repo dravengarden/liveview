@@ -35,8 +35,7 @@
       "inputs": {
         "crane": "crane",
         "nixpkgs": "nixpkgs",
-        "rust-overlay": "rust-overlay",
-        "shared-utils": "shared-utils"
+        "rust-overlay": "rust-overlay"
       }
     },
     "rust-overlay": {
@@ -57,27 +56,6 @@
         "owner": "oxalica",
         "repo": "rust-overlay",
         "type": "github"
-      }
-    },
-    "shared-utils": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1785684273,
-        "narHash": "sha256-KoWnn4DwIoIyRECUtmr8lJvjkAI8nYsSIR1dNcnqXGw=",
-        "ref": "main",
-        "rev": "b034bc8fe221c82801af2c9babf00edca4d8d334",
-        "revCount": 148,
-        "type": "git",
-        "url": "ssh://git@github.com/dravengarden/shared-utils.git"
-      },
-      "original": {
-        "ref": "main",
-        "type": "git",
-        "url": "ssh://git@github.com/dravengarden/shared-utils.git"
       }
     }
   },

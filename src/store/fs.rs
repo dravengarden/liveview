@@ -17,9 +17,9 @@ use crate::config::{BookState, RenditionKind};
 use crate::server::tree::build_virtual_tree;
 use crate::shared::FileType;
 use crate::store::content::{BlobStore, ContentStore};
-use crate::store::pg::{
-    AssetRow, AudioTaskRollup, BookRow, ChapterRow, DagArtwork, DagChapter, EditionRow,
-    ManifestChapter, ProgressEntry, RenditionRow,
+use crate::store::model::{
+    AssetRecord, AudioTaskRollup, BookRecord, ChapterRecord, DagArtwork, DagChapter, EditionRecord,
+    ManifestChapter, ProgressEntry, RenditionRecord,
 };
 
 pub struct FsStore {
@@ -122,11 +122,11 @@ impl FsStore {
 
 #[async_trait]
 impl ContentStore for FsStore {
-    async fn list_books(&self) -> Result<Vec<BookRow>, String> {
+    async fn list_books(&self) -> Result<Vec<BookRecord>, String> {
         Ok(self
             .books
             .iter()
-            .map(|b| BookRow {
+            .map(|b| BookRecord {
                 slug: b.slug.clone(),
                 label: b.label.clone(),
                 description: b.description.clone(),
@@ -143,14 +143,14 @@ impl ContentStore for FsStore {
             .collect())
     }
 
-    async fn list_renditions(&self, book_slug: &str) -> Result<Vec<RenditionRow>, String> {
+    async fn list_renditions(&self, book_slug: &str) -> Result<Vec<RenditionRecord>, String> {
         let Some(b) = self.book(book_slug) else {
             return Ok(vec![]);
         };
         Ok(b.renditions
             .iter()
             .enumerate()
-            .map(|(i, r)| RenditionRow {
+            .map(|(i, r)| RenditionRecord {
                 kind: r.kind.as_str().to_string(),
                 label: r.label.clone(),
                 default_lang: r.default_lang.clone(),
@@ -165,7 +165,7 @@ impl ContentStore for FsStore {
         &self,
         book_slug: &str,
         rendition: &str,
-    ) -> Result<Vec<EditionRow>, String> {
+    ) -> Result<Vec<EditionRecord>, String> {
         let Some(kind) = RenditionKind::parse(rendition) else {
             return Ok(vec![]);
         };
@@ -176,7 +176,7 @@ impl ContentStore for FsStore {
             .editions
             .iter()
             .enumerate()
-            .map(|(i, e)| EditionRow {
+            .map(|(i, e)| EditionRecord {
                 lang: e.lang.clone(),
                 label: e.label.clone(),
                 ord: i as i32,
@@ -190,7 +190,7 @@ impl ContentStore for FsStore {
         rendition: &str,
         lang: &str,
         rel_path: &str,
-    ) -> Result<Option<ChapterRow>, String> {
+    ) -> Result<Option<ChapterRecord>, String> {
         let Some(kind) = RenditionKind::parse(rendition) else {
             return Ok(None);
         };
@@ -206,7 +206,7 @@ impl ContentStore for FsStore {
             return Ok(None);
         }
         let ft = FileType::from_path(rel_path);
-        let mut row = ChapterRow {
+        let mut row = ChapterRecord {
             book_slug: book_slug.to_string(),
             rendition: kind.as_str().to_string(),
             lang: lang.to_string(),
@@ -244,13 +244,13 @@ impl ContentStore for FsStore {
         Ok(Some(row))
     }
 
-    async fn get_asset(&self, content_hash: &str) -> Result<Option<AssetRow>, String> {
+    async fn get_asset(&self, content_hash: &str) -> Result<Option<AssetRecord>, String> {
         Ok(self
             .blobs
             .lock()
             .unwrap()
             .get(content_hash)
-            .map(|(b, m)| AssetRow {
+            .map(|(b, m)| AssetRecord {
                 content_hash: content_hash.to_string(),
                 mime: m.clone(),
                 size: b.len() as i64,

@@ -1,7 +1,6 @@
-// Connection / version banner store — now sourced from the shared @shared-utils/ui
-// module (web/src/_shell/connection-banner.tsx). liveview is the canonical
-// behavior; cowboy shares the same instance factory. This file just creates
-// liveview's singleton (probing "/api/version") and re-exports the bound API the
+// Connection / version banner store, sourced from the repository-owned shell
+// primitive. This file creates LiveView's singleton (probing "/api/version")
+// and re-exports the bound API the
 // rest of the app already imports from "@/connectionStore", so no caller changes.
 //
 // The live-reload WebSocket (web/src/hooks/useWebSocket.ts) drives the reconnect

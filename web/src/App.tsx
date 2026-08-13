@@ -73,6 +73,13 @@ import type {
   TreeNode,
 } from "@/types";
 
+const NATIVE_RELEASE_APP_ID = (
+  import.meta.env["VITE_NATIVE_RELEASE_APP_ID"] as string | undefined
+)?.trim();
+const NATIVE_RELEASE_MANIFEST_URL = (
+  import.meta.env["VITE_NATIVE_RELEASE_MANIFEST_URL"] as string | undefined
+)?.trim();
+
 function hasFilePath(nodes: TreeNode[], target: string): boolean {
   for (const node of nodes) {
     if (!node.is_dir && node.path === target) return true;
@@ -2120,10 +2127,12 @@ export function App(): React.JSX.Element {
           ? goToNowPlaying
           : undefined}
       />
-      <NativeReleaseUpdatePrompt
-        appId="top.thundersparrow.liveview"
-        manifestUrl={remoteUrl("/native-release.json")}
-      />
+      {NATIVE_RELEASE_APP_ID && NATIVE_RELEASE_MANIFEST_URL && (
+        <NativeReleaseUpdatePrompt
+          appId={NATIVE_RELEASE_APP_ID}
+          manifestUrl={remoteUrl(NATIVE_RELEASE_MANIFEST_URL)}
+        />
+      )}
       <Snackbar
         open={notice !== null}
         autoHideDuration={3000}

@@ -1,7 +1,4 @@
-// VENDORED from shared-utils/packages/native-media/ios/NativeMediaController.swift
-// (canonical source of truth is @shared-utils/native-media; re-sync from there on change)
-
-// NativeMediaController — the native (iOS) half of @shared-utils/native-media.
+// NativeMediaController — the native iOS half of LiveView's media bridge.
 //
 // Moves the OS media-control layer to native while the audio keeps playing in the
 // web `<audio>` element:

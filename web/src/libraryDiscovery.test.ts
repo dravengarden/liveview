@@ -1,8 +1,10 @@
 import {
+  buildLibraryTaxonomy,
   discoveryTagIds,
   matchesTagFacets,
   readingState,
   searchScore,
+  sortCollectionNames,
 } from "./libraryDiscovery.ts";
 import type { Book } from "@/types";
 
@@ -11,18 +13,22 @@ declare const Deno: {
 };
 
 function assertEquals<T>(actual: T, expected: T): void {
-  if (!Object.is(actual, expected)) {
-    throw new Error(`expected ${String(expected)}, received ${String(actual)}`);
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(
+      `expected ${JSON.stringify(expected)}, received ${
+        JSON.stringify(actual)
+      }`,
+    );
   }
 }
 
 const book: Book = {
-  label: "Rig: Building LLM Agents in Rust",
-  slug: "rig-for-engineers",
-  description: "A production agent framework",
-  collection: "AI & Agents",
-  author: "Codex",
-  tags: ["topic.agents", "technology.rust", "audience.intermediate"],
+  label: "Wetlands Field Guide",
+  slug: "wetlands-field-guide",
+  description: "Observations from a restored coastal habitat",
+  collection: "Natural History",
+  author: "A. Reader",
+  tags: ["subject.ecology", "format.field-guide", "beginner"],
   cover: false,
   backdrop: false,
   default_rendition: "text",
@@ -34,46 +40,64 @@ const book: Book = {
   updated_at: 0,
 };
 
-Deno.test("weighted search covers title, aliases, series, author, and description", () => {
+Deno.test("weighted search covers title, tags, series, author, and description", () => {
   assertEquals(
-    (searchScore(book, "rig") ?? 0) > (searchScore(book, "production") ?? 0),
+    (searchScore(book, "wetlands") ?? 0) >
+      (searchScore(book, "restored") ?? 0),
     true,
   );
-  assertEquals(searchScore(book, "agent rust") != null, true);
-  assertEquals(searchScore(book, "blockchain"), null);
+  assertEquals(searchScore(book, "ecology field") != null, true);
+  assertEquals(searchScore(book, "astronomy"), null);
 });
 
 Deno.test("tag matching is OR within facets and AND across facets", () => {
   assertEquals(
-    matchesTagFacets(book, new Set(["topic.agents", "topic.ai"])),
+    matchesTagFacets(book, new Set(["subject.ecology", "subject.botany"])),
     true,
   );
   assertEquals(
-    matchesTagFacets(book, new Set(["topic.agents", "technology.rust"])),
+    matchesTagFacets(book, new Set(["subject.ecology", "format.field-guide"])),
     true,
   );
   assertEquals(
-    matchesTagFacets(book, new Set(["topic.agents", "technology.julia"])),
+    matchesTagFacets(book, new Set(["subject.ecology", "format.reference"])),
     false,
   );
 });
 
-Deno.test("open manifest keywords map onto stable discovery facets", () => {
-  const legacy = {
-    ...book,
-    tags: ["llm-agents", "rust", "architecture"],
-  };
-  assertEquals(discoveryTagIds(legacy).has("topic.agents"), true);
-  assertEquals(discoveryTagIds(legacy).has("technology.rust"), true);
+Deno.test("catalog tags derive generic facets without aliases or collection inference", () => {
+  const taxonomy = buildLibraryTaxonomy([
+    book,
+    {
+      ...book,
+      slug: "forest-notes",
+      tags: ["subject.botany", "format.reference"],
+    },
+  ]);
   assertEquals(
-    matchesTagFacets(legacy, new Set(["audience.intermediate"])),
-    true,
+    taxonomy.facets.map((facet) => facet.id),
+    ["format", "subject", "tags"],
   );
   assertEquals(
-    discoveryTagIds({ ...book, tags: [], collection: "Systems & Infra" }).has(
-      "topic.systems",
-    ),
-    true,
+    taxonomy.tags.map((tag) => [tag.id, tag.facet, tag.label]),
+    [
+      ["beginner", "tags", "Beginner"],
+      ["format.field-guide", "format", "Field Guide"],
+      ["format.reference", "format", "Reference"],
+      ["subject.botany", "subject", "Botany"],
+      ["subject.ecology", "subject", "Ecology"],
+    ],
+  );
+  assertEquals(
+    [...discoveryTagIds({ ...book, tags: [], collection: "Natural History" })],
+    [],
+  );
+});
+
+Deno.test("collection ordering is locale-aware and has no curated priorities", () => {
+  assertEquals(
+    sortCollectionNames(["Zoology", "Architecture", "Botany"], "en"),
+    ["Architecture", "Botany", "Zoology"],
   );
 });
 

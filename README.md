@@ -171,6 +171,7 @@ default_lang = "en"
 default_rendition = "text"
 cover = "cover.webp"
 backdrop = "backdrop.webp"
+tags = ["subject.distributed-systems", "format.guide", "replication"]
 
 [langs.en]
 label = "English"
@@ -187,6 +188,12 @@ label = "Listen"
 langs = ["en"]
 voice = "en-US-AriaNeural"
 ```
+
+Tags are optional, author-owned search keywords. LiveView derives filters from
+the current catalog instead of shipping a subject taxonomy: `facet.value`
+creates a named facet (for example, `format.guide`), while an unnamespaced value
+such as `replication` appears under the generic Tags facet. Collections group
+books independently and never imply tags or priority.
 
 ## Validate content
 
@@ -252,10 +259,41 @@ liveview --config liveview.toml --host 0.0.0.0 --port 4160
 | `LIVEVIEW_S3_BUCKET` | Object bucket name; defaults to `liveview` |
 | `LIVEVIEW_S3_ACCESS_KEY[_FILE]` | Access key or path to a file containing it |
 | `LIVEVIEW_S3_SECRET_KEY[_FILE]` | Secret key or path to a file containing it |
-| `LIVEVIEW_TTS_VOICE` | Default `edge-tts` voice for generated audio |
+| `LIVEVIEW_EDGE_TTS_CMD` | Optional Edge TTS adapter command; unset disables network speech synthesis |
+| `LIVEVIEW_TTS_VOICE` | Optional fallback voice when a book rendition does not declare one |
+| `LIVEVIEW_BOOK_END_PHRASES` | Optional JSON map of language tags to spoken end cues, for example `{"en":"The end."}` |
+| `LIVEVIEW_APM_VL_URL` | Optional VictoriaLogs-compatible APM ingest URL |
+| `LIVEVIEW_APM_TOKEN[_FILE]` | Bearer token or token file for the optional APM sink |
+| `LIVEVIEW_APM_ALLOW_UNAUTHENTICATED` | Explicitly permit a configured APM sink without a token; defaults to false |
+| `LIVEVIEW_ALLOWED_ORIGINS` | Comma-separated exact CORS origins; unset permits same-origin requests only |
+| `LIVEVIEW_ACCESS_TOKEN[_FILE]` | Optional bearer token expected on every API and WebSocket request |
+
+The default Nix package has no speech provider. `.#liveview-with-edge-tts`
+adds the reference adapter; synthesis still remains disabled until
+`LIVEVIEW_EDGE_TTS_CMD=edge-tts` is set. Browser APM collection is separately
+opted in at build time with `VITE_APM_ENABLED=true`.
+
+Native release prompts are deployment-owned. Set both
+`VITE_NATIVE_RELEASE_APP_ID` and `VITE_NATIVE_RELEASE_MANIFEST_URL` while
+building the web application to enable one; otherwise no release channel or
+endpoint appears in the reader.
 
 > [!IMPORTANT]
-> LiveView does not currently provide multi-user authentication. For an internet-facing deployment, place it behind a trusted reverse proxy or identity-aware access layer, terminate TLS there, and restrict access to the storage services.
+> LiveView does not provide user accounts or multi-user authorization. For an
+> internet-facing deployment, place it behind a trusted reverse proxy or
+> identity-aware access layer, terminate TLS there, and restrict access to the
+> storage services. As defense in depth, the proxy can inject
+> `Authorization: Bearer …` upstream while LiveView verifies the matching
+> `LIVEVIEW_ACCESS_TOKEN`. This proxy-injected mode also covers media and
+> WebSocket requests that browser APIs cannot decorate directly.
+
+Same-origin access is the default. A native shell or separately hosted reader
+must enumerate each exact origin in `LIVEVIEW_ALLOWED_ORIGINS`; wildcard CORS
+is deliberately rejected. For example:
+
+```bash
+export LIVEVIEW_ALLOWED_ORIGINS='tauri://localhost,https://reader.example.org'
+```
 
 ## CLI overview
 
@@ -316,7 +354,7 @@ tools/               Deterministic content tooling
 
 ## Contributing
 
-Issues, focused pull requests, documentation improvements, and reproducible bug reports are welcome.
+Issues, focused pull requests, documentation improvements, and reproducible bug reports are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete development and review contract and [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
 Before submitting a change:
 

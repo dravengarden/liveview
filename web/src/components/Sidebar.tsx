@@ -24,7 +24,8 @@ import {
   UnfoldMore as ExpandAllIcon,
 } from "@mui/icons-material";
 import type { LangInfo, TreeNode } from "@/types";
-import { useI18n } from "@/i18n";
+import { type Language, useI18n } from "@/i18n";
+import { localeDescriptor } from "@/locales/registry";
 
 /** A single-line label that reveals its full text in a tooltip only when it is
  *  actually truncated (ellipsized). Re-measures on container resize, so it
@@ -261,9 +262,9 @@ interface SidebarProps {
 // expand/collapse-all, reveal current — plus the language switcher
 // and the tree, filling whatever container NavShell gives it.
 /** Format a unix-ms deploy stamp as a locale date, or null when unset (0). */
-function fmtDate(ms: number | undefined, lang: string): string | null {
+function fmtDate(ms: number | undefined, lang: Language): string | null {
   if (!ms) return null;
-  return new Date(ms).toLocaleDateString(lang === "zh" ? "zh-CN" : "en-US", {
+  return new Date(ms).toLocaleDateString(localeDescriptor(lang).htmlLang, {
     year: "numeric",
     month: "short",
     day: "numeric",

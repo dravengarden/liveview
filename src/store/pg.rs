@@ -7,8 +7,13 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
 use sqlx::postgres::{PgPool, PgPoolOptions};
+
+use crate::store::model::{
+    AssetRecord, AudioTask, AudioTaskRollup, AudioTaskUpsert, BookRecord, BookUpsert,
+    ChapterRecord, DagArtwork, DagChapter, EditionRecord, LegacyAudioAsset, ManifestChapter,
+    MerkleNode, ProgressEntry, RenditionRecord,
+};
 
 /// The schema, embedded so migration needs no file at runtime.
 const SCHEMA: &str = include_str!("schema.sql");
@@ -16,215 +21,6 @@ const SCHEMA: &str = include_str!("schema.sql");
 #[derive(Clone)]
 pub struct PgStore {
     pool: PgPool,
-}
-
-// ── Row types ────────────────────────────────────────────────────────────────
-
-/// A content leaf. Text-ish rows carry `html`+`markdown`; binary rows carry
-/// `asset_hash` (bytes live in rustfs, described by an `AssetRow`).
-#[derive(Clone, Debug, sqlx::FromRow)]
-pub struct ChapterRow {
-    pub book_slug: String,
-    pub rendition: String,
-    pub lang: String,
-    pub rel_path: String,
-    pub file_type: String,
-    pub html: Option<String>,
-    pub markdown: Option<String>,
-    pub asset_hash: Option<String>,
-    /// Canonical Opus/CAF audio plus sentence marks (→ assets).
-    pub audio_hash: Option<String>,
-    pub marks_hash: Option<String>,
-    pub content_hash: String,
-    pub render_version: i32,
-}
-
-/// A content-addressed binary blob stored in rustfs (key = `content_hash`).
-#[derive(Clone, Debug, sqlx::FromRow)]
-pub struct AssetRow {
-    pub content_hash: String,
-    pub mime: String,
-    pub size: i64,
-}
-
-/// Legacy source audio still referenced by at least one chapter. Audio
-/// optimization promotes each row to a canonical CAF asset and atomically
-/// rewrites every chapter reference.
-#[derive(Clone, Debug, sqlx::FromRow)]
-pub struct LegacyAudioAsset {
-    pub content_hash: String,
-    pub size: i64,
-}
-
-/// Book structure rows (for the server's catalog / `/api/books`).
-#[derive(Clone, Debug, sqlx::FromRow)]
-pub struct BookRow {
-    pub slug: String,
-    pub label: String,
-    pub description: Option<String>,
-    pub tags: Vec<String>,
-    pub collection: Option<String>,
-    pub author: Option<String>,
-    pub cover_hash: Option<String>,
-    pub backdrop_hash: Option<String>,
-    pub card_backdrop_hash: Option<String>,
-    pub default_rendition: String,
-    /// Deploy-time stamps (unix ms); 0 when never stamped. See `mark_book`.
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-
-/// Input for one book catalog upsert. Keeping the related fields together
-/// prevents call sites from silently swapping adjacent optional strings.
-pub struct BookUpsert<'a> {
-    pub slug: &'a str,
-    pub label: &'a str,
-    pub description: Option<&'a str>,
-    pub tags: &'a [String],
-    pub collection: Option<&'a str>,
-    pub author: Option<&'a str>,
-    pub cover_hash: Option<&'a str>,
-    pub backdrop_hash: Option<&'a str>,
-    pub card_backdrop_hash: Option<&'a str>,
-    pub default_rendition: &'a str,
-}
-
-#[derive(Clone, Debug, sqlx::FromRow)]
-pub struct RenditionRow {
-    pub kind: String,
-    pub label: String,
-    pub default_lang: String,
-    pub voice: Option<String>,
-    pub manifest: bool,
-    pub ord: i32,
-}
-
-#[derive(Clone, Debug, sqlx::FromRow)]
-pub struct EditionRow {
-    pub lang: String,
-    pub label: String,
-    pub ord: i32,
-}
-
-/// A Merkle node: a `leaf` (points at content) or a `tree` (sorted children).
-/// `payload` is an opaque serialized body owned by the sync layer.
-#[derive(Clone, Debug, sqlx::FromRow)]
-pub struct MerkleNode {
-    pub node_hash: String,
-    pub kind: String,
-    pub payload: String,
-}
-
-/// A claimed audio-generation task — one chapter leaf the worker must synth.
-#[derive(Clone, Debug, sqlx::FromRow)]
-pub struct AudioTask {
-    pub book_slug: String,
-    pub rendition: String,
-    pub lang: String,
-    pub rel_path: String,
-    pub content_hash: String,
-    pub leaf_kind: String,
-    pub voice: String,
-    pub status: String,
-    pub priority: i32,
-    pub attempts: i32,
-    pub error: Option<String>,
-    pub enqueued_at: i64,
-    pub started_at: Option<i64>,
-    pub finished_at: Option<i64>,
-}
-
-/// Input for an idempotent audio-queue upsert.
-pub struct AudioTaskUpsert<'a> {
-    pub book_slug: &'a str,
-    pub rendition: &'a str,
-    pub lang: &'a str,
-    pub rel_path: &'a str,
-    pub content_hash: &'a str,
-    pub leaf_kind: &'a str,
-    pub voice: &'a str,
-    pub priority: i32,
-}
-
-/// Per-book (NULL slug = global) audio-task counts for the status surface.
-#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
-pub struct AudioTaskRollup {
-    pub book_slug: Option<String>,
-    pub done: i64,
-    pub total: i64,
-    pub failed: i64,
-    pub pending: i64,
-}
-
-/// One chapter's heavy-blob + audio-readiness row for `/api/manifest/<slug>` —
-/// the content-addressed index the SW prefetches (Lane B) and the readiness UX
-/// reads. Text/HTML is Lane A (standard PWA cache), so it isn't here.
-#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
-pub struct ManifestChapter {
-    pub rendition: String,
-    pub lang: String,
-    pub rel_path: String,
-    /// blake3 of the chapter's source (the Merkle leaf identity, salted by
-    /// render-version). The client content-addresses TEXT by this: cache the
-    /// /api/file response keyed by content_hash, refetch only when it changes —
-    /// the text equivalent of the audio/asset blob hashes.
-    pub content_hash: String,
-    /// 'markdown'|'image'|'pdf'|'html'|'data'|… — lets the client know how to
-    /// fetch/render the leaf without a second round-trip.
-    pub file_type: String,
-    pub audio_hash: Option<String>,
-    pub marks_hash: Option<String>,
-    pub audio_size: Option<i64>,
-    pub audio_mime: Option<String>,
-    pub asset_hash: Option<String>,
-    pub asset_size: Option<i64>,
-    /// Audio task status (queued/running/done/failed) — `None` ⇒ no audio / never
-    /// queued.
-    pub status: Option<String>,
-}
-
-/// One chapter's full resource row for `/api/dag` (the WHOLE corpus, every book).
-/// The client (lv-sync) turns each row into content-addressed resources (text /
-/// units / spoken / audio / marks / asset) with byte sizes + fetch URLs.
-#[derive(Clone, Debug, sqlx::FromRow)]
-pub struct DagChapter {
-    pub book_slug: String,
-    pub rendition: String,
-    pub lang: String,
-    pub rel_path: String,
-    pub content_hash: String,
-    pub file_type: String,
-    /// Rendered-HTML byte length (text resources' size; units/spoken are tiny).
-    pub html_bytes: Option<i64>,
-    pub audio_hash: Option<String>,
-    pub audio_size: Option<i64>,
-    pub audio_mime: Option<String>,
-    pub marks_hash: Option<String>,
-    pub marks_size: Option<i64>,
-    pub asset_hash: Option<String>,
-    pub asset_size: Option<i64>,
-}
-
-/// One book's visual assets for `/api/dag`. Original and derived artwork are
-/// first-class offline content mirrored by blob hash like chapter assets.
-#[derive(Clone, Debug, sqlx::FromRow)]
-pub struct DagArtwork {
-    pub book_slug: String,
-    pub cover_hash: Option<String>,
-    pub cover_size: Option<i64>,
-    pub backdrop_hash: Option<String>,
-    pub backdrop_size: Option<i64>,
-    pub card_backdrop_hash: Option<String>,
-    pub card_backdrop_size: Option<i64>,
-}
-
-/// One document's saved scroll position (0..1 ratio). Wire-compatible with the
-/// old SQLite `ProgressEntry`.
-#[derive(Clone, Debug, Serialize, sqlx::FromRow)]
-pub struct ProgressEntry {
-    pub path: String,
-    pub scroll: f64,
-    pub updated_at: i64,
 }
 
 impl PgStore {
@@ -417,8 +213,8 @@ impl PgStore {
 
     // ── Catalog readers (server side) ────────────────────────────────────────
 
-    pub async fn list_books(&self) -> Result<Vec<BookRow>, sqlx::Error> {
-        sqlx::query_as::<_, BookRow>(
+    pub async fn list_books(&self) -> Result<Vec<BookRecord>, sqlx::Error> {
+        sqlx::query_as::<_, BookRecord>(
             "SELECT slug, label, description, tags, collection, author, cover_hash, backdrop_hash, card_backdrop_hash, default_rendition, created_at, updated_at
              FROM books ORDER BY slug",
         )
@@ -426,8 +222,11 @@ impl PgStore {
         .await
     }
 
-    pub async fn list_renditions(&self, book_slug: &str) -> Result<Vec<RenditionRow>, sqlx::Error> {
-        sqlx::query_as::<_, RenditionRow>(
+    pub async fn list_renditions(
+        &self,
+        book_slug: &str,
+    ) -> Result<Vec<RenditionRecord>, sqlx::Error> {
+        sqlx::query_as::<_, RenditionRecord>(
             "SELECT kind, label, default_lang, voice, manifest, ord
              FROM renditions WHERE book_slug = $1 ORDER BY ord",
         )
@@ -440,8 +239,8 @@ impl PgStore {
         &self,
         book_slug: &str,
         rendition: &str,
-    ) -> Result<Vec<EditionRow>, sqlx::Error> {
-        sqlx::query_as::<_, EditionRow>(
+    ) -> Result<Vec<EditionRecord>, sqlx::Error> {
+        sqlx::query_as::<_, EditionRecord>(
             "SELECT lang, label, ord FROM editions
              WHERE book_slug = $1 AND rendition = $2 ORDER BY ord",
         )
@@ -460,7 +259,7 @@ impl PgStore {
         lang: &str,
         default_lang: &str,
         rel_path: &str,
-    ) -> Result<Option<(ChapterRow, String)>, sqlx::Error> {
+    ) -> Result<Option<(ChapterRecord, String)>, sqlx::Error> {
         if let Some(c) = self
             .get_chapter(book_slug, rendition, lang, rel_path)
             .await?
@@ -500,7 +299,7 @@ impl PgStore {
 
     // ── Chapters ──────────────────────────────────────────────────────────────
 
-    pub async fn upsert_chapter(&self, c: &ChapterRow) -> Result<(), sqlx::Error> {
+    pub async fn upsert_chapter(&self, c: &ChapterRecord) -> Result<(), sqlx::Error> {
         sqlx::query(
             "INSERT INTO chapters
                  (book_slug, rendition, lang, rel_path, file_type,
@@ -560,8 +359,8 @@ impl PgStore {
         rendition: &str,
         lang: &str,
         rel_path: &str,
-    ) -> Result<Option<ChapterRow>, sqlx::Error> {
-        sqlx::query_as::<_, ChapterRow>(
+    ) -> Result<Option<ChapterRecord>, sqlx::Error> {
+        sqlx::query_as::<_, ChapterRecord>(
             "SELECT book_slug, rendition, lang, rel_path, file_type,
                     html, markdown, asset_hash, audio_hash, marks_hash,
                     content_hash, render_version
@@ -709,8 +508,8 @@ impl PgStore {
         Ok(rows.into_iter().collect())
     }
 
-    pub async fn get_asset(&self, content_hash: &str) -> Result<Option<AssetRow>, sqlx::Error> {
-        sqlx::query_as::<_, AssetRow>(
+    pub async fn get_asset(&self, content_hash: &str) -> Result<Option<AssetRecord>, sqlx::Error> {
+        sqlx::query_as::<_, AssetRecord>(
             "SELECT content_hash, mime, size FROM assets WHERE content_hash = $1",
         )
         .bind(content_hash)
@@ -1263,7 +1062,7 @@ mod tests {
     #[tokio::test]
     async fn book_rendition_edition_roundtrip() {
         let Some(s) = store().await else { return };
-        let tags = vec!["agent-systems".to_string(), "rust".to_string()];
+        let tags = vec!["subject.ecology".to_string(), "field-notes".to_string()];
         s.delete_book("t-book").await.unwrap();
         s.upsert_book(&BookUpsert {
             slug: "t-book",
@@ -1314,7 +1113,7 @@ mod tests {
     #[tokio::test]
     async fn chapter_and_asset_roundtrip() {
         let Some(s) = store().await else { return };
-        let c = ChapterRow {
+        let c = ChapterRecord {
             book_slug: "t-book".into(),
             rendition: "text".into(),
             lang: "zh".into(),

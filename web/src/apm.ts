@@ -31,12 +31,12 @@ import {
 import { REMOTE } from "@/apiBase";
 
 const SCHEME = "lvsync://localhost";
+const ENABLED = (import.meta.env["VITE_APM_ENABLED"] as string | undefined)
+  ?.toLocaleLowerCase() === "true";
 
-/** Shared secret gating /api/ingest. Baked into the native build via Vite env
- *  (`VITE_APM_TOKEN`). Empty in dev → the server accepts unauthenticated (it only
- *  enforces when its own LIVEVIEW_APM_TOKEN is set). Embedding it in the client is
- *  not true secrecy — it's a simple "block random junk" gate, which is all a
- *  single-user LAN app needs. */
+/** Optional bearer token gating /api/ingest. Baked into a deployment via the
+ *  Vite environment and expected to match the server configuration. Embedding
+ *  it in a client is not true secrecy; use a trusted network boundary. */
 const TOKEN = (import.meta.env["VITE_APM_TOKEN"] as string | undefined) ?? "";
 /** Build id, so events can be attributed to a bundle version. */
 const APP_VERSION = (import.meta.env["VITE_APP_VERSION"] as string | undefined) ?? "dev";
@@ -90,7 +90,7 @@ let lastProbe = 0;
  *  merged as top-level event fields — keep perf numbers scalar (e.g. `dur_ms`) so
  *  they're queryable in VictoriaLogs, not buried in a nested object. */
 export function logEvent(type: string, fields?: Record<string, unknown>): void {
-  if (!nativeSyncAvailable()) return;
+  if (!ENABLED || !nativeSyncAvailable()) return;
   try {
     const event = {
       event_id: randomId(),
@@ -173,7 +173,7 @@ let flushing = false;
  *  events retry on the next trigger — at-least-once. No-op off-shell / when a flush
  *  is already running. Never throws. */
 export async function flushApm(): Promise<void> {
-  if (!nativeSyncAvailable() || flushing) return;
+  if (!ENABLED || !nativeSyncAvailable() || flushing) return;
   flushing = true;
   try {
     // Round cap: even if an ack somehow never lands, we can't drain more than the
@@ -227,7 +227,7 @@ let started = false;
  *  so uncaught exceptions/rejections are logged (de-duped) with zero per-call-site
  *  instrumentation. Native-shell only; idempotent. */
 export function startApm(): void {
-  if (started || !nativeSyncAvailable() || typeof window === "undefined") return;
+  if (!ENABLED || started || !nativeSyncAvailable() || typeof window === "undefined") return;
   started = true;
 
   // Uncaught errors → APM, app-wide, de-duped/capped (the biggest debug win for the

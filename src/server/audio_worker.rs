@@ -16,7 +16,8 @@
 use tokio::sync::broadcast;
 
 use crate::server::{audio, narration, speakable, spoken};
-use crate::store::pg::{AudioTask, PgStore};
+use crate::store::model::AudioTask;
+use crate::store::pg::PgStore;
 use crate::sync::merkle;
 use crate::sync::objstore::ObjStore;
 

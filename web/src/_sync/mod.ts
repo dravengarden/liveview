@@ -1,9 +1,4 @@
-// ⚠️ VENDORED — DO NOT EDIT. Copied from @shared-utils/sync (shared-utils
-// monorepo, `state-sync-engine` branch). Edit there + re-vendor (`web/src/_sync`)
-// rather than here, so the canonical lib and every consumer stay in sync. When
-// the lib lands on JSR / shared-utils main, replace this copy with an import.
-//
-// @shared-utils/sync — a small, pure-TS local-first state-sync engine.
+// Repository-owned, pure-TypeScript local-first state-sync engine.
 //
 // A central ARBITER owns the truth; clients apply deterministic MUTATORS
 // locally for instant UI, send them to the arbiter, and REBASE their pending
@@ -12,7 +7,6 @@
 // Rust service can implement natively against the same `Mutation`/`Patch`
 // contract. The Merkle-DAG "incremental diff" idea is deferred behind `Patch`.
 //
-// See packages/sync/README.md and the cowboy `state-sync-engine` task.
 
 // — OP-based tier (active arbiter): the kernel + its reactive-store face —
 export { createClient } from "./src/client.ts";

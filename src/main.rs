@@ -8,13 +8,13 @@ mod server;
 mod shared;
 mod store;
 mod sync;
-mod taxonomy;
+mod tags;
 
 use axum::{
     Extension, Router,
     body::Body,
     extract::{DefaultBodyLimit, Query, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
 };
@@ -27,7 +27,8 @@ use shared::{FileContent, FileType, TreeNode, WsMessage};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use store::pg::{PgStore, ProgressEntry};
+use store::model::{ChapterRecord, ProgressEntry};
+use store::pg::PgStore;
 use sync::objstore::ObjStore;
 use tokio::sync::{RwLock, broadcast};
 use tracing_subscriber::EnvFilter;
@@ -389,7 +390,6 @@ async fn run_sync(args: cli::SyncArgs) -> Result<(), String> {
         s3_access_key,
         s3_secret_key,
         s3_bucket: args.s3_bucket,
-        tts_cmd: args.edge_tts_cmd,
         tts_voice: args.tts_voice,
         text_audio: args.pregen_text_audio,
         render_version: args.render_version,
@@ -532,36 +532,31 @@ fn store_config_from_env() -> Result<StoreConfig, String> {
     })
 }
 
-/// Build the APM ingest sink from the env the systemd unit sets. Always returns a
-/// sink on the deployed path (VL defaults to the host's loopback jsonline endpoint);
-/// auth is enabled only when `LIVEVIEW_APM_TOKEN[_FILE]` is present, so a dev/local
-/// server without a token accepts unauthenticated. `event_type` + `device_id` are the
-/// VL stream fields (bounded cardinality); `client_ts` is the event time (so an
-/// offline-buffered event lands at when it HAPPENED, not when it was flushed).
+/// Build the optional APM ingest sink. Telemetry is disabled unless an operator
+/// explicitly supplies a VictoriaLogs-compatible endpoint. An authenticated
+/// token is required unless unauthenticated ingest is separately opted into.
 fn build_apm_sink() -> Option<ApmSink> {
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    let base = env("LIVEVIEW_APM_VL_URL")?;
     let allow_unauthenticated = env("LIVEVIEW_APM_ALLOW_UNAUTHENTICATED")
         .is_some_and(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"));
-    let base = env("LIVEVIEW_APM_VL_URL")
-        .unwrap_or_else(|| "http://127.0.0.1:6302/insert/jsonline".to_string());
     let vl_url =
         format!("{base}?_msg_field=_msg&_time_field=client_ts&_stream_fields=device_id,event_type");
     let token = match env("LIVEVIEW_APM_TOKEN_FILE") {
         Some(f) => match std::fs::read_to_string(&f) {
             Ok(s) => Some(s.trim().to_string()).filter(|s| !s.is_empty()),
             Err(e) => {
-                if !allow_unauthenticated {
-                    tracing::warn!(error = %e, file = %f, "apm token file unreadable; auth disabled");
-                }
-                None
+                tracing::warn!(error = %e, file = %f, "apm disabled because token file is unreadable");
+                return None;
             }
         },
         None => env("LIVEVIEW_APM_TOKEN"),
     };
     if token.is_none() && !allow_unauthenticated {
         tracing::warn!(
-            "apm ingest is unauthenticated; set a token or explicitly allow unauthenticated ingest"
+            "apm disabled without a token; explicitly allow unauthenticated ingest to override"
         );
+        return None;
     }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -667,11 +662,16 @@ async fn run(cli: Cli, server: config::ServerCfg) {
 
     let (tx, _rx) = broadcast::channel::<String>(64);
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-    let tts_cmd = env("LIVEVIEW_EDGE_TTS_CMD").unwrap_or_else(|| "edge-tts".to_string());
-    let tts_voice = env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string());
+    let tts_cmd = env("LIVEVIEW_EDGE_TTS_CMD");
+    let tts_voice = env("LIVEVIEW_TTS_VOICE");
+    let book_end_phrases = load_book_end_phrases();
 
-    // Drain the audio task queue in the background (sync only enqueues now).
-    crate::server::audio_worker::spawn(worker_pg, worker_obj, tts_cmd.clone(), tx.clone());
+    // Drain the audio task queue only when an operator enabled a speech adapter.
+    if let Some(command) = tts_cmd.clone() {
+        crate::server::audio_worker::spawn(worker_pg, worker_obj, command, tx.clone());
+    } else {
+        tracing::info!("speech synthesis disabled (LIVEVIEW_EDGE_TTS_CMD is unset)");
+    }
 
     let state: SharedState = Arc::new(AppState {
         tx,
@@ -682,6 +682,7 @@ async fn run(cli: Cli, server: config::ServerCfg) {
         sizes_cache: Default::default(),
         tts_cmd,
         tts_voice,
+        book_end_phrases,
         book_end_cue: Default::default(),
         audio_synth_locks: Default::default(),
         apm: build_apm_sink(),
@@ -690,7 +691,13 @@ async fn run(cli: Cli, server: config::ServerCfg) {
     // Reload the catalog + nudge clients when `liveview sync` issues NOTIFY.
     spawn_reload_listener(state.clone(), conf.database_url.clone());
 
-    let app = build_app(state);
+    let app = match build_app(state) {
+        Ok(app) => app,
+        Err(error) => {
+            eprintln!("http policy: {error}");
+            std::process::exit(2);
+        }
+    };
     serve_app(app, host, port, should_open).await;
 }
 
@@ -722,15 +729,16 @@ async fn run_preview(args: cli::PreviewArgs) -> Result<(), String> {
         catalog: RwLock::new(catalog),
         dag_cache: Default::default(),
         sizes_cache: Default::default(),
-        tts_cmd: env("LIVEVIEW_EDGE_TTS_CMD").unwrap_or_else(|| "edge-tts".to_string()),
-        tts_voice: env("LIVEVIEW_TTS_VOICE").unwrap_or_else(|| "zh-CN-XiaoxiaoNeural".to_string()),
+        tts_cmd: env("LIVEVIEW_EDGE_TTS_CMD"),
+        tts_voice: env("LIVEVIEW_TTS_VOICE"),
+        book_end_phrases: load_book_end_phrases(),
         book_end_cue: Default::default(),
         audio_synth_locks: Default::default(),
         // No VL to forward to in local preview — /api/ingest no-ops (accept + drop).
         apm: None,
     });
 
-    let app = build_app(state);
+    let app = build_app(state)?;
     serve_app(app, host, args.port, args.open).await;
     Ok(())
 }
@@ -1200,7 +1208,7 @@ async fn api_sizes(State(state): State<SharedState>, headers: HeaderMap) -> Resp
     manifest_json_response(&root, body)
 }
 
-/// Batched client APM events → VictoriaLogs. The native app buffers operation /
+/// Batched client APM events → an explicitly configured VictoriaLogs sink. The native app buffers operation /
 /// perf / error events offline and POSTs them here in batches when the network is
 /// good; we stamp each with `received_at` + a `_msg` summary and forward the batch
 /// as jsonline to the host VL, where it's queried/debugged with LogsQL. Auth: a
@@ -1219,7 +1227,8 @@ async fn api_ingest(
         // No VL configured (preview) — accept + drop so a dev client doesn't spin.
         return StatusCode::OK;
     };
-    // Bearer auth when a token is configured; open otherwise (dev/local).
+    // Bearer auth when a token is configured; an open sink requires explicit
+    // LIVEVIEW_APM_ALLOW_UNAUTHENTICATED configuration at startup.
     if let Some(want) = apm.token.as_deref() {
         let got = headers
             .get(header::AUTHORIZATION)
@@ -1280,10 +1289,77 @@ async fn api_ingest(
     }
 }
 
-fn build_app(state: SharedState) -> Router {
-    let api_router = Router::new()
+#[derive(Clone, Debug, Default)]
+struct HttpPolicy {
+    allowed_origins: Vec<HeaderValue>,
+    access_token: Option<String>,
+}
+
+impl HttpPolicy {
+    fn parse(allowed_origins: Option<&str>, access_token: Option<String>) -> Result<Self, String> {
+        let allowed_origins = allowed_origins
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|origin| !origin.is_empty())
+            .map(|origin| {
+                if origin == "*" {
+                    return Err(
+                        "LIVEVIEW_ALLOWED_ORIGINS requires explicit origins; '*' is not allowed"
+                            .to_string(),
+                    );
+                }
+                let uri = origin
+                    .parse::<axum::http::Uri>()
+                    .map_err(|error| format!("invalid allowed origin {origin:?}: {error}"))?;
+                if uri.scheme().is_none()
+                    || uri.authority().is_none()
+                    || uri.query().is_some()
+                    || !matches!(uri.path(), "" | "/")
+                {
+                    return Err(format!(
+                        "invalid allowed origin {origin:?}: expected scheme and authority without a path or query"
+                    ));
+                }
+                origin
+                    .parse::<HeaderValue>()
+                    .map_err(|error| format!("invalid allowed origin {origin:?}: {error}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let access_token = access_token
+            .map(|token| token.trim().to_string())
+            .filter(|token| !token.is_empty());
+        if let Some(token) = &access_token {
+            format!("Bearer {token}")
+                .parse::<HeaderValue>()
+                .map_err(|error| format!("invalid access token: {error}"))?;
+        }
+        Ok(Self {
+            allowed_origins,
+            access_token,
+        })
+    }
+
+    fn from_env() -> Result<Self, String> {
+        let env = |key: &str| std::env::var(key).ok().filter(|value| !value.is_empty());
+        let token =
+            match env("LIVEVIEW_ACCESS_TOKEN_FILE") {
+                Some(path) => Some(std::fs::read_to_string(&path).map_err(|error| {
+                    format!("read LIVEVIEW_ACCESS_TOKEN_FILE {path:?}: {error}")
+                })?),
+                None => env("LIVEVIEW_ACCESS_TOKEN"),
+            };
+        Self::parse(env("LIVEVIEW_ALLOWED_ORIGINS").as_deref(), token)
+    }
+}
+
+fn build_app(state: SharedState) -> Result<Router, String> {
+    Ok(build_app_with_policy(state, HttpPolicy::from_env()?))
+}
+
+fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
+    let mut api_router = Router::new()
         .route("/api/books", get(api_books))
-        .route("/api/taxonomy", get(api_taxonomy))
         .route("/api/cover", get(api_cover))
         .route("/api/backdrop", get(api_backdrop))
         .route("/api/card-backdrop", get(api_card_backdrop))
@@ -1318,20 +1394,44 @@ fn build_app(state: SharedState) -> Router {
             post(api_ingest).layer(DefaultBodyLimit::max(APM_MAX_BODY_BYTES)),
         )
         .route("/ws", get(server::ws::ws_handler))
-        .with_state(state.clone())
+        .with_state(state.clone());
+
+    // Optional defense in depth for a trusted reverse proxy. The proxy injects
+    // the bearer header on every upstream request, including media and WebSocket
+    // requests that browser APIs cannot decorate themselves.
+    if let Some(token) = &policy.access_token {
+        let expected: HeaderValue = format!("Bearer {token}")
+            .parse()
+            .expect("HttpPolicy validates the authorization header");
+        api_router = api_router.route_layer(axum::middleware::from_fn(
+            move |request: axum::http::Request<Body>, next: axum::middleware::Next| {
+                let expected = expected.clone();
+                async move {
+                    if request.headers().get(header::AUTHORIZATION) == Some(&expected) {
+                        next.run(request).await
+                    } else {
+                        StatusCode::UNAUTHORIZED.into_response()
+                    }
+                }
+            },
+        ));
+    }
+
+    api_router = api_router
         // Large whole-corpus metadata responses are highly compressible (the
         // current DAG shrinks by roughly an order of magnitude with gzip).
-        .layer(tower_http::compression::CompressionLayer::new())
-        // CORS for the BUNDLED native app. The iOS/macOS Tauri shell now loads the
-        // SPA from a LOCAL origin (tauri://localhost) and fetches `/api/...`
-        // CROSS-ORIGIN against this server (via apiBase.ts installApiShim). WKWebView
-        // enforces CORS, so without these headers every /api fetch from the app is
-        // blocked — reading history/progress/settings silently came back empty after
-        // the bundled-app cutover (the old shell loaded the remote origin directly,
-        // same-origin, so no CORS was ever needed). permissive() echoes any origin and
-        // answers the PUT preflight; requests are unauthenticated (single-user LAN +
-        // tailnet), so there are no credentials/cookies to protect.
-        .layer(tower_http::cors::CorsLayer::permissive());
+        .layer(tower_http::compression::CompressionLayer::new());
+
+    // Same-origin is the secure default. Native shells and separately hosted
+    // frontends opt into exact origins; wildcard reflection is never implicit.
+    if !policy.allowed_origins.is_empty() {
+        api_router = api_router.layer(
+            tower_http::cors::CorsLayer::new()
+                .allow_origin(policy.allowed_origins)
+                .allow_methods([Method::GET, Method::POST, Method::PUT])
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
+        );
+    }
 
     #[cfg(feature = "embedded")]
     {
@@ -1625,7 +1725,7 @@ struct BookInfo {
     label: String,
     slug: String,
     description: Option<String>,
-    /// Controlled taxonomy IDs used for local search and faceted discovery.
+    /// Author-defined keywords used for local search and faceted discovery.
     tags: Vec<String>,
     /// Optional shelf grouping key (book.toml top-level `collection`).
     collection: Option<String>,
@@ -1705,10 +1805,6 @@ async fn api_books(State(state): State<SharedState>) -> impl IntoResponse {
         })
         .collect();
     axum::Json(books)
-}
-
-async fn api_taxonomy() -> axum::Json<&'static crate::taxonomy::Taxonomy> {
-    axum::Json(crate::taxonomy::taxonomy())
 }
 
 #[derive(serde::Deserialize)]
@@ -2072,10 +2168,7 @@ async fn api_file(
 /// prefer the distilled `<id>.spoken.md` chapter, else the raw `<id>.md`; for
 /// audio, the `<aid>.spoken.md` chapter IS the script. Returns the chapter +
 /// the served lang (overlay → base).
-async fn resolve_narration(
-    state: &AppState,
-    ctx: &ReqCtx,
-) -> Option<(store::pg::ChapterRow, String)> {
+async fn resolve_narration(state: &AppState, ctx: &ReqCtx) -> Option<(ChapterRecord, String)> {
     if ctx.kind == RenditionKind::Text
         && let Some(stem) = ctx.rest.strip_suffix(".md")
     {
@@ -2475,8 +2568,8 @@ async fn api_audio(
     let Ok(data) = state.obj.get(&hash).await else {
         return (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response();
     };
-    // The book's last chapter carries a spoken "全书完" tail (client sends
-    // `tail=bookend` only for that chapter). Bake it into the served bytes so it
+    // A book's last chapter may carry an operator-configured spoken tail (the
+    // client sends `tail=bookend` only for that chapter). Bake it into the served bytes so it
     // plays through the same MediaSession element — on the lock screen / in the
     // background, where a client-side cue would be silent. MP3 frames concatenate
     // cleanly (same as `assemble()` joins per-sentence clips). Marks are
@@ -2491,8 +2584,11 @@ async fn api_audio(
         .flatten()
         .map(|a| a.mime);
     if asset_mime.as_deref() == Some(AUDIO_VARIANT.mime) {
-        if is_bookend {
-            let tail_key = format!("{hash}.tail.{}", AUDIO_VARIANT.tag);
+        if is_bookend && let Some(phrase) = book_end_phrase(&state.book_end_phrases, &row.lang) {
+            // Include the configured phrase in the derived cache identity so a
+            // configuration change can never replay an older deployment's cue.
+            let phrase_hash = blake3::hash(phrase.as_bytes()).to_hex();
+            let tail_key = format!("{hash}.tail.{}.{phrase_hash}", AUDIO_VARIANT.tag);
             if let Ok(tail) = state.obj.get(&tail_key).await {
                 return serve_audio_range(tail, &headers, AUDIO_VARIANT.mime);
             }
@@ -2579,7 +2675,7 @@ async fn api_marks(
 /// Already-generated chapters are a no-op. Returns `(audio_hash, marks_hash)`.
 async fn ensure_chapter_audio(
     state: &AppState,
-    row: &store::pg::ChapterRow,
+    row: &ChapterRecord,
 ) -> Result<(String, String), String> {
     if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash) {
         return Ok((a.clone(), m.clone()));
@@ -2591,9 +2687,14 @@ async fn ensure_chapter_audio(
         cat.book(&row.book_slug)
             .and_then(|b| b.rendition(RenditionKind::Audio))
             .and_then(|r| r.voice.clone())
-            .unwrap_or_else(|| state.tts_voice.clone())
+            .or_else(|| state.tts_voice.clone())
+            .ok_or("speech voice is not configured")?
     };
-    let (mp3, marks) = server::audio::synthesize(&state.tts_cmd, &voice, &sentences).await?;
+    let command = state
+        .tts_cmd
+        .as_deref()
+        .ok_or("speech synthesis is not configured")?;
+    let (mp3, marks) = server::audio::synthesize(command, &voice, &sentences).await?;
     let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
     let caf = transcode_audio(mp3).await?;
     let audio_hash = store_blob(state, caf, AUDIO_VARIANT.mime).await?;
@@ -2702,9 +2803,14 @@ async fn ensure_text_audio(
         cat.book(&row.book_slug)
             .and_then(|b| b.rendition(RenditionKind::Audio))
             .and_then(|r| r.voice.clone())
-            .unwrap_or_else(|| state.tts_voice.clone())
+            .or_else(|| state.tts_voice.clone())
+            .ok_or("speech voice is not configured")?
     };
-    let (mp3, marks) = server::audio::synthesize(&state.tts_cmd, &voice, &texts).await?;
+    let command = state
+        .tts_cmd
+        .as_deref()
+        .ok_or("speech synthesis is not configured")?;
+    let (mp3, marks) = server::audio::synthesize(command, &voice, &texts).await?;
     let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
     let caf = transcode_audio(mp3).await?;
     let audio_hash = store_blob(state, caf, AUDIO_VARIANT.mime).await?;
@@ -2724,17 +2830,44 @@ async fn ensure_text_audio(
     Ok((audio_hash, marks_hash))
 }
 
-/// The spoken "end of the whole book" phrase for a language edition, matched by
-/// language prefix (`zh`, `zh-CN`, `en`, `en-US`, …). Returns `None` for a
-/// language we have no phrase for — better silence than a wrong-language tail.
-fn book_end_phrase(lang: &str) -> Option<&'static str> {
-    if lang.starts_with("zh") {
-        Some("全书完")
-    } else if lang.starts_with("en") {
-        Some("The end.")
-    } else {
-        None
+/// Parse operator-defined end-of-book phrases. No language or wording is built
+/// into the reader; an absent or invalid map disables this optional cue.
+fn parse_book_end_phrases(value: &str) -> Result<HashMap<String, String>, String> {
+    let phrases: HashMap<String, String> = serde_json::from_str(value)
+        .map_err(|error| format!("LIVEVIEW_BOOK_END_PHRASES must be a JSON object: {error}"))?;
+    Ok(phrases
+        .into_iter()
+        .filter_map(|(lang, phrase)| {
+            let lang = lang.trim().to_ascii_lowercase();
+            let phrase = phrase.trim().to_string();
+            (!lang.is_empty() && !phrase.is_empty()).then_some((lang, phrase))
+        })
+        .collect())
+}
+
+fn load_book_end_phrases() -> HashMap<String, String> {
+    let Ok(value) = std::env::var("LIVEVIEW_BOOK_END_PHRASES") else {
+        return HashMap::new();
+    };
+    match parse_book_end_phrases(&value) {
+        Ok(phrases) => phrases,
+        Err(error) => {
+            tracing::warn!(%error, "end-of-book audio cue disabled");
+            HashMap::new()
+        }
     }
+}
+
+/// Look up an exact BCP 47 tag first, then its primary language subtag.
+fn book_end_phrase<'a>(phrases: &'a HashMap<String, String>, lang: &str) -> Option<&'a str> {
+    let lang = lang.trim().to_ascii_lowercase();
+    phrases
+        .get(&lang)
+        .or_else(|| {
+            lang.split_once('-')
+                .and_then(|(primary, _)| phrases.get(primary))
+        })
+        .map(String::as_str)
 }
 
 /// The synthesized "end of book" cue for this chapter's voice + language,
@@ -2743,23 +2876,25 @@ fn book_end_phrase(lang: &str) -> Option<&'static str> {
 /// chapter audio with no tail, never an error (a missing cue must not break
 /// playback). The voice is the book's audio-rendition voice, mirroring
 /// `ensure_chapter_audio`, so the cue matches the narration.
-async fn book_end_cue(state: &AppState, row: &store::pg::ChapterRow) -> Option<Vec<u8>> {
-    let phrase = book_end_phrase(&row.lang)?;
+async fn book_end_cue(state: &AppState, row: &ChapterRecord) -> Option<Vec<u8>> {
+    let phrase = book_end_phrase(&state.book_end_phrases, &row.lang)?;
     let voice = {
         let cat = state.catalog.read().await;
         cat.book(&row.book_slug)
             .and_then(|b| b.rendition(RenditionKind::Audio))
             .and_then(|r| r.voice.clone())
-            .unwrap_or_else(|| state.tts_voice.clone())
+            .or_else(|| state.tts_voice.clone())?
     };
     let key = format!("{voice}|{phrase}");
     if let Some(cue) = state.book_end_cue.lock().await.get(&key) {
         return Some(cue.as_ref().clone());
     }
-    // Synthesize off-lock (a few-KB, ~1s edge-tts call); a rare double-synth
+    // Synthesize off-lock; a rare double-synth
     // race is harmless — both produce the same tiny clip and the last write wins.
     let (mp3, _marks) =
-        match server::audio::synthesize(&state.tts_cmd, &voice, &[phrase.to_string()]).await {
+        match server::audio::synthesize(state.tts_cmd.as_deref()?, &voice, &[phrase.to_string()])
+            .await
+        {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(error = %e, voice, "book-end cue synth failed");
@@ -2821,6 +2956,97 @@ async fn api_raw(
 mod apm_tests {
     use super::*;
     use crate::store::fs::FsStore;
+    use tower::ServiceExt;
+
+    #[test]
+    fn http_policy_defaults_to_same_origin_without_authentication() {
+        let policy = HttpPolicy::parse(None, None).unwrap();
+        assert!(policy.allowed_origins.is_empty());
+        assert!(policy.access_token.is_none());
+    }
+
+    #[test]
+    fn http_policy_accepts_exact_origins_and_rejects_wildcards() {
+        let policy = HttpPolicy::parse(
+            Some("tauri://localhost, https://reader.example.org"),
+            Some("proxy-secret".into()),
+        )
+        .unwrap();
+        assert_eq!(policy.allowed_origins.len(), 2);
+        assert_eq!(policy.allowed_origins[0], "tauri://localhost");
+        assert_eq!(policy.access_token.as_deref(), Some("proxy-secret"));
+        assert!(HttpPolicy::parse(Some("*"), None).is_err());
+        assert!(HttpPolicy::parse(Some("reader.example.org"), None).is_err());
+        assert!(HttpPolicy::parse(Some("https://reader.example.org/path"), None).is_err());
+    }
+
+    #[tokio::test]
+    async fn access_token_protects_api_routes() {
+        let policy = HttpPolicy::parse(None, Some("proxy-secret".into())).unwrap();
+        let app = build_app_with_policy(state_with(None).await, policy);
+        let unauthorized = app
+            .clone()
+            .oneshot(
+                axum::http::Request::get("/api/version")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        let authorized = app
+            .oneshot(
+                axum::http::Request::get("/api/version")
+                    .header(header::AUTHORIZATION, "Bearer proxy-secret")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(authorized.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn cors_returns_only_an_explicit_allowed_origin() {
+        let policy = HttpPolicy::parse(Some("https://reader.example.org"), None).unwrap();
+        let app = build_app_with_policy(state_with(None).await, policy);
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/api/progress")
+                    .header(header::ORIGIN, "https://reader.example.org")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "PUT")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("https://reader.example.org"))
+        );
+    }
+
+    #[test]
+    fn book_end_phrases_are_explicit_and_language_aware() {
+        let phrases = parse_book_end_phrases(
+            r#"{"en":"The end.","zh":"全书完","fr-CA":" Fin. ","empty":" "}"#,
+        )
+        .unwrap();
+        assert_eq!(book_end_phrase(&phrases, "en-US"), Some("The end."));
+        assert_eq!(book_end_phrase(&phrases, "ZH-Hans"), Some("全书完"));
+        assert_eq!(book_end_phrase(&phrases, "fr-CA"), Some("Fin."));
+        assert_eq!(book_end_phrase(&phrases, "fr-FR"), None);
+        assert_eq!(book_end_phrase(&HashMap::new(), "en"), None);
+    }
+
+    #[test]
+    fn invalid_book_end_phrase_config_is_rejected() {
+        assert!(parse_book_end_phrases(r#"["not", "an", "object"]"#).is_err());
+    }
 
     #[tokio::test]
     async fn canonical_audio_variant_is_muxable_by_ffmpeg() {
@@ -2878,19 +3104,19 @@ mod apm_tests {
 
     #[test]
     fn artwork_resource_is_content_addressed_and_book_scoped() {
-        let resource = artwork_resource("quant-book", "backdrop", "abc123", 4096);
-        assert_eq!(resource["path"], "quant-book/@backdrop");
+        let resource = artwork_resource("field-guide", "backdrop", "abc123", 4096);
+        assert_eq!(resource["path"], "field-guide/@backdrop");
         assert_eq!(resource["hash"], "abc123");
         assert_eq!(resource["kind"], "backdrop");
         assert_eq!(resource["bytes"], 4096);
-        assert_eq!(resource["url"], "/api/backdrop?book=quant-book");
+        assert_eq!(resource["url"], "/api/backdrop?book=field-guide");
 
-        let card = artwork_resource("quant-book", "card-backdrop", "def456", 1024);
-        assert_eq!(card["path"], "quant-book/@card-backdrop");
+        let card = artwork_resource("field-guide", "card-backdrop", "def456", 1024);
+        assert_eq!(card["path"], "field-guide/@card-backdrop");
         assert_eq!(card["hash"], "def456");
         assert_eq!(card["kind"], "card-backdrop");
         assert_eq!(card["bytes"], 1024);
-        assert_eq!(card["url"], "/api/card-backdrop?book=quant-book");
+        assert_eq!(card["url"], "/api/card-backdrop?book=field-guide");
     }
 
     /// Minimal AppState over an empty in-memory FsStore (no pg/rustfs, no audio
@@ -2908,8 +3134,9 @@ mod apm_tests {
             catalog: RwLock::new(catalog),
             dag_cache: Default::default(),
             sizes_cache: Default::default(),
-            tts_cmd: "edge-tts".into(),
-            tts_voice: "x".into(),
+            tts_cmd: Some("edge-tts".into()),
+            tts_voice: Some("x".into()),
+            book_end_phrases: HashMap::new(),
             book_end_cue: Default::default(),
             audio_synth_locks: Default::default(),
             apm,

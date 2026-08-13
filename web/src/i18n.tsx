@@ -6,7 +6,14 @@ import {
   useMemo,
   useState,
 } from "react";
-export type Language = "en" | "zh";
+import {
+  type Language,
+  localeDescriptor,
+  resolveLocale,
+  UI_LOCALES,
+} from "@/locales/registry";
+
+export { type Language, UI_LOCALES as UI_LANGUAGES };
 
 const LANG_KEY = "lv-lang";
 
@@ -51,6 +58,7 @@ const STRINGS: Record<Language, Dict> = {
     "landing.collapseAllSeries": "Collapse all",
     "landing.kind": "Show",
     "landing.kindAll": "All",
+    "landing.tags": "Tags",
     "history.title": "Reading history",
     "history.empty": "Nothing read yet — open a book and it'll show up here.",
     "history.today": "Today",
@@ -77,6 +85,24 @@ const STRINGS: Record<Language, Dict> = {
       "Saved offline automatically — reading as you open, audio as you listen.",
     "sync.offlineNone": "No audiobooks yet.",
     "sync.retry": "Retry",
+    "offline.downloads": "Downloads",
+    "offline.description":
+      "Text and compressed audio download automatically within your storage budget for fully offline reading and listening.",
+    "offline.wifiOnly": "Prefetch on WiFi only",
+    "offline.wifiOnlyHint": "Don't auto-preload on cellular",
+    "offline.maxStorage": "Max storage",
+    "offline.maxStorageHint": "Evicts least-recently-used audio over budget",
+    "offline.waitingWifi": "Waiting for WiFi",
+    "offline.available": "Available offline",
+    "offline.downloading": "Downloading",
+    "offline.content": "Offline content",
+    "offline.text": "Text",
+    "offline.audio": "Audio",
+    "offline.chapterAbbr": "ch",
+    "offline.lowerLimit": "Lower storage limit",
+    "offline.lowerLimitBody":
+      "{used} in use exceeds the new {limit} GB limit. Confirming evicts least-recently-used audio to fit.",
+    "offline.confirmDelete": "Confirm",
     "landing.filterBooks": "Books",
     "landing.filterAudiobooks": "Audiobooks",
     "landing.filterDocs": "Docs",
@@ -230,6 +256,7 @@ const STRINGS: Record<Language, Dict> = {
     "landing.collapseAllSeries": "折叠全部",
     "landing.kind": "显示",
     "landing.kindAll": "全部",
+    "landing.tags": "标签",
     "history.title": "阅读历史",
     "history.empty": "还没有阅读记录——打开一本书,这里就会出现。",
     "history.today": "今天",
@@ -253,6 +280,24 @@ const STRINGS: Record<Language, Dict> = {
     "sync.offlineAuto": "已自动离线缓存——阅读随开随存,音频边听边存。",
     "sync.offlineNone": "暂无有声书。",
     "sync.retry": "重试",
+    "offline.downloads": "下载",
+    "offline.description":
+      "文字与压缩音频会在存储上限内自动下载到本机，断网也能读和听。",
+    "offline.wifiOnly": "仅 WiFi 预加载",
+    "offline.wifiOnlyHint": "蜂窝网络下不自动预加载",
+    "offline.maxStorage": "最大存储",
+    "offline.maxStorageHint": "超出后淘汰最久未用的音频",
+    "offline.waitingWifi": "等待 WiFi",
+    "offline.available": "已离线",
+    "offline.downloading": "下载中",
+    "offline.content": "离线内容",
+    "offline.text": "文字",
+    "offline.audio": "音频",
+    "offline.chapterAbbr": "章",
+    "offline.lowerLimit": "降低存储上限",
+    "offline.lowerLimitBody":
+      "当前已用 {used}，超过新上限 {limit} GB。确认后会删除最久未用的音频直到符合上限。",
+    "offline.confirmDelete": "确认删除",
     "landing.filterBooks": "书",
     "landing.filterAudiobooks": "有声书",
     "landing.filterDocs": "文档",
@@ -371,10 +416,7 @@ const STRINGS: Record<Language, Dict> = {
 
 function detectLanguage(): Language {
   const stored = localStorage.getItem(LANG_KEY);
-  if (stored === "en" || stored === "zh") {
-    return stored;
-  }
-  return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+  return resolveLocale(stored) ?? resolveLocale(navigator.language) ?? "en";
 }
 
 export type Translate = (
@@ -401,7 +443,7 @@ export function I18nProvider(
   }, []);
 
   useEffect(() => {
-    document.documentElement.lang = lang === "zh" ? "zh-CN" : "en";
+    document.documentElement.lang = localeDescriptor(lang).htmlLang;
   }, [lang]);
 
   const t = useCallback<Translate>(

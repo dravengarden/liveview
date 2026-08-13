@@ -1,7 +1,4 @@
-// VENDORED from shared-utils/packages/native-nav/ios/SnapshotNavController.swift
-// (canonical source of truth is @shared-utils/native-nav; re-sync from there on change)
-
-// SnapshotNavController — the native (iOS) half of @shared-utils/native-nav.
+// SnapshotNavController — the native iOS half of LiveView's navigation bridge.
 //
 // THE PROBLEM IT SOLVES: in a single-WKWebView SPA shell (Tauri), returning from a
 // detail view to a list froze ~480ms on real iOS devices. WebKit re-composites the

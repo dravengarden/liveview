@@ -1,10 +1,6 @@
-// ⚠️ VENDORED — DO NOT EDIT. Copied from @shared-utils/store (shared-utils
-// `state-sync-engine` branch). Edit there + re-vendor. See _store/mod.ts.
-//
-// A minimal reactive store — the shared contract every reactive thing in the
-// atlantis apps implements: a per-device pref (`persisted`) or a sync client
-// (via its `toStore` adapter). One contract → one `useStore` hook
-// (@shared-utils/store-react) renders any of them. Framework-agnostic; no React.
+// A minimal reactive store: a per-device preference (`persisted`) or a sync
+// client (via its `toStore` adapter) implements the same contract. One
+// `useStore` hook renders any of them. Framework-agnostic; no React.
 
 /** Read side: a value you can read + subscribe to. `get()` must return a STABLE
  *  reference while unchanged (the useSyncExternalStore requirement). */

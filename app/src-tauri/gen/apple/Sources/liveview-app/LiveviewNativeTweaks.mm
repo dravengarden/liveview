@@ -159,8 +159,8 @@ static id lv_wk_init(id self, SEL _cmd, CGRect frame, id configuration) {
         // through). Leaving both on would double-animate the swipe. Web-side the
         // left-edge swipe handler still drives backToLanding → native pop.
         ((WKWebView *)wv).allowsBackForwardNavigationGestures = NO;
-        // Install the native snapshot-transition nav bridge (shared-utils
-        // native-nav, SnapshotNavController.swift). Looked up dynamically so this
+        // Install the native snapshot-transition navigation bridge
+        // (SnapshotNavController.swift). Looked up dynamically so this
         // file needs no compile-time dependency on the generated -Swift.h header:
         // it's a Swift @objc(SnapshotNavController) class whose +installOnWebView:
         // registers the "lvNativeNav" WKScriptMessageHandler. The web half no-ops
@@ -170,7 +170,7 @@ static id lv_wk_init(id self, SEL _cmd, CGRect frame, id configuration) {
         if (navCls && [navCls respondsToSelector:installSel]) {
             ((void (*)(id, SEL, id))objc_msgSend)(navCls, installSel, wv);
         }
-        // Native AUDIO engine (shared-utils native-media → NativeAudioController):
+        // Native AUDIO engine (LiveView media bridge → NativeAudioController):
         // decodes the audiobook in a native AVPlayer + owns the AVAudioSession +
         // MPRemoteCommandCenter + MPNowPlayingInfoCenter, with the web as a thin
         // remote. The web <audio> CANNOT hold the session / resume after a long

@@ -1,5 +1,4 @@
-// MIRROR of @shared-utils/native-media (packages/native-media/native-media.ts).
-// Inlined until shared-utils publishes the package + the flake is bumped; keep in sync.
+// Repository-owned native media bridge contract.
 
 // Native iOS media-control bridge — routes the OS now-playing / remote-control
 // layer (lock screen, AirPods, CarPlay, steering wheel, Control Center) through

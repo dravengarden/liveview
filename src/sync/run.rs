@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use crate::config::{BookState, Layout, RenditionKind, Resolved};
 use crate::server::renderer;
 use crate::shared::FileType;
-use crate::store::pg::{AudioTaskUpsert, BookUpsert, ChapterRow, PgStore};
+use crate::store::model::{AudioTaskUpsert, BookUpsert, ChapterRecord};
+use crate::store::pg::PgStore;
 use crate::sync::diff::{Plan, plan};
 use crate::sync::merkle::{Build, Dag, Leaf, Node};
 use crate::sync::objstore::ObjStore;
@@ -31,8 +32,7 @@ pub struct SyncCfg {
     pub s3_access_key: String,
     pub s3_secret_key: String,
     pub s3_bucket: String,
-    pub tts_cmd: String,
-    pub tts_voice: String,
+    pub tts_voice: Option<String>,
     /// Pre-generate the TEXT read-aloud audio for every markdown chapter (not just
     /// the audiobook rendition). Big one-time backfill; incremental thereafter.
     pub text_audio: bool,
@@ -154,11 +154,9 @@ fn catalog_hash(
     }
 
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"liveview-book-catalog-v3\0");
-    // Taxonomy is part of catalog identity, not merely a web bundle detail.
-    // Any controlled-vocabulary change therefore advances the deploy root and
-    // invalidates native catalog caches together with the tagged book metadata.
-    field(&mut hasher, include_str!("../../taxonomy.json"));
+    // v4 removes the old build-time taxonomy from catalog identity. Discovery
+    // metadata is now derived entirely from the author-owned tags hashed below.
+    hasher.update(b"liveview-book-catalog-v4\0");
     field(&mut hasher, &book.slug);
     field(&mut hasher, &book.label);
     optional(&mut hasher, book.description.as_deref());
@@ -238,7 +236,13 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
             .iter()
             .find(|r| r.kind == RenditionKind::Audio)
             .and_then(|r| r.voice.clone())
-            .unwrap_or_else(|| cfg.tts_voice.clone());
+            .or_else(|| cfg.tts_voice.clone());
+        if cfg.text_audio && text_voice_for_book.is_none() {
+            return Err(format!(
+                "book {:?}: text-audio generation requires a rendition voice or --tts-voice",
+                book.slug
+            ));
+        }
 
         // Cover → rustfs (content-addressed). Referenced by books.cover_hash, so
         // the orphan GC spares it (see orphan_asset_hashes).
@@ -377,15 +381,29 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                         }
                     }
                     let is_audio = rend.kind == RenditionKind::Audio && rel.ends_with(".spoken.md");
-                    let voice = is_audio
-                        .then(|| rend.voice.clone().unwrap_or_else(|| cfg.tts_voice.clone()));
+                    let voice = if is_audio {
+                        Some(
+                            rend.voice
+                                .clone()
+                                .or_else(|| cfg.tts_voice.clone())
+                                .ok_or_else(|| {
+                                    format!(
+                                        "book {:?} audio rendition requires a voice or --tts-voice",
+                                        book.slug
+                                    )
+                                })?,
+                        )
+                    } else {
+                        None
+                    };
                     // Text read-aloud pre-gen target: a markdown chapter of the
                     // text rendition, when enabled. (Never an audiobook chapter —
                     // that's `voice` above.)
                     let text_voice = (cfg.text_audio
                         && rend.kind == RenditionKind::Text
                         && matches!(&ft, FileType::Markdown))
-                    .then(|| text_voice_for_book.clone());
+                    .then(|| text_voice_for_book.clone())
+                    .flatten();
 
                     // Leaf kind folds the transform + version so a renderer or
                     // voice change re-applies the leaf even with identical source.
@@ -819,7 +837,7 @@ async fn apply_leaf(
     obj: &ObjStore,
     cfg: &SyncCfg,
 ) -> Result<(), String> {
-    let mut row = ChapterRow {
+    let mut row = ChapterRecord {
         book_slug: a.book_slug.clone(),
         rendition: a.rendition.clone(),
         lang: a.lang.clone(),
@@ -984,7 +1002,7 @@ mod tests {
             label: "Book".into(),
             slug: "book".into(),
             description: Some("Description".into()),
-            tags: vec!["topic.ai".into()],
+            tags: vec!["subject.natural-history".into()],
             collection: Some("Collection".into()),
             author: Some("Author".into()),
             cover: None,
@@ -1079,8 +1097,8 @@ mod tests {
     fn catalog_tags_change_deploy_root_without_content_operations() {
         let mut old_book = catalog_test_book();
         let mut new_book = old_book.clone();
-        old_book.tags = vec!["rust".into()];
-        new_book.tags = vec!["rust".into(), "agent-systems".into()];
+        old_book.tags = vec!["field-notes".into()];
+        new_book.tags = vec!["field-notes".into(), "subject.ecology".into()];
 
         let old = Dag::build(Build::Tree(vec![(
             old_book.slug.clone(),
@@ -1151,8 +1169,7 @@ mod tests {
             s3_access_key: std::env::var("S3_ACCESS_KEY").ok()?,
             s3_secret_key: std::env::var("S3_SECRET_KEY").ok()?,
             s3_bucket: "liveview-itest".to_string(),
-            tts_cmd: "edge-tts".to_string(),
-            tts_voice: "zh-CN-XiaoxiaoNeural".to_string(),
+            tts_voice: Some("en-US-AriaNeural".to_string()),
             text_audio: false,
             render_version: 1,
             repair: false,

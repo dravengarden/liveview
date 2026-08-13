@@ -19,7 +19,7 @@ import { SettingsSheet } from "../_shell";
 import type { MenuBarSettings, Theme, ThemeMode, ThemeVariant } from "@/types";
 import { THEME_VARIANTS, VARIANT_OPTIONS } from "@/types";
 import { FONT_PRESETS } from "@/fonts";
-import { useI18n } from "@/i18n";
+import { UI_LANGUAGES, useI18n } from "@/i18n";
 import { OfflineSection } from "./OfflineSection";
 import { SegmentedPill } from "./SegmentedPill";
 import { nativeSyncAvailable } from "@/native-sync";
@@ -176,7 +176,6 @@ export function SettingsButton({
   // Two segments (cowboy SegmentedPill): all the Settings in one scroll + a
   // Downloads segment for the offline cache. The Downloads segment only exists on
   // the native shell (the PWA caches via the SW, nothing to manage here).
-  const zh = lang === "zh";
   const hasDownloads = nativeSyncAvailable();
   const [seg, setSeg] = useState<"settings" | "downloads">("settings");
 
@@ -194,8 +193,8 @@ export function SettingsButton({
             value={seg}
             onChange={setSeg}
             options={[
-              { value: "settings", label: zh ? "设置" : "Settings" },
-              { value: "downloads", label: zh ? "下载" : "Downloads" },
+              { value: "settings", label: t("settings.title") },
+              { value: "downloads", label: t("offline.downloads") },
             ]}
             sx={{ alignSelf: "center" }}
           />
@@ -499,11 +498,13 @@ export function SettingsButton({
             exclusive
             value={lang}
             onChange={(_, value: string | null) => {
-              if (value === "en" || value === "zh") setLang(value);
+              const language = UI_LANGUAGES.find(({ id }) => id === value);
+              if (language) setLang(language.id);
             }}
           >
-            <ToggleButton value="en">English</ToggleButton>
-            <ToggleButton value="zh">中文</ToggleButton>
+            {UI_LANGUAGES.map(({ id, label }) => (
+              <ToggleButton key={id} value={id}>{label}</ToggleButton>
+            ))}
           </ToggleButtonGroup>
         </Stack>
 
