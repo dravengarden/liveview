@@ -38,21 +38,21 @@ keeps them one unit. Pick a tier and the table + count follow.
     "coins": {
       "columns": { "tier": "string", "name": "string", "note": "string" },
       "values": [
-        { "tier": "L1", "name": "Bitcoin", "note": "the reserve asset" },
-        { "tier": "L1", "name": "Ethereum", "note": "the settlement layer" },
-        { "tier": "L1", "name": "Solana", "note": "high-throughput monolith" },
-        { "tier": "L2", "name": "Arbitrum", "note": "optimistic rollup" },
-        { "tier": "L2", "name": "Base", "note": "CB-backed OP-stack rollup" },
-        { "tier": "DeFi", "name": "Uniswap", "note": "the AMM standard" },
-        { "tier": "DeFi", "name": "Aave", "note": "money-market blue chip" }
+        { "tier": "Canopy", "name": "Oak", "note": "broadleaf habitat" },
+        { "tier": "Canopy", "name": "Pine", "note": "evergreen habitat" },
+        { "tier": "Canopy", "name": "Birch", "note": "pioneer species" },
+        { "tier": "Understory", "name": "Hazel", "note": "shrub layer" },
+        { "tier": "Understory", "name": "Holly", "note": "winter cover" },
+        { "tier": "Ground", "name": "Fern", "note": "shade specialist" },
+        { "tier": "Ground", "name": "Moss", "note": "moisture indicator" }
       ]
     },
     "picked": { "derived": "filter(coins, tier == tier_sig)" }
   },
   "signals": {
-    "tier_sig": { "type": "enum", "init": "L1",
+    "tier_sig": { "type": "enum", "init": "Canopy",
       "widget": { "type": "segmented", "label": "Tier",
-        "options": [ { "label": "L1", "value": "L1" }, { "label": "L2", "value": "L2" }, { "label": "DeFi", "value": "DeFi" } ] } },
+        "options": [ { "label": "Canopy", "value": "Canopy" }, { "label": "Understory", "value": "Understory" }, { "label": "Ground", "value": "Ground" } ] } },
     "n": { "type": "number", "derived": "count(picked.name)" }
   },
   "view": [

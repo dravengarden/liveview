@@ -27,8 +27,6 @@
 tailwindcss
 assets/tailwind.css
 result
-web/src/_shell
-.shell-src
 
 # native app (Tauri) build artifacts
 app/src-tauri/target/

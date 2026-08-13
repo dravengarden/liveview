@@ -1,9 +1,10 @@
 #!/bin/bash
-# Headless iOS build+sign for the liveview shell over SSH.
+# Headless iOS build+sign for the LiveView shell.
 # Unlocks the login keychain IN this SSH session (the GUI unlock state does NOT
 # carry across macOS security sessions, so codesign fails with
 # errSecInternalComponent without this), then builds the signed device .app.
-# Password lives only in ~/.lvbuild-kcpw (chmod 600, user-created).
+# The caller supplies the keychain password file explicitly; this script never
+# owns a deployment credential or distribution channel.
 set -euo pipefail
 
 # WidgetKit can't read the Tauri web bundle's compile-time origin. Reuse the
@@ -19,24 +20,23 @@ fi
 BUILD_MARKER="$(mktemp -t liveview-build.XXXXXX)"
 trap 'rm -f "$BUILD_MARKER"' EXIT
 
-KCPW_FILE="$HOME/.lvbuild-kcpw"
-KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
+KCPW_FILE="${LIVEVIEW_KEYCHAIN_PASSWORD_FILE:-}"
+KEYCHAIN="${LIVEVIEW_KEYCHAIN:-$HOME/Library/Keychains/login.keychain-db}"
 
-if [[ ! -f "$KCPW_FILE" ]]; then
-  echo "FATAL: $KCPW_FILE missing (create it: printf '%s' '<login password>' > ~/.lvbuild-kcpw && chmod 600 ~/.lvbuild-kcpw)" >&2
+if [[ -z "$KCPW_FILE" || ! -f "$KCPW_FILE" ]]; then
+  echo "FATAL: set LIVEVIEW_KEYCHAIN_PASSWORD_FILE to a readable credential file" >&2
   exit 1
 fi
 
 security unlock-keychain -p "$(cat "$KCPW_FILE")" "$KEYCHAIN"
 
-# Build from the consolidated layout (~/liveview/app, synced from main/app; the
-# plugin is at ../../plugins/lvsync, the bundled SPA at ../../web/dist-app).
-cd "$HOME/liveview/app/src-tauri"
+REPO_ROOT="${LIVEVIEW_SOURCE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+cd "$REPO_ROOT/app/src-tauri"
 
 # The SPA and default window icon are compiled into Rust. Cargo does not track
 # those files as normal source dependencies, so invalidate the device target
 # when their bytes change or a successful build can install stale/invalid assets.
-BUNDLE_DIR="$HOME/liveview/web/dist-app"
+BUNDLE_DIR="$REPO_ROOT/web/dist-app"
 BUNDLE_STAMP="gen/apple/.liveview-device-embedded-hash"
 if [[ ! -d "$BUNDLE_DIR" ]]; then
   echo "FATAL: missing native web bundle: $BUNDLE_DIR" >&2
@@ -73,16 +73,12 @@ export PATH="/opt/homebrew/bin:$PATH"
 # signed .app instead. (A REAL build failure leaves no fresh .app → install no-ops.)
 cargo tauri ios build --target aarch64 || echo "note: cargo tauri ios build returned non-zero (IPA export failure is expected; using the signed DerivedData .app)"
 
-# This legacy helper proves that Xcode produced a fresh signed development app.
-# It deliberately does not install it: normal physical-device releases are
-# built and published through Hawk's machine-owned ios-resign skill, then
-# installed and refreshed by SideStore. Direct devicectl installs bypass source
-# ownership and are reserved for recovery.
+# This helper proves that Xcode produced a fresh signed development app. Signing,
+# distribution, installation, and release metadata remain caller-owned steps.
 APP="$(ls -dt "$HOME"/Library/Developer/Xcode/DerivedData/liveview-app-*/Build/Products/release-iphoneos/LiveView.app | head -1)"
 if [[ ! "$APP" -nt "$BUILD_MARKER" ]]; then
   echo "FATAL: build did not produce a fresh signed LiveView.app" >&2
   exit 1
 fi
 echo "BUILT $APP"
-echo "Next: run 'resign.sh build-and-publish liveview' on hawk."
-echo "LVBUILD_OK (not installed; SideStore owns device installation)"
+echo "LVBUILD_OK (not installed or distributed)"

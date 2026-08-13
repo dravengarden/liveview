@@ -420,7 +420,7 @@ export function AudioPlayerProvider(
       persistSession(np, q, qi);
 
       const q1 = query(np.chapterPath, np.lang, np.rendition);
-      // The book's last chapter gets a spoken "全书完" tail baked into its audio
+      // The book's last chapter may get a configured spoken tail baked into its audio
       // server-side. `q` is the full book spine, so the last index is the book end.
       // Only the audio src carries the flag — read-along data stays clean.
       const isBookEnd = qi === q.length - 1;

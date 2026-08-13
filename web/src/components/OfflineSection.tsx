@@ -53,8 +53,7 @@ function maxGB(): number {
  * progress line. Lowering the budget below current usage confirms before evicting.
  */
 export function OfflineSection(): React.JSX.Element | null {
-  const { lang } = useI18n();
-  const zh = lang === "zh";
+  const { t } = useI18n();
   const [stats, setStats] = useState<CacheStats | null>(null);
   const [audio, setAudio] = useState<AudioStats | null>(null);
   // Download TOTALS from the cheap server index (/api/sizes), keyed by deploy root
@@ -207,15 +206,13 @@ export function OfflineSection(): React.JSX.Element | null {
   return (
     <Stack spacing={1.75}>
       <Typography variant="body2" color="text.secondary">
-        {zh
-          ? "文字与音频(已压缩)会在存储上限内自动下载到本机,断网也能读和听。"
-          : "Text and (compressed) audio download automatically within your storage budget for fully offline reading + listening."}
+        {t("offline.description")}
       </Typography>
 
       <Stack>
         <ToggleRow
-          label={zh ? "仅 WiFi 预加载" : "Prefetch on WiFi only"}
-          hint={zh ? "蜂窝网络下不自动预加载" : "Don't auto-preload on cellular"}
+          label={t("offline.wifiOnly")}
+          hint={t("offline.wifiOnlyHint")}
           checked={wifiOnly}
           onChange={(v) => {
             setWifiOnly(v);
@@ -224,9 +221,9 @@ export function OfflineSection(): React.JSX.Element | null {
         />
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ py: 0.25 }}>
           <Box>
-            <Typography variant="body2">{zh ? "最大存储" : "Max storage"}</Typography>
+            <Typography variant="body2">{t("offline.maxStorage")}</Typography>
             <Typography variant="caption" color="text.secondary">
-              {zh ? "超出后淘汰最久未用的音频" : "Evicts least-recently-used audio over budget"}
+              {t("offline.maxStorageHint")}
             </Typography>
           </Box>
           <Select size="small" value={cap} onChange={(e) => applyCap(Number(e.target.value))} sx={{ minWidth: 90 }}>
@@ -246,12 +243,12 @@ export function OfflineSection(): React.JSX.Element | null {
             )}
             <Typography variant="body2">
               {waitingWifi
-                ? (zh ? "等待 WiFi" : "Waiting for WiFi")
+                ? t("offline.waitingWifi")
                 : downloadComplete
-                ? (zh ? "已离线" : "Available offline")
+                ? t("offline.available")
                 : active
-                ? (zh ? "下载中" : "Downloading")
-                : (zh ? "离线内容" : "Offline content")}
+                ? t("offline.downloading")
+                : t("offline.content")}
             </Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
@@ -289,13 +286,13 @@ export function OfflineSection(): React.JSX.Element | null {
         </Box>
         <Stack direction="row" justifyContent="space-between" sx={{ mt: 0.75 }} spacing={1}>
           <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
-            {zh ? "文字 " : "Text "}{gb(textUsed)} · {zh ? "音频 " : "Audio "}
+            {t("offline.text")} {gb(textUsed)} · {t("offline.audio")} {" "}
             {gb(audioUsed)}
             {/* Chapter count + % ONLY when we have the real corpus total (/api/sizes).
                 Without it a byte-estimate "0%" is just noise next to GBs of cached
                 audio — show the bytes alone instead of a misleading percentage. */}
             {haveTotals
-              && ` · ${audioDoneCount}/${audioTotalCount} ${zh ? "章" : "ch"} · ${audioPct}%`}
+              && ` · ${audioDoneCount}/${audioTotalCount} ${t("offline.chapterAbbr")} · ${audioPct}%`}
           </Typography>
           {/* Speed only while bytes are actually moving — never "↓ 0 KB/s". */}
           {active && speed != null && speed > 0 && (
@@ -332,16 +329,17 @@ export function OfflineSection(): React.JSX.Element | null {
       </Box>
 
       <Dialog open={confirmCap != null} onClose={() => setConfirmCap(null)}>
-        <DialogTitle>{zh ? "降低存储上限" : "Lower storage limit"}</DialogTitle>
+        <DialogTitle>{t("offline.lowerLimit")}</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            {zh
-              ? `当前已用 ${gb(used)},超过新上限 ${confirmCap} GB。确认后会删除最久未用的音频直到符合上限。`
-              : `${gb(used)} in use exceeds the new ${confirmCap} GB limit. Confirming evicts least-recently-used audio to fit.`}
+            {t("offline.lowerLimitBody", {
+              used: gb(used),
+              limit: confirmCap ?? 0,
+            })}
           </DialogContentText>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setConfirmCap(null)}>{zh ? "取消" : "Cancel"}</Button>
+          <Button onClick={() => setConfirmCap(null)}>{t("audiobook.cancel")}</Button>
           <Button
             color="error"
             onClick={() => {
@@ -352,7 +350,7 @@ export function OfflineSection(): React.JSX.Element | null {
               nativeAudioSetCap(g * 1_073_741_824);
             }}
           >
-            {zh ? "确认删除" : "Confirm"}
+            {t("offline.confirmDelete")}
           </Button>
         </DialogActions>
       </Dialog>

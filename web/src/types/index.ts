@@ -90,14 +90,13 @@ export interface Book {
   label: string;
   slug: string;
   description?: string | null;
-  /** Controlled taxonomy IDs used by search and faceted library discovery. */
+  /** Author-owned keywords. `facet.value` opts into a derived filter facet. */
   tags?: string[];
-  /** The series/collection this book belongs to (e.g. "AI & Agents"), used by
+  /** The series/collection this book belongs to (e.g. "Reference Guides"), used by
    *  the shelf's optional group-by-series view. Null/empty ⇒ ungrouped. */
   collection?: string | null;
-  /** Optional credit line shown on the shelf card (book.toml `author`): the
-   *  authoring agent, or "<original author> · Claude Code 修订" for a converted/
-   *  translated book. Null/empty ⇒ no byline. */
+  /** Optional credit line shown on the shelf card (book.toml `author`).
+   *  Null/empty ⇒ no byline. */
   author?: string | null;
   /** Whether a cover image is available at `/api/cover?book=<slug>`. */
   cover: boolean;

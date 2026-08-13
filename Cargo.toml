@@ -49,14 +49,10 @@ sqlx = { version = "0.8", features = [ "runtime-tokio", "postgres" ] }
 # Content-addressing for the sync Merkle DAG (leaf + tree node hashes).
 blake3 = "1"
 
-# S3 client for the private rustfs object store (book blobs: images, PDFs,
-# covers, audio mp3 + marks). Talks to rustfs's S3 API over loopback HTTP.
+# S3-compatible client for content blobs: images, PDFs, covers, and audio.
 aws-sdk-s3 = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 
-# Minimal HTTP client for the APM ingest → VictoriaLogs forwarder (POST NDJSON to
-# the host VL on loopback). default-features=false: no TLS/http2/proxy — the target
-# is plain http://127.0.0.1:6302, so the base HTTP/1 client is all we need, and it
-# keeps the dep light.
+# Minimal HTTP client for the optional APM JSON-lines forwarder.
 reqwest = { version = "0.12", default-features = false }
 
 # Embedded assets
@@ -72,6 +68,9 @@ include_dir = { version = "0.7", optional = true }
 katex = "0.4.6"
 typst-syntax = "0.14.2"
 roxmltree = "0.21.1"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
 
 [features]
 default = []

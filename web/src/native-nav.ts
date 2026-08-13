@@ -1,6 +1,4 @@
-// MIRROR of @shared-utils/native-nav (packages/native-nav/native-nav.ts).
-// Inlined until shared-utils publishes the package + the flake is bumped; then
-// replace these imports with `@shared-utils/native-nav`. Keep in sync.
+// Repository-owned native navigation bridge contract.
 
 // Native iOS navigation bridge — drives a native snapshot push/pop transition in
 // the iOS Tauri shell, with a graceful no-op fallback everywhere else.

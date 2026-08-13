@@ -99,6 +99,7 @@ pub struct BookCfg {
     /// One-line blurb shown on the landing page card. Optional.
     pub description: Option<String>,
     /// Open-vocabulary keywords used by shelf search and faceted discovery.
+    /// `facet.value` opts into a named facet; plain values remain generic tags.
     #[serde(default)]
     pub tags: Vec<String>,
     /// Card artwork, resolved relative to the corpus config file.
@@ -209,6 +210,7 @@ pub struct BookManifest {
     pub title: String,
     pub default_lang: String,
     /// Open-vocabulary keywords used by shelf search and faceted discovery.
+    /// `facet.value` opts into a named facet; plain values remain generic tags.
     #[serde(default)]
     pub tags: Vec<String>,
     /// Which rendition opens first. Defaults to `text`; must name a declared
@@ -232,10 +234,7 @@ pub struct BookManifest {
     /// Optional shelf grouping key — books sharing a value belong to the same
     /// collection. Top-level, sibling of `slug`/`title`/`tags`.
     pub collection: Option<String>,
-    /// Optional credit line shown on the shelf card. Free text so the book
-    /// carries its own attribution: an agent-authored book writes the agent
-    /// ("Claude Code"); a translated/converted book keeps the original author
-    /// and appends the reviser ("Ernest P. Chan · Claude Code 修订").
+    /// Optional free-text credit line shown on the shelf card.
     pub author: Option<String>,
 }
 
@@ -632,7 +631,7 @@ impl Config {
             }
 
             let default_lang = b.default_lang.unwrap_or_else(|| editions[0].lang.clone());
-            let tags = crate::taxonomy::normalize_tags(b.tags)
+            let tags = crate::tags::normalize_tags(b.tags)
                 .map_err(|e| format!("book {:?}: {e}", b.label))?;
 
             // A `[[book]]`/`[[mount]]` is a single `text` rendition over the
@@ -893,7 +892,7 @@ fn load_doc_manifest(
         label: manifest.title,
         slug: manifest.slug,
         description: manifest.description,
-        tags: crate::taxonomy::normalize_tags(manifest.tags)
+        tags: crate::tags::normalize_tags(manifest.tags)
             .map_err(|e| format!("{}: {e}", manifest_path.display()))?,
         collection: manifest.collection,
         author: manifest.author,
@@ -1120,7 +1119,7 @@ fn load_book_manifest(
         label: manifest.title,
         slug,
         description: None,
-        tags: crate::taxonomy::normalize_tags(manifest.tags.clone())
+        tags: crate::tags::normalize_tags(manifest.tags.clone())
             .map_err(|e| format!("{}: {e}", manifest_path.display()))?,
         collection: manifest.collection.clone(),
         author: manifest.author.clone(),
@@ -1376,7 +1375,7 @@ mod tests {
     #[test]
     fn registry_discovers_versioned_repo_doc_manifest() {
         let root = std::env::temp_dir().join(format!("liveview-registry-{}", std::process::id()));
-        let docs = root.join("cowboy/main/docs");
+        let docs = root.join("field-guide/main/docs");
         let source = docs.join("architecture");
         std::fs::create_dir_all(&source).unwrap();
         std::fs::write(source.join("00-overview.md"), "# Overview\n").unwrap();
@@ -1384,7 +1383,7 @@ mod tests {
         std::fs::write(docs.join("backdrop.webp"), b"wide").unwrap();
         std::fs::write(
             docs.join("liveview.toml"),
-            "schema = 1\nslug = \"cowboy-architecture\"\ntitle = \"Cowboy Architecture\"\nsource = \"architecture\"\ncover = \"cover.webp\"\nbackdrop = \"backdrop.webp\"\n",
+            "schema = 1\nslug = \"field-guide-architecture\"\ntitle = \"Field Guide Architecture\"\nsource = \"architecture\"\ncover = \"cover.webp\"\nbackdrop = \"backdrop.webp\"\n",
         )
         .unwrap();
         let books = discover_registry(
@@ -1396,7 +1395,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(books.len(), 1);
-        assert_eq!(books[0].slug, "cowboy-architecture");
+        assert_eq!(books[0].slug, "field-guide-architecture");
         assert_eq!(
             books[0].cover.as_deref(),
             Some(docs.join("cover.webp").as_path())

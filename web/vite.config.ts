@@ -11,12 +11,10 @@ const ReactCompilerConfig = {
 
 // ── Single-instance enforcement for React-context-bearing packages ──────────
 //
-// THE BUG CLASS this prevents (it has bitten the bundled app twice): the shared
-// _shell SDK is a DIRECTORY SYMLINK to ../../../shared-utils/packages/ui, and
-// shared-utils carries its OWN node_modules copies of React/MUI/emotion. Vite
-// resolves a symlinked source file's bare imports from the file's REAL location
-// (shared-utils), so NavShell / SettingsSheet / DetentSheet etc. bind to a SECOND
-// copy of these packages. React Context is keyed by MODULE IDENTITY, so the app's
+// THE BUG CLASS this prevents: UI primitives can arrive through a linked or
+// separately installed source tree carrying another React/MUI/emotion graph.
+// NavShell / SettingsSheet / DetentSheet etc. can then bind to a SECOND copy of
+// these packages. React Context is keyed by MODULE IDENTITY, so the app's
 // <ThemeProvider> populates copy-A's context while the SDK reads copy-B's EMPTY
 // context → MUI silently falls back to its DEFAULT (light) theme for every SDK
 // subtree. Symptom: in dark mode the bottom nav bar AND the Settings sheet render
@@ -34,9 +32,9 @@ const ReactCompilerConfig = {
 // up bundled from >1 location, so a future re-introduced duplicate can never ship
 // a silently light-themed SDK again — it dies loudly at build time instead.
 // All @mui/* and @emotion/* (+ react) must be single copies: not only the explicit
-// context-holders, but @mui/material itself — otherwise shared-utils's @mui/material
+// context-holders, but @mui/material itself — otherwise another @mui/material
 // copy gets bundled and drags IN its OWN transitive @mui/private-theming /
-// @emotion/cache (resolved internally within shared-utils's .deno tree, bypassing a
+// @emotion/cache (resolved internally within its dependency tree, bypassing a
 // bare-specifier interceptor). forceSingletons() resolves each via `this.resolve`
 // from the app root, which honours package.json `exports`, so deep subpaths
 // (@mui/system/createBreakpoints, @mui/utils/composeClasses) resolve correctly —
@@ -58,8 +56,8 @@ const SINGLETONS = [
 
 // Force every import of a SINGLETON package (bare OR deep subpath) to resolve as if
 // imported from the APP root, so it lands on the app's single copy — including from
-// the symlinked _shell SDK, whose source otherwise resolves these from
-// shared-utils/node_modules. We re-run resolution via `this.resolve` (vite's own
+// linked UI sources, which might otherwise resolve their own node_modules. We
+// re-run resolution via `this.resolve` (vite's own
 // resolver) rather than a path alias on purpose: these packages use package.json
 // `exports` for deep subpaths (e.g. @mui/system/createBreakpoints,
 // @mui/utils/composeClasses), so a raw directory alias — and resolve.dedupe — both
@@ -125,10 +123,9 @@ function assertSingletons(): Plugin {
   };
 }
 
-// Inject the shared pre-mount app-shell splash (from @shared-utils/ui, staged
-// into _shell) into index.html at build time: the <style> before </head> and
-// the spinner markup inside #root. One source across all atlantis apps; React's
-// createRoot replaces it on mount.
+// Inject the repository-owned pre-mount app-shell splash into index.html at
+// build time: the <style> before </head> and spinner markup inside #root.
+// React's createRoot replaces it on mount.
 function splashInjector(): Plugin {
   const { head, body } = splashHtml({ title: "LiveView" });
   return {
@@ -253,7 +250,7 @@ export default defineConfig(({ mode }) => {
     },
     resolve: {
       // forceSingletons() (a resolveId plugin, above) pins the React-context-bearing
-      // packages to the app's single copy so the symlinked _shell SDK shares the app's
+      // packages to the app's single copy so linked UI code shares the app's
       // React/MUI/emotion context (the dual-context bug that washed out the nav bar +
       // Settings sheet in dark mode); assertSingletons() guards against regressions.
       dedupe: ["react", "react-dom"],

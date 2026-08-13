@@ -3,9 +3,8 @@
 #
 # `nix build` produces a binary equivalent to `deno task build` followed by
 # `cargo build --release --features embedded`, with no external build
-# orchestration (no docker compile sandbox). The SPA is built through the
-# shared, footgun-free buildDenoViteApp (deps-only FOD + offline build); see
-# its comment below.
+# orchestration (no docker compile sandbox). The SPA uses a dependencies-only
+# fixed-output cache plus an offline, content-addressed Vite build.
 {
   description = "liveview — book reader (axum + embedded React SPA, pg + rustfs backed)";
 
@@ -19,21 +18,12 @@
   };
   inputs.crane.url = "github:ipetkov/crane";
 
-  # The shared @shared-utils/ui SDK (business- and portal-free React + MUI
-  # primitives), referenced as a Nix package and staged into the web build below
-  # — NOT vendored into this repo's git tree (web/src/_shell/ is gitignored and
-  # materialized from here). Lives in the shared-utils monorepo, exposed
-  # as that flake's `ui` package.
-  inputs.shared-utils.url = "git+ssh://git@github.com/dravengarden/shared-utils.git?ref=main";
-  inputs.shared-utils.inputs.nixpkgs.follows = "nixpkgs";
-
   outputs =
     {
       self,
       nixpkgs,
       rust-overlay,
       crane,
-      shared-utils,
     }:
     let
       system = "x86_64-linux";
@@ -42,7 +32,6 @@
         overlays = [ rust-overlay.overlays.default ];
       };
       lib = pkgs.lib;
-      shared = shared-utils.lib.${system};
       version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
       rustToolchain = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
       craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
@@ -74,7 +63,6 @@
             type == "regular"
             && builtins.elem (baseNameOf (toString path)) [
               "schema.sql"
-              "taxonomy.json"
             ]
           );
         name = "liveview-rust-source";
@@ -90,40 +78,88 @@
             inWeb = relative == "web" || lib.hasPrefix "web/" relative;
             inTools = relative == "tools" || lib.hasPrefix "tools/" relative;
           in
-          pathString == root || inWeb || inTools || (type == "regular" && relative == "taxonomy.json");
+          pathString == root || inWeb || inTools;
         name = "liveview-web-source";
       };
 
-      # Shared UI SDK source tree from the shared-utils `ui` package, re-exposed
-      # for local dev to materialize web/src/_shell/ (the build itself stages it
-      # via buildDenoViteApp's default shellSrc).
-      sharedUiSrc = shared-utils.packages.${system}.ui;
+      # Keep the web toolchain self-contained so an anonymous clone has no
+      # private flake inputs. Remove this pin once nixpkgs carries the same Deno.
+      deno = pkgs.stdenvNoCC.mkDerivation rec {
+        pname = "deno";
+        version = "2.8.1";
+        src = pkgs.fetchurl {
+          url = "https://github.com/denoland/deno/releases/download/v${version}/deno-x86_64-unknown-linux-gnu.zip";
+          hash = "sha256-LXu2GVImrIMuC/cQmhFfCvZe5prHl6S73lsnoGzCQtk=";
+        };
+        nativeBuildInputs = [
+          pkgs.unzip
+          pkgs.autoPatchelfHook
+        ];
+        buildInputs = [
+          pkgs.stdenv.cc.cc.lib
+          pkgs.zlib
+        ];
+        unpackPhase = "unzip $src";
+        installPhase = "install -Dm755 deno $out/bin/deno";
+      };
 
-      # edge-tts CLI for the audiobook track: `liveview` shells out to it to
-      # synthesize chapter narration. Baked onto the binary's PATH (below) so
-      # the deployed unit needs no extra wiring, and present in the dev shell.
+      # edge-tts remains an optional reference speech adapter. The default
+      # package does not depend on it; deployments may select the adapter bundle.
       edgeTts = pkgs.python3Packages.edge-tts;
 
-      # ── liveview-web: the SPA, built via the shared, footgun-free builder ──
-      # A deps-only FOD (vendored npm cache keyed by web/deno.lock + package.json
-      # → depsHash below) + a normal content-addressed offline build. Any source
-      # edit rebuilds automatically; only refresh depsHash when the lockfiles
-      # change (lib.fakeHash → build → copy "got"). Replaces the old single FOD
-      # whose outputHash addressed the WHOLE build — so a source-only change
-      # silently reused a stale bundle until the hash was hand-rebumped.
-      #
-      # The checked-in lockfile makes local and Nix dependency resolution agree;
-      # --allow-scripts lets esbuild's lifecycle script link its native binary.
-      # The build runs `deno task
-      # build`, which web/deno.json maps to a vite-only build (no tsc pass), as
-      # the old FOD did. shellSrc defaults to the shared-utils ui SDK — exactly
-      # what liveview already staged — so it's omitted.
-      liveview-web = shared.buildDenoViteApp {
-        pname = "liveview";
+      # Vendor only npm dependencies in the fixed-output derivation. Application
+      # source is compiled later in a normal derivation, so source changes can
+      # never reuse a stale bundle.
+      webDeps = pkgs.stdenvNoCC.mkDerivation {
+        pname = "liveview-web-deps";
+        inherit version;
+        src = pkgs.runCommandLocal "liveview-web-deps-src" { } ''
+          mkdir -p $out
+          for f in deno.json deno.jsonc deno.lock package.json; do
+            if [ -e "${webBuildSrc}/web/$f" ]; then cp "${webBuildSrc}/web/$f" "$out/$f"; fi
+          done
+        '';
+        nativeBuildInputs = [
+          deno
+          pkgs.nodejs_24
+        ];
+        dontUnpack = true;
+        dontConfigure = true;
+        buildPhase = ''
+          export HOME=$TMPDIR
+          export DENO_DIR=$out
+          export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+          cp -RL $src/. .
+          chmod -R u+w .
+          deno install --frozen --allow-scripts
+        '';
+        dontInstall = true;
+        dontFixup = true;
+        outputHashMode = "recursive";
+        outputHashAlgo = "sha256";
+        outputHash = "sha256-R0RO3/QklM4bjfdKPCQqL38CmhB7yFPxmu8mgEOMN0M=";
+      };
+
+      liveview-web = pkgs.stdenvNoCC.mkDerivation {
+        pname = "liveview-web";
         inherit version;
         src = webBuildSrc;
-        installArgs = "--frozen --allow-scripts";
-        depsHash = "sha256-R0RO3/QklM4bjfdKPCQqL38CmhB7yFPxmu8mgEOMN0M=";
+        nativeBuildInputs = [
+          deno
+          pkgs.nodejs_24
+        ];
+        dontConfigure = true;
+        buildPhase = ''
+          export HOME=$TMPDIR
+          export DENO_DIR=$TMPDIR/deno-cache
+          cp -R ${webDeps} $DENO_DIR
+          chmod -R u+w $DENO_DIR
+          cd web
+          deno install --frozen --allow-scripts
+          deno task build
+        '';
+        installPhase = "cp -R dist $out";
+        dontFixup = true;
       };
 
       # Compile the locked dependency graph independently from application
@@ -148,24 +184,17 @@
         strictDeps = true;
         cargoExtraArgs = "--locked --features embedded --bin liveview";
 
-        # makeWrapper puts edge-tts on PATH. sqlx is postgres-only (pure-Rust
-        # driver, no libpq) and the S3 client uses rustls, so no system libs are
-        # linked; pkg-config stays for any transitive build-script probe.
+        # sqlx is postgres-only (pure-Rust driver, no libpq) and the S3 client
+        # uses rustls. ffmpeg owns format conversion but no speech provider.
         nativeBuildInputs = [
           pkgs.pkg-config
           pkgs.makeWrapper
           pkgs.ffmpeg
         ];
 
-        # Audio generation shells out to edge-tts and ffmpeg; bake both onto
-        # PATH so the deployed binary is self-contained (no unit-level wiring).
+        # Keep only provider-neutral runtime media tooling on PATH.
         postInstall = ''
-          wrapProgram $out/bin/liveview --prefix PATH : ${
-            lib.makeBinPath [
-              edgeTts
-              pkgs.ffmpeg
-            ]
-          }
+          wrapProgram $out/bin/liveview --prefix PATH : ${lib.makeBinPath [ pkgs.ffmpeg ]}
         '';
 
         # include_dir!("$CARGO_MANIFEST_DIR/web/dist") is a compile-time
@@ -187,15 +216,24 @@
           license = licenses.mit;
         };
       };
+
+      liveviewWithEdgeTts = pkgs.symlinkJoin {
+        name = "liveview-with-edge-tts-${version}";
+        paths = [ liveview ];
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+        postBuild = ''
+          wrapProgram $out/bin/liveview --prefix PATH : ${lib.makeBinPath [ edgeTts ]}
+        '';
+        meta = liveview.meta // {
+          description = "LiveView with the optional edge-tts speech adapter";
+        };
+      };
     in
     {
       packages.${system} = {
         inherit liveview liveview-web;
+        liveview-with-edge-tts = liveviewWithEdgeTts;
         default = liveview;
-        # The shared-utils ui SDK source, re-exposed so local dev can materialize
-        # web/src/_shell/ via `just shell` (it isn't committed). Pinned by the
-        # same locked shared-utils input the web build uses.
-        shared-ui-src = sharedUiSrc;
       };
 
       checks.${system} = {
@@ -214,8 +252,8 @@
           pkgs.just
           pkgs.jq
           pkgs.nixfmt
-          shared.deno
-          pkgs.nodejs
+          deno
+          pkgs.nodejs_24
           pkgs.ffmpeg
           pkgs.imagemagick
           pkgs.libicns

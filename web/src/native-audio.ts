@@ -1,5 +1,4 @@
-// MIRROR of @shared-utils/native-media (packages/native-media/native-audio.ts).
-// Inlined until shared-utils publishes the package + the flake is bumped; keep in sync.
+// Repository-owned native audio bridge contract.
 //
 // Native iOS AVPlayer audio bridge — moves the actual audio DECODING + session to
 // a native AVPlayer (NativeAudioController.swift), with the web app as a thin

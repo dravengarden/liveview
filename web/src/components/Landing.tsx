@@ -53,14 +53,16 @@ import {
   useShelfSort,
 } from "@/hooks";
 import { useI18n } from "@/i18n";
+import { localeDescriptor } from "@/locales/registry";
 import { useSyncStatus } from "@/syncStore";
 import {
-  LIBRARY_TAXONOMY,
+  buildLibraryTaxonomy,
   matchesTagFacets,
   type ReadingFilter,
   readingState,
   searchScore,
-  TAG_BY_ID,
+  sortCollectionNames,
+  tagLabel,
 } from "@/libraryDiscovery";
 import { ShelfCardArtwork } from "./CoverTile";
 import { ScrollToTopButton } from "./ScrollToTopButton";
@@ -135,17 +137,6 @@ const SHELF_SORTS: ShelfSort[] = ["updated", "read", "added", "name"];
  *  Sort & Filter sheet — grouping is a shelf-organizing control, same surface). */
 const SHELF_GROUPS: ShelfGroup[] = ["none", "collection"];
 
-/** The curated front-of-shelf series order. Collections named here sort first,
- *  in this exact order; any other collection follows alphabetically, and the
- *  catch-all "Other" group (books with no collection) always sorts last. */
-const PREFERRED_GROUP_ORDER = [
-  "AI & Agents",
-  "Crypto & MEV",
-  "Quant & Trading",
-  "Systems & Infra",
-  "Augmented Solo",
-] as const;
-
 /** A named shelf group: its display label + the entries that fall under it,
  *  already in the shelf's active sort order. `name` is the collection string
  *  (the stable key used for collapse state); for the catch-all bucket it's the
@@ -157,11 +148,10 @@ interface ShelfGroupSection {
 
 /** Partition `visible` (already sorted) into ordered series sections. Group
  *  membership is `book.collection`; a null/empty collection lands in the
- *  catch-all bucket labelled `otherLabel`, which always sorts LAST. Curated
- *  collections (PREFERRED_GROUP_ORDER) come first in that fixed order, then any
- *  remaining collections alphabetically. Only non-empty groups are returned;
- *  within each group the entries keep `visible`'s order (round-robin happens
- *  per-group at render). */
+ *  catch-all bucket labelled `otherLabel`, which always sorts last. Named
+ *  collections use locale-aware alphabetical order; LiveView never assigns
+ *  product-specific priority. Within each group the entries keep `visible`'s
+ *  order (round-robin happens per-group at render). */
 function groupByCollection(
   visible: ShelfEntry[],
   otherLabel: string,
@@ -180,12 +170,11 @@ function groupByCollection(
       hasOther = true;
     }
   }
-  const preferred = PREFERRED_GROUP_ORDER.filter((n) => buckets.has(n));
-  const preferredSet = new Set<string>(PREFERRED_GROUP_ORDER);
-  const rest = [...buckets.keys()]
-    .filter((n) => n !== otherLabel && !preferredSet.has(n))
-    .sort((a, b) => a.localeCompare(b, locale));
-  const order = [...preferred, ...rest, ...(hasOther ? [otherLabel] : [])];
+  const named = sortCollectionNames(
+    [...buckets.keys()].filter((name) => name !== otherLabel),
+    locale,
+  );
+  const order = [...named, ...(hasOther ? [otherLabel] : [])];
   return order
     .map((name) => ({ name, entries: buckets.get(name) ?? [] }))
     .filter((g) => g.entries.length > 0);
@@ -794,6 +783,7 @@ export function Landing({
   navbarAtBottom,
 }: LandingProps): React.JSX.Element {
   const { t, lang } = useI18n();
+  const locale = localeDescriptor(lang).htmlLang;
   const sort = useShelfSort();
   // Books whose audiobook audio is still generating — drives the card micro-badge.
   const syncStatus = useSyncStatus();
@@ -842,8 +832,7 @@ export function Landing({
     const cmp: Record<ShelfSort, (a: ShelfEntry, z: ShelfEntry) => number> = {
       updated: (a, z) => changedAt(z.book) - changedAt(a.book),
       added: (a, z) => (z.book.created_at || 0) - (a.book.created_at || 0),
-      name: (a, z) =>
-        a.book.label.localeCompare(z.book.label, lang === "zh" ? "zh" : "en"),
+      name: (a, z) => a.book.label.localeCompare(z.book.label, locale),
       // Most-recently opened first; never-opened books fall to the bottom,
       // tie-broken by content recency.
       read: (a, z) => {
@@ -852,7 +841,23 @@ export function Landing({
       },
     };
     return shelfEntries(books).sort(cmp[sort]);
-  }, [books, sort, progress, lang]);
+  }, [books, sort, progress, locale]);
+  const libraryTaxonomy = useMemo(
+    () => buildLibraryTaxonomy(books),
+    [books],
+  );
+  const tagById = useMemo(
+    () => new Map(libraryTaxonomy.tags.map((tag) => [tag.id, tag])),
+    [libraryTaxonomy],
+  );
+  // A refreshed catalog can remove its last use of a tag. Drop that stale
+  // selection instead of leaving the shelf trapped in an impossible filter.
+  useEffect(() => {
+    setSelectedTags((current) => {
+      if ([...current].every((id) => tagById.has(id))) return current;
+      return new Set([...current].filter((id) => tagById.has(id)));
+    });
+  }, [tagById]);
 
   // "book" = anything readable/listenable (text book, text+audio book, OR an
   // audio-only book — one shared card); "docs" = a raw docs tree. So the only real
@@ -925,7 +930,7 @@ export function Landing({
   // as AND constraints.
   const tagCounts = useMemo(() => {
     const result = new Map<string, number>();
-    for (const tag of LIBRARY_TAXONOMY.tags) {
+    for (const tag of libraryTaxonomy.tags) {
       const candidate = new Set(selectedTags);
       candidate.add(tag.id);
       let count = 0;
@@ -942,21 +947,28 @@ export function Landing({
     }
     return result;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries, selectedTags, kind, readingFilter, progress, query]);
+  }, [
+    entries,
+    selectedTags,
+    kind,
+    readingFilter,
+    progress,
+    query,
+    libraryTaxonomy,
+  ]);
 
-  // The ordered series sections (only when grouping by collection). Order:
-  // curated PREFERRED_GROUP_ORDER first, then other collections A→Z, then the
-  // "Other" catch-all last; empty groups omitted.
+  // The ordered series sections (only when grouping by collection): named
+  // collections use locale order and the "Other" catch-all remains last.
   const groupSections = useMemo(
     () =>
       group === "collection"
         ? groupByCollection(
           visible,
           t("landing.otherGroup"),
-          lang === "zh" ? "zh" : "en",
+          locale,
         )
         : [],
-    [group, visible, t, lang],
+    [group, visible, t, locale],
   );
   const visibleGroupNames = useMemo(
     () => groupSections.map((section) => section.name),
@@ -1329,11 +1341,11 @@ export function Landing({
               </Typography>
               <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
                 {[...selectedTags].map((id) => {
-                  const tag = TAG_BY_ID.get(id);
+                  const tag = tagById.get(id);
                   return (
                     <Chip
                       key={id}
-                      label={tag?.labels[lang] ?? id}
+                      label={tag?.label ?? tagLabel(id)}
                       color="primary"
                       onDelete={() => toggleTag(id)}
                     />
@@ -1342,13 +1354,13 @@ export function Landing({
               </Stack>
             </Stack>
           )}
-          {LIBRARY_TAXONOMY.facets.map((facet) => (
+          {libraryTaxonomy.facets.map((facet) => (
             <Stack key={facet.id} spacing={1}>
               <Typography variant="overline" color="text.secondary">
-                {facet.labels[lang]}
+                {facet.id === "tags" ? t("landing.tags") : facet.label}
               </Typography>
               <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
-                {LIBRARY_TAXONOMY.tags.filter((tag) =>
+                {libraryTaxonomy.tags.filter((tag) =>
                   tag.facet === facet.id
                 )
                   .map((tag) => {
@@ -1357,7 +1369,7 @@ export function Landing({
                     return (
                       <Chip
                         key={tag.id}
-                        label={`${tag.labels[lang]} · ${count}`}
+                        label={`${tag.label} · ${count}`}
                         color={selected ? "primary" : "default"}
                         variant={selected ? "filled" : "outlined"}
                         disabled={!selected && count === 0}
@@ -1523,7 +1535,7 @@ export function Landing({
                   <Chip
                     key={id}
                     size="small"
-                    label={TAG_BY_ID.get(id)?.labels[lang] ?? id}
+                    label={tagById.get(id)?.label ?? tagLabel(id)}
                     onDelete={() => toggleTag(id)}
                   />
                 ))}

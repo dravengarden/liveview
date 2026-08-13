@@ -1,16 +1,14 @@
-import taxonomyJson from "../../taxonomy.json" with { type: "json" };
 import type { Book, BookProgress } from "@/types";
 
 export interface TaxonomyFacet {
   id: string;
-  labels: Record<"en" | "zh", string>;
+  label: string;
 }
 
 export interface TaxonomyTag {
   id: string;
   facet: string;
-  labels: Record<"en" | "zh", string>;
-  aliases: string[];
+  label: string;
 }
 
 export interface LibraryTaxonomy {
@@ -18,35 +16,63 @@ export interface LibraryTaxonomy {
   tags: TaxonomyTag[];
 }
 
-export const LIBRARY_TAXONOMY = taxonomyJson as LibraryTaxonomy;
-export const TAG_BY_ID = new Map(
-  LIBRARY_TAXONOMY.tags.map((tag) => [tag.id, tag]),
-);
-
+const DEFAULT_TAG_FACET_ID = "tags";
 const normalize = (value: string): string =>
   value.normalize("NFKC").toLocaleLowerCase();
 
-const tagKey = (value: string): string =>
-  normalize(value).trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-
-const TAXONOMY_ID_BY_KEY = new Map<string, string>();
-for (const tag of LIBRARY_TAXONOMY.tags) {
-  for (const value of [tag.id, ...tag.aliases]) {
-    TAXONOMY_ID_BY_KEY.set(tagKey(value), tag.id);
-  }
+function tagParts(id: string): { facet: string; value: string } {
+  const separator = id.indexOf(".");
+  return separator > 0 && separator < id.length - 1
+    ? { facet: id.slice(0, separator), value: id.slice(separator + 1) }
+    : { facet: DEFAULT_TAG_FACET_ID, value: id };
 }
 
-/** Map open-vocabulary manifest keywords onto the small, stable facet catalog. */
-export function discoveryTagIds(book: Book): Set<string> {
-  const ids = new Set<string>();
-  const collectionSignals = book.collection
-    ? [book.collection, ...book.collection.split(/[&/]/)]
-    : [];
-  for (const raw of [...(book.tags ?? []), ...collectionSignals]) {
-    const id = TAG_BY_ID.has(raw) ? raw : TAXONOMY_ID_BY_KEY.get(tagKey(raw));
-    if (id) ids.add(id);
+export function tagLabel(id: string): string {
+  const { value } = tagParts(id);
+  return value
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((word) => word[0]!.toLocaleUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function facetLabel(id: string): string {
+  return id === DEFAULT_TAG_FACET_ID ? "Tags" : tagLabel(id);
+}
+
+/** Derive the available filters from author-owned catalog tags. A tag named
+ * `facet.value` opts into that facet; unnamespaced tags share the generic Tags
+ * facet. LiveView provides the convention and never ships a subject vocabulary. */
+export function buildLibraryTaxonomy(
+  books: readonly Book[],
+): LibraryTaxonomy {
+  const ids = [...new Set(books.flatMap((book) => book.tags ?? []))].sort();
+  const facetIds = new Set<string>();
+  const tags = ids.map((id): TaxonomyTag => {
+    const { facet } = tagParts(id);
+    facetIds.add(facet);
+    const label = tagLabel(id);
+    return {
+      id,
+      facet,
+      label,
+    };
+  });
+  const namedFacets = [...facetIds].filter((id) => id !== DEFAULT_TAG_FACET_ID)
+    .sort();
+  if (facetIds.has(DEFAULT_TAG_FACET_ID)) {
+    namedFacets.push(DEFAULT_TAG_FACET_ID);
   }
-  return ids;
+  return {
+    facets: namedFacets.map((id) => ({ id, label: facetLabel(id) })),
+    tags,
+  };
+}
+
+/** Exact tag IDs carried by a book. Collections remain an independent
+ * editorial grouping and never implicitly classify content. */
+export function discoveryTagIds(book: Book): Set<string> {
+  return new Set(book.tags ?? []);
 }
 
 /** A weighted, dependency-free catalog search. Every query token must match at
@@ -54,10 +80,9 @@ export function discoveryTagIds(book: Book): Set<string> {
 export function searchScore(book: Book, query: string): number | null {
   const tokens = normalize(query).trim().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return 0;
-  const tagText = (book.tags ?? []).flatMap((id) => {
-    const tag = TAG_BY_ID.get(id);
-    return tag ? [id, tag.labels.en, tag.labels.zh, ...tag.aliases] : [id];
-  }).map(normalize);
+  const tagText = (book.tags ?? []).flatMap((id) => [id, tagLabel(id)]).map(
+    normalize,
+  );
   const fields: Array<[number, string[]]> = [
     [12, [book.label]],
     [9, tagText],
@@ -91,7 +116,7 @@ export function matchesTagFacets(
   if (selected.size === 0) return true;
   const selectedByFacet = new Map<string, Set<string>>();
   for (const id of selected) {
-    const facet = TAG_BY_ID.get(id)?.facet ?? "unknown";
+    const { facet } = tagParts(id);
     const ids = selectedByFacet.get(facet) ?? new Set<string>();
     ids.add(id);
     selectedByFacet.set(facet, ids);
@@ -101,6 +126,14 @@ export function matchesTagFacets(
   return [...selectedByFacet.values()].every((ids) =>
     [...ids].some((id) => bookTags.has(id))
   );
+}
+
+/** Locale-aware collection order without product-specific priority lists. */
+export function sortCollectionNames(
+  names: Iterable<string>,
+  locale: string,
+): string[] {
+  return [...new Set(names)].sort((a, b) => a.localeCompare(b, locale));
 }
 
 export type ReadingFilter = "all" | "unread" | "progress" | "finished";

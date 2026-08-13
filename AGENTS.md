@@ -71,10 +71,11 @@ scheme and refreshes it from a configured LiveView server.
 - Keep remote-origin selection aligned between `web/src/apiBase.ts` and
   `plugins/lvsync`.
 - Treat manifest `tags` as author-owned, lowercase search keywords. Keep them
-  precise and portable; `taxonomy.json` maps selected aliases onto the stable
-  Topic, Technology, and Level discovery facets. Taxonomy aliases, labels, and
-  IDs are product schema: update Rust and web consistency tests together, and
-  keep taxonomy plus book tags in the catalog Merkle identity.
+  precise and portable. A `facet.value` tag opts into a dynamically derived
+  facet; unnamespaced values remain ordinary Tags. Never add a built-in subject
+  vocabulary, alias map, collection inference, or preferred collection order to
+  LiveView. Keep Rust and web derivation tests aligned, and keep book tags in the
+  catalog Merkle identity.
 
 ## Native shell
 
@@ -84,7 +85,6 @@ the authoritative native UI and background-audio validation target.
 
 Use the repo-local `ios-sim-dev` skill for simulator builds, WKWebView
 inspection, selector-driven interaction, screenshots, and light/dark visual
-verification. Physical-device releases are a host operation owned by the
-machine-level `ios-resign` skill. Publish normal iPhone/iPad updates through
-its private SideStore source workflow; direct `devicectl` installation is
-recovery-only.
+verification. Physical-device signing credentials, distribution channels, and
+release manifests are deployment-owned and must not be embedded in this
+repository.

@@ -14,9 +14,9 @@
 
 use async_trait::async_trait;
 
-use crate::store::pg::{
-    AssetRow, AudioTaskRollup, BookRow, ChapterRow, DagArtwork, DagChapter, EditionRow,
-    ManifestChapter, ProgressEntry, RenditionRow,
+use crate::store::model::{
+    AssetRecord, AudioTaskRollup, BookRecord, ChapterRecord, DagArtwork, DagChapter, EditionRecord,
+    ManifestChapter, ProgressEntry, RenditionRecord,
 };
 
 /// Catalog structure + chapter/asset access the reader needs. The deployed
@@ -24,13 +24,13 @@ use crate::store::pg::{
 /// renders on demand. Object-safe (`Arc<dyn ContentStore>`).
 #[async_trait]
 pub trait ContentStore: Send + Sync {
-    async fn list_books(&self) -> Result<Vec<BookRow>, String>;
-    async fn list_renditions(&self, book_slug: &str) -> Result<Vec<RenditionRow>, String>;
+    async fn list_books(&self) -> Result<Vec<BookRecord>, String>;
+    async fn list_renditions(&self, book_slug: &str) -> Result<Vec<RenditionRecord>, String>;
     async fn list_editions(
         &self,
         book_slug: &str,
         rendition: &str,
-    ) -> Result<Vec<EditionRow>, String>;
+    ) -> Result<Vec<EditionRecord>, String>;
 
     async fn get_chapter(
         &self,
@@ -38,7 +38,7 @@ pub trait ContentStore: Send + Sync {
         rendition: &str,
         lang: &str,
         rel_path: &str,
-    ) -> Result<Option<ChapterRow>, String>;
+    ) -> Result<Option<ChapterRecord>, String>;
 
     /// Overlay → base fallback: try `lang`, then `default_lang`. Shared default
     /// — both backends only implement the single-lang `get_chapter`.
@@ -49,7 +49,7 @@ pub trait ContentStore: Send + Sync {
         lang: &str,
         default_lang: &str,
         rel_path: &str,
-    ) -> Result<Option<(ChapterRow, String)>, String> {
+    ) -> Result<Option<(ChapterRecord, String)>, String> {
         if let Some(c) = self
             .get_chapter(book_slug, rendition, lang, rel_path)
             .await?
@@ -66,7 +66,7 @@ pub trait ContentStore: Send + Sync {
         Ok(None)
     }
 
-    async fn get_asset(&self, content_hash: &str) -> Result<Option<AssetRow>, String>;
+    async fn get_asset(&self, content_hash: &str) -> Result<Option<AssetRecord>, String>;
 
     /// Register an asset's metadata (mime/size) — used by on-demand audio
     /// synthesis when it stores a freshly generated blob.
@@ -150,10 +150,10 @@ use crate::sync::objstore::ObjStore;
 
 #[async_trait]
 impl ContentStore for PgStore {
-    async fn list_books(&self) -> Result<Vec<BookRow>, String> {
+    async fn list_books(&self) -> Result<Vec<BookRecord>, String> {
         PgStore::list_books(self).await.map_err(|e| e.to_string())
     }
-    async fn list_renditions(&self, book_slug: &str) -> Result<Vec<RenditionRow>, String> {
+    async fn list_renditions(&self, book_slug: &str) -> Result<Vec<RenditionRecord>, String> {
         PgStore::list_renditions(self, book_slug)
             .await
             .map_err(|e| e.to_string())
@@ -162,7 +162,7 @@ impl ContentStore for PgStore {
         &self,
         book_slug: &str,
         rendition: &str,
-    ) -> Result<Vec<EditionRow>, String> {
+    ) -> Result<Vec<EditionRecord>, String> {
         PgStore::list_editions(self, book_slug, rendition)
             .await
             .map_err(|e| e.to_string())
@@ -173,12 +173,12 @@ impl ContentStore for PgStore {
         rendition: &str,
         lang: &str,
         rel_path: &str,
-    ) -> Result<Option<ChapterRow>, String> {
+    ) -> Result<Option<ChapterRecord>, String> {
         PgStore::get_chapter(self, book_slug, rendition, lang, rel_path)
             .await
             .map_err(|e| e.to_string())
     }
-    async fn get_asset(&self, content_hash: &str) -> Result<Option<AssetRow>, String> {
+    async fn get_asset(&self, content_hash: &str) -> Result<Option<AssetRecord>, String> {
         PgStore::get_asset(self, content_hash)
             .await
             .map_err(|e| e.to_string())

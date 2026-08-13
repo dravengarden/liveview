@@ -31,10 +31,8 @@ startOfflineFlagSync();
 // offline session. AFTER the shim so relative /api/* hits the remote origin.
 startSyncQueue();
 
-// Client APM: buffer operation/perf/error events in the native SQLite outbox and
-// batch-flush them to the server (→ VictoriaLogs) when the network is good. Native
-// shell only; installs app-wide error capture. AFTER the shim so /api/ingest hits
-// the remote origin.
+// Optional client APM. This remains a complete no-op unless VITE_APM_ENABLED=true;
+// deployments choose their own server-side sink explicitly.
 startApm();
 
 // App-bundle hot-update: check the server for a newer web bundle (incremental,

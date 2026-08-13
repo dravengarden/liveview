@@ -9,17 +9,9 @@ default:
 toolchain-check:
   actual="$(rustc --version --verbose | awk '/^release:/ { print $2 }')"; for manifest in Cargo.toml lv-sync/Cargo.toml plugins/lvsync/Cargo.toml app/src-tauri/Cargo.toml; do required="$(cargo metadata --manifest-path "$manifest" --no-deps --format-version 1 | jq -r '.packages[0].rust_version')"; test "$required" = "$actual" || { echo "$manifest rust-version $required does not match pinned rustc $actual" >&2; exit 1; }; done
 
-# Materialize the shared UI SDK when the checkout does not use a development link.
+# Verify the repository-owned UI primitives are present.
 shell:
-  @if [[ -L web/src/_shell ]]; then \
-    echo "Using linked shared UI: $(readlink web/src/_shell)"; \
-  else \
-    nix build .#shared-ui-src -o .shell-src; \
-    mkdir -p web/src/_shell; \
-    cp -f .shell-src/* web/src/_shell/; \
-    chmod -R u+w web/src/_shell; \
-    rm -f .shell-src; \
-  fi
+  @test -f web/src/_shell/mod.ts
 
 # Start the frontend and backend development servers.
 dev: shell

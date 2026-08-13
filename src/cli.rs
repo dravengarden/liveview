@@ -275,19 +275,11 @@ pub struct SyncArgs {
     #[arg(long, env = "LIVEVIEW_S3_SECRET_KEY_FILE")]
     pub s3_secret_key_file: Option<PathBuf>,
 
-    /// `edge-tts` executable for audiobook pre-generation.
-    #[arg(long, env = "LIVEVIEW_EDGE_TTS_CMD", default_value = "edge-tts")]
-    pub edge_tts_cmd: String,
+    /// Optional fallback voice; a book's `[renditions.audio].voice` overrides it.
+    #[arg(long, env = "LIVEVIEW_TTS_VOICE")]
+    pub tts_voice: Option<String>,
 
-    /// Default edge-tts voice; a book's `[renditions.audio].voice` overrides it.
-    #[arg(
-        long,
-        env = "LIVEVIEW_TTS_VOICE",
-        default_value = "zh-CN-XiaoxiaoNeural"
-    )]
-    pub tts_voice: String,
-
-    /// Pre-generate the TEXT read-aloud audio (edge-tts + marks) for every
+    /// Pre-generate the TEXT read-aloud audio task for every
     /// markdown chapter during sync, so the reader's first play is instant
     /// instead of waiting on an on-demand synth. Incremental + resumable like the
     /// audiobook pre-gen. Off by default — enabling it triggers a large one-time
