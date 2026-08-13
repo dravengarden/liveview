@@ -241,6 +241,7 @@ export function PlaybackBar(
           transport's own glass). */}
       <Box
         aria-hidden
+        data-lv-playback-bar="true"
         sx={{
           position: "absolute",
           left: 0,
@@ -266,6 +267,7 @@ export function PlaybackBar(
       />
       <Box
         ref={transportRef}
+        data-lv-playback-bar="true"
         sx={{
           position: "absolute",
           left: 0,
