@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
-import { splashHtml } from "./src/_shell/splash";
+import { splashHtml } from "./src/_shell/splash.ts";
 
 const ReactCompilerConfig = {
   target: "19",
@@ -262,11 +262,16 @@ export default defineConfig(({ mode }) => {
       outDir: isApp ? "dist-app" : "dist",
       emptyOutDir: true,
       sourcemap: false,
-      minify: "esbuild",
-      rollupOptions: {
+      minify: "oxc",
+      rolldownOptions: {
         output: {
-          manualChunks: {
-            mui: ["@mui/material", "@mui/icons-material"],
+          codeSplitting: {
+            groups: [
+              {
+                name: "mui",
+                test: /node_modules[\\/]@mui[\\/](?:material|icons-material)[\\/]/,
+              },
+            ],
           },
         },
       },
