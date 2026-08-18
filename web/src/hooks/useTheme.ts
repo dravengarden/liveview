@@ -292,6 +292,17 @@ export function useTheme(): UseThemeResult {
       "--lv-bar-fg-dim",
       c.textSecondary,
     );
+    // The contents rail is rendered by the app but sits inside the shared
+    // navigation shell. Publish its resolved surface explicitly so it cannot
+    // fall back to the shell's default-light context in a bundled WebView.
+    // MUI remains the fallback for isolated renders and tests.
+    document.documentElement.style.setProperty("--lv-nav-bg", c.bgPaper);
+    document.documentElement.style.setProperty("--lv-nav-fg", c.textPrimary);
+    document.documentElement.style.setProperty(
+      "--lv-nav-fg-dim",
+      c.textSecondary,
+    );
+    document.documentElement.style.setProperty("--lv-nav-divider", c.divider);
     document.documentElement.style.setProperty("--lv-accent", c.primary);
     document.documentElement.style.setProperty(
       "--lv-activity",

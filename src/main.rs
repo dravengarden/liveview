@@ -2987,7 +2987,7 @@ mod apm_tests {
         let unauthorized = app
             .clone()
             .oneshot(
-                axum::http::Request::get("/api/version")
+                axum::http::Request::get("/api/books")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -2997,7 +2997,7 @@ mod apm_tests {
 
         let authorized = app
             .oneshot(
-                axum::http::Request::get("/api/version")
+                axum::http::Request::get("/api/books")
                     .header(header::AUTHORIZATION, "Bearer proxy-secret")
                     .body(Body::empty())
                     .unwrap(),

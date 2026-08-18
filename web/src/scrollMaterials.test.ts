@@ -75,6 +75,21 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "the active theme must publish its page surface for authored reader CSS",
   );
   assertPresent(
+    themeHook,
+    /setProperty\("--lv-nav-bg", c\.bgPaper\)[\s\S]{0,300}setProperty\(\s*"--lv-nav-fg", c\.textPrimary\)/,
+    "the active theme must publish the contents-rail surface and foreground",
+  );
+  assertPresent(
+    sidebar,
+    /var\(--lv-nav-bg,\s*\$\{theme\.palette\.background\.paper\}\)/,
+    "the contents rail must consume the active theme instead of a fixed surface",
+  );
+  assertPresent(
+    sidebar,
+    /alpha\(\s*theme\.palette\.primary\.main[\s\S]{0,150}theme\.palette\.mode === "dark"/,
+    "the selected contents row must use a theme-aware accent contrast",
+  );
+  assertPresent(
     markdownStyles,
     /background-color:\s*var\(--lv-page-bg,\s*#ffffff\)/,
     "the Markdown column must share the themed page instead of becoming a white card",

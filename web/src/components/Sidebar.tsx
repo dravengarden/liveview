@@ -391,7 +391,10 @@ export function Sidebar({
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
-        bgcolor: "background.paper",
+        backgroundColor: (theme) =>
+          `var(--lv-nav-bg, ${theme.palette.background.paper})`,
+        color: (theme) =>
+          `var(--lv-nav-fg, ${theme.palette.text.primary})`,
       }}
     >
       {showHeader && (
@@ -403,7 +406,8 @@ export function Sidebar({
             px: 1,
             py: 0.5,
             borderBottom: 1,
-            borderColor: "divider",
+            borderColor: (theme) =>
+              `var(--lv-nav-divider, ${theme.palette.divider})`,
           }}
         >
           <Typography variant="subtitle2" sx={{ pl: 1, fontWeight: 700 }}>
@@ -442,13 +446,17 @@ export function Sidebar({
             px: 1,
             py: 0.75,
             borderBottom: 1,
-            borderColor: "divider",
+            borderColor: (theme) =>
+              `var(--lv-nav-divider, ${theme.palette.divider})`,
           }}
         >
           <Typography
             variant="caption"
-            color="text.secondary"
-            sx={{ flexShrink: 0 }}
+            sx={{
+              flexShrink: 0,
+              color: (theme) =>
+                `var(--lv-nav-fg-dim, ${theme.palette.text.secondary})`,
+            }}
           >
             {t("sidebar.language")}
           </Typography>
@@ -534,7 +542,8 @@ export function Sidebar({
                 px: 1.25,
                 py: 0.75,
                 borderTop: 1,
-                borderColor: "divider",
+                borderColor: (theme) =>
+                  `var(--lv-nav-divider, ${theme.palette.divider})`,
                 // Cowboy's spatial rail is one continuous material. Deploy
                 // timestamps are useful in the persistent desktop sidebar, but
                 // become a hard footer seam in the temporary mobile drawer.
@@ -543,8 +552,12 @@ export function Sidebar({
             >
               <Typography
                 variant="caption"
-                color="text.disabled"
-                sx={{ display: "block", lineHeight: 1.5 }}
+                sx={{
+                  display: "block",
+                  lineHeight: 1.5,
+                  color: (theme) =>
+                    `var(--lv-nav-fg-dim, ${theme.palette.text.secondary})`,
+                }}
               >
                 {stamps.join(" · ")}
               </Typography>
