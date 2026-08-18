@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  alpha,
   Box,
   Collapse,
   IconButton,
@@ -24,6 +25,7 @@ import {
   UnfoldMore as ExpandAllIcon,
 } from "@mui/icons-material";
 import type { LangInfo, TreeNode } from "@/types";
+import { LIVEVIEW_RADII } from "@/brand";
 import { type Language, useI18n } from "@/i18n";
 import { localeDescriptor } from "@/locales/registry";
 
@@ -115,15 +117,32 @@ function TreeItem({
     <>
       <ListItemButton
         data-path={node.path}
+        data-liveview-nav-row
         onClick={handleClick}
         selected={isSelected}
         sx={{
           pl: 1 + level * 2,
+          pr: 1.5,
+          mx: 0.75,
+          my: 0.25,
+          borderRadius: `${LIVEVIEW_RADII.control}px`,
           // Taller, finger-friendly rows on touch screens; compact on desktop.
           py: { xs: 0.75, md: 0.5 },
           minHeight: { xs: 44, md: 32 },
+          transition: "background-color 140ms ease, color 140ms ease",
           "&.Mui-selected": {
-            bgcolor: "action.selected",
+            bgcolor: (theme) =>
+              alpha(
+                theme.palette.primary.main,
+                theme.palette.mode === "dark" ? 0.18 : 0.11,
+              ),
+            "&:hover": {
+              bgcolor: (theme) =>
+                alpha(
+                  theme.palette.primary.main,
+                  theme.palette.mode === "dark" ? 0.22 : 0.15,
+                ),
+            },
           },
         }}
       >
@@ -139,7 +158,7 @@ function TreeItem({
                 : <ChevronRightIcon fontSize="medium" />}
             </ListItemIcon>
           )
-          : <ListItemIcon sx={{ minWidth: 24 }} />}
+          : !bookMode && <ListItemIcon sx={{ minWidth: 24 }} />}
         {
           /* Book mode is a clean reading spine — no folder/file icons. Docs mode
             keeps the filesystem-tree icons. */

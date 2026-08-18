@@ -207,12 +207,22 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   assertPresent(
     temporaryNav,
     /key: "back"[\s\S]{0,100}label: backLabel[\s\S]{0,100}icon: <ChevronLeftIcon/,
-    "the spatial navigation back affordance must live in the bottom action island",
+    "the spatial navigation back affordance must live in its bottom action island",
   );
   assertPresent(
     temporaryNav,
-    /!spatial && onBack && backLabel/,
-    "the spatial header must not duplicate the bottom back action",
+    /\{!spatial && \(/,
+    "Cowboy-style spatial navigation must leave the rail headerless",
+  );
+  assertPresent(
+    temporaryNav,
+    /justifyContent: "space-between"[\s\S]{0,400}key: "back"[\s\S]{0,500}key: "close"/,
+    "spatial navigation must split back and close into calm edge action islands",
+  );
+  assertPresent(
+    sidebar,
+    /data-liveview-nav-row[\s\S]{0,180}mx: 0\.75[\s\S]{0,80}my: 0\.25[\s\S]{0,100}borderRadius:/,
+    "navigation rows must use Cowboy-style inset selected surfaces",
   );
   assertPresent(
     sidebar,
