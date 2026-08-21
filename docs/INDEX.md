@@ -27,7 +27,7 @@ material, operational guidance, research evidence, and historical notes.
 
 ### Design
 
-- [`design/thin-native-idb-replica.md`](design/thin-native-idb-replica.md) — Thin Native IDB Replica (current storage ownership)
+- [`design/thin-native-idb-replica.md`](design/thin-native-idb-replica.md) — Thin Native IDB Replica (decision record; storage ownership landed in `web/src/replica/` + thin `lvsync://localhost` host)
 - [`design/incremental-offline-pipeline.md`](design/incremental-offline-pipeline.md) — Incremental Offline Pipeline
 - [`design/interactive-view-authoring.md`](design/interactive-view-authoring.md) — Interactive View Authoring
 - [`design/interactive-view.md`](design/interactive-view.md) — Interactive View

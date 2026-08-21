@@ -5,20 +5,22 @@
 | **Status** | Accepted (rev 3). Storage ownership landed in the thin-native series. Sqlite wipe remains a gated follow-up. Present-tense "current state" sections below are the pre-cutover decision record. |
 | **Author** | LiveView |
 | **Date** | 2026-08-21 |
-| **Supersedes (storage ownership)** | [docs/offline-first.md](docs/offline-first.md) §5 (native blob store), [docs/offline-first-plan.md](docs/offline-first-plan.md) P3 native store, [docs/offline-rearchitecture.md](docs/offline-rearchitecture.md) (SQLite + Rust plugin as source of truth), [docs/ota-optimization.md](docs/ota-optimization.md) (plugin-owned app-root store) |
-| **Does not supersede** | [docs/core-requirements.md](docs/core-requirements.md) (product gate), Merkle DAG identity of covers/backdrops, native ownership of background audio / lock-screen, protocol compatibility rule (version stays 1), SW-on-iOS rejection, O(1) Downloads stats, `lvsync://localhost` origin |
+| **Supersedes (storage ownership)** | [docs/offline-first.md](../offline-first.md) §5 (native blob store), [docs/offline-first-plan.md](../offline-first-plan.md) P3 native store, [docs/offline-rearchitecture.md](../offline-rearchitecture.md) (SQLite + Rust plugin as source of truth), [docs/ota-optimization.md](../ota-optimization.md) (plugin-owned app-root store) |
+| **Does not supersede** | [docs/core-requirements.md](../core-requirements.md) (product gate), Merkle DAG identity of covers/backdrops, native ownership of background audio / lock-screen, protocol compatibility rule (version stays 1), SW-on-iOS rejection, O(1) Downloads stats, `lvsync://localhost` origin |
 
 ---
 
 ## Overview
 
-LiveView's native iOS/macOS shell currently owns too much: a Rust Merkle replica (`lv-sync/` + `plugins/lvsync/`), a SQLite content-addressed blob store, an OTA app-bundle overlay served at `lvsync://localhost/app/`, an APM SQLite outbox, a Swift audio file cache with its own SQLite index (`LvStore.swift`), and the download/retention/stats machinery that feeds Settings → Downloads. The TypeScript reader is a client of that native data plane via `contentFetch` (`web/src/native-sync.ts`) and `lvsync://` scheme fetches.
+**Landed.** The TypeScript IndexedDB replica (`web/src/replica/`) is the only content Merkle DAG replica. Native is a thin `lvsync://localhost` host (protocol v1): app-shell overlay, bounded media cache, AVPlayer. `lv-sync/` and `plugins/lvsync/` are deleted. Sqlite wipe remains a gated follow-up. This file is the decision record; "current state" sections below describe the **pre-cutover** tree.
 
-This refactor **reverses storage ownership**. IndexedDB in TypeScript becomes the only replica of the content Merkle DAG, the only place retention/GC/stats/APM/reader-state live, and the owner of app-shell update detection and apply. Native shrinks to the capabilities WKWebView and a PWA cannot provide — AVPlayer lock-screen audio, now-playing / widgets, snapshot navigation, haptics, URL opening, network-path, a generic app-shell file overlay, and a generic media playback cache with a **bounded URLSession pool** — behind a **stable, versioned, LiveView-agnostic host API**.
+Before the cutover, LiveView's native iOS/macOS shell owned too much: a Rust Merkle replica (`lv-sync/` + `plugins/lvsync/`), a SQLite content-addressed blob store, an OTA app-bundle overlay served at `lvsync://localhost/app/`, an APM SQLite outbox, a Swift audio file cache with its own SQLite index (`LvStore.swift`), and the download/retention/stats machinery that feeds Settings → Downloads. The TypeScript reader was a client of that native data plane via `contentFetch` (`web/src/native-sync.ts`) and `lvsync://` scheme fetches.
+
+This refactor **reversed storage ownership**. IndexedDB in TypeScript is the only replica of the content Merkle DAG, the only place retention/GC/stats/APM/reader-state live, and the owner of app-shell update detection and apply. Native shrinks to the capabilities WKWebView and a PWA cannot provide — AVPlayer lock-screen audio, now-playing / widgets, snapshot navigation, haptics, URL opening, network-path, a generic app-shell file overlay, and a generic media playback cache with a **bounded URLSession pool** — behind a **stable, versioned, LiveView-agnostic host API**.
 
 The product intent matches Cowboy's frontend rule: shipping a new TypeScript bundle reloads the running app automatically; SideStore / App Store reinstall is required **only** when the native binary itself changes (`web/src/_shell/native-release-update.tsx`). Native binary changes in this series are **batched into one IPA**.
 
-Three platform constraints make a naive "everything in IndexedDB, zero native files, rename the scheme" design fail the [core requirements](docs/core-requirements.md):
+Three platform constraints make a naive "everything in IndexedDB, zero native files, rename the scheme" design fail the [core requirements](../core-requirements.md):
 
 1. **AVPlayer cannot play bytes that live only in IndexedDB.** Lock-screen / background / AirPods playback must stay on native AVPlayer (WebKit #198277 / #204261, cited in `web/src/native-audio.ts`). The JS bridge must not carry corpus-sized payloads (`docs/core-requirements.md`: constant-size bridge messages).
 2. **WKWebView cannot boot a SPA from IndexedDB.** Cold launch happens before TypeScript runs. Today's `lvsync://localhost/app/index.html` (`app/src-tauri/tauri.conf.json`) exists for this reason.
@@ -30,9 +32,9 @@ The design therefore **keeps the scheme name `lvsync://localhost`** and treats t
 
 ## Background & Motivation
 
-### Current state (verified in tree)
+### Pre-cutover state (verified in the tree this design started from)
 
-Live SPA I/O uses the **custom-scheme handlers**, not the unused Tauri `invoke` commands (`generate_handler![resolve, sync_all, cache_stats, …]` has no `plugin:lvsync` caller in `web/src`).
+Live SPA I/O used the **custom-scheme handlers**, not the unused Tauri `invoke` commands (`generate_handler![resolve, sync_all, cache_stats, …]` had no `plugin:lvsync` caller in `web/src`).
 
 ```mermaid
 flowchart LR
@@ -69,7 +71,7 @@ flowchart LR
   WS --> OTA
 ```
 
-Concrete owners today:
+Concrete owners before the cutover:
 
 | Concern | Owner today | Live path (SPA) |
 |---|---|---|
@@ -96,24 +98,24 @@ Connect timeout on the live fetcher is **1.5s** plus `FORCE_OFFLINE` / `OFFLINE_
 
 ### Why the current split exists (and why we are reversing it)
 
-[docs/offline-rearchitecture.md](docs/offline-rearchitecture.md) chose SQLite + bundled SPA + **no Service Worker on iOS** because:
+[docs/offline-rearchitecture.md](../offline-rearchitecture.md) chose SQLite + bundled SPA + **no Service Worker on iOS** because:
 
 - A remote-origin WKWebView plus SW plus a parallel native bridge produced two disagreeing offline stacks.
 - Downloads was slow: ~4 MB `/api/dag`, ~15k resources, ~3k audio files, and a 3388-element key list across the bridge.
 - Tauri plugin IPC from a remote origin is unreliable; a local origin + custom scheme (`lvsync://`) reaches Rust directly.
 
-Those diagnoses remain true. The mistake was collapsing **"must not use a fragile SW as the native store"** into **"native must own the content replica."** Cowboy shows the other split: the TypeScript layer owns persistence and reload; native is a thin host ([cowboy `docs/architecture/09-frontend.md`](/home/draven/.local/state/cowboy-machine/worktrees/sess-1785903517771/docs/architecture/09-frontend.md): SW `VERSION` bump → foreground update-check → auto-reload; native only for lock-screen / file picker). That analogue is fair for **PWA** (already implemented in `main.tsx`). It is not evidence for letting JS PUT overlay bytes.
+Those diagnoses remain true. The mistake was collapsing **"must not use a fragile SW as the native store"** into **"native must own the content replica."** Cowboy shows the other split: the TypeScript layer owns persistence and reload; native is a thin host (Cowboy `docs/architecture/09-frontend.md`: SW `VERSION` bump → foreground update-check → auto-reload; native only for lock-screen / file picker). That analogue is fair for **PWA** (already implemented in `main.tsx`). It is not evidence for letting JS PUT overlay bytes.
 
 Pain points this refactor addresses:
 
 - **Every storage/sync/OTA/stats change requires a native rebuild** (SideStore). The user's stated goal is the opposite.
 - **Two replicas** (Rust SQLite + Swift audio + PWA SW + TS IDB for settings) diverge. Cover recovery in `native-sync.ts` already special-cases WKWebView `<img>` vs `fetch` vs blob URLs.
-- **Live `/stats` still walks every non-audio resource and calls `has()`** (`plugins/lvsync/src/lib.rs` `stats_inner`). The original SQLite `agg` table from the rearchitecture doc was never implemented (`offline-rearchitecture.md` is still "design / research"). Audio *is* O(1) via `LvStore.stats()`, but `audioStats` still ships the full `pinned` key array across `evaluateJavaScript`.
+- **Pre-cutover `/stats` walked every non-audio resource and called `has()`** (`plugins/lvsync/src/lib.rs` `stats_inner`). The original SQLite `agg` table from the rearchitecture doc was never implemented in native. Audio *was* O(1) via `LvStore.stats()`, but `audioStats` still shipped the full `pinned` key array across `evaluateJavaScript`. Landed Downloads stats are O(1) from the IDB `agg` row.
 - **OTA lives in Rust.** `otaUpdater.ts` is a one-line `fetch("lvsync://localhost/ota-check")` plus `location.replace`. A TypeScript-only web change cannot change OTA policy without a native rebuild — the thing OTA is supposed to avoid.
 
 ### Constraints that still hold
 
-From [docs/core-requirements.md](docs/core-requirements.md) and `CLAUDE.md` / `AGENTS.md`:
+From [docs/core-requirements.md](../core-requirements.md) and `CLAUDE.md` / `AGENTS.md`:
 
 - Already-acquired content is usable with **zero network**.
 - Scrolling, sheets, chapter changes, and playback stay fluid while background work runs. No unbounded bridge payloads. No `backdrop-filter` on shelves.
@@ -294,7 +296,7 @@ Justification that this is not "storage" in the user's sense:
 
 **G. App-shell overlay** (generic primitive; **not** content storage; **native-fetched**)
 
-WKWebView cold-starts from a URL. IndexedDB is unreachable until JS runs. A Service Worker inside the native WKWebView is the mechanism [offline-rearchitecture.md](docs/offline-rearchitecture.md) rejected, and `web/src/main.tsx` already **does not** register a SW when `BUNDLED` is true.
+WKWebView cold-starts from a URL. IndexedDB is unreachable until JS runs. A Service Worker inside the native WKWebView is the mechanism [offline-rearchitecture.md](../offline-rearchitecture.md) rejected, and `web/src/main.tsx` already **does not** register a SW when `BUNDLED` is true.
 
 Keep a **tiny** disk overlay, owned by the app crate (not `lv-sync`). **Reuse the existing `web/` path** so a rename does not force a re-download of the current SPA:
 
@@ -473,11 +475,11 @@ resolve(url):
   offline miss → 504, never hang
 ```
 
-Use `isLikelyOffline()` from the native network event (or `navigator.onLine` on PWA) to skip network on miss. Replica fetches fail fast when `net === "none"` (0 ms) and otherwise use a short connect budget (~1.5s, matching the **live** plugin fetcher, not the stale 4s comment) so a card tap never freezes. `AbortSignal.timeout` on `installApiShim` (15s) stays for writes.
+Use `isLikelyOffline()` from the native network event (or `navigator.onLine` on PWA) to skip network on miss. Replica fetches fail fast when `net === "none"` (0 ms) and otherwise use a short connect budget (~1.5s, matching the pre-cutover plugin fetcher, not the stale 4s comment) so a card tap never freezes. `AbortSignal.timeout` on `installApiShim` (15s) stays for writes.
 
 #### 3.4 O(1) stats — do not copy `stats_inner`
 
-Today's **live** content stats (`GET lvsync://localhost/stats`) iterate ~12k resources. The new rule:
+Pre-cutover content stats (`GET lvsync://localhost/stats`) iterated ~12k resources. The landed rule:
 
 - Every `put`/`delete`/`present` flip updates `agg[kind]` and `agg['all']` in the same IDB transaction.
 - For audio, a metadata `put` **must not** increment `cachedCount` until `{ type: "cacheProgress", hash, ok: true }`. Otherwise Downloads shows complete while the caf is missing.
@@ -621,7 +623,7 @@ Recommended boot sequence:
 
 ### 5. Unified TypeScript data plane
 
-Align with [docs/offline-first.md](docs/offline-first.md) unified read path, with both modes in TS:
+Align with [docs/offline-first.md](../offline-first.md) unified read path, with both modes in TS:
 
 ```
 useResource(pathOrHash) -> { data, loading, missing }
@@ -979,15 +981,15 @@ Closed in this revision (rev 3): widget artwork stays http(s); APM stays shell-o
 
 ## References
 
-- [docs/core-requirements.md](docs/core-requirements.md) — product gate
-- [docs/offline-first.md](docs/offline-first.md) — unified read path; lazy vs eager (storage owner reversed here)
-- [docs/offline-first-plan.md](docs/offline-first-plan.md)
-- [docs/offline-rearchitecture.md](docs/offline-rearchitecture.md) — why SW-on-iOS was rejected; why O(1) stats exist (status: design/research; `agg` never shipped)
-- [docs/ota-optimization.md](docs/ota-optimization.md) — content-addressed app-root (policy moves to TS; fetch stays native-allowlisted)
-- [docs/design/incremental-offline-pipeline.md](docs/design/incremental-offline-pipeline.md)
-- Cowboy [docs/architecture/09-frontend.md](/home/draven/.local/state/cowboy-machine/worktrees/sess-1785903517771/docs/architecture/09-frontend.md) — VERSION bump → auto-reload; thin native (**PWA analogue**, not JS overlay PUT)
-- `lv-sync/src/lib.rs`, `lv-sync/src/sqlite.rs`, `lv-sync/src/retention.rs` (unused in production)
-- `plugins/lvsync/src/lib.rs` — **live** scheme `/resolve` `/stats` `/sync_all` (sequential) `/app` `/ota-check`; unused invoke concurrency 24; `activate_embedded_upgrade`; 1.5s connect + `OFFLINE_UNTIL_MS`
+- [docs/core-requirements.md](../core-requirements.md) — product gate
+- [docs/offline-first.md](../offline-first.md) — unified read path; lazy vs eager (storage owner reversed here)
+- [docs/offline-first-plan.md](../offline-first-plan.md)
+- [docs/offline-rearchitecture.md](../offline-rearchitecture.md) — why SW-on-iOS was rejected; why O(1) stats exist (historical for storage ownership; native `agg` never shipped)
+- [docs/ota-optimization.md](../ota-optimization.md) — content-addressed app-root (policy moves to TS; fetch stays native-allowlisted)
+- [docs/design/incremental-offline-pipeline.md](incremental-offline-pipeline.md)
+- Cowboy `docs/architecture/09-frontend.md` — VERSION bump → auto-reload; thin native (**PWA analogue**, not JS overlay PUT)
+- `lv-sync/src/lib.rs`, `lv-sync/src/sqlite.rs`, `lv-sync/src/retention.rs` (deleted; unused in production before the cutover)
+- `plugins/lvsync/src/lib.rs` — deleted; pre-cutover live scheme `/resolve` `/stats` `/sync_all` (sequential) `/app` `/ota-check`; unused invoke concurrency 24; `activate_embedded_upgrade`; 1.5s connect + `OFFLINE_UNTIL_MS`
 - `web/src/native-sync.ts`, `native-audio.ts`, `native-media.ts`, `native-nav.ts`
 - `web/src/otaUpdater.ts`, `otaReloadUrl.ts`, `apiBase.ts`, `apm.ts`, `main.tsx`
 - `web/src/_sync-idb/idb.ts`, `web/src/audio/stores.ts` (`audio.session` on this origin), `web/public/sw.js`

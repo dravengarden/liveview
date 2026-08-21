@@ -21,10 +21,11 @@ This document is the blueprint for the refactor; the phased plan lives in
 ## 1. The core idea
 
 The server already has a content-addressed **Merkle DAG** of the corpus
-(`src/sync/merkle.rs`, persisted in pg `merkle_nodes` + `deploy_root`). Today the
-*browser* doesn't use it — it fetches per-path, network-first. The refactor makes
-the client read from a **local content-addressed replica** of that DAG, so every
-read is local-first.
+(`src/sync/merkle.rs`, persisted in pg `merkle_nodes` + `deploy_root`). The
+client reads from a **local content-addressed replica** of that DAG in
+TypeScript IndexedDB (`web/src/replica/`), so every read is local-first.
+Network fills missing hashes only. (The pre-refactor browser path was
+per-path, network-first, and is not the landed store.)
 
 Two addressing primitives, shared by both modes:
 
