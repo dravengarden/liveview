@@ -45,14 +45,6 @@ audio.
 
 <p align="center"><sub>A dense, searchable bookshelf with collections, language editions, artwork, and independent reading and listening progress.</sub></p>
 
-### iPad reading
-
-<p align="center">
-  <img src="docs/assets/screenshots/ipad-reader.webp" alt="LiveView on iPad with a persistent chapter navigator beside the reading surface" width="72%">
-</p>
-
-<p align="center"><sub>iPad gets a purpose-built split navigator and reading surface instead of a stretched phone layout.</sub></p>
-
 ### Mobile, without simplifying the content
 
 <table>
@@ -75,7 +67,7 @@ audio.
   </tr>
 </table>
 
-<p align="center"><sub>Captured from the current light-theme desktop build and native iPhone/iPad Simulator app.</sub></p>
+<p align="center"><sub>Captured from the current light-theme desktop build and native iPhone Simulator app.</sub></p>
 
 > [!NOTE]
 > LiveView is pre-1.0 and developed from the default branch. The content model
