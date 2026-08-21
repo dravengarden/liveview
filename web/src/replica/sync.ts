@@ -61,6 +61,55 @@ async function fillOnMainThread(items: ReplicaWorkerFillItem[]): Promise<void> {
   await runWithTimeBudget(items, fillOne);
 }
 
+async function hashesDone(
+  items: ReplicaWorkerFillItem[],
+): Promise<string[]> {
+  const done: string[] = [];
+  for (const item of items) {
+    if (isAudioKind(item.kind) || !persistBodyForKind(item.kind)) {
+      done.push(item.hash);
+      continue;
+    }
+    if (await hasBlob(item.hash)) done.push(item.hash);
+  }
+  return done;
+}
+
+async function fillOnMainThreadAndDrain(
+  items: ReplicaWorkerFillItem[],
+): Promise<void> {
+  await fillOnMainThread(items);
+  await removeFetches(await hashesDone(items));
+}
+
+type WorkerOut = {
+  type?: string;
+  hash?: string;
+  url?: string;
+  items?: ReplicaWorkerFillItem[];
+};
+
+async function onWorkerMessage(msg: WorkerOut | undefined): Promise<void> {
+  if (msg?.type === "media" && msg.hash && msg.url) {
+    enqueueCacheFromUrl(msg.hash, msg.url);
+    await removeFetch(msg.hash);
+    return;
+  }
+  if (msg?.type === "filled" && msg.hash) {
+    await removeFetch(msg.hash);
+    return;
+  }
+  if (msg?.type !== "fallback") return;
+  workerFailed = true;
+  try {
+    worker?.terminate();
+  } catch {
+    // already dead
+  }
+  worker = null;
+  await fillOnMainThreadAndDrain(msg.items ?? []);
+}
+
 function ensureWorker(): Worker | null {
   if (workerFailed) return null;
   if (worker) return worker;
@@ -69,32 +118,8 @@ function ensureWorker(): Worker | null {
     workerFailed = true;
     return null;
   }
-  worker.addEventListener("message", (event: MessageEvent<{
-    type?: string;
-    hash?: string;
-    url?: string;
-    items?: ReplicaWorkerFillItem[];
-  }>) => {
-    const msg = event.data;
-    if (msg?.type === "media" && msg.hash && msg.url) {
-      enqueueCacheFromUrl(msg.hash, msg.url);
-      void removeFetch(msg.hash);
-      return;
-    }
-    if (msg?.type === "filled" && msg.hash) {
-      void removeFetch(msg.hash);
-      return;
-    }
-    if (msg?.type === "fallback") {
-      workerFailed = true;
-      try {
-        worker?.terminate();
-      } catch {
-        // already dead
-      }
-      worker = null;
-      void fillOnMainThread(msg.items ?? []);
-    }
+  worker.addEventListener("message", (event: MessageEvent<WorkerOut>) => {
+    void onWorkerMessage(event.data);
   });
   worker.addEventListener("error", () => {
     workerFailed = true;
@@ -133,16 +158,7 @@ export async function pullMissingTextArt(): Promise<void> {
     });
     return;
   }
-  await fillOnMainThread(items);
-  const done: string[] = [];
-  for (const item of items) {
-    if (isAudioKind(item.kind) || !persistBodyForKind(item.kind)) {
-      done.push(item.hash);
-      continue;
-    }
-    if (await hasBlob(item.hash)) done.push(item.hash);
-  }
-  await removeFetches(done);
+  await fillOnMainThreadAndDrain(items);
 }
 
 export async function replayWorklist(): Promise<void> {
@@ -181,14 +197,7 @@ export async function replayWorklist(): Promise<void> {
     const policy = currentReplicaPolicy();
     if (policy.mode === "lazy") return;
     await fillOnMainThread(items);
-    const done = new Set<string>();
-    for (const item of items) {
-      if (isAudioKind(item.kind) || !persistBodyForKind(item.kind)) {
-        done.add(item.hash);
-        continue;
-      }
-      if (await hasBlob(item.hash)) done.add(item.hash);
-    }
+    const done = new Set(await hashesDone(items));
     await mutateWorklistUnlocked((next) => {
       next.fetch = next.fetch.filter((item) => !done.has(item.hash));
     });
