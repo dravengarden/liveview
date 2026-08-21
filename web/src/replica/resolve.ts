@@ -5,6 +5,7 @@ import { idbRequest, withTxn } from "./idb.ts";
 import {
   applyDag,
   normalizeReplicaUrl,
+  onPathIndexAdopted,
   parseManifest,
   parseRoot,
   pathRecordByUrl,
@@ -17,8 +18,8 @@ import {
   isArtworkKind,
   isAudioKind,
   META_URL_PREFIX,
-  REPLICA_CONNECT_MS,
   REPLICA_DAG_MS,
+  REPLICA_FETCH_MS,
   STORE_META,
   type MetaRecord,
   type PathRecord,
@@ -31,7 +32,7 @@ export interface ReplicaContentFetchOpts {
   fresh?: boolean;
   /** Skip network entirely (net === "none" / known offline). */
   offline?: boolean;
-  /** Override the default 1.5s connect budget. */
+  /** Override the overall fetch budget. Instant 0 when offline. */
   connectMs?: number;
 }
 
@@ -53,10 +54,11 @@ export function replicaIsOffline(): boolean {
   return offlineProbe();
 }
 
-function connectBudget(opts?: ReplicaContentFetchOpts): number {
+/** 0 when net is none; otherwise a body-inclusive budget (not connect-only). */
+export function replicaFetchBudgetMs(opts?: ReplicaContentFetchOpts): number {
   if (opts?.offline === true || replicaIsOffline()) return 0;
   if (opts?.connectMs !== undefined) return opts.connectMs;
-  return REPLICA_CONNECT_MS;
+  return REPLICA_FETCH_MS;
 }
 
 function offline504(): Response {
@@ -103,10 +105,11 @@ function absoluteUrl(pathOrUrl: string): string {
   return joinRemoteUrl(replicaRemoteBase(), pathOrUrl);
 }
 
-const artworkObjectUrls = new Map<string, string>();
+type ArtworkEntry = { kind: string; slug: string; hash: string; url: string };
+const artworkObjectUrls = new Map<string, ArtworkEntry>();
 
 function artworkCacheKey(kind: string, slug: string): string {
-  return `${kind}:${slug}`;
+  return `${kind}\0${slug}`;
 }
 
 export function slugFromArtworkUrl(url: string): string | undefined {
@@ -116,9 +119,30 @@ export function slugFromArtworkUrl(url: string): string | undefined {
   return new URLSearchParams(norm.slice(q + 1)).get("book") ?? undefined;
 }
 
+function artworkRecord(kind: string, slug: string): PathRecord | undefined {
+  return pathRecordByUrl(`/api/${kind}?book=${slug}`) ??
+    pathRecordByUrl(`/api/${kind}?book=${encodeURIComponent(slug)}`);
+}
+
+function revokeObjectUrl(url: string): void {
+  try {
+    URL.revokeObjectURL(url);
+  } catch {
+    // already revoked
+  }
+}
+
+function forgetArtworkUrl(key: string): void {
+  const prev = artworkObjectUrls.get(key);
+  if (!prev) return;
+  artworkObjectUrls.delete(key);
+  revokeObjectUrl(prev.url);
+}
+
 function rememberArtworkUrl(
   kind: string,
   slug: string,
+  hash: string,
   data: ArrayBuffer,
 ): string | undefined {
   if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
@@ -127,14 +151,11 @@ function rememberArtworkUrl(
   const key = artworkCacheKey(kind, slug);
   const prev = artworkObjectUrls.get(key);
   if (prev) {
-    try {
-      URL.revokeObjectURL(prev);
-    } catch {
-      // already revoked
-    }
+    artworkObjectUrls.delete(key);
+    revokeObjectUrl(prev.url);
   }
   const url = URL.createObjectURL(new Blob([new Uint8Array(data)]));
-  artworkObjectUrls.set(key, url);
+  artworkObjectUrls.set(key, { kind, slug, hash, url });
   return url;
 }
 
@@ -142,23 +163,37 @@ function noteArtwork(rec: PathRecord, data: ArrayBuffer): void {
   if (!isArtworkKind(rec.kind)) return;
   const slug = slugFromArtworkUrl(rec.url);
   if (!slug) return;
-  rememberArtworkUrl(rec.kind, slug, data);
+  rememberArtworkUrl(rec.kind, slug, rec.hash, data);
 }
+
+export function pruneStaleArtworkObjectUrls(): void {
+  for (const [key, entry] of artworkObjectUrls) {
+    const rec = artworkRecord(entry.kind, entry.slug);
+    if (rec && rec.hash === entry.hash) continue;
+    forgetArtworkUrl(key);
+  }
+}
+
+onPathIndexAdopted(pruneStaleArtworkObjectUrls);
 
 export function artworkBlobSrc(
   kind: string,
   slug: string,
 ): string | undefined {
-  return artworkObjectUrls.get(artworkCacheKey(kind, slug));
+  const key = artworkCacheKey(kind, slug);
+  const cached = artworkObjectUrls.get(key);
+  if (!cached) return undefined;
+  const rec = artworkRecord(kind, slug);
+  if (!rec || rec.hash !== cached.hash) {
+    forgetArtworkUrl(key);
+    return undefined;
+  }
+  return cached.url;
 }
 
 export function resetArtworkObjectUrls(): void {
-  for (const url of artworkObjectUrls.values()) {
-    try {
-      URL.revokeObjectURL(url);
-    } catch {
-      // ignore
-    }
+  for (const entry of artworkObjectUrls.values()) {
+    revokeObjectUrl(entry.url);
   }
   artworkObjectUrls.clear();
 }
@@ -168,14 +203,16 @@ export async function materializeArtworkSrc(
   kind: string,
   slug: string,
 ): Promise<string | undefined> {
+  const rec = artworkRecord(kind, slug);
+  if (!rec) {
+    forgetArtworkUrl(artworkCacheKey(kind, slug));
+    return undefined;
+  }
   const cached = artworkBlobSrc(kind, slug);
   if (cached) return cached;
-  const rec = pathRecordByUrl(`/api/${kind}?book=${slug}`) ??
-    pathRecordByUrl(`/api/${kind}?book=${encodeURIComponent(slug)}`);
-  if (!rec) return undefined;
   const data = await getBlob(rec.hash);
   if (!data) return undefined;
-  return rememberArtworkUrl(kind, slug, data);
+  return rememberArtworkUrl(kind, slug, rec.hash, data);
 }
 
 async function resolveManifest(
@@ -187,12 +224,17 @@ async function resolveManifest(
     noteArtwork(rec, local);
     return new Response(local, { status: 200 });
   }
-  const budget = connectBudget(opts);
+  const budget = replicaFetchBudgetMs(opts);
   if (budget <= 0) return offline504();
+  let buffer: ArrayBuffer;
   try {
     const response = await fetchAbsolute(absoluteUrl(rec.url), budget);
     if (!response.ok) return offline504();
-    const buffer = await response.arrayBuffer();
+    buffer = await response.arrayBuffer();
+  } catch {
+    return offline504();
+  }
+  try {
     if (!isAudioKind(rec.kind) && persistBodyForKind(rec.kind)) {
       await putBlob({
         hash: rec.hash,
@@ -205,10 +247,10 @@ async function resolveManifest(
       });
     }
     noteArtwork(rec, buffer);
-    return new Response(buffer, { status: 200 });
   } catch {
-    return offline504();
+    // Quota / IDB must not turn a 200 into "offline".
   }
+  return new Response(buffer, { status: 200 });
 }
 
 async function resolveKeyed(
@@ -220,13 +262,17 @@ async function resolveKeyed(
     const hit = await getUrlCache(norm);
     if (hit) return new Response(hit, { status: 200 });
   }
-  const budget = connectBudget(opts);
+  const budget = replicaFetchBudgetMs(opts);
   if (budget > 0) {
     try {
       const response = await fetchAbsolute(absoluteUrl(norm), budget);
       if (response.ok) {
         const buffer = await response.arrayBuffer();
-        await putUrlCache(norm, buffer);
+        try {
+          await putUrlCache(norm, buffer);
+        } catch {
+          // Persist is best-effort; the caller still gets the fresh body.
+        }
         return new Response(buffer, { status: 200 });
       }
     } catch {
@@ -289,7 +335,7 @@ export async function refreshReplicaManifest(): Promise<string> {
   try {
     const rootResp = await fetchAbsolute(
       absoluteUrl("/api/root"),
-      REPLICA_CONNECT_MS,
+      replicaFetchBudgetMs(),
     );
     if (rootResp.ok) {
       nextRoot = parseRoot(await rootResp.text()).root;

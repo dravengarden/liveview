@@ -14,12 +14,14 @@ import { evictUnpinnedLru } from "./gc.ts";
 import { closeReplicaDb, openReplicaDb } from "./idb.ts";
 import { applyDag, parseManifest, parseRoot } from "./manifest.ts";
 import { installMemoryIndexedDB, type MemoryIdbHandle } from "./memory-idb.ts";
+import { contentFetch } from "../native-sync.ts";
 import {
   artworkBlobSrc,
   initReplica,
   materializeArtworkSrc,
   pinAudio,
   replicaContentFetch,
+  replicaFetchBudgetMs,
   replicaFlag,
   refreshReplicaManifest,
   resetReplica,
@@ -680,6 +682,78 @@ test("cover blob URL helper materializes from a local IDB body", async () => {
   assert.equal(artworkBlobSrc("cover", "book"), url);
 });
 
+test("artwork blob URL is dropped when applyDag changes the hash", async () => {
+  await setup();
+  const png = buf("PNG1");
+  await applyDag({
+    protocol_version: 1,
+    root: "r1",
+    resources: [{
+      path: "book/@cover",
+      hash: "cov-old",
+      kind: "cover",
+      bytes: png.byteLength,
+      url: "/api/cover?book=book",
+    }],
+  });
+  await putBlob({
+    hash: "cov-old",
+    kind: "cover",
+    bytes: png.byteLength,
+    pinned: 0,
+    mtime: 1,
+    present: 1,
+    data: png,
+  });
+  const url = await materializeArtworkSrc("cover", "book");
+  assert.ok(url);
+  await applyDag({
+    protocol_version: 1,
+    root: "r2",
+    resources: [{
+      path: "book/@cover",
+      hash: "cov-new",
+      kind: "cover",
+      bytes: 4,
+      url: "/api/cover?book=book",
+    }],
+  });
+  assert.equal(artworkBlobSrc("cover", "book"), undefined);
+});
+
+test("persist failure after a 200 still returns the body", async () => {
+  await setup(1);
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [{
+      path: "book/text/en/01.md",
+      hash: "big",
+      kind: "text",
+      bytes: 64,
+      url: "/api/blob/big",
+    }],
+  });
+  const body = "x".repeat(64);
+  const fetchMock = installFetch(() => new Response(body, { status: 200 }));
+  try {
+    const res = await replicaContentFetch("/api/blob/big");
+    assert.equal(res.status, 200);
+    assert.equal(await res.text(), body);
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("replica fetch budget is 0 offline and longer than 1.5s online", async () => {
+  await setup();
+  assert.equal(replicaFetchBudgetMs({ offline: true }), 0);
+  setReplicaOfflineProbe(() => true);
+  assert.equal(replicaFetchBudgetMs(), 0);
+  setReplicaOfflineProbe(() => false);
+  assert.ok(replicaFetchBudgetMs() > 1500);
+});
+
 test("contentFetch with TAURI + lv.replica=idb never hits lvsync://resolve", async () => {
   await setup();
   storage.set(REPLICA_FLAG_KEY, "idb");
@@ -704,10 +778,14 @@ test("contentFetch with TAURI + lv.replica=idb never hits lvsync://resolve", asy
     return new Response("ok", { status: 200 });
   });
   try {
-    const res = await replicaContentFetch("/api/blob/h4");
+    const res = await contentFetch("/api/blob/h4");
     assert.equal(res.status, 200);
     assert.equal(await res.text(), "ok");
-    assert.equal(fetchMock.calls.some((u) => u.includes("/resolve")), false);
+    assert.equal(
+      fetchMock.calls.some((u) => u.includes("lvsync://localhost/resolve")),
+      false,
+    );
+    assert.deepEqual(fetchMock.calls, ["https://example.test/api/blob/h4"]);
   } finally {
     fetchMock.restore();
     Reflect.deleteProperty(globalThis, "__TAURI_INTERNALS__");

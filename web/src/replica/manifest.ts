@@ -297,6 +297,16 @@ export async function hydratePathIndex(): Promise<void> {
   adoptPathIndex(nextPaths, nextUrls);
 }
 
+const pathIndexListeners = new Set<() => void>();
+
+/** Fires after the in-memory path/url index is replaced (applyDag / hydrate). */
+export function onPathIndexAdopted(fn: () => void): () => void {
+  pathIndexListeners.add(fn);
+  return () => {
+    pathIndexListeners.delete(fn);
+  };
+}
+
 function adoptPathIndex(
   nextPaths: Map<string, PathRecord>,
   nextUrls: Map<string, string>,
@@ -306,6 +316,7 @@ function adoptPathIndex(
   urlIndex = new Map();
   hashIndex = new Map();
   for (const rec of nextPaths.values()) indexRecord(rec);
+  for (const fn of pathIndexListeners) fn();
 }
 
 export async function readRoot(): Promise<string | null> {

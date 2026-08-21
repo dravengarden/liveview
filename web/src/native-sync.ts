@@ -21,8 +21,8 @@ import {
   nativeAudioSetWifiOnly,
   nativeAudioStats,
   onNativeAudioEvent,
-} from "@/native-audio";
-import { remoteUrl } from "@/apiBase";
+} from "./native-audio.ts";
+import { remoteUrl } from "./apiBase.ts";
 import {
   artworkBlobSrc,
   currentReplicaPolicy,
@@ -34,7 +34,7 @@ import {
   replicaContentFetch,
   replicaFlag,
   setReplicaOfflineProbe,
-} from "@/replica/mod.ts";
+} from "./replica/mod.ts";
 
 const SCHEME = "lvsync://localhost";
 

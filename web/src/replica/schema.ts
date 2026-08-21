@@ -21,8 +21,8 @@ export const META_WORKLIST = "worklist";
 /** Url-keyed metadata cache (`/api/manifest`, settings, progress, …). */
 export const META_URL_PREFIX = "url:";
 
-/** Replica network I/O connect budget. Fail instantly when net === "none". */
-export const REPLICA_CONNECT_MS = 1500;
+/** Overall replica fetch budget (body included). Instant fail when net === "none". */
+export const REPLICA_FETCH_MS = 15_000;
 export const REPLICA_DAG_MS = 30_000;
 
 export const AGG_ALL = "all";

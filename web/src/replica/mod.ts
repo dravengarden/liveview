@@ -56,6 +56,7 @@ export {
   replicaAudioIndex,
   replicaCacheStats,
   replicaContentFetch,
+  replicaFetchBudgetMs,
   replicaIsOffline,
   setReplicaOfflineProbe,
 } from "./resolve.ts";
