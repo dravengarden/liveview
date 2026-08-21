@@ -9,7 +9,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/dravengarden/liveview/actions/workflows/ci.yml"><img src="https://github.com/dravengarden/liveview/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2563eb.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95-dea584.svg" alt="Rust 1.95">
   <img src="https://img.shields.io/badge/Deno-2.x-70ffaf.svg" alt="Deno 2.x">
