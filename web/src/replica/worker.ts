@@ -1,4 +1,4 @@
-import { MAIN_THREAD_BUDGET_MS } from "./schema.ts";
+import { MAIN_THREAD_BUDGET_MS, TEXT_ART_CONCURRENCY } from "./schema.ts";
 
 export interface ReplicaWorkerInit {
   type: "init";
@@ -90,15 +90,41 @@ function inDedicatedWorker(): boolean {
 
 let workerRemoteBase = "";
 
+async function poolMap<T>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
+  let i = 0;
+  const n = Math.min(Math.max(limit, 1), items.length);
+  if (n === 0) return;
+  const runners = Array.from({ length: n }, async () => {
+    while (i < items.length) {
+      const item = items[i];
+      i += 1;
+      if (item === undefined) continue;
+      await fn(item);
+    }
+  });
+  await Promise.all(runners);
+}
+
 async function workerFill(items: ReplicaWorkerFillItem[]): Promise<void> {
   const { putBlob } = await import("./blobs.ts");
   const { isAudioKind } = await import("./schema.ts");
+  const textArt: ReplicaWorkerFillItem[] = [];
   for (const item of items) {
     const url = joinRemoteUrl(workerRemoteBase, item.url);
     if (isAudioKind(item.kind)) {
       self.postMessage({ type: "media", hash: item.hash, url });
       continue;
     }
+    textArt.push(item);
+  }
+  let fallback: ReplicaWorkerFillItem[] | null = null;
+  await poolMap(textArt, TEXT_ART_CONCURRENCY, async (item) => {
+    if (fallback) return;
+    const url = joinRemoteUrl(workerRemoteBase, item.url);
     try {
       const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) {
@@ -107,7 +133,7 @@ async function workerFill(items: ReplicaWorkerFillItem[]): Promise<void> {
           hash: item.hash,
           message: `fetch ${response.status}`,
         });
-        continue;
+        return;
       }
       const buffer = await response.arrayBuffer();
       await putBlob({
@@ -126,11 +152,14 @@ async function workerFill(items: ReplicaWorkerFillItem[]): Promise<void> {
         error instanceof Error &&
         (error.name === "InvalidStateError" || /indexeddb/i.test(message))
       ) {
-        self.postMessage({ type: "fallback", reason: message, items });
+        fallback = items;
         return;
       }
       self.postMessage({ type: "error", hash: item.hash, message });
     }
+  });
+  if (fallback) {
+    self.postMessage({ type: "fallback", reason: "indexeddb", items: fallback });
   }
 }
 

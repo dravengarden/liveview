@@ -81,7 +81,8 @@ export const SPIKE_EVAL_JS = `(() => {
         db.createObjectStore("agg", { keyPath: "kind" });
       }
       if (!db.objectStoreNames.contains("apm")) {
-        db.createObjectStore("apm", { keyPath: "event_id" });
+        const apm = db.createObjectStore("apm", { keyPath: "event_id" });
+        apm.createIndex("by-ts", "ts");
       }
     };
     req.onsuccess = () => resolve(req.result);

@@ -14,9 +14,11 @@ import { evictUnpinnedLru } from "./gc.ts";
 import { closeReplicaDb, openReplicaDb } from "./idb.ts";
 import { applyDag, parseManifest, parseRoot } from "./manifest.ts";
 import { installMemoryIndexedDB, type MemoryIdbHandle } from "./memory-idb.ts";
-import { initReplica, replicaFlag, resetReplica } from "./mod.ts";
+import { initReplica, pinAudio, replicaFlag, resetReplica } from "./mod.ts";
+import { setPersistFullSizeArtwork } from "./policy.ts";
 import { REPLICA_FLAG_KEY } from "./schema.ts";
-import { getWorklist, setWorklist } from "./worklist.ts";
+import { missingTextArt } from "./sync.ts";
+import { enqueueFetch, getWorklist, setWorklist } from "./worklist.ts";
 
 function buf(text: string): ArrayBuffer {
   const u8 = new TextEncoder().encode(text);
@@ -51,6 +53,7 @@ function installLocalStorage(): void {
 async function setup(quotaBytes?: number): Promise<MemoryIdbHandle> {
   installLocalStorage();
   storage.clear();
+  setPersistFullSizeArtwork(true);
   const handle = installMemoryIndexedDB();
   if (quotaBytes !== undefined) handle.setQuotaBytes(quotaBytes);
   await resetReplica();
@@ -266,6 +269,77 @@ test("protocol_version newer than 1 is rejected", async () => {
   assert.equal(legacy.protocol_version, 1);
   const m = parseManifest(`{"root":"r","resources":[]}`);
   assert.equal(m.protocol_version, 1);
+});
+
+test("worklist mutations serialize overlapping enqueueFetch", async () => {
+  await setup();
+  await Promise.all([
+    enqueueFetch("a", "/a"),
+    enqueueFetch("b", "/b"),
+    enqueueFetch("c", "/c"),
+  ]);
+  const wl = await getWorklist();
+  assert.equal(wl.fetch.length, 3);
+  assert.deepEqual(
+    new Set(wl.fetch.map((item) => item.hash)),
+    new Set(["a", "b", "c"]),
+  );
+});
+
+test("applyDag records dropped audio on worklist.evict in the same apply", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r1",
+    resources: [
+      { path: "a", hash: "aud", kind: "audio", bytes: 8, url: "/aud" },
+      { path: "t", hash: "txt", kind: "text", bytes: 1, url: "/txt" },
+    ],
+  });
+  await applyDag({
+    protocol_version: 1,
+    root: "r2",
+    resources: [
+      { path: "t", hash: "txt", kind: "text", bytes: 1, url: "/txt" },
+    ],
+  });
+  assert.equal(await getBlobRecord("aud"), undefined);
+  const wl = await getWorklist();
+  assert.deepEqual(wl.evict, ["aud"]);
+});
+
+test("missingTextArt omits kinds that must not persist bodies", async () => {
+  await setup();
+  setPersistFullSizeArtwork(false);
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [
+      { path: "c", hash: "cover", kind: "cover", bytes: 40, url: "/cover" },
+      { path: "b", hash: "card", kind: "card-backdrop", bytes: 8, url: "/card" },
+      { path: "t", hash: "txt", kind: "text", bytes: 4, url: "/txt" },
+    ],
+  });
+  const missing = await missingTextArt();
+  const kinds = new Set(missing.map((item) => item.kind));
+  assert.equal(kinds.has("cover"), false);
+  assert.equal(kinds.has("card-backdrop"), true);
+  assert.equal(kinds.has("text"), true);
+});
+
+test("pinAudio skips non-audio hashes", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [
+      { path: "a", hash: "aud", kind: "audio", bytes: 8, url: "/api/blob/aud" },
+      { path: "c", hash: "cov", kind: "cover", bytes: 4, url: "/api/blob/cov" },
+    ],
+  });
+  await pinAudio(["aud", "cov"], "https://example.test");
+  assert.equal((await getBlobRecord("aud"))?.pinned, 1);
+  assert.equal((await getBlobRecord("cov"))?.pinned, 0);
 });
 
 test("worklist persists and replay evicts queued hashes", async () => {

@@ -171,27 +171,38 @@ export function isQuotaExceeded(error: unknown): boolean {
 export function forEachCursor<T>(
   source: IDBObjectStore | IDBIndex,
   range: IDBKeyRange | null,
-  visit: (value: T, cursor: IDBCursorWithValue) => boolean | void,
+  visit: (
+    value: T,
+    cursor: IDBCursorWithValue,
+  ) => boolean | void | Promise<boolean | void>,
 ): Promise<number> {
   return new Promise((resolve, reject) => {
     const req = range ? source.openCursor(range) : source.openCursor();
     let n = 0;
+    let settled = false;
+    const finish = (err?: unknown): void => {
+      if (settled) return;
+      settled = true;
+      if (err !== undefined) reject(err);
+      else resolve(n);
+    };
     req.addEventListener("success", () => {
       const cursor = req.result;
       if (!cursor) {
-        resolve(n);
+        finish();
         return;
       }
       n += 1;
-      const keepGoing = visit(cursor.value as T, cursor);
-      if (keepGoing === false) {
-        resolve(n);
-        return;
-      }
-      cursor.continue();
+      void Promise.resolve(visit(cursor.value as T, cursor)).then((keepGoing) => {
+        if (keepGoing === false) {
+          finish();
+          return;
+        }
+        cursor.continue();
+      }, finish);
     });
     req.addEventListener("error", () => {
-      reject(req.error ?? new Error("IndexedDB cursor failed"));
+      finish(req.error ?? new Error("IndexedDB cursor failed"));
     });
   });
 }

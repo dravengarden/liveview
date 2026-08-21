@@ -46,11 +46,13 @@ export function prepareBlobRecord(
   }
   if (isAudioKind(record.kind)) {
     // present flips only on cacheProgress; a metadata put must not look cached.
-    if (record.data !== undefined) record = stripBody(record);
-  } else if (record.data && record.present !== 1) {
-    record = { ...record, present: 1 };
-  } else if (!record.data && record.present === 1 && !isAudioKind(record.kind)) {
-    record = { ...record, present: 0 };
+    return record;
+  }
+  if (record.data && record.present !== 1) {
+    return { ...record, present: 1 };
+  }
+  if (!record.data && record.present === 1) {
+    return { ...record, present: 0 };
   }
   return record;
 }

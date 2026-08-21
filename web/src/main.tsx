@@ -4,7 +4,7 @@ import { App } from "./App";
 import { I18nProvider } from "./i18n";
 import { AudioPlayerProvider } from "./audio/player";
 import { installHaptics } from "./_shell";
-import { BUNDLED, installApiShim, selectRemote } from "./apiBase";
+import { BUNDLED, installApiShim, REMOTE, selectRemote } from "./apiBase";
 import { startOfflineFlagSync } from "./native-sync";
 import { startSyncQueue } from "./syncQueue";
 import { startApm } from "./apm";
@@ -40,8 +40,10 @@ startApm();
 // content-addressed) and reload into it when ready. Native shell only.
 startOtaUpdater();
 
-// IDB replica stays opt-in this PR (default native). contentFetch is unchanged.
-if (replicaFlag() === "idb") void initReplica();
+// Replica is opt-in; missing flag keeps the native content path.
+if (replicaFlag() === "idb") {
+  void initReplica(undefined, { remoteBase: REMOTE, origins: [REMOTE] });
+}
 
 // Global haptic delegation: ONE listener set buzzes every MUI control (button /
 // toggle / card / chip / Select), custom `cursor:pointer` clickable, text input,

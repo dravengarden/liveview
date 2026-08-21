@@ -46,7 +46,7 @@ function isCacheProgress(detail: unknown): detail is HostCacheProgressEvent {
     typeof rec["ok"] === "boolean";
 }
 
-/** Bind cacheProgress from the native audio event bus. No-op until PR 4. */
+/** cacheProgress is a window CustomEvent; workers cannot see WKScriptMessage. */
 export function installMediaBridge(): () => void {
   const listener = (event: Event): void => {
     const { detail } = event as CustomEvent<unknown>;

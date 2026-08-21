@@ -1,6 +1,5 @@
 import { replicaStats as readReplicaStats } from "./agg.ts";
 import { getBlob, hasBlob, putBlob, setPinned } from "./blobs.ts";
-import { setGcNativeDelete } from "./gc.ts";
 import {
   closeReplicaDb,
   deleteReplicaDb,
@@ -9,10 +8,9 @@ import {
   openReplicaDb,
   withTxn,
 } from "./idb.ts";
-import { applyDag, hydratePathIndex, pathByHashUrl, resetPathIndex } from "./manifest.ts";
+import { applyDag, hydratePathIndex, pathRecordForHash, resetPathIndex } from "./manifest.ts";
 import {
   applyCellularPolicy,
-  enqueueCacheDelete,
   enqueueCacheFromUrl,
   installMediaBridge,
 } from "./media-bridge.ts";
@@ -27,8 +25,9 @@ import {
   STORE_APM,
   type ApmRecord,
   type DataMode,
+  isAudioKind,
 } from "./schema.ts";
-import { replayWorklist, setReplicaRemote } from "./sync.ts";
+import { replayWorklist, replicaRemoteBase, setReplicaRemote } from "./sync.ts";
 import { joinRemoteUrl } from "./worker.ts";
 import { installReplicaSpike } from "./spike.ts";
 
@@ -90,12 +89,15 @@ export async function putApmEvent(event: ApmRecord): Promise<boolean> {
   });
 }
 
-export async function pinAudio(hashes: string[], remoteBase = ""): Promise<void> {
+export async function pinAudio(
+  hashes: string[],
+  remoteBase = replicaRemoteBase(),
+): Promise<void> {
   for (const hash of hashes) {
+    const rec = pathRecordForHash(hash);
+    if (!rec || !isAudioKind(rec.kind)) continue;
     await setPinned(hash, 1);
-    const url = pathByHashUrl(hash);
-    if (!url) continue;
-    enqueueCacheFromUrl(hash, joinRemoteUrl(remoteBase, url));
+    enqueueCacheFromUrl(hash, joinRemoteUrl(remoteBase, rec.url));
   }
 }
 
@@ -110,7 +112,6 @@ export async function initReplica(mode?: DataMode, opts?: {
   const policy = loadPolicy(mode);
   await persistPolicy(policy);
   if (opts?.remoteBase) setReplicaRemote(opts.remoteBase, opts.origins ?? []);
-  setGcNativeDelete((hash) => enqueueCacheDelete(hash));
   if (!policy.wifiOnly) applyCellularPolicy(true);
   else applyCellularPolicy(false);
   if (!mediaUnsub) mediaUnsub = installMediaBridge();

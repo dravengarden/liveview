@@ -26,7 +26,7 @@ export const AGG_ARTWORK = "artwork";
 
 export const APM_MAX_ROWS = 5000;
 
-/** Origin-scoped; default stays native until a later PR flips the reader. */
+/** Origin-scoped flag; missing or unknown values mean native. */
 export const REPLICA_FLAG_KEY = "lv.replica";
 
 export const WIFI_ONLY_KEY = "lv.offline.wifiOnly";

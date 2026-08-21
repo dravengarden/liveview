@@ -1,18 +1,15 @@
 import { deleteBlob, getBlobRecord, hasBlob, putBlob } from "./blobs.ts";
-import { enqueueCacheFromUrl } from "./media-bridge.ts";
+import { enqueueCacheDelete, enqueueCacheFromUrl } from "./media-bridge.ts";
 import { allPathRecords } from "./manifest.ts";
-import { currentReplicaPolicy } from "./policy.ts";
+import { currentReplicaPolicy, persistBodyForKind } from "./policy.ts";
 import {
   getWorklist,
-  removeEvict,
+  mutateWorklistUnlocked,
   removeFetch,
-  setWorklist,
+  removeFetches,
+  withWorklistLock,
 } from "./worklist.ts";
-import {
-  isAudioKind,
-  TEXT_ART_CONCURRENCY,
-  type PathRecord,
-} from "./schema.ts";
+import { isAudioKind, type PathRecord } from "./schema.ts";
 import {
   joinRemoteUrl,
   runWithTimeBudget,
@@ -38,36 +35,14 @@ export function absoluteReplicaUrl(pathOrUrl: string): string {
   return joinRemoteUrl(remoteBase, pathOrUrl);
 }
 
-async function poolMap<T>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T) => Promise<void>,
-): Promise<void> {
-  let i = 0;
-  const n = Math.min(limit, items.length);
-  if (n === 0) return;
-  const runners = Array.from({ length: n }, async () => {
-    while (i < items.length) {
-      const item = items[i];
-      i += 1;
-      if (item === undefined) continue;
-      await fn(item);
-    }
-  });
-  await Promise.all(runners);
-}
-
 async function fillOne(item: ReplicaWorkerFillItem): Promise<void> {
   const url = joinRemoteUrl(remoteBase, item.url);
   if (isAudioKind(item.kind)) {
     enqueueCacheFromUrl(item.hash, url);
-    await removeFetch(item.hash);
     return;
   }
-  if (await hasBlob(item.hash)) {
-    await removeFetch(item.hash);
-    return;
-  }
+  if (!persistBodyForKind(item.kind)) return;
+  if (await hasBlob(item.hash)) return;
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) return;
   const buffer = await response.arrayBuffer();
@@ -80,7 +55,6 @@ async function fillOne(item: ReplicaWorkerFillItem): Promise<void> {
     present: 1,
     data: buffer,
   });
-  await removeFetch(item.hash);
 }
 
 async function fillOnMainThread(items: ReplicaWorkerFillItem[]): Promise<void> {
@@ -134,6 +108,7 @@ export async function missingTextArt(): Promise<ReplicaWorkerFillItem[]> {
   const seen = new Set<string>();
   for (const rec of allPathRecords()) {
     if (isAudioKind(rec.kind) || seen.has(rec.hash)) continue;
+    if (!persistBodyForKind(rec.kind)) continue;
     seen.add(rec.hash);
     const row = await getBlobRecord(rec.hash);
     if (row?.present === 1 && row.data) continue;
@@ -158,36 +133,66 @@ export async function pullMissingTextArt(): Promise<void> {
     });
     return;
   }
-  await poolMap(items, TEXT_ART_CONCURRENCY, fillOne);
+  await fillOnMainThread(items);
+  const done: string[] = [];
+  for (const item of items) {
+    if (isAudioKind(item.kind) || !persistBodyForKind(item.kind)) {
+      done.push(item.hash);
+      continue;
+    }
+    if (await hasBlob(item.hash)) done.push(item.hash);
+  }
+  await removeFetches(done);
 }
 
 export async function replayWorklist(): Promise<void> {
-  const wl = await getWorklist();
-  for (const hash of wl.evict) {
-    await deleteBlob(hash);
-    await removeEvict(hash);
-  }
-  const pending = (await getWorklist()).fetch;
-  if (pending.length === 0) return;
-  const items: ReplicaWorkerFillItem[] = [];
-  for (const item of pending) {
-    const rec = pathByKind(item.hash);
-    items.push({
-      hash: item.hash,
-      url: item.url,
-      kind: rec?.kind ?? "text",
-      bytes: rec?.bytes ?? 0,
+  await withWorklistLock(async () => {
+    const wl = await getWorklist();
+    const keepEvict: string[] = [];
+    for (const hash of wl.evict) {
+      const existed = await getBlobRecord(hash);
+      await deleteBlob(hash);
+      const posted = enqueueCacheDelete(hash);
+      if (posted) continue;
+      if (existed && !isAudioKind(existed.kind)) continue;
+      keepEvict.push(hash);
+    }
+    const pending = wl.fetch;
+    await mutateWorklistUnlocked((next) => {
+      next.evict = keepEvict;
+      next.fetch = pending;
     });
-  }
-  await setWorklist({ fetch: pending, evict: [] });
-  const w = ensureWorker();
-  if (w) {
-    w.postMessage({ type: "fill", items });
-    return;
-  }
-  const policy = currentReplicaPolicy();
-  if (policy.mode === "lazy") return;
-  await fillOnMainThread(items);
+    if (pending.length === 0) return;
+    const items: ReplicaWorkerFillItem[] = [];
+    for (const item of pending) {
+      const rec = pathByKind(item.hash);
+      items.push({
+        hash: item.hash,
+        url: item.url,
+        kind: rec?.kind ?? "text",
+        bytes: rec?.bytes ?? 0,
+      });
+    }
+    const w = ensureWorker();
+    if (w) {
+      w.postMessage({ type: "fill", items });
+      return;
+    }
+    const policy = currentReplicaPolicy();
+    if (policy.mode === "lazy") return;
+    await fillOnMainThread(items);
+    const done = new Set<string>();
+    for (const item of items) {
+      if (isAudioKind(item.kind) || !persistBodyForKind(item.kind)) {
+        done.add(item.hash);
+        continue;
+      }
+      if (await hasBlob(item.hash)) done.add(item.hash);
+    }
+    await mutateWorklistUnlocked((next) => {
+      next.fetch = next.fetch.filter((item) => !done.has(item.hash));
+    });
+  });
 }
 
 function pathByKind(hash: string): PathRecord | undefined {
