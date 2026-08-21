@@ -2,11 +2,15 @@ import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  HOST_CMD_HAPTIC_IMPACT,
+  HOST_CMD_HAPTIC_NOTIFICATION,
+  HOST_CMD_HAPTIC_SELECTION,
   HOST_ORIGIN,
   HOST_PROTOCOL,
   HOST_PROTOCOL_V1_APPSHELL_ROUTES,
   HOST_PROTOCOL_V1_CACHE_KINDS,
   HOST_PROTOCOL_V1_MEDIA_KINDS,
+  HOST_PROTOCOL_V1_NAV_TYPES,
   HOST_PROTOCOL_V1_TAURI_COMMANDS,
   LEGACY_AUDIO_STORE_KINDS,
   appshellActivate,
@@ -46,6 +50,7 @@ test("host protocol is frozen at v1 on lvsync://localhost", () => {
 test("protocol v1 allow-lists reject LiveView-store kinds", () => {
   const allowed = new Set<string>([
     ...HOST_PROTOCOL_V1_MEDIA_KINDS,
+    ...HOST_PROTOCOL_V1_NAV_TYPES,
     ...HOST_PROTOCOL_V1_CACHE_KINDS,
     ...HOST_PROTOCOL_V1_APPSHELL_ROUTES,
     ...HOST_PROTOCOL_V1_TAURI_COMMANDS,
@@ -53,6 +58,7 @@ test("protocol v1 allow-lists reject LiveView-store kinds", () => {
   ]);
   const v1 = new Set<string>([
     ...HOST_PROTOCOL_V1_MEDIA_KINDS,
+    ...HOST_PROTOCOL_V1_NAV_TYPES,
     ...HOST_PROTOCOL_V1_CACHE_KINDS,
     ...HOST_PROTOCOL_V1_APPSHELL_ROUTES,
   ]);
@@ -66,7 +72,6 @@ test("protocol v1 allow-lists reject LiveView-store kinds", () => {
   assert.equal(v1.has("/sync_all"), false);
   assert.equal(v1.has("/resolve"), false);
   assert.equal(v1.has("/stats"), false);
-  // Documented so this PR still forwards them; they are not v1.
   for (const kind of [
     "pin",
     "unpin",
@@ -88,9 +93,11 @@ test("protocol v1 allow-lists reject LiveView-store kinds", () => {
     );
   }
   assert.ok(allowed.has("load"));
+  assert.ok(allowed.has("push"));
   assert.ok(allowed.has("cacheFromUrl"));
   assert.ok(allowed.has("/host-info"));
   assert.ok(allowed.has("/origins"));
+  assert.deepEqual([...HOST_PROTOCOL_V1_NAV_TYPES], ["push", "pop", "ready"]);
 });
 
 test("legacy audio store kinds are not protocol v1 media or cache", () => {
@@ -182,15 +189,36 @@ test("putFromUrl is path-only and never sends u=", async () => {
   assert.equal(new URL(seen[1]!.url).searchParams.get("v"), "1.2.3");
 });
 
-test("existing native call sites route through the host facade", async () => {
+test("existing native call sites keep protocol v1 wire shapes", async () => {
   const root = new URL("./", import.meta.url);
   const apiBase = await readFile(new URL("apiBase.ts", root), "utf8");
   const audio = await readFile(new URL("native-audio.ts", root), "utf8");
   const nav = await readFile(new URL("native-nav.ts", root), "utf8");
   const haptics = await readFile(new URL("_shell/haptics.ts", root), "utf8");
-  assert.ok(apiBase.includes("HOST_ORIGIN"));
-  assert.equal(apiBase.includes("lvsync://localhost/origins"), false);
   assert.ok(audio.includes("postHostAudio"));
   assert.ok(nav.includes("postHostNav"));
   assert.ok(haptics.includes("invokeHost"));
+  for (const kind of HOST_PROTOCOL_V1_MEDIA_KINDS) {
+    assert.ok(
+      audio.includes(`kind: "${kind}"`),
+      `audio still posts { kind: "${kind}" }`,
+    );
+  }
+  for (const type of HOST_PROTOCOL_V1_NAV_TYPES) {
+    assert.ok(
+      nav.includes(`type: "${type}"`),
+      `nav still posts { type: "${type}" }`,
+    );
+  }
+  assert.equal(HOST_CMD_HAPTIC_IMPACT, "plugin:haptics|impact_feedback");
+  assert.equal(
+    HOST_CMD_HAPTIC_NOTIFICATION,
+    "plugin:haptics|notification_feedback",
+  );
+  assert.equal(HOST_CMD_HAPTIC_SELECTION, "plugin:haptics|selection_feedback");
+  assert.ok(haptics.includes("HOST_CMD_HAPTIC_IMPACT"));
+  assert.ok(haptics.includes("HOST_CMD_HAPTIC_NOTIFICATION"));
+  assert.ok(haptics.includes("HOST_CMD_HAPTIC_SELECTION"));
+  assert.ok(apiBase.includes("${HOST_ORIGIN}/origins"));
+  assert.equal(apiBase.includes("lvsync://localhost/origins"), false);
 });

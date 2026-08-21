@@ -3,11 +3,8 @@
 // content; native code adds offline storage, background audio,
 // lock-screen controls, haptics, and app-settings integration that a PWA cannot.
 //
-// The document origin is frozen as `lvsync://localhost` (including
-// `lvsync://localhost/app/index.html` in tauri.conf.json and
-// capabilities/app-origin.json). That origin is the persistence contract for
-// IndexedDB, localStorage, and `_sync-idb`; host protocol v1
-// (`web/src/native-host.ts`) lives on the same scheme. Do not rename it.
+// Document origin is frozen as `lvsync://localhost` (IndexedDB/localStorage
+// persistence). Do not rename it.
 //
 // The shell also exposes the opener plugin (the error UI's "去设置开启" button →
 // iOS app-settings page) and the haptics plugin (the bundled UI buzzes controls

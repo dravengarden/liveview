@@ -1,13 +1,9 @@
 // Frozen native host protocol v1.
 //
-// Document origin `lvsync://localhost` is the persistence contract for IndexedDB,
-// localStorage, and `_sync-idb`. The scheme name is stale; do not rename it —
-// host routes live under that same origin. Additive fields are allowed; removing
-// or renaming a command is a native binary bump. TypeScript feature-detects and
-// no-ops missing commands (same as today's nativeAudioAvailable()).
+// Document origin `lvsync://localhost` is the persistence contract, so the
+// scheme stays.
 
-/** Persistence + host-route origin. Must stay aligned with tauri.conf.json and
- *  capabilities/app-origin.json. */
+/** Persistence + host-route origin. */
 export const HOST_ORIGIN = "lvsync://localhost";
 
 /** `host-info.protocol` starts at 1. */
@@ -33,6 +29,13 @@ export const HOST_PROTOCOL_V1_MEDIA_KINDS = [
   "seek",
   "rate",
   "widgetSnapshot",
+] as const;
+
+/** Navigation snapshot messages posted as `{ type }` (not `{ kind }`). */
+export const HOST_PROTOCOL_V1_NAV_TYPES = [
+  "push",
+  "pop",
+  "ready",
 ] as const;
 
 /** Media-cache kinds. Native does not implement these yet; wrappers no-op. */
@@ -65,8 +68,8 @@ export const HOST_PROTOCOL_V1_TAURI_COMMANDS = [
   HOST_CMD_HAPTIC_VIBRATE,
 ] as const;
 
-/** LiveView-store kinds this PR still forwards (native still implements them)
- *  but protocol v1 rejects as part of the frozen API. */
+/** LiveView-store kinds still forwarded because native still implements them.
+ *  Not part of protocol v1. */
 export const LEGACY_AUDIO_STORE_KINDS = [
   "prefetch",
   "pin",
@@ -79,6 +82,7 @@ export const LEGACY_AUDIO_STORE_KINDS = [
 
 export type HostProtocolV1MediaKind =
   (typeof HOST_PROTOCOL_V1_MEDIA_KINDS)[number];
+export type HostProtocolV1NavType = (typeof HOST_PROTOCOL_V1_NAV_TYPES)[number];
 export type HostProtocolV1CacheKind =
   (typeof HOST_PROTOCOL_V1_CACHE_KINDS)[number];
 export type LegacyAudioStoreKind = (typeof LEGACY_AUDIO_STORE_KINDS)[number];
