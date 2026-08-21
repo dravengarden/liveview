@@ -176,6 +176,16 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertAbsent(
     landing,
+    /<TextField[\s\S]{0,200}\bvalue=\{query\}/,
+    "the iOS shelf search must not control the native input and replace IME marked text",
+  );
+  assertPresent(
+    landing,
+    /onCompositionStart[\s\S]{0,500}onCompositionEnd[\s\S]{0,500}nativeEvent\.isComposing/,
+    "the shelf search must defer discovery updates until IME composition commits",
+  );
+  assertAbsent(
+    landing,
     /\bcontain\s*:/,
     "per-card paint containment (WKWebView promotes the artwork cards into an expensive scrolling layer set)",
   );

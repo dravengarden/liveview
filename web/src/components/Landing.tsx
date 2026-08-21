@@ -801,6 +801,12 @@ export function Landing({
   const group = useShelfGroup();
   const collapsed = useCollapsedGroups();
   const [query, setQuery] = useState("");
+  // Keep the native input uncontrolled. iOS WebKit owns marked text while a
+  // Chinese/Japanese/Korean IME is composing; feeding every provisional value
+  // back through React's `value` prop replaces that marked range and leaves the
+  // keyboard showing candidates while the field itself appears frozen.
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchComposingRef = useRef(false);
   // Single-choice kind filter ("all" = no narrowing). Audio-only books fall under
   // "book" — they share the card, so they're never a separate filter.
   const [kind, setKind] = useState<FilterKind>("all");
@@ -1255,8 +1261,26 @@ export function Landing({
             <>
               <TextField
                 size="small"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                inputRef={searchInputRef}
+                defaultValue=""
+                onCompositionStart={() => {
+                  searchComposingRef.current = true;
+                }}
+                onCompositionEnd={(e) => {
+                  searchComposingRef.current = false;
+                  setQuery(
+                    searchInputRef.current?.value ??
+                      (e.target as HTMLInputElement).value,
+                  );
+                }}
+                onChange={(e) => {
+                  const nativeEvent = e.nativeEvent as InputEvent;
+                  if (
+                    !searchComposingRef.current && !nativeEvent.isComposing
+                  ) {
+                    setQuery(e.currentTarget.value);
+                  }
+                }}
                 placeholder={t("landing.search")}
                 aria-label={t("landing.search")}
                 InputProps={{
@@ -1276,7 +1300,14 @@ export function Landing({
                       >
                         <IconButton
                           size="small"
-                          onClick={() => setQuery("")}
+                          onClick={() => {
+                            searchComposingRef.current = false;
+                            if (searchInputRef.current) {
+                              searchInputRef.current.value = "";
+                              searchInputRef.current.focus();
+                            }
+                            setQuery("");
+                          }}
                           aria-label={t("landing.searchClear")}
                           sx={{
                             width: { xs: 40, lg: 32 },
