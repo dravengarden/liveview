@@ -9,6 +9,7 @@ import { startOfflineFlagSync } from "./native-sync";
 import { startSyncQueue } from "./syncQueue";
 import { startApm } from "./apm";
 import { startOtaUpdater } from "./otaUpdater";
+import { initReplica, replicaFlag } from "./replica/mod.ts";
 import "./styles/index.css";
 
 // Choose a reachable native endpoint before any subsystem captures/uses REMOTE.
@@ -38,6 +39,9 @@ startApm();
 // App-bundle hot-update: check the server for a newer web bundle (incremental,
 // content-addressed) and reload into it when ready. Native shell only.
 startOtaUpdater();
+
+// IDB replica stays opt-in this PR (default native). contentFetch is unchanged.
+if (replicaFlag() === "idb") void initReplica();
 
 // Global haptic delegation: ONE listener set buzzes every MUI control (button /
 // toggle / card / chip / Select), custom `cursor:pointer` clickable, text input,
