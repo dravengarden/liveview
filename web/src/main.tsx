@@ -40,8 +40,8 @@ startApm();
 // content-addressed) and reload into it when ready. Native shell only.
 startOtaUpdater();
 
-// Replica is opt-in; missing flag keeps the native content path. Await so the
-// first contentFetch can hit the hydrated path index instead of a cold miss.
+// IDB replica is the content store. Await so the first contentFetch can hit
+// the hydrated path index instead of a cold miss.
 if (replicaFlag() === "idb") {
   await initReplica(undefined, { remoteBase: REMOTE, origins: [REMOTE] });
 }

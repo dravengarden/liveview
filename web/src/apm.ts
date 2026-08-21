@@ -1,36 +1,38 @@
 // Client APM (application performance monitoring): a NATIVE-ONLY, offline-durable
 // event pipeline. `logEvent()` records an operation/perf/error event into the
-// native Rust SQLite outbox (via the lvsync:// scheme); `flushApm()` batch-sends
-// the buffer to the server's /api/ingest when the network is good; the server
-// forwards each event to VictoriaLogs, where it's queried/debugged with LogsQL.
+// TypeScript IDB outbox; `flushApm()` batch-sends the buffer to the server's
+// /api/ingest when the network is good; the server forwards each event to
+// VictoriaLogs, where it's queried/debugged with LogsQL.
 //
 // Why native-only: the hard case APM exists FOR — an offline device that buffers
-// events for hours and flushes on reconnect — only happens on the phone shell,
-// which is also the only surface with a real SQLite (lvsync.sqlite). Off the shell
-// (PWA / browser) every helper is a no-op: desktop/web is effectively always
-// online and a lost analytics event there is not worth an IndexedDB buffer.
+// events for hours and flushes on reconnect — only happens on the phone shell.
+// Off the shell (PWA / browser) every helper is a no-op.
 //
-// The store is schema-dumb (see plugins/lvsync /apm routes): THIS file owns the
-// event shape. The server stamps `received_at` and streams by (device_id,
-// event_type). Delivery is at-least-once: a row is dropped from the local buffer
-// only after the server 200s, and `event_id` (a UUID) dedups a re-send.
+// The store is schema-dumb: THIS file owns the event shape. The replica `apm`
+// object store is INSERT-OR-IGNORE, capped at APM_MAX_ROWS (5000). Delivery is
+// at-least-once: a row is dropped only after the server 200s, and `event_id`
+// (a UUID) dedups a re-send.
 //
 // SELF-PROTECTION (never let telemetry harm the app):
 //   1. Every path is try/catch-swallowed — a failing log/flush is a NO-OP, never a
 //      throw into the app, and APM NEVER logs its own failures (that would be a
-//      self-feeding garbage loop: an APM error → an error event → written offline →
-//      … until storage fills).
-//   2. Storage is bounded: the native outbox caps at APM_MAX_ROWS (drops oldest);
+//      self-feeding garbage loop).
+//   2. Storage is bounded: the outbox caps at APM_MAX_ROWS (drops oldest);
 //      `error` events are de-duplicated + capped so an error storm can't flood it;
 //      connectivity transitions are logged ONCE per flip, never one-per-retry.
 
 import {
   nativeSyncAvailable,
   onNativeNetworkClass,
-} from "@/native-sync";
-import { REMOTE } from "@/apiBase";
+} from "./native-sync.ts";
+import { REMOTE } from "./apiBase.ts";
+import {
+  ackApmEvents,
+  drainApmEvents,
+  putApmEvent,
+} from "./replica/mod.ts";
+import { APM_MAX_ROWS } from "./replica/schema.ts";
 
-const SCHEME = "lvsync://localhost";
 const ENABLED = (import.meta.env["VITE_APM_ENABLED"] as string | undefined)
   ?.toLocaleLowerCase() === "true";
 
@@ -85,55 +87,48 @@ let netHint: "wifi" | "cell" | "none" | "unknown" = "unknown";
 let reachable = true;
 let lastProbe = 0;
 
-/** Record one client event. Fire-and-forget: it writes to the native SQLite outbox
+/** Record one client event. Fire-and-forget: it writes to the IDB outbox
  *  and never blocks the caller or throws. No-op off the native shell. `fields` are
  *  merged as top-level event fields — keep perf numbers scalar (e.g. `dur_ms`) so
  *  they're queryable in VictoriaLogs, not buried in a nested object. */
 export function logEvent(type: string, fields?: Record<string, unknown>): void {
   if (!ENABLED || !nativeSyncAvailable()) return;
   try {
+    const event_id = randomId();
+    const client_ts = Date.now();
     const event = {
-      event_id: randomId(),
+      event_id,
       device_id: deviceId(),
       session_id: sessionId,
       seq: seq++,
-      client_ts: Date.now(),
+      client_ts,
       event_type: type,
       app_version: APP_VERSION,
       net: netHint,
       reachable,
       ...fields,
     };
-    void fetch(`${SCHEME}/apm/log?e=${encodeURIComponent(JSON.stringify(event))}`).catch(
-      () => undefined,
-    );
+    void putApmEvent({ event_id, ts: client_ts, body: event }).catch(() => undefined);
   } catch {
     /* never let telemetry break the app */
   }
 }
 
 // ── error de-dup + cap ──────────────────────────────────────────────────────
-// An uncaught-error loop must NOT write a row per throw. De-dupe by signature
-// (log the FIRST occurrence of each distinct msg|src|line only) and cap the number
-// of distinct signatures per session — together these bound the worst case to
-// MAX_DISTINCT_ERRORS rows no matter how badly the app is misbehaving.
 const errSeen = new Map<string, number>();
 function logError(msg: string, extra: Record<string, unknown>): void {
   try {
     const key = `${msg}|${extra["src"] ?? ""}|${extra["line"] ?? ""}`;
     const n = errSeen.get(key) ?? 0;
     errSeen.set(key, n + 1);
-    if (n > 0) return; // this exact error already logged this session → skip
-    if (errSeen.size > MAX_DISTINCT_ERRORS) return; // storm backstop
+    if (n > 0) return;
+    if (errSeen.size > MAX_DISTINCT_ERRORS) return;
     logEvent("error", { ...extra, msg });
   } catch {
     /* error-logging must itself never throw */
   }
 }
 
-// ── reachability state machine ──────────────────────────────────────────────
-// Emit a transition event ONLY on an actual flip (state-guarded), so an offline
-// stretch logs exactly one net_offline + one net_online — never one-per-retry.
 function markReachable(): void {
   if (reachable) return;
   reachable = true;
@@ -142,14 +137,9 @@ function markReachable(): void {
 function markUnreachable(): void {
   if (!reachable) return;
   reachable = false;
-  // logEvent writes to LOCAL SQLite (works offline) — so this is recorded at the
-  // moment of detection with its true client_ts, then delivered on reconnect.
   logEvent("net_offline");
 }
 
-/** Cheap GET to sample server reachability when there's nothing to flush, so a
- *  SILENT offline (no user activity, empty outbox) still flips the state machine.
- *  Rate-limited to IDLE_PROBE_MS; produces NO event itself (only updates state). */
 async function probeReachability(): Promise<void> {
   const now = Date.now();
   if (now - lastProbe < IDLE_PROBE_MS) return;
@@ -159,7 +149,7 @@ async function probeReachability(): Promise<void> {
       cache: "no-store",
       ...(typeof AbortSignal.timeout === "function" ? { signal: AbortSignal.timeout(8_000) } : {}),
     });
-    markReachable(); // any response ⇒ server reachable
+    markReachable();
   } catch {
     markUnreachable();
   }
@@ -167,24 +157,22 @@ async function probeReachability(): Promise<void> {
 
 let flushing = false;
 
-/** Drain the native outbox in BATCH-sized rounds and POST each to /api/ingest,
- *  acking only what the server accepted (200). A network error (server unreachable)
- *  flips the reachability state machine and stops the round WITHOUT acking, so the
- *  events retry on the next trigger — at-least-once. No-op off-shell / when a flush
- *  is already running. Never throws. */
+/** Drain the IDB outbox in BATCH-sized rounds and POST each to /api/ingest,
+ *  acking only what the server accepted (200). Never throws. Never logs its own
+ *  failures. */
 export async function flushApm(): Promise<void> {
   if (!ENABLED || !nativeSyncAvailable() || flushing) return;
   flushing = true;
   try {
-    // Round cap: even if an ack somehow never lands, we can't drain more than the
-    // buffer's own cap (APM_MAX_ROWS) worth of rounds — bound it so a pathological
-    // state can't spin the server. Normal flushes exit far earlier (buffer drained).
-    for (let round = 0; round < 200; round++) {
-      const drained = await fetch(`${SCHEME}/apm/drain?limit=${BATCH}`);
-      if (drained.status !== 200) break;
-      const events = (await drained.json()) as Array<Record<string, unknown>>;
-      if (!events.length) {
-        await probeReachability(); // nothing to send → still sample reachability
+    for (let round = 0; round < Math.ceil(APM_MAX_ROWS / BATCH); round++) {
+      let events: unknown[];
+      try {
+        events = await drainApmEvents(BATCH);
+      } catch {
+        break;
+      }
+      if (!Array.isArray(events) || events.length === 0) {
+        await probeReachability();
         break;
       }
       let res: Response;
@@ -201,20 +189,25 @@ export async function flushApm(): Promise<void> {
             : {}),
         });
       } catch {
-        markUnreachable(); // network error = server unreachable; keep the rows, retry later
+        markUnreachable();
         break;
       }
-      markReachable(); // server responded (ANY status, incl. 401/502) ⇒ reachable
-      // 401 (bad token) / 5xx (VL hiccup) → reachable but not accepted; keep the rows.
+      markReachable();
       if (!res.ok) break;
-      const ids = events.map((e) => String(e["event_id"])).filter((id) => id && id !== "undefined");
-      await fetch(`${SCHEME}/apm/ack?ids=${encodeURIComponent(ids.join(","))}`).catch(
-        () => undefined,
-      );
-      if (events.length < BATCH) break; // buffer drained
+      const ids = events.flatMap((e) => {
+        if (!e || typeof e !== "object") return [];
+        const id = (e as { event_id?: unknown }).event_id;
+        return typeof id === "string" && id ? [id] : [];
+      });
+      try {
+        await ackApmEvents(ids);
+      } catch {
+        break;
+      }
+      if (events.length < BATCH) break;
     }
   } catch {
-    /* offline / transient — the next trigger retries */
+    /* offline / transient — the next trigger retries; never log own failures */
   } finally {
     flushing = false;
   }
@@ -222,16 +215,10 @@ export async function flushApm(): Promise<void> {
 
 let started = false;
 
-/** Wire the flush triggers + global error capture once. Also emits session-lifecycle
- *  events (session_start, app_foreground/background) and installs app-wide error hooks
- *  so uncaught exceptions/rejections are logged (de-duped) with zero per-call-site
- *  instrumentation. Native-shell only; idempotent. */
 export function startApm(): void {
   if (!ENABLED || started || !nativeSyncAvailable() || typeof window === "undefined") return;
   started = true;
 
-  // Uncaught errors → APM, app-wide, de-duped/capped (the biggest debug win for the
-  // least code). Uses logError, NOT logEvent, so an error loop can't flood the outbox.
   globalThis.addEventListener?.("error", (ev: ErrorEvent) => {
     logError(String(ev.message ?? "error"), { src: ev.filename ?? "", line: ev.lineno ?? 0 });
   });
@@ -239,8 +226,6 @@ export function startApm(): void {
     logError(String(ev.reason ?? "unhandledrejection"), { kind: "rejection" });
   });
 
-  // Session lifecycle: one per launch, plus foreground/background transitions (these
-  // are bounded — a few per sitting — not high-frequency, so they're worth keeping).
   logEvent("session_start");
   document.addEventListener?.("visibilitychange", () => {
     if (document.visibilityState === "visible") {
@@ -251,15 +236,12 @@ export function startApm(): void {
     }
   });
 
-  // Flush triggers.
   globalThis.addEventListener?.("online", () => void flushApm());
   globalThis.setInterval?.(() => void flushApm(), FLUSH_MS);
 
-  // Share the native NWPathMonitor push stream with offline handling. APM must
-  // never create its own recurring native bridge work on the scroll hot path.
   onNativeNetworkClass((net) => {
     netHint = net;
   });
 
-  void flushApm(); // drain anything left from a prior offline session
+  void flushApm();
 }

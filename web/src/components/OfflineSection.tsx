@@ -19,15 +19,18 @@ import {
   contentFetch,
   ensureAutoSync,
   nativeCacheStats,
+  nativeNetworkClass,
   nativeSyncAvailable,
   offlineWifiOnly,
+  onNativeNetworkClass,
   setOfflineWifiOnly,
 } from "@/native-sync";
 import {
-  type AudioStats,
-  nativeAudioSetCap,
-  nativeAudioStats,
-} from "@/native-audio";
+  evictUnpinnedAudioToFit,
+  loadPolicy,
+  persistPolicy,
+  replicaStats,
+} from "@/replica/mod.ts";
 import { useI18n } from "@/i18n";
 
 function gb(bytes: number): string {
@@ -55,7 +58,11 @@ function maxGB(): number {
 export function OfflineSection(): React.JSX.Element | null {
   const { t } = useI18n();
   const [stats, setStats] = useState<CacheStats | null>(null);
-  const [audio, setAudio] = useState<AudioStats | null>(null);
+  const [audio, setAudio] = useState<{
+    usedBytes: number;
+    cachedCount: number;
+    net: "wifi" | "cell" | "none";
+  } | null>(null);
   // Download TOTALS from the cheap server index (/api/sizes), keyed by deploy root
   // — replaces fetching + parsing the ~4 MB /api/dag here just to sum sizes.
   const [sizes, setSizes] = useState<
@@ -77,12 +84,17 @@ export function OfflineSection(): React.JSX.Element | null {
     } catch {
       /* keep last-known */
     }
-    const a = await nativeAudioStats();
-    setAudio(a);
-    // Average download speed over a ~10s window (audio is the bulk that grows;
-    // text is static). The window itself smooths; we only report once we have a
-    // ≥2s span so the very first sample doesn't show a wild number.
-    if (a) {
+    try {
+      const replica = await replicaStats();
+      const netRaw = nativeNetworkClass();
+      const net: "wifi" | "cell" | "none" =
+        netRaw === "cell" || netRaw === "none" ? netRaw : "wifi";
+      const a = {
+        usedBytes: replica.audioBytes,
+        cachedCount: replica.audioCached,
+        net,
+      };
+      setAudio(a);
       const now = Date.now();
       const arr = samplesRef.current;
       arr.push({ t: now, used: a.usedBytes });
@@ -95,13 +107,17 @@ export function OfflineSection(): React.JSX.Element | null {
       } else {
         setSpeed(null);
       }
+    } catch {
+      /* keep last-known */
     }
     if (s && s.cached < s.total) void ensureAutoSync();
   }, []);
 
   useEffect(() => {
     if (!nativeSyncAvailable()) return undefined;
-    nativeAudioSetCap(maxGB() * 1_073_741_824);
+    const unsubNet = onNativeNetworkClass(() => {
+      void tick();
+    });
     void (async () => {
       try {
         // Cheap precomputed totals (tiny JSON), NOT the 4 MB dag. Network-first so
@@ -124,6 +140,7 @@ export function OfflineSection(): React.JSX.Element | null {
     void tick();
     pollRef.current = globalThis.setInterval(() => void tick(), 2000);
     return () => {
+      unsubNet();
       if (pollRef.current !== undefined) clearInterval(pollRef.current);
     };
   }, [tick]);
@@ -202,7 +219,9 @@ export function OfflineSection(): React.JSX.Element | null {
     }
     setCap(newGB);
     globalThis.localStorage?.setItem(MAX_KEY, String(newGB));
-    nativeAudioSetCap(newGB * 1_073_741_824);
+    const policy = loadPolicy();
+    policy.capBytes = newGB * 1_073_741_824;
+    void persistPolicy(policy).then(() => evictUnpinnedAudioToFit(policy.capBytes));
   };
 
   return (
@@ -309,25 +328,6 @@ export function OfflineSection(): React.JSX.Element | null {
             </Typography>
           )}
         </Stack>
-        {/* Downloader diagnostics — shows whether the native pool is actually
-            running (inflight/queued/done) and the last transfer error, so a
-            stalled fill is debuggable from the device without os_log access. */}
-        {audio?.dlInflight != null && (
-          <Typography
-            variant="caption"
-            sx={{
-              display: "block",
-              mt: 0.5,
-              color: audio.dlErr ? "warning.main" : "text.disabled",
-              fontVariantNumeric: "tabular-nums",
-              wordBreak: "break-word",
-            }}
-          >
-            dl ▸ inflight {audio.dlInflight} · queued {audio.dlQueued ?? 0} · done{" "}
-            {audio.dlDone ?? 0}
-            {audio.dlErr ? ` · err: ${audio.dlErr}` : ""}
-          </Typography>
-        )}
       </Box>
 
       <Dialog open={confirmCap != null} onClose={() => setConfirmCap(null)}>
@@ -349,7 +349,11 @@ export function OfflineSection(): React.JSX.Element | null {
               setConfirmCap(null);
               setCap(g);
               globalThis.localStorage?.setItem(MAX_KEY, String(g));
-              nativeAudioSetCap(g * 1_073_741_824);
+              const policy = loadPolicy();
+              policy.capBytes = g * 1_073_741_824;
+              void persistPolicy(policy).then(() =>
+                evictUnpinnedAudioToFit(policy.capBytes)
+              );
             }}
           >
             {t("offline.confirmDelete")}

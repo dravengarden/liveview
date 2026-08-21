@@ -14,24 +14,24 @@
 // Protocol (web ⇄ native):
 //   web → native   (WKScriptMessage "lvNativeAudio"): {kind, data?}
 //       load {url, position, rate, title, artist, album, artworkUrl}
-//       play | pause | stop
+//       play | pause | stop | state
 //       seek {position} | rate {rate}
+//       cacheFromUrl {url, hash} | cacheHas {id, hash} | cacheDelete {hash}
+//       cacheCount {id} | setAllowsCellular {on}
 //   native → web   (CustomEvent "lv-native-audio"): {type, ...}
 //       time {position, duration} | durationchange {duration}
 //       playing | paused | ended | waiting | canplay
 //       next | prev   (remote next/prev track — the WEB owns the queue)
-//       error {message}
+//       error {message} | network {net} | cacheProgress {hash, ok}
+//
+// Media cache is a generic decode cache + bounded fetch queue, not the store:
+// TS owns pin/LRU/cap/worklist. Native never sees a DAG, book, or Downloads
+// total. Continuation while suspended is NOT available — do not reintroduce
+// `.background(withIdentifier:)`.
 //
 // Lock-screen / AirPods / CarPlay transport runs through MPRemoteCommandCenter +
 // MPNowPlayingInfoCenter, applied DIRECTLY to the AVPlayer (play/pause/seek/skip)
 // and echoed to the web so its UI + read-along stay in sync.
-//
-// Offline cache (M2): download-aside, content-addressed. A cached chapter plays
-// from the LOCAL file (offline + instant); an uncached one streams the origin AND
-// downloads it in the background so the next play is local. Keyed by the web's
-// content hash (dedup + survive re-render) when supplied, else the URL. Chosen
-// over a single-pass AVAssetResourceLoaderDelegate for robustness (no Range
-// bookkeeping); on the tailnet the first-play double-fetch is negligible.
 //
 // Concurrency: classic main-thread MediaPlayer/AVFoundation. Script messages and
 // remote-command callbacks arrive on the main thread.
@@ -79,15 +79,8 @@ import WidgetKit
   private var currentCacheKey: String?
   private var playingFromCache = false
 
-  // Offline audio store (content-addressed when the web supplies the hash), in
-  // Application Support (NOT Caches — iOS purges Caches under pressure). DURABLE
-  // data, two tiers + a budget:
-  //   • PINNED  — books the user explicitly downloaded (🎧). Protected: never
-  //     auto-evicted; only a manual remove deletes them. Persisted in _pins.json.
-  //   • preload/played — fetched to fill the storage budget or as a side-effect of
-  //     playing. Evictable (LRU by access mtime) once the store exceeds `capBytes`.
-  // Text is a separate, tiny store (LvSyncController) and is NEVER evicted — its
-  // "weight" is effectively infinite vs audio.
+  // Playback files live in Application Support (NOT Caches — iOS purges Caches
+  // under pressure). Keyed by content hash; TS owns pins/LRU/cap.
   private var inFlight: Set<String> = []
   private lazy var cacheDir: URL = {
     let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -95,73 +88,22 @@ import WidgetKit
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
   }()
-  // Manual-download protection set (sanitized hashes), persisted across launches.
-  private lazy var pinsFile: URL = cacheDir.appendingPathComponent("_pins.json")
-  private lazy var pinned: Set<String> = {
-    guard let d = try? Data(contentsOf: pinsFile),
-          let a = try? JSONDecoder().decode([String].self, from: d) else { return [] }
-    return Set(a)
-  }()
-  private func savePins() { try? JSONEncoder().encode(Array(pinned)).write(to: pinsFile) }
 
-  // SQLite resource INDEX (LvStore.swift): one row per cached blob (key+bytes+
-  // pinned+mtime). Lets audioStats/usedBytes be an O(1) aggregate instead of a
-  // contentsOfDirectory scan + per-file stat on every 2s poll + panel open — the
-  // fix for the slow Downloads panel. Maintained on every publish/evict/unpin/pin.
-  private lazy var store: LvStore? = {
-    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    guard let s = LvStore(path: base.appendingPathComponent("lv-index-audio.sqlite").path)
-    else { return nil }
-    // One-time import: index any blobs already on disk (upgrade from the pre-index
-    // build) so stats are correct without re-downloading.
-    if s.isEmpty() { importExisting(into: s) }
-    return s
-  }()
-
-  /// Populate the index from the files currently in cacheDir (one-time migration).
-  private func importExisting(into s: LvStore) {
-    let fm = FileManager.default
-    guard let files = try? fm.contentsOfDirectory(
-      at: cacheDir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]
-    ) else { return }
-    for f in files
-    where f.pathExtension != "part" && !f.lastPathComponent.hasPrefix("_") {
-      // The logical key is the bare content hash; on-disk files carry .caf (see
-      // fileURL). Strip it so the index keys match what playback/pins/stats use.
-      let key = f.pathExtension == "caf"
-        ? String(f.deletingPathExtension().lastPathComponent)
-        : f.lastPathComponent
-      let v = try? f.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-      let bytes = Int64(v?.fileSize ?? 0)
-      let mtime = Int64((v?.contentModificationDate ?? Date(timeIntervalSince1970: 0))
-        .timeIntervalSince1970)
-      s.upsert(key: key, kind: "audio", bytes: bytes, pinned: pinned.contains(key), mtime: mtime)
-    }
-  }
-
-  /// Index a freshly-published blob. `now` mtime so LRU treats new files as recent.
-  private func indexPut(_ key: String, _ bytes: Int64) {
-    store?.upsert(key: key, kind: "audio", bytes: bytes,
-                  pinned: pinned.contains(key), mtime: Int64(Date().timeIntervalSince1970))
-  }
-  // Storage budget for the audio store (bytes). The web owns the setting and pushes
-  // it via `setCap`; default 20 GB until told otherwise. Eviction (LRU, pinned-
-  // exempt) keeps the store at/under this.
-  private var capBytes: Int64 = 20_000_000_000
+  // In-memory hash-set for cacheCount. Rebuilt OFF-MAIN from the directory if
+  // cold; never a UI-path readdir of ~3k files (that jank is why LvStore existed).
+  private var cachedHashes: Set<String> = []
+  private var hashSetReady = false
+  private let hashSetQueue = DispatchQueue(label: "lv.audio.hashset", qos: .utility)
 
   // ── Foreground bulk-download scheduler ───────────────────────────────────────
-  // The library fill (pin/preload) runs on a POOL of FOREGROUND `.default`
-  // URLSessions. WHY not `.background(withIdentifier:)` (an earlier attempt at
-  // "download in the background while suspended"): on THIS device the background
-  // nsurlsessiond pool made ZERO progress — not even in the foreground — while a
-  // `.default` session provably works (audio streaming/prefetch uses one, and the
-  // previous `.default` pool is what filled the first ~4327 chapters). The
-  // out-of-process daemon path never delivered a single completion here, so the
-  // fill stalled AND the on-screen fill regressed. Reverted to `.default`: it
-  // reliably advances whenever the app is open. The tradeoff — `.default`
-  // transfers suspend when the app leaves the foreground — is the accepted ceiling
-  // until true background continuation is solved separately (it needs a working
-  // background session + an app-suspend hand-off, hard in this wry app shell).
+  // The library fill runs on a POOL of FOREGROUND `.default` URLSessions. WHY
+  // not `.background(withIdentifier:)` (an earlier attempt at "download while
+  // suspended"): on THIS device the background nsurlsessiond pool made ZERO
+  // progress — not even in the foreground — while a `.default` session
+  // provably works. Reverted to `.default`: it reliably advances whenever the
+  // app is open. The tradeoff — `.default` transfers suspend when the app
+  // leaves the foreground — is the accepted ceiling until true background
+  // continuation is solved separately.
   //
   // A POOL of N sessions (not one): one URLSession multiplexes ALL its tasks onto a
   // SINGLE HTTP/2 connection to a host; the origin is a TLS domain reached through a
@@ -169,54 +111,37 @@ import WidgetKit
   // h2 flow-control window caps aggregate throughput to ~one stream's worth NO
   // MATTER how many streams are in flight. N independent sessions = N connections =
   // N parallel windows, restoring the ~tens-of-MB/s fill.
-  // `httpMaximumConnectionsPerHost` per session bounds the real concurrency.
   private struct DLItem { let url: URL; let key: String }
-  private struct DagPlan: Decodable {
-    let root: String
-    let resources: [DagPlanResource]
-  }
-  private struct DagPlanResource: Decodable {
-    let hash: String
-    let kind: String
-    let url: String
-  }
   private var dlQueue: [DLItem] = []
   private var dlQueueHead = 0
   private var dlQueuedKeys: Set<String> = []
   private var dlInflight = 0
   private var dlTimer: Timer?
   private var dlRetries: [String: Int] = [:]
-  private let planQueue = DispatchQueue(label: "lv.audio.plan", qos: .utility)
-  private var planGeneration = 0
-  private var lastPlanRequest: (root: String, baseURL: String)?
   private static let dlSessionCount = 6
   // Keep only one active bulk task per independent session. Queuing thousands of
-  // URLSession tasks at once made task creation, delegate delivery and SQLite
-  // accounting contend with WKWebView's main thread while the user was scrolling.
-  // Six independent connections preserve the high-latency relay throughput; the
-  // in-memory Merkle queue remains the cheap source of pending work.
+  // URLSession tasks at once made task creation and delegate delivery contend
+  // with WKWebView's main thread while the user was scrolling.
   private static let dlMaxInflight = dlSessionCount
 
-  // "Prefetch on WiFi only": enforced NATIVELY on the pool via
-  // `allowsCellularAccess`. Persisted in UserDefaults so the pool has the
-  // right cellular policy from the first task at launch, before the web re-pushes
-  // it. Default true (never surprise-burn cellular).
+  // Cellular policy on the pool. Persisted so the pool has the right
+  // allowsCellularAccess from the first task at launch, before TS re-pushes it.
+  // Default false (never surprise-burn cellular). Migrates the old wifiOnly key.
+  private static let allowsCellularKey = "lv.audio.allowsCellular"
   private static let wifiOnlyKey = "lv.audio.wifiOnly"
-  private lazy var wifiOnly: Bool =
-    (UserDefaults.standard.object(forKey: Self.wifiOnlyKey) as? Bool) ?? true
+  private lazy var allowsCellular: Bool = {
+    if let v = UserDefaults.standard.object(forKey: Self.allowsCellularKey) as? Bool {
+      return v
+    }
+    let wifiOnly = (UserDefaults.standard.object(forKey: Self.wifiOnlyKey) as? Bool) ?? true
+    return !wifiOnly
+  }()
 
   private var dlSessions: [URLSession] = []
   private var dlRR = 0
 
-  // Download diagnostics surfaced to the Downloads panel via `audioStats`, so a
-  // stalled fill is debuggable on-device (we can't stream this app's os_log off a
-  // wirelessly-paired phone). `dlDone` = completions since launch; `dlLastErr` =
-  // the most recent non-cancel transfer error.
-  private var dlDone = 0
-  private var dlLastErr: String?
-
   /// Build the foreground `.default` pool. Called once eagerly at init and again
-  /// after a WiFi-only toggle. Assumes `dlSessions` is empty. Delegate-based
+  /// after a cellular-policy toggle. Assumes `dlSessions` is empty. Delegate-based
   /// downloads (no completion handler) so publish/accounting run in the
   /// URLSessionDownloadDelegate methods below.
   private func setupDownloadSessions() {
@@ -224,7 +149,7 @@ import WidgetKit
     dlSessions = (0..<Self.dlSessionCount).map { index in
       let cfg = URLSessionConfiguration.default
       cfg.httpMaximumConnectionsPerHost = 6
-      cfg.allowsCellularAccess = !wifiOnly
+      cfg.allowsCellularAccess = allowsCellular
       // Ride out a brief connectivity blip instead of failing the task outright.
       cfg.waitsForConnectivity = true
       cfg.timeoutIntervalForRequest = 90
@@ -247,20 +172,23 @@ import WidgetKit
     return s
   }
 
-  /// Apply the WiFi-only preference pushed from the web. Rebuilds the pool so the
+  /// Apply the cellular preference pushed from the web. Rebuilds the pool so the
   /// new `allowsCellularAccess` takes effect (config is immutable). `.default`
   /// sessions carry no shared identifier, so the new pool can be built immediately;
   /// the old sessions' cancelled tasks fire didCompleteWithError(.cancelled), which
-  /// we skip-retry; the durable Merkle plan reconciles the missing item again.
-  private func applyWifiOnly(_ on: Bool) {
-    if dlSessions.isEmpty { // first push at launch — just build with the right policy
-      if on != wifiOnly { wifiOnly = on; UserDefaults.standard.set(on, forKey: Self.wifiOnlyKey) }
+  /// we skip-retry; TS re-enqueues misses from its IDB worklist.
+  private func applyAllowsCellular(_ on: Bool) {
+    if dlSessions.isEmpty {
+      if on != allowsCellular {
+        allowsCellular = on
+        UserDefaults.standard.set(on, forKey: Self.allowsCellularKey)
+      }
       setupDownloadSessions()
       return
     }
-    if on == wifiOnly { return }
-    wifiOnly = on
-    UserDefaults.standard.set(on, forKey: Self.wifiOnlyKey)
+    if on == allowsCellular { return }
+    allowsCellular = on
+    UserDefaults.standard.set(on, forKey: Self.allowsCellularKey)
     let old = dlSessions
     dlSessions = []
     dlInflight = 0
@@ -271,10 +199,9 @@ import WidgetKit
   }
 
   // Foreground single-file session for the play-path prefetch (the chapter being
-  // streamed right now) + explicit save-offline. Kept a `.default` completion-
-  // handler session on purpose: it's a want-it-NOW fetch while the app is active,
-  // not part of the background library fill, so it needs no out-of-process
-  // continuation. `waitsForConnectivity` rides out a brief drop.
+  // streamed right now). Kept a `.default` completion-handler session on purpose:
+  // it's a want-it-NOW fetch while the app is active, not part of the library
+  // fill, so it needs no out-of-process continuation.
   private lazy var fgSession: URLSession = {
     let cfg = URLSessionConfiguration.default
     cfg.httpMaximumConnectionsPerHost = 6
@@ -303,70 +230,11 @@ import WidgetKit
     c.observeAudioSession()
     c.startTimeObserver()
     c.purgeForeignAudio()
-    c.reconcileIndex()
-  }
-
-  /// Prune index rows whose backing file is gone, so `cachedCount`/`usedBytes` and
-  /// the download driver's dedup reflect what's ACTUALLY on disk. Repairs the
-  /// damage the old `purgeForeignAudio` key bug left behind (thousands of phantom
-  /// rows: indexed as cached but deleted from disk). Without this, those chapters
-  /// stay "cached" in the index forever → the driver never re-downloads them, the
-  /// count is inflated, and they fail to play offline. Idempotent + cheap (one
-  /// existence check per row); self-heals on every launch. `resolveFile` also
-  /// migrates a legacy extension-less blob in place, which is harmless here.
-  private func reconcileIndex() {
-    guard let s = store else { return }
-    let fm = FileManager.default
-    let known = Set(s.allKeys())
-    // Half 1 — prune PHANTOM rows (indexed but the file is gone): the old
-    // purgeForeignAudio key bug left thousands behind, inflating the count and
-    // making the driver dedup deleted chapters as "cached" forever.
-    let gone = known.filter { resolveFile($0) == nil }
-    for key in gone {
-      s.remove(key: key)
-      pinned.remove(key)
-    }
-    // Half 2 — ADOPT orphan files (on disk but NOT indexed). A completion whose
-    // async `indexPut` never ran — the app suspended/killed between `publish`
-    // (off-main, writes the file) and the main-queue hop that indexes it — leaves
-    // a `.caf` with no row. This is the SECOND wedge: the download DRIVER dedups
-    // against the INDEX (`store.allKeys`) while native `preload` dedups against
-    // DISK (`onDisk`), so an orphan is invisible to the driver (re-sent every
-    // tick) yet skipped by native (already on disk). The driver's front-anchored
-    // slice keeps re-feeding the same on-disk orphans and never advances to the
-    // truly-missing chapters — inflight/queued/done all 0 with disk > index, the
-    // fill frozen with no error. Adopting orphans makes index == disk so the
-    // driver's "uncached" set is truthful again and the fill resumes. Idempotent.
-    var adopted = 0
-    if let files = try? fm.contentsOfDirectory(
-      at: cacheDir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) {
-      for f in files where f.pathExtension == "caf" {
-        let key = String(f.deletingPathExtension().lastPathComponent)
-        if known.contains(key) || key.hasPrefix("_") { continue }
-        let vals = try? f.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-        let bytes = Int64(vals?.fileSize ?? 0)
-        let mtime = Int64(vals?.contentModificationDate?.timeIntervalSince1970
-          ?? Date().timeIntervalSince1970)
-        s.upsert(key: key, kind: "audio", bytes: bytes, pinned: pinned.contains(key), mtime: mtime)
-        adopted += 1
-      }
-    }
-    if !gone.isEmpty { savePins() }
-    // Visible via the dl_stats telemetry: cachedCount converges to the true
-    // on-disk count on the next poll, then the driver re-enqueues the real gaps.
-    if !gone.isEmpty || adopted > 0 {
-      NSLog("[lv-audio] reconcileIndex pruned %d phantom rows, adopted %d orphan files",
-            gone.count, adopted)
-    }
+    c.seedHashSetAndExportLegacy()
   }
 
   /// One-time cleanup: delete any audio file that is NOT the current compressed
-  /// variant (Opus-in-CAF). Legacy uncompressed MP3s (and any old variant) sit
-  /// under the same content-hash keys as the new CAF, so `downloadToCache` skips
-  /// them and the store stays bloated (used ≫ what's actually current). Keep only
-  /// files whose magic bytes are "caff"; delete the rest — the next preload
-  /// re-fetches them compressed. Marker-gated so it runs once; BUMP the marker
-  /// name whenever the variant/cleanup changes so it re-runs exactly once more.
+  /// variant (Opus-in-CAF). Marker-gated so it runs once.
   private func purgeForeignAudio() {
     let marker = cacheDir.appendingPathComponent("_purge_caf_v2")
     if FileManager.default.fileExists(atPath: marker.path) { return }
@@ -379,23 +247,65 @@ import WidgetKit
         try? h.close()
         let isCaf = head?.starts(with: [0x63, 0x61, 0x66, 0x66]) ?? false // "caff"
         if !isCaf {
-          // The index/pins key is the BARE hash; the file may carry a `.caf`
-          // extension. Strip it before remove — passing the filename-with-`.caf`
-          // (the original bug) matched no index row, so deleting foreign audio left
-          // a PHANTOM index row behind (indexed as cached, file gone), which
-          // inflated the count AND made the download driver dedup the deleted
-          // chapter as "already cached" so it never re-downloaded.
-          let key = f.pathExtension == "caf"
-            ? String(f.deletingPathExtension().lastPathComponent)
-            : f.lastPathComponent
           try? fm.removeItem(at: f)
-          pinned.remove(key)
-          store?.remove(key: key)
         }
       }
     }
-    savePins()
     fm.createFile(atPath: marker.path, contents: Data())
+  }
+
+  /// Scan lv-audio off-main, seed the hash-set, and write `_legacy-index.json`
+  /// once so TS can import present/pins without 3k cacheHas round-trips.
+  private func seedHashSetAndExportLegacy() {
+    let dir = cacheDir
+    hashSetQueue.async { [weak self] in
+      let (hashes, pins) = Self.scanLegacy(dir)
+      let dest = dir.appendingPathComponent("_legacy-index.json")
+      if !FileManager.default.fileExists(atPath: dest.path) {
+        let obj: [String: Any] = ["hashes": Array(hashes), "pins": Array(pins)]
+        if let data = try? JSONSerialization.data(withJSONObject: obj) {
+          try? data.write(to: dest, options: .atomic)
+        }
+      }
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.cachedHashes = hashes
+        self.hashSetReady = true
+      }
+    }
+  }
+
+  /// Directory scan + `.caf`/legacy migration. Must not run on the UI path.
+  private static func scanLegacy(_ dir: URL) -> (Set<String>, Set<String>) {
+    var hashes = Set<String>()
+    let fm = FileManager.default
+    if let files = try? fm.contentsOfDirectory(
+      at: dir, includingPropertiesForKeys: nil
+    ) {
+      for f in files
+      where f.pathExtension != "part"
+        && f.pathExtension != "json"
+        && !f.lastPathComponent.hasPrefix("_") {
+        let key: String
+        if f.pathExtension == "caf" {
+          key = String(f.deletingPathExtension().lastPathComponent)
+        } else {
+          key = f.lastPathComponent
+          let caf = dir.appendingPathComponent(key + ".caf")
+          if !fm.fileExists(atPath: caf.path) {
+            try? fm.moveItem(at: f, to: caf)
+          }
+        }
+        if !key.isEmpty { hashes.insert(key) }
+      }
+    }
+    var pins = Set<String>()
+    let pinsFile = dir.appendingPathComponent("_pins.json")
+    if let d = try? Data(contentsOf: pinsFile),
+       let a = try? JSONDecoder().decode([String].self, from: d) {
+      pins = Set(a).intersection(hashes)
+    }
+    return (hashes, pins)
   }
 
   private init(webView: WKWebView) {
@@ -409,12 +319,9 @@ import WidgetKit
     netMonitor.pathUpdateHandler = { [weak self] p in
       guard let self else { return }
       self.netPath = p
-      // Push path changes once instead of making JavaScript poll audioStats every
-      // two seconds. audioStats enumerates the audio index and filesystem; two
-      // synchronized web polls were periodically blocking WKWebView scrolling.
       self.emit("{type:'network',net:'\(self.netType())'}")
       if p.status == .satisfied {
-        DispatchQueue.main.async { [weak self] in self?.reconcileLastAudioPlan() }
+        DispatchQueue.main.async { [weak self] in self?.startScheduler() }
       }
     }
     netMonitor.start(queue: DispatchQueue(label: "lv.net"))
@@ -423,7 +330,6 @@ import WidgetKit
     // session's delegate queue (off main) and touches `cacheDir`; a non-thread-safe
     // lazy racing that first access could crash. Pre-touching here closes the window.
     _ = cacheDir
-    // Build the download pool eagerly so it's ready before the first preload arrives.
     setupDownloadSessions()
   }
 
@@ -447,16 +353,11 @@ import WidgetKit
     case "rate": if let r = d?["rate"] as? Double { setRate(r) }
     case "stop": stop()
     case "state": emitState()
-    case "prefetch":
-      if let s = d?["url"] as? String, let u = URL(string: s) {
-        downloadToCache(u, cacheKey(forURL: u, hash: d?["hash"] as? String))
-      }
-    case "pin": pin(d)
-    case "reconcile": reconcileAudioPlan(d)
-    case "unpin": unpin(d)
-    case "setCap": setCap(d)
-    case "setWifiOnly": if let on = d?["on"] as? Bool { applyWifiOnly(on) }
-    case "audioStats": audioStats(d)
+    case "cacheFromUrl": cacheFromUrl(d)
+    case "cacheHas": cacheHas(d)
+    case "cacheDelete": cacheDelete(d)
+    case "cacheCount": cacheCount(d)
+    case "setAllowsCellular": if let on = d?["on"] as? Bool { applyAllowsCellular(on) }
     case "widgetSnapshot": publishWidgetSnapshot(d)
     default: break
     }
@@ -509,116 +410,68 @@ import WidgetKit
     }
   }
 
-  // MARK: offline downloads (per-book)
+  // MARK: media cache
 
-  /// MANUAL download (🎧): mark PROTECTED + enqueue at the FRONT (the user wants
-  /// this book now, ahead of the background fill). Idempotent.
-  private func pin(_ d: [String: Any]?) {
-    guard let items = d?["items"] as? [[String: Any]] else { return }
-    var front: [DLItem] = []
-    for it in items {
-      guard let s = it["url"] as? String, let u = URL(string: s) else { continue }
-      let key = cacheKey(forURL: u, hash: it["hash"] as? String)
-      pinned.insert(key)
-      if onDisk(key) {
-        store?.setPinned(key: key, pinned: true) // already cached → just flag it
-      } else {
-        front.append(DLItem(url: u, key: key))
-      }
+  private func cacheFromUrl(_ d: [String: Any]?) {
+    guard let s = d?["url"] as? String, let u = URL(string: s),
+          let scheme = u.scheme?.lowercased(), scheme == "http" || scheme == "https",
+          let hash = d?["hash"] as? String else { return }
+    let key = sanitizeKey(hash)
+    guard !key.isEmpty else { return }
+    if onDisk(key) {
+      noteCached(key)
+      emitCacheProgress(key, true)
+      return
     }
-    savePins()
-    // Prepend (skip dups already queued/in-flight).
-    let wanted = front.filter { !dlQueuedKeys.contains($0.key) && !inFlight.contains($0.key) }
-    if !wanted.isEmpty {
-      // Manual downloads are rare and explicitly prioritized. Compact once here;
-      // the hot automatic dequeue path below remains O(1).
-      dlQueue = wanted + Array(dlQueue[dlQueueHead...])
-      dlQueueHead = 0
-      dlQueuedKeys.formUnion(wanted.map(\.key))
-    }
+    if dlQueuedKeys.contains(key) || inFlight.contains(key) { return }
+    dlQueue.append(DLItem(url: u, key: key))
+    dlQueuedKeys.insert(key)
     startScheduler()
   }
 
-  /// Reconcile automatic downloads from lv-sync's durable `dag.json`. The web
-  /// sends only a root + origin; reading, decoding and disk diffing stay off the
-  /// WKWebView/main thread. The Rust plugin remains the sole manifest owner.
-  private func reconcileAudioPlan(_ d: [String: Any]?) {
-    guard let root = d?["root"] as? String,
-          let baseURL = d?["baseURL"] as? String,
-          !root.isEmpty, URL(string: baseURL) != nil else { return }
-    lastPlanRequest = (root, baseURL)
-    planGeneration &+= 1
-    let generation = planGeneration
-    let appSupport = FileManager.default.urls(
-      for: .applicationSupportDirectory, in: .userDomainMask)[0]
-    let appID = Bundle.main.bundleIdentifier ?? "top.thundersparrow.liveview"
-    let manifestURL = appSupport
-      .appendingPathComponent(appID, isDirectory: true)
-      .appendingPathComponent("dag.json")
-    let audioDir = cacheDir
-
-    planQueue.async { [weak self] in
-      guard let self,
-            let data = try? Data(contentsOf: manifestURL),
-            let plan = try? JSONDecoder().decode(DagPlan.self, from: data),
-            plan.root == root,
-            let origin = URL(string: baseURL) else { return }
-      let fm = FileManager.default
-      var items: [DLItem] = []
-      items.reserveCapacity(plan.resources.count / 3)
-      for resource in plan.resources where resource.kind == "audio" {
-        let key = self.cacheKeyForPlan(resource.hash, resource.url)
-        let caf = audioDir.appendingPathComponent(key + ".caf")
-        let legacy = audioDir.appendingPathComponent(key)
-        if fm.fileExists(atPath: caf.path) || fm.fileExists(atPath: legacy.path) { continue }
-        guard let url = URL(string: resource.url, relativeTo: origin)?.absoluteURL else { continue }
-        items.append(DLItem(url: url, key: key))
-      }
-      DispatchQueue.main.async { [weak self] in
-        guard let self, generation == self.planGeneration else { return }
-        self.enqueuePlanItems(items, from: 0, generation: generation)
-      }
-    }
+  private func cacheHas(_ d: [String: Any]?) {
+    guard let id = d?["id"] as? String, let hash = d?["hash"] as? String else { return }
+    reply(id, ["has": onDisk(sanitizeKey(hash))])
   }
 
-  private func reconcileLastAudioPlan() {
-    guard let request = lastPlanRequest else { return }
-    reconcileAudioPlan(["root": request.root, "baseURL": request.baseURL])
+  private func cacheDelete(_ d: [String: Any]?) {
+    guard let hash = d?["hash"] as? String else { return }
+    let key = sanitizeKey(hash)
+    let fm = FileManager.default
+    try? fm.removeItem(at: fileURL(key))
+    try? fm.removeItem(at: cacheDir.appendingPathComponent(key))
+    cachedHashes.remove(key)
   }
 
-  /// Keep each main-runloop slice bounded. URLSession task construction is cheap
-  /// but thousands in one callback visibly stalls WKWebView scrolling.
-  private func enqueuePlanItems(_ items: [DLItem], from start: Int, generation: Int) {
-    guard generation == planGeneration, start < items.count else {
-      if dlQueueHead < dlQueue.count { startScheduler() }
+  private func cacheCount(_ d: [String: Any]?) {
+    guard let id = d?["id"] as? String else { return }
+    if hashSetReady {
+      reply(id, ["count": cachedHashes.count])
       return
     }
-    let end = min(start + 64, items.count)
-    for item in items[start..<end]
-    where !dlQueuedKeys.contains(item.key) && !inFlight.contains(item.key) {
-      dlQueue.append(item)
-      dlQueuedKeys.insert(item.key)
-    }
-    DispatchQueue.main.async { [weak self] in
-      self?.enqueuePlanItems(items, from: end, generation: generation)
+    let dir = cacheDir
+    hashSetQueue.async { [weak self] in
+      let (hashes, _) = Self.scanLegacy(dir)
+      DispatchQueue.main.async {
+        guard let self else { return }
+        if !self.hashSetReady {
+          self.cachedHashes = hashes
+          self.hashSetReady = true
+        }
+        self.reply(id, ["count": self.cachedHashes.count])
+      }
     }
   }
 
-  /// Pure key derivation for the background plan queue. Manifest audio always has
-  /// a content hash; retain the URL fallback for protocol compatibility.
-  private func cacheKeyForPlan(_ hash: String, _ rawURL: String) -> String {
-    if !hash.isEmpty {
-      return hash.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
-    }
-    return "u" + stableDigest(rawURL)
+  private func noteCached(_ key: String) {
+    cachedHashes.insert(key)
   }
 
   // MARK: adaptive download scheduler
 
-  /// Start the budget/drain timer (idempotent) + pump.
+  /// Start the drain timer (idempotent) + pump.
   private func startScheduler() {
     if dlTimer == nil {
-      // Enforce the budget + sweep for drained state every 2s while there's work.
       dlTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
         self?.schedulerTick()
       }
@@ -626,17 +479,21 @@ import WidgetKit
     pump()
   }
 
-  /// Keep a small bounded set of real URLSession tasks active. Pending Merkle work
+  /// Keep a small bounded set of real URLSession tasks active. Pending work
   /// stays in our O(1) FIFO rather than becoming thousands of Foundation tasks.
-  /// This isolates bulk audio from WKWebView scrolling while retaining one active
-  /// transfer on each independent high-RTT connection.
   private func pump() {
     guard !dlSessions.isEmpty else { return } // pool rebuilding — next tick pumps
     while dlInflight < Self.dlMaxInflight, dlQueueHead < dlQueue.count {
       let item = dlQueue[dlQueueHead]
       dlQueueHead += 1
       dlQueuedKeys.remove(item.key)
-      if onDisk(item.key) || inFlight.contains(item.key) { continue }
+      if onDisk(item.key) || inFlight.contains(item.key) {
+        if onDisk(item.key) {
+          noteCached(item.key)
+          emitCacheProgress(item.key, true)
+        }
+        continue
+      }
       runScheduled(item)
     }
     // Reclaim consumed storage occasionally without shifting the array on every
@@ -647,11 +504,6 @@ import WidgetKit
     }
   }
 
-  /// Enqueue one bulk download on the background pool. Delegate-based on purpose: a
-  /// background session has NO completion handler (that API is a runtime error on a
-  /// background config) — publish + accounting happen in the URLSessionDownloadDelegate
-  /// methods below. The cache key rides on `taskDescription` so the delegate (which
-  /// may fire in a fresh process after relaunch) can recover it.
   private func runScheduled(_ item: DLItem) {
     inFlight.insert(item.key)
     dlInflight += 1
@@ -660,20 +512,12 @@ import WidgetKit
     task.resume()
   }
 
-  /// 2s tick: stop when the queue has fully drained, else keep the budget and pump.
-  /// (Budget check lives here, not per-completion, so the used-bytes read runs
-  /// ~every 2s.) `pump()` admits at most `dlMaxInflight` real tasks.
+  /// 2s tick: stop when the queue has fully drained, else keep pumping.
   private func schedulerTick() {
     if dlQueueHead >= dlQueue.count && dlInflight == 0 {
       dlTimer?.invalidate()
       dlTimer = nil
       return
-    }
-    if usedBytes() >= capBytes { // budget full → stop filling + evict to fit
-      dlQueue.removeAll(keepingCapacity: true)
-      dlQueueHead = 0
-      dlQueuedKeys.removeAll(keepingCapacity: true)
-      enforceCap()
     }
     pump()
   }
@@ -683,27 +527,23 @@ import WidgetKit
   /// A finished transfer's temp file is valid ONLY inside this call — publish it
   /// synchronously here (on the session's delegate queue, off main). A "download"
   /// still completes for a 404/500 (the body is the error page), so status-gate:
-  /// only a 200 publishes; a non-200 falls through to didCompleteWithError for a
-  /// bounded retry. Each task writes a DISTINCT key, so concurrent publishes across
-  /// the pool don't race.
+  /// only a 200 publishes.
   public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                          didFinishDownloadingTo location: URL) {
     guard let key = downloadTask.taskDescription else { return }
     let code = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
-    guard code == 200, let n = publish(location, key) else { return }
-    // LvStore serializes its own SQLite access. Keep the write on this delegate
-    // queue so a burst of completed audio files cannot block WebKit's main runloop.
-    indexPut(key, n)
+    guard code == 200, publish(location, key) != nil else { return }
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       self.dlRetries[key] = nil
-      self.dlDone += 1 // diagnostic: completions since launch
+      self.noteCached(key)
+      self.emitCacheProgress(key, true)
     }
   }
 
   /// Terminal callback for every bulk task. Decrement in-flight, requeue a bounded
-  /// number of times on failure (the file didn't land on disk), and pump. Runs on
-  /// the session's delegate queue; hop to main for the shared scheduler state.
+  /// number of times on failure, and pump. Runs on the session's delegate queue;
+  /// hop to main for the shared scheduler state.
   public func urlSession(_ session: URLSession, task: URLSessionTask,
                          didCompleteWithError error: Error?) {
     guard let key = task.taskDescription else { return }
@@ -714,16 +554,14 @@ import WidgetKit
       guard let self else { return }
       self.dlInflight = max(0, self.dlInflight - 1)
       self.inFlight.remove(key)
-      // A cancel is a deliberate pool teardown (WiFi-only rebuild); Merkle-plan
-      // reconciliation re-feeds it, so don't burn its retry budget. Otherwise success ==
-      // the file is on disk (didFinishDownloadingTo published it before this fires).
       if !cancelled, !self.onDisk(key), let url {
-        if let e = error { self.dlLastErr = (e as NSError).localizedDescription } // diagnostic
         let r = (self.dlRetries[key] ?? 0) + 1
         if r <= 3, !self.dlQueuedKeys.contains(key) {
           self.dlRetries[key] = r
           self.dlQueue.append(DLItem(url: url, key: key))
           self.dlQueuedKeys.insert(key)
+        } else if r > 3 {
+          self.emitCacheProgress(key, false)
         }
       }
       self.pump()
@@ -745,81 +583,6 @@ import WidgetKit
       return nil
     }
     return Int64((try? dest.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
-  }
-
-  /// Remove (delete) the given keys' audio files + unpin them. `keys` are sanitized
-  /// content hashes the web computed from the manifest.
-  private func unpin(_ d: [String: Any]?) {
-    guard let keys = d?["keys"] as? [String] else { return }
-    let fm = FileManager.default
-    for k in keys {
-      let key = cacheKey(forURL: URL(string: "x:")!, hash: k) // sanitize same way
-      pinned.remove(key)
-      try? fm.removeItem(at: fileURL(key)) // <key>.caf
-      try? fm.removeItem(at: cacheDir.appendingPathComponent(key)) // legacy (pre-.caf)
-      store?.remove(key: key)
-    }
-    savePins()
-  }
-
-  /// Set the storage budget (bytes) + immediately enforce it (a lowered cap evicts
-  /// down to fit). The web confirms destructive lowering with the user first.
-  private func setCap(_ d: [String: Any]?) {
-    if let c = d?["bytes"] as? Double, c > 0 { capBytes = Int64(c) }
-    enforceCap()
-  }
-
-  /// Total bytes of cached audio — O(1) from the SQLite index (the budget check
-  /// on every 2s scheduler tick used to scan the whole directory here).
-  private func usedBytes() -> Int64 {
-    store?.stats().bytes ?? 0
-  }
-
-  /// LRU eviction (adaptive by access recency — `cachedFileURL` touches mtime on
-  /// every play): while OVER the cap, delete the least-recently-used EVICTABLE
-  /// (non-pinned) file. Pinned (manual) + the `_pins.json` sidecar are never
-  /// touched; if pinned alone exceeds the cap we stop (the user's deliberate choice
-  /// wins over the budget). Text is a separate store and is never evicted here.
-  private func enforceCap() {
-    let total = usedBytes() // O(1) from the index
-    guard total > capBytes else { return }
-    // LRU candidates (non-pinned, oldest mtime first) straight from the SQLite
-    // index — no directory scan. Delete the file + its row for each.
-    let fm = FileManager.default
-    for key in store?.lruEvictionCandidates(toFree: total - capBytes) ?? [] {
-      try? fm.removeItem(at: fileURL(key)) // <key>.caf
-      try? fm.removeItem(at: cacheDir.appendingPathComponent(key)) // legacy (pre-.caf)
-      store?.remove(key: key)
-    }
-  }
-
-  /// Report the audio store state for the Downloads UI: total used, the cap,
-  /// pinned (protected) bytes, and the cached + pinned key sets (the web maps
-  /// keys→books via the manifest). Replied via `window.__lvAudioResolve(id, json)`.
-  private func audioStats(_ d: [String: Any]?) {
-    guard let id = d?["id"] as? String else { return }
-    // O(1) from the SQLite index. This response is intentionally constant-size:
-    // it is requested at startup and every 2s while Downloads is visible, so
-    // enumerating thousands of keys/files here causes bridge serialization and
-    // filesystem work to show up as reader animation hitches.
-    let (count, used, pinnedBytes) = store?.stats() ?? (0, 0, 0)
-    var obj: [String: Any] = [
-      "usedBytes": used, "cap": capBytes, "pinnedBytes": pinnedBytes,
-      "cachedCount": count, "pinned": Array(pinned),
-      "net": netType(),
-      // Download diagnostics for the Downloads panel (see dlDone/dlLastErr).
-      "dlInflight": dlInflight, "dlQueued": dlQueue.count - dlQueueHead, "dlDone": dlDone,
-    ]
-    if let e = dlLastErr { obj["dlErr"] = e }
-    let json = (try? JSONSerialization.data(withJSONObject: obj))
-      .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-    let esc = json.replacingOccurrences(of: "\\", with: "\\\\")
-      .replacingOccurrences(of: "'", with: "\\'")
-    let safeId = id.replacingOccurrences(of: "'", with: "")
-    let js = "window.__lvAudioResolve&&window.__lvAudioResolve('\(safeId)','\(esc)')"
-    DispatchQueue.main.async { [weak self] in
-      self?.webView?.evaluateJavaScript(js, completionHandler: nil)
-    }
   }
 
   private func load(_ d: [String: Any]?) {
@@ -886,13 +649,14 @@ import WidgetKit
   /// Re-emit the CURRENT state on demand. The web loses its in-memory playing/
   /// position when it reloads, but the native player keeps playing — so the web
   /// requests this on mount to re-sync (else it shows a paused button while audio
-  /// is actually playing). `time` only fires on a tick/seek, so it can't be relied
-  /// on to re-assert play state after a reload.
+  /// is actually playing). Also re-pushes `network` so a listener installed after
+  /// the first NWPathMonitor fire still gets a snapshot.
   private func emitState() {
     let d = duration
     if d > 0 { emit("{type:'durationchange',duration:\(d)}") }
     emit("{type:'time',position:\(currentPosition()),duration:\(d)}")
     emit(isPlaying() ? "{type:'playing'}" : "{type:'paused'}")
+    emit("{type:'network',net:'\(netType())'}")
   }
 
   private func seek(_ p: Double) {
@@ -966,15 +730,14 @@ import WidgetKit
         // A cached LOCAL file should no longer fail now that it carries a .caf
         // extension (AVURLAsset can infer the container). If it still does, DO NOT
         // delete the download — deleting a perfectly-good offline file was the old
-        // "downloads vanish" death-loop (an extension-less CAF read as "corrupt",
-        // got wiped, and offline there was nothing left to fall back to). When
-        // ONLINE, re-stream from the origin as a fallback but KEEP the file; when
-        // OFFLINE, surface the error and keep the file for a later retry.
+        // "downloads vanish" death-loop. When ONLINE, re-stream from the origin as
+        // a fallback but KEEP the file; when OFFLINE, surface the error and keep
+        // the file for a later retry.
         if self.playingFromCache, let origin = self.currentOriginURL,
            self.netType() != "none" {
           self.playingFromCache = false
           let wasPlaying = self.isPlaying()
-          self.teardownItem() // drop this (now-stale) item's observers
+          self.teardownItem()
           let fresh = AVPlayerItem(url: origin)
           self.observeItem(fresh)
           self.player.replaceCurrentItem(with: fresh)
@@ -1073,7 +836,6 @@ import WidgetKit
                    name: AVAudioSession.routeChangeNotification, object: nil)
     nc.addObserver(self, selector: #selector(interrupted(_:)),
                    name: AVAudioSession.interruptionNotification, object: nil)
-    // App lifecycle drives the background emit-throttle (see `backgrounded`).
     nc.addObserver(self, selector: #selector(appDidBackground),
                    name: UIApplication.didEnterBackgroundNotification, object: nil)
     nc.addObserver(self, selector: #selector(appWillForeground),
@@ -1122,7 +884,6 @@ import WidgetKit
       self.isPlaying() ? self.pause() : self.play()
       return .success
     }
-    // Next/prev need the book's chapter queue, which lives in the web — defer.
     cc.nextTrackCommand.addTarget { [weak self] _ in self?.emit("{type:'next'}"); return .success }
     cc.previousTrackCommand.addTarget { [weak self] _ in self?.emit("{type:'prev'}"); return .success }
     cc.skipForwardCommand.preferredIntervals = [Self.skip]
@@ -1147,14 +908,17 @@ import WidgetKit
     }
   }
 
-  // MARK: Offline cache (content-addressed, LRU)
+  // MARK: Offline cache (content-addressed)
 
-  /// The cache filename for a track: the web-supplied content hash (so the same
-  /// audio dedups + survives a re-render → new hash → new file) when present, else
-  /// a stable digest of the origin URL. Sanitized to a safe filename.
+  private func sanitizeKey(_ hash: String) -> String {
+    hash.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+  }
+
+  /// The cache filename for a track: the web-supplied content hash when present,
+  /// else a stable digest of the origin URL. Sanitized to a safe filename.
   private func cacheKey(forURL url: URL, hash: String?) -> String {
     if let hash, !hash.isEmpty {
-      return hash.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
+      return sanitizeKey(hash)
     }
     // No hash → key by the URL via a DETERMINISTIC digest. NOT Swift's
     // `hashValue`, which is randomized per process launch and so would miss the
@@ -1169,21 +933,16 @@ import WidgetKit
     return String(h, radix: 16)
   }
 
-  /// Pure existence check (no mtime touch — used by the scheduler for dedup, which
-  /// must NOT mark a not-yet-played file as recently used).
   /// On-disk path for a cache key. Files carry a `.caf` EXTENSION on purpose:
   /// AVURLAsset infers a LOCAL file's container type from its path extension, and
   /// our content-hash keys have none — without it Opus-in-CAF fails to load with
-  /// "item failed" on OFFLINE playback (streaming works only because the HTTP
-  /// Content-Type supplies the type). The logical KEY stays the bare hash
-  /// everywhere (index / pins / stats); only the filename gets the extension.
+  /// "item failed" on OFFLINE playback.
   private func fileURL(_ key: String) -> URL {
     cacheDir.appendingPathComponent(key + ".caf")
   }
 
   /// Resolve a key to its on-disk file, lazily migrating a legacy extension-less
   /// blob (`<hash>` → `<hash>.caf`) IN PLACE — instant, same bytes, no re-download.
-  /// nil if neither exists.
   private func resolveFile(_ key: String) -> URL? {
     let caf = fileURL(key)
     let fm = FileManager.default
@@ -1200,28 +959,26 @@ import WidgetKit
     resolveFile(key) != nil
   }
 
-  /// The local file for a fully-cached key, or nil. Touches it so the LRU keeps
-  /// recently-played audio.
+  /// The local file for a fully-cached key, or nil. Touches mtime so TS LRU can
+  /// still treat recently-played audio as recent if it later stats the file.
   private func cachedFileURL(_ key: String) -> URL? {
     guard let f = resolveFile(key) else { return nil }
-    let now = Date()
-    try? FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: f.path)
-    store?.touch(key: key, mtime: Int64(now.timeIntervalSince1970)) // LRU recency in the index
+    try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: f.path)
     return f
   }
 
-  /// Download `url` into the cache as `key`, once. Skips if already cached or in
-  /// flight. Used as a side-effect of streaming a not-yet-cached chapter AND by an
-  /// explicit prefetch (save-offline). Atomic publish (.part → rename) so a crash
-  /// never leaves a truncated file masquerading as complete.
+  /// Download `url` into the cache as `key`, once. Play-path want-it-NOW fetch.
   private func downloadToCache(_ url: URL, _ key: String) {
-    let dest = fileURL(key) // <key>.caf — see fileURL()
+    let dest = fileURL(key)
     if onDisk(key) || inFlight.contains(key) { return }
     inFlight.insert(key)
     let task = fgSession.downloadTask(with: url) { [weak self] tmp, resp, _ in
       guard let self else { return }
       defer { DispatchQueue.main.async { self.inFlight.remove(key) } }
-      guard let tmp, let code = (resp as? HTTPURLResponse)?.statusCode, code == 200 else { return }
+      guard let tmp, let code = (resp as? HTTPURLResponse)?.statusCode, code == 200 else {
+        DispatchQueue.main.async { self.emitCacheProgress(key, false) }
+        return
+      }
       let fm = FileManager.default
       let part = dest.appendingPathExtension("part")
       try? fm.removeItem(at: part)
@@ -1231,18 +988,14 @@ import WidgetKit
         try fm.moveItem(at: part, to: dest)
       } catch {
         try? fm.removeItem(at: part)
+        DispatchQueue.main.async { self.emitCacheProgress(key, false) }
         return
       }
-      let bytes = Int64((try? dest.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
-      DispatchQueue.main.async { self.indexPut(key, bytes) } // maintain the index
-      // Keep the store within the budget (LRU, pinned-exempt). A no-op while under
-      // cap — which, post-compression, is the common case (full audio ≈ 3.7GB ≪
-      // a 20GB default).
-      DispatchQueue.main.async { self.enforceCap() }
+      DispatchQueue.main.async {
+        self.noteCached(key)
+        self.emitCacheProgress(key, true)
+      }
     }
-    // Default priority (NOT low): a low URLSessionTask.priority throttles the
-    // transfer's scheduling on iOS and capped the fill at a few hundred KB/s.
-    // Yielding to foreground is handled by the gate (stop issuing), not priority.
     task.resume()
   }
 
@@ -1253,6 +1006,22 @@ import WidgetKit
   /// interpolation of web-supplied strings).
   private func emit(_ detail: String) {
     let js = "window.dispatchEvent(new CustomEvent('lv-native-audio',{detail:\(detail)}))"
+    DispatchQueue.main.async { [weak self] in
+      self?.webView?.evaluateJavaScript(js, completionHandler: nil)
+    }
+  }
+
+  private func emitCacheProgress(_ hash: String, _ ok: Bool) {
+    emit("{type:'cacheProgress',hash:'\(hash)',ok:\(ok ? "true" : "false")}")
+  }
+
+  private func reply(_ id: String, _ obj: [String: Any]) {
+    let json = (try? JSONSerialization.data(withJSONObject: obj))
+      .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    let esc = json.replacingOccurrences(of: "\\", with: "\\\\")
+      .replacingOccurrences(of: "'", with: "\\'")
+    let safeId = id.replacingOccurrences(of: "'", with: "")
+    let js = "window.__lvHostResolve&&window.__lvHostResolve('\(safeId)','\(esc)')"
     DispatchQueue.main.async { [weak self] in
       self?.webView?.evaluateJavaScript(js, completionHandler: nil)
     }

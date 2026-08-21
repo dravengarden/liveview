@@ -26,7 +26,8 @@ function readStorage(key: string): string | null {
 export function replicaFlag(): ReplicaFlag {
   const value = readStorage(REPLICA_FLAG_KEY);
   if (value === "idb" || value === "native") return value;
-  return "native";
+  // Native content store is gone; IDB is the replica.
+  return "idb";
 }
 
 export function isAppShell(): boolean {

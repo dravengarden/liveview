@@ -59,7 +59,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "utf8",
   );
   const syncPlugin = await readFile(
-    new URL("../../plugins/lvsync/src/lib.rs", ROOT),
+    new URL("../../app/src-tauri/src/host.rs", ROOT),
     "utf8",
   );
   const shell = await source("App.tsx");
@@ -491,18 +491,18 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     preloadDriver,
-    /nativeAudioReconcile\(root, REMOTE\)/,
-    "the web must submit only a constant-size native reconciliation signal",
+    /enqueueMissingAudio/,
+    "TS owns the audio worklist; native only enqueues cacheFromUrl",
   );
   assertPresent(
     nativeAudio,
-    /planQueue\.async/,
-    "native manifest decoding and disk diffing must stay off the main thread",
+    /hashSetQueue\.async/,
+    "native hash-set rebuild and legacy export must stay off the main thread",
   );
-  assertPresent(
+  assertAbsent(
     nativeAudio,
-    /min\(start \+ 64, items\.count\)/,
-    "native queue admission must be split into bounded runloop slices",
+    /kind == "pin"|case "pin"|case "reconcile"|case "audioStats"|case "setCap"/,
+    "native must not keep LiveView-store pin/reconcile/stats commands",
   );
   assertPresent(
     nativeAudio,

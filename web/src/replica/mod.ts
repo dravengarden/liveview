@@ -1,5 +1,5 @@
 import { replicaStats as readReplicaStats } from "./agg.ts";
-import { getBlob, hasBlob, putBlob, setPinned } from "./blobs.ts";
+import { getBlob, getBlobRecord, hasBlob, putBlob, setPinned } from "./blobs.ts";
 import {
   closeReplicaDb,
   deleteReplicaDb,
@@ -14,6 +14,7 @@ import {
   enqueueCacheFromUrl,
   installMediaBridge,
 } from "./media-bridge.ts";
+import { legacyIndex } from "../native-host.ts";
 import {
   loadPolicy,
   persistPolicy,
@@ -43,12 +44,17 @@ export {
 export { parseManifest, parseRoot, rejectNewerProtocol } from "./manifest.ts";
 export { replicaWorkerInitMessage } from "./worker.ts";
 export { runReplicaSpike, SPIKE_EVAL_JS } from "./spike.ts";
-export { loadPolicy, persistBodyForKind, setPersistFullSizeArtwork } from "./policy.ts";
+export {
+  loadPolicy,
+  persistPolicy,
+  persistBodyForKind,
+  setPersistFullSizeArtwork,
+} from "./policy.ts";
 export { getWorklist, setWorklist, enqueueFetch, enqueueEvict } from "./worklist.ts";
-export { evictUnpinnedLru } from "./gc.ts";
+export { evictUnpinnedLru, evictUnpinnedAudioToFit } from "./gc.ts";
 export { prepareBlobRecord, getBlobRecord, setPresent, deleteBlob } from "./blobs.ts";
 export { runWithTimeBudget, spawnReplicaWorker } from "./worker.ts";
-export { pullMissingTextArt, setReplicaRemote } from "./sync.ts";
+export { pullMissingTextArt, enqueueMissingAudio, setReplicaRemote } from "./sync.ts";
 export {
   artworkBlobSrc,
   materializeArtworkSrc,
@@ -79,6 +85,49 @@ export type {
 
 export function replicaStats(): ReturnType<typeof readReplicaStats> {
   return readReplicaStats();
+}
+
+export async function drainApmEvents(limit: number): Promise<unknown[]> {
+  const cap = Math.max(1, Math.min(limit, 500));
+  return withTxn([STORE_APM], "readonly", async (txn) => {
+    const index = txn.objectStore(STORE_APM).index(INDEX_APM_TS);
+    const out: unknown[] = [];
+    await forEachCursor<ApmRecord>(index, null, (value) => {
+      if (out.length >= cap) return false;
+      out.push(value.body);
+      return true;
+    });
+    return out;
+  });
+}
+
+export async function ackApmEvents(ids: readonly string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await withTxn([STORE_APM], "readwrite", async (txn) => {
+    const store = txn.objectStore(STORE_APM);
+    for (const id of ids) {
+      await idbRequest(store.delete(id));
+    }
+  });
+}
+
+async function importLegacyIndex(): Promise<void> {
+  const idx = await legacyIndex();
+  if (!idx) return;
+  const pins = new Set(idx.pins);
+  for (const hash of idx.hashes) {
+    if (!hash) continue;
+    const old = await getBlobRecord(hash);
+    const pinned = old?.pinned === 1 || pins.has(hash) ? 1 : 0;
+    await putBlob({
+      hash,
+      kind: "audio",
+      bytes: old?.bytes ?? 0,
+      pinned,
+      mtime: old?.mtime ?? Date.now(),
+      present: 1,
+    });
+  }
 }
 
 export async function putApmEvent(event: ApmRecord): Promise<boolean> {
@@ -115,7 +164,8 @@ export async function pinAudio(
     const rec = pathRecordForHash(hash);
     if (!rec || !isAudioKind(rec.kind)) continue;
     await setPinned(hash, 1);
-    enqueueCacheFromUrl(hash, joinRemoteUrl(remoteBase, rec.url));
+    const url = joinRemoteUrl(remoteBase, rec.url);
+    enqueueCacheFromUrl(hash, url);
   }
 }
 
@@ -133,6 +183,7 @@ export async function initReplica(mode?: DataMode, opts?: {
   if (!policy.wifiOnly) applyCellularPolicy(true);
   else applyCellularPolicy(false);
   if (!mediaUnsub) mediaUnsub = installMediaBridge();
+  await importLegacyIndex();
   await hydratePathIndex();
   await replayWorklist();
 }

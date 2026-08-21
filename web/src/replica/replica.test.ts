@@ -431,9 +431,11 @@ test("QuotaExceededError evicts unpinned image/text LRU in bounded batches", asy
   assert.equal(oldImg === undefined || oldTxt === undefined, true);
 });
 
-test("initReplica no-ops unless lv.replica is idb", async () => {
+test("initReplica no-ops when lv.replica is native", async () => {
   await setup();
   storage.delete(REPLICA_FLAG_KEY);
+  assert.equal(replicaFlag(), "idb");
+  storage.set(REPLICA_FLAG_KEY, "native");
   assert.equal(replicaFlag(), "native");
   await initReplica("eager");
   await putBlob({

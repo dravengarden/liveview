@@ -1,7 +1,7 @@
-// Native shell: the window boots the bundled SPA and resolves reader content
-// through the `lvsync://` custom scheme. A configured remote server supplies
-// content; native code adds offline storage, background audio,
-// lock-screen controls, haptics, and app-settings integration that a PWA cannot.
+// Native shell: the window boots the bundled SPA from `lvsync://localhost`.
+// Reader content lives in the TypeScript IDB replica. Native adds the overlay
+// host, background audio, lock-screen controls, haptics, and app-settings
+// integration that a PWA cannot.
 //
 // Document origin is frozen as `lvsync://localhost` (IndexedDB/localStorage
 // persistence). Do not rename it.
@@ -14,15 +14,23 @@
 //
 // `mobile_entry_point` is the symbol the generated iOS/Android projects call;
 // on desktop `main.rs` calls `run()` directly.
+
+mod host;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_haptics::init())
-        // Cross-platform Rust offline content layer (lv-sync + SqliteBlobStore),
-        // exposed to the bundled SPA via the `lvsync://` URI scheme. Audio stays
-        // native (AVPlayer).
-        .plugin(tauri_plugin_lvsync::init())
+        // Thin `lvsync://localhost` host: overlay + origins + host-info. Content
+        // replica is TypeScript IndexedDB; audio decode cache stays in Swift.
+        .setup(|app| {
+            host::setup(app.handle());
+            Ok(())
+        })
+        .register_asynchronous_uri_scheme_protocol("lvsync", |ctx, request, responder| {
+            host::handle(ctx.app_handle().clone(), request, responder);
+        })
         .run(tauri::generate_context!())
         .expect("error while running liveview native shell");
 }

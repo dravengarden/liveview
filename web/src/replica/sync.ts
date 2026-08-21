@@ -3,6 +3,7 @@ import { enqueueCacheDelete, enqueueCacheFromUrl } from "./media-bridge.ts";
 import { allPathRecords } from "./manifest.ts";
 import { currentReplicaPolicy, persistBodyForKind } from "./policy.ts";
 import {
+  enqueueFetch,
   getWorklist,
   mutateWorklistUnlocked,
   removeFetch,
@@ -38,6 +39,7 @@ export function absoluteReplicaUrl(pathOrUrl: string): string {
 async function fillOne(item: ReplicaWorkerFillItem): Promise<void> {
   const url = joinRemoteUrl(remoteBase, item.url);
   if (isAudioKind(item.kind)) {
+    if (await hasBlob(item.hash)) return;
     enqueueCacheFromUrl(item.hash, url);
     return;
   }
@@ -145,6 +147,16 @@ export async function missingTextArt(): Promise<ReplicaWorkerFillItem[]> {
     });
   }
   return out;
+}
+
+export async function enqueueMissingAudio(): Promise<void> {
+  for (const rec of allPathRecords()) {
+    if (!isAudioKind(rec.kind)) continue;
+    if (await hasBlob(rec.hash)) continue;
+    const url = joinRemoteUrl(remoteBase, rec.url);
+    await enqueueFetch(rec.hash, url);
+    enqueueCacheFromUrl(rec.hash, url);
+  }
 }
 
 export async function pullMissingTextArt(): Promise<void> {

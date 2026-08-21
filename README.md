@@ -460,10 +460,8 @@ The main components are:
 
 ```text
 src/                 Rust CLI, server, renderer, checker, and sync pipeline
-web/                 React and TypeScript reader
-lv-sync/             Platform-neutral offline synchronization core
-plugins/lvsync/      Tauri plugin for native storage and transport
-app/                 Tauri application shell
+web/                 React and TypeScript reader (IDB replica)
+app/                 Tauri application shell (thin lvsync:// host)
 tools/               Deterministic content tooling
 ```
 

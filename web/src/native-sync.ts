@@ -1,27 +1,16 @@
-// Bridge to the native offline-content layer via the `lvsync://` URI SCHEME
-// (tauri-plugin-lvsync, Rust + SqliteBlobStore). The bundled SPA loads from the
-// LOCAL origin (tauri://localhost), where a registered WKURLSchemeHandler reaches
-// Rust DIRECTLY — reliable on device, unlike webview→plugin IPC. This REPLACES the
-// old Swift "lvSync" WKScriptMessageHandler (LvSyncController) for reader CONTENT;
-// AUDIO stays in native-audio.ts (native AVPlayer, its own cache).
+// Facade over the TypeScript IDB replica for reader content, plus the thin
+// `lvsync://localhost` host for overlay/origins. AUDIO decode files stay in
+// native-audio.ts (AVPlayer + bounded cacheFromUrl queue).
 //
-//   GET lvsync://localhost/resolve?u=<encoded api url>  → bytes (200) | 504 offline
-//   GET lvsync://localhost/stats                        → [cached,total,cb,tb]
-//   GET lvsync://localhost/sync_all                     → bytes-cached (number)
-//   GET lvsync://localhost/audio-index                  → cached audio/marks manifest
+// Off the shell (PWA / browser) every helper falls back to a normal `fetch`
+// (the service worker handles HTTP cache there).
 //
-// Off the shell (PWA / browser) the scheme is absent → every helper falls back to a
-// normal `fetch` (the service worker handles offline there).
-//
-// When localStorage `lv.replica` is `idb`, reader content, covers, Downloads
-// stats, and eager text/art fill go through the TypeScript replica instead. The
-// native scheme remains the default fallback until the native cutover.
+// Reader content, covers, Downloads stats, and eager fill go through the
+// TypeScript IDB replica. `lvsync://localhost` remains the document origin and
+// thin host scheme (overlay / origins / host-info).
 
-import {
-  nativeAudioSetWifiOnly,
-  nativeAudioStats,
-  onNativeAudioEvent,
-} from "./native-audio.ts";
+import { nativeAudioRequestState, onNativeAudioEvent } from "./native-audio.ts";
+import { setAllowsCellular } from "./native-host.ts";
 import { remoteUrl } from "./apiBase.ts";
 import {
   artworkBlobSrc,
@@ -43,11 +32,9 @@ export function nativeSyncAvailable(): boolean {
   return "__TAURI_INTERNALS__" in globalThis;
 }
 
-/** Drop-in `fetch` for reader content. On the shell it resolves through the native
- *  Rust content store (offline-safe): the engine serves immutable content-addressed
- *  resources cache-first and LIVE lists (/api/tree, /api/books, progress…) network-
- *  first-then-cache automatically, so freshness is implied by the resource — `fresh`
- *  is accepted for API compatibility but no longer needed. */
+/** Drop-in `fetch` for reader content. On the IDB replica path it resolves
+ *  store-first for manifest resources and cache/network-first for url-keyed
+ *  lists. `fresh` is accepted for API compatibility. */
 export async function contentFetch(
   url: string,
   opts?: { fresh?: boolean; cacheFirst?: boolean },
@@ -313,13 +300,9 @@ export async function nativeAudioIndex(): Promise<NativeAudioResource[]> {
  *  each stalls 4s → the tap feels frozen. Flipping this when `navigator.onLine`
  *  goes false makes those misses fail INSTANTLY (cache hits are unaffected — they
  *  never touch the fetcher), so offline navigation is snappy. No-op off-shell. */
-function setNativeOffline(on: boolean): void {
-  if (!nativeSyncAvailable()) return;
-  try {
-    void fetch(`${SCHEME}/offline?on=${on ? 1 : 0}`);
-  } catch {
-    /* non-fatal */
-  }
+function setNativeOffline(_on: boolean): void {
+  // Replica fail-fast is TS-owned (`setReplicaOfflineProbe`). The native
+  // `/offline` scheme route is gone with the content plugin.
 }
 
 /** Keep the native fast-fail flag in sync with connectivity so offline navigation
@@ -381,11 +364,9 @@ export function startOfflineFlagSync(): void {
   apply(!navigator.onLine);
   globalThis.addEventListener("online", () => apply(false));
   globalThis.addEventListener("offline", () => apply(true));
-  // One startup snapshot closes the race where NWPathMonitor emitted before the
-  // SPA installed its listener. Subsequent changes are native push events.
-  void nativeAudioStats().then((a) => {
-    if (a) applyNetwork(a.net);
-  }).catch(() => undefined);
+  // Native re-emits `network` on `state` so a listener installed after the
+  // first NWPathMonitor fire still gets a snapshot.
+  nativeAudioRequestState();
   onNativeAudioEvent((event) => {
     if (event.type === "network") applyNetwork(event.net);
   });
@@ -436,7 +417,10 @@ export function setOfflineWifiOnly(on: boolean): void {
   // Push to native so its BACKGROUND download sessions get the new cellular policy
   // (allowsCellularAccess) — the web gate alone can't stop transfers already handed
   // to the system daemon, which keep running while the app is suspended.
-  nativeAudioSetWifiOnly(on);
+  // Native enforces this on its foreground `.default` pool via
+  // allowsCellularAccess. Those sessions suspend when the app backgrounds —
+  // that is the accepted ceiling; JS cannot continue transfers while suspended.
+  setAllowsCellular({ on: !on });
   // Relaxing the constraint may unblock a previously-refused run.
   if (!on) void ensureAutoSync();
 }

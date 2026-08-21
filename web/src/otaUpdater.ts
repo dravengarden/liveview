@@ -1,40 +1,70 @@
 // App-bundle OTA updater (native shell only).
 //
-// The web bundle hot-updates without an app reinstall. The trigger is a SERVER PUSH:
-// the server sends an `AppVersion` over the WebSocket on (re)connect (a deploy =
-// server restart = reconnect, so it's effectively instant), and useWebSocket calls
-// runOtaCheck() in response. runOtaCheck asks the plugin's lvsync://localhost/ota-check
-// to do a cheap ETag probe + INCREMENTAL download (only changed assets) + flip the
-// `current` version; on "updated" it reloads (silently — the webview re-fetches
-// lvsync://localhost/app/ and gets the new bundle; native AVPlayer playback survives,
-// the SPA restores session/scroll). A single on-load check covers first launch before
-// the WS connects. Off the native shell this is inert.
+// TypeScript owns policy (ETag, which hashed files to skip, when to activate).
+// Native fetches overlay bytes path-only from baked origins (`putFromUrl` has
+// no `u=`). On success we `location.replace` a versioned `lvsync://localhost/app`
+// URL so WKWebView cannot satisfy the navigation from its current-document
+// cache. Playback survives because AVPlayer is native.
 
-import { nativeSyncAvailable } from "@/native-sync";
+import { remoteUrl } from "./apiBase.ts";
+import {
+  appshellActivate,
+  appshellCurrent,
+  appshellHas,
+  hostInfo,
+  putFromUrl,
+} from "./native-host.ts";
+import { nativeSyncAvailable } from "./native-sync.ts";
 import { otaReloadUrl } from "./otaReloadUrl.ts";
 
 let applying = false;
+
+interface WebManifest {
+  version?: string;
+  files?: string[];
+}
 
 /** Probe + (if newer) incrementally download the app bundle, then reload into it.
  *  Called on load and on every server `AppVersion` WS push. Idempotent. */
 export async function runOtaCheck(): Promise<void> {
   if (applying || !nativeSyncAvailable()) return;
   try {
-    const r = await fetch("lvsync://localhost/ota-check");
-    const status = (await r.text()).trim();
-    if (status.startsWith("updated:")) {
-      applying = true;
-      // Download completed server-side + `current` flipped; reload picks it up. No
-      // banner — the reload is brief and the app restores its state. Use a
-      // versioned navigation URL instead of reload(): WKWebView may satisfy a
-      // custom-scheme reload from its current navigation cache even after the
-      // native `web/current` pointer has moved, leaving old JavaScript resident.
-      const version = status.slice("updated:".length).split(" ", 1)[0] ??
-        "updated";
-      globalThis.location.replace(
-        otaReloadUrl(globalThis.location.href, version),
-      );
+    const info = await hostInfo();
+    // Native `web_get` already returns None in debug; skip the apply so a
+    // just-built simulator bundle is not replaced by production OTA files.
+    if (info?.debugEmbedded === true) return;
+
+    const current = await appshellCurrent();
+    const headers: Record<string, string> = {};
+    if (current) headers["If-None-Match"] = current;
+    const response = await fetch(remoteUrl("/app-dist/manifest.json"), {
+      cache: "no-store",
+      headers,
+    });
+    if (response.status === 304) return;
+    if (!response.ok) return;
+
+    const manifest = (await response.json()) as WebManifest;
+    const version = manifest.version?.trim() ?? "";
+    const files = Array.isArray(manifest.files) ? manifest.files : [];
+    if (!version || files.length === 0) return;
+    if (version === current) return;
+
+    const hashed = files.filter((f) => f !== "index.html" && !f.includes(".."));
+    for (const path of hashed) {
+      if (await appshellHas(path)) continue;
+      const put = await putFromUrl(path);
+      if (put == null) return;
     }
+    const indexPut = await putFromUrl("index.html", version);
+    if (indexPut == null) return;
+    const ok = await appshellActivate(version, hashed);
+    if (!ok) return;
+
+    applying = true;
+    globalThis.location.replace(
+      otaReloadUrl(globalThis.location.href, version),
+    );
   } catch {
     // offline / transient / not the native shell — ignore
   }

@@ -1,9 +1,8 @@
 # liveview native shell (Tauri 2).
 #
 # This crate bundles the web shell and adds the native capabilities that a PWA
-# cannot provide: offline
-# content via the lvsync custom scheme, background/lock-screen audio, haptics,
-# and app-settings integration. It is not a second copy of the server.
+# cannot provide: a thin lvsync:// overlay host, background/lock-screen audio,
+# haptics, and app-settings integration. It is not a second copy of the server.
 # A configured remote LiveView server supplies the content, because a pure-web
 # PWA on iOS CANNOT keep an audiobook playing once the screen
 # locks / the app backgrounds, nor drive the lock-screen media controls — only a
@@ -15,7 +14,7 @@
 [package]
 name = "liveview-app"
 version = "0.1.0"
-description = "LiveView native shell with offline reading and background audio"
+description = "LiveView native shell: thin lvsync host, background audio, and app overlay"
 edition = "2024"
 license = "MIT"
 publish = false
@@ -47,10 +46,14 @@ tauri-plugin-opener = "2"
 # `plugin:haptics|*` via the injected IPC bridge; granted to the app origin in
 # capabilities/app-origin.json. installHaptics() (web) buzzes every control.
 tauri-plugin-haptics = "2"
-# Cross-platform Rust offline data layer (lv-sync core + SqliteBlobStore), served
-# to the bundled SPA via the `lvsync://` URI scheme because iOS webview-to-plugin
-# IPC is unreliable. Cross-compiles to aarch64-apple-ios (verified).
-tauri-plugin-lvsync = { path = "../../plugins/lvsync" }
+# Overlay fetch races baked LIVEVIEW_REMOTE_ORIGINS. rustls-tls works on iOS;
+# gzip of overlay bodies is deferred.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+serde_json = "1"
+futures-util = "0.3"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [lints.rust]
 warnings = "deny"
