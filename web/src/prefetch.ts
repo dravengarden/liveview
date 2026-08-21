@@ -10,6 +10,7 @@
 import { setPrefetching } from "@/syncStore";
 import { nativeAudioAvailable } from "@/native-audio";
 import { contentFetch, nativeSyncAvailable } from "@/native-sync";
+import { currentReplicaPolicy, replicaFlag } from "@/replica/policy";
 
 /** Books already swept this session (cheap dedup; the SW holds the real cache). */
 const sweptText = new Set<string>();
@@ -17,14 +18,12 @@ const sweptAudio = new Set<string>();
 let inFlight = 0;
 
 /**
- * EAGER mode — the native shell (iOS/Mac Tauri). There it pre-loads the WHOLE
- * library so every book reads + plays offline with no per-book "open it first",
- * vs LAZY (web/PWA) which warms only the opened book on demand. Detected by the
- * Tauri IPC global (same key haptics.ts uses); the remote-loaded web page still
- * carries it inside the WKWebView. Lazy = false ⇒ no full-corpus sweep.
+ * EAGER vs LAZY is replica.policy. Native defaults eager; PWA defaults lazy.
+ * When lv.replica=idb, replica/sync.ts owns the eager fill — this module must
+ * not double-run it.
  */
 export function isEagerShell(): boolean {
-  return "__TAURI_INTERNALS__" in globalThis;
+  return currentReplicaPolicy().mode === "eager";
 }
 
 let sweptTrees = false;
@@ -59,6 +58,8 @@ export async function prefetchTrees(): Promise<void> {
  */
 export async function prefetchAllBooks(slugs: readonly string[]): Promise<void> {
   if (!isEagerShell()) return;
+  // replica/sync.ts owns eager text/art fill when lv.replica=idb.
+  if (replicaFlag() === "idb") return;
   for (const slug of slugs) {
     if (!navigator.onLine) break;
     await prefetchBookText(slug);
@@ -92,10 +93,9 @@ const splitId = (id: string): [string, string, string] | null => {
  * failed chapter is skipped, never thrown.
  */
 export async function prefetchBookText(slug: string): Promise<void> {
-  // Native shell: the Rust plugin (sync_all + resolve-on-open) is the offline
-  // cacher — these raw-fetch sweeps go to REMOTE WITHOUT populating the native
-  // store, so they're pointless (and can hang) here. PWA only (SW caches them).
-  if (nativeSyncAvailable()) return;
+  // Native shell / IDB replica: sync.ts (or the Rust plugin) is the offline
+  // cacher — these raw-fetch sweeps go to REMOTE WITHOUT populating the store.
+  if (nativeSyncAvailable() || replicaFlag() === "idb") return;
   if (sweptText.has(slug) || !navigator.onLine) return;
   sweptText.add(slug);
   inFlight++;
@@ -145,9 +145,9 @@ export async function prefetchBookText(slug: string): Promise<void> {
  * background) or fill in as they generate.
  */
 export async function prefetchBookAudio(slug: string): Promise<void> {
-  // Native shell: audio offline is the AVPlayer's own cache (native-audio +
-  // useAudioPreloadDriver); this raw-fetch sweep doesn't populate it. PWA only.
-  if (nativeSyncAvailable()) return;
+  // Native shell / IDB replica: audio offline is AVPlayer + replica metadata.
+  // This raw-fetch sweep doesn't populate either. PWA-only (SW caches).
+  if (nativeSyncAvailable() || replicaFlag() === "idb") return;
   if (sweptAudio.has(slug) || !navigator.onLine) return;
   sweptAudio.add(slug);
   inFlight++;

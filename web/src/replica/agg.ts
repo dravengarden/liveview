@@ -35,6 +35,23 @@ export async function replicaStats(): Promise<ReplicaStats> {
   };
 }
 
+/** Non-audio Downloads numerator/denominator (text + artwork). */
+export async function contentReplicaStats(): Promise<{
+  cached: number;
+  total: number;
+  cachedBytes: number;
+  totalBytes: number;
+}> {
+  const text = await readAgg(AGG_TEXT);
+  const art = await readAgg(AGG_ARTWORK);
+  return {
+    cached: text.cachedCount + art.cachedCount,
+    total: text.totalCount + art.totalCount,
+    cachedBytes: text.cachedBytes + art.cachedBytes,
+    totalBytes: text.totalBytes + art.totalBytes,
+  };
+}
+
 export async function loadAgg(
   txn: IDBTransaction,
   kind: string,

@@ -14,7 +14,18 @@ import { evictUnpinnedLru } from "./gc.ts";
 import { closeReplicaDb, openReplicaDb } from "./idb.ts";
 import { applyDag, parseManifest, parseRoot } from "./manifest.ts";
 import { installMemoryIndexedDB, type MemoryIdbHandle } from "./memory-idb.ts";
-import { initReplica, pinAudio, replicaFlag, resetReplica } from "./mod.ts";
+import {
+  artworkBlobSrc,
+  initReplica,
+  materializeArtworkSrc,
+  pinAudio,
+  replicaContentFetch,
+  replicaFlag,
+  refreshReplicaManifest,
+  resetReplica,
+  setReplicaOfflineProbe,
+  setReplicaRemote,
+} from "./mod.ts";
 import { setPersistFullSizeArtwork } from "./policy.ts";
 import { REPLICA_FLAG_KEY } from "./schema.ts";
 import { missingTextArt } from "./sync.ts";
@@ -54,6 +65,8 @@ async function setup(quotaBytes?: number): Promise<MemoryIdbHandle> {
   installLocalStorage();
   storage.clear();
   setPersistFullSizeArtwork(true);
+  setReplicaOfflineProbe(() => false);
+  setReplicaRemote("https://example.test");
   const handle = installMemoryIndexedDB();
   if (quotaBytes !== undefined) handle.setQuotaBytes(quotaBytes);
   await resetReplica();
@@ -445,6 +458,7 @@ test("replica modules never getAll() blobs", async () => {
     "sync.ts",
     "idb.ts",
     "mod.ts",
+    "resolve.ts",
   ];
   for (const file of files) {
     const src = await readFile(new URL(file, import.meta.url), "utf8");
@@ -454,4 +468,259 @@ test("replica modules never getAll() blobs", async () => {
       `${file} must not call getAll on the blob store`,
     );
   }
+});
+
+function installFetch(
+  handler: (url: string) => Promise<Response> | Response,
+): { calls: string[]; restore: () => void } {
+  const calls: string[] = [];
+  const orig = globalThis.fetch;
+  globalThis.fetch = (async (
+    input: RequestInfo | URL,
+    _init?: RequestInit,
+  ): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.href
+      : input.url;
+    calls.push(url);
+    return await handler(url);
+  }) as typeof fetch;
+  return {
+    calls,
+    restore: () => {
+      globalThis.fetch = orig;
+    },
+  };
+}
+
+test("replica resolve serves a cache hit without network", async () => {
+  await setup();
+  const data = buf("chapter");
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [{
+      path: "book/text/en/01.md",
+      hash: "h1",
+      kind: "text",
+      bytes: data.byteLength,
+      url: "/api/file?path=book/01.md&lang=en&rendition=text",
+    }],
+  });
+  await putBlob({
+    hash: "h1",
+    kind: "text",
+    bytes: data.byteLength,
+    pinned: 0,
+    mtime: 1,
+    present: 1,
+    data,
+  });
+  const fetchMock = installFetch(() => {
+    throw new Error("network should not run on cache hit");
+  });
+  try {
+    const res = await replicaContentFetch(
+      "/api/file?path=book%2F01.md&lang=en&rendition=text",
+    );
+    assert.equal(res.status, 200);
+    assert.equal(await res.text(), "chapter");
+    assert.equal(fetchMock.calls.length, 0);
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("replica resolve miss fetches the absolute URL and puts", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [{
+      path: "book/text/en/01.md",
+      hash: "h2",
+      kind: "text",
+      bytes: 4,
+      url: "/api/blob/h2",
+    }],
+  });
+  const fetchMock = installFetch((url) => {
+    assert.equal(url, "https://example.test/api/blob/h2");
+    return new Response("body", { status: 200 });
+  });
+  try {
+    const res = await replicaContentFetch("/api/blob/h2");
+    assert.equal(res.status, 200);
+    assert.equal(await res.text(), "body");
+    const stored = await getBlob("h2");
+    assert.ok(stored);
+    assert.equal(new TextDecoder().decode(stored), "body");
+    assert.deepEqual(fetchMock.calls, ["https://example.test/api/blob/h2"]);
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("url-keyed cacheFirst serves the stored copy without a second fetch", async () => {
+  await setup();
+  let fetches = 0;
+  const fetchMock = installFetch((url) => {
+    fetches += 1;
+    assert.equal(url, "https://example.test/api/manifest/book");
+    return new Response(JSON.stringify({ chapters: [] }), { status: 200 });
+  });
+  try {
+    const first = await replicaContentFetch("/api/manifest/book", {
+      cacheFirst: true,
+    });
+    assert.equal(first.status, 200);
+    const second = await replicaContentFetch("/api/manifest/book", {
+      cacheFirst: true,
+    });
+    assert.equal(second.status, 200);
+    assert.equal(fetches, 1);
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("refreshReplicaManifest fetches /api/dag only when /api/root changes", async () => {
+  await setup();
+  const calls: string[] = [];
+  const fetchMock = installFetch((url) => {
+    calls.push(url);
+    if (url.endsWith("/api/root")) {
+      return new Response(JSON.stringify({ protocol_version: 1, root: "r1" }), {
+        status: 200,
+      });
+    }
+    if (url.endsWith("/api/dag")) {
+      return new Response(JSON.stringify({
+        protocol_version: 1,
+        root: "r1",
+        resources: [{
+          path: "book/text/en/01.md",
+          hash: "h1",
+          kind: "text",
+          bytes: 1,
+          url: "/api/blob/h1",
+        }],
+      }), { status: 200 });
+    }
+    return new Response(null, { status: 404 });
+  });
+  try {
+    const first = await refreshReplicaManifest();
+    assert.equal(first, "r1");
+    assert.equal(calls.filter((u) => u.endsWith("/api/dag")).length, 1);
+    calls.length = 0;
+    const second = await refreshReplicaManifest();
+    assert.equal(second, "r1");
+    assert.equal(calls.some((u) => u.endsWith("/api/dag")), false);
+    assert.equal(calls.some((u) => u.endsWith("/api/root")), true);
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("replica resolve returns 504 offline and does not hang", async () => {
+  await setup();
+  setReplicaOfflineProbe(() => true);
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [{
+      path: "book/text/en/01.md",
+      hash: "h3",
+      kind: "text",
+      bytes: 1,
+      url: "/api/blob/h3",
+    }],
+  });
+  const fetchMock = installFetch(() => {
+    throw new Error("must not fetch when offline");
+  });
+  try {
+    const res = await replicaContentFetch("/api/blob/h3", { offline: true });
+    assert.equal(res.status, 504);
+    assert.equal(fetchMock.calls.length, 0);
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("cover blob URL helper materializes from a local IDB body", async () => {
+  await setup();
+  const png = buf("PNG");
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [{
+      path: "book/@cover",
+      hash: "cov",
+      kind: "cover",
+      bytes: png.byteLength,
+      url: "/api/cover?book=book",
+    }],
+  });
+  await putBlob({
+    hash: "cov",
+    kind: "cover",
+    bytes: png.byteLength,
+    pinned: 0,
+    mtime: 1,
+    present: 1,
+    data: png,
+  });
+  const url = await materializeArtworkSrc("cover", "book");
+  assert.ok(url);
+  assert.equal(url.startsWith("blob:"), true);
+  assert.equal(artworkBlobSrc("cover", "book"), url);
+});
+
+test("contentFetch with TAURI + lv.replica=idb never hits lvsync://resolve", async () => {
+  await setup();
+  storage.set(REPLICA_FLAG_KEY, "idb");
+  Object.defineProperty(globalThis, "__TAURI_INTERNALS__", {
+    configurable: true,
+    value: { invoke: () => Promise.resolve() },
+  });
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [{
+      path: "book/text/en/01.md",
+      hash: "h4",
+      kind: "text",
+      bytes: 3,
+      url: "/api/blob/h4",
+    }],
+  });
+  const fetchMock = installFetch((url) => {
+    assert.equal(url.includes("lvsync://localhost/resolve"), false);
+    assert.equal(url.startsWith("https://example.test/"), true);
+    return new Response("ok", { status: 200 });
+  });
+  try {
+    const res = await replicaContentFetch("/api/blob/h4");
+    assert.equal(res.status, 200);
+    assert.equal(await res.text(), "ok");
+    assert.equal(fetchMock.calls.some((u) => u.includes("/resolve")), false);
+  } finally {
+    fetchMock.restore();
+    Reflect.deleteProperty(globalThis, "__TAURI_INTERNALS__");
+  }
+});
+
+test("native-sync facade checks lv.replica=idb before scheme resolve", async () => {
+  const src = await readFile(new URL("../native-sync.ts", import.meta.url), "utf8");
+  const fn = src.slice(src.indexOf("export async function contentFetch"));
+  const flagIdx = fn.indexOf('replicaFlag() === "idb"');
+  const resolveIdx = fn.indexOf("/resolve?u=");
+  assert.ok(flagIdx >= 0, "contentFetch must branch on replicaFlag");
+  assert.ok(resolveIdx > flagIdx, "idb replica must win over lvsync://resolve");
+  assert.equal(src.includes("replicaContentFetch"), true);
+  assert.equal(src.includes("cacheCount"), false);
 });

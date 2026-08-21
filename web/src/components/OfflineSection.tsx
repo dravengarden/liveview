@@ -159,7 +159,9 @@ export function OfflineSection(): React.JSX.Element | null {
   if (!nativeSyncAvailable()) return null;
 
   const audioUsed = audio?.usedBytes ?? 0;
-  const textUsed = stats?.cb ?? 0;
+  const textUsed = sizes?.textBytes
+    ? Math.min(stats?.cb ?? 0, sizes.textBytes)
+    : (stats?.cb ?? 0);
   const used = audioUsed + textUsed;
   const capBytes = cap * 1_073_741_824;
   // Preliminary total from the cached index (instant) → refined by the live dag.

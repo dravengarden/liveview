@@ -18,6 +18,12 @@ export const META_ROOT = "root";
 export const META_PROTOCOL_VERSION = "protocol_version";
 export const META_POLICY = "policy";
 export const META_WORKLIST = "worklist";
+/** Url-keyed metadata cache (`/api/manifest`, settings, progress, …). */
+export const META_URL_PREFIX = "url:";
+
+/** Replica network I/O connect budget. Fail instantly when net === "none". */
+export const REPLICA_CONNECT_MS = 1500;
+export const REPLICA_DAG_MS = 30_000;
 
 export const AGG_ALL = "all";
 export const AGG_AUDIO = "audio";
