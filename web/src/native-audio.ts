@@ -17,6 +17,8 @@
 // absent, so `nativeAudioAvailable()` is false and the app keeps using the web
 // `<audio>` element — this bridge is inert.
 
+import { hostAudioAvailable, postHostAudio } from "./native-host.ts";
+
 /** A track to load into the native player. */
 export interface NativeAudioTrack {
   /** Absolute media URL (the native URLSession can't resolve a relative path). */
@@ -91,30 +93,8 @@ type OutMsg =
   | { readonly kind: "audioStats"; readonly data: { readonly id: string } }
   | { readonly kind: "widgetSnapshot"; readonly data: NativeWidgetSnapshot };
 
-interface WebKitHandler {
-  postMessage(message: unknown): void;
-}
-
-function handler(): WebKitHandler | null {
-  const w = globalThis as {
-    webkit?: { messageHandlers?: Readonly<Record<string, WebKitHandler>> };
-  };
-  return w.webkit?.messageHandlers?.["lvNativeAudio"] ?? null;
-}
-
 function send(message: OutMsg): boolean {
-  const h = handler();
-  if (!h) {
-    return false;
-  }
-  try {
-    // WKScriptMessageHandler.postMessage (one-arg native bridge), NOT window.postMessage.
-    // oxlint-disable-next-line unicorn/require-post-message-target-origin
-    h.postMessage(message);
-    return true;
-  } catch {
-    return false;
-  }
+  return postHostAudio(message);
 }
 
 /** True only inside the native iOS shell that carries the AVPlayer engine (the
@@ -123,7 +103,7 @@ function send(message: OutMsg): boolean {
  *  the shell — it's what gives reliable lock-screen / background / resume that
  *  WKWebView's `<audio>` can't. */
 export function nativeAudioAvailable(): boolean {
-  return handler() !== null;
+  return hostAudioAvailable();
 }
 
 /** Load (replace) the current track. Pass the resume position + rate so native
