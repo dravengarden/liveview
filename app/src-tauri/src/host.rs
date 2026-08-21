@@ -352,7 +352,9 @@ impl HostState {
         // Flip `current` last so a partial download never goes live.
         write_file(self.web_root.join("current").as_path(), version.as_bytes())?;
         self.web_record_version(version);
-        self.web_gc();
+        // Empty assets would contribute no keep-entries, so file GC would
+        // prune hashed files unique to this version. Skip that prune.
+        self.web_gc(!assets.is_empty());
         Ok(())
     }
 
@@ -368,7 +370,7 @@ impl HostState {
         let _ = std::fs::write(&p, vs.join("\n"));
     }
 
-    fn web_gc(&self) {
+    fn web_gc(&self, prune_unlisted_files: bool) {
         let vs: Vec<String> = std::fs::read_to_string(self.web_root.join("versions"))
             .unwrap_or_default()
             .lines()
@@ -398,8 +400,10 @@ impl HostState {
                 }
             }
         }
-        let files = self.web_root.join("files");
-        prune_files(&files, &files, &keep_assets);
+        if prune_unlisted_files {
+            let files = self.web_root.join("files");
+            prune_files(&files, &files, &keep_assets);
+        }
         let trimmed: Vec<String> = vs.iter().filter(|v| keep.contains(v)).cloned().collect();
         let _ = std::fs::write(self.web_root.join("versions"), trimmed.join("\n"));
     }
@@ -807,6 +811,23 @@ mod tests {
         assert_eq!(state.current_version(), ver);
         assert!(root_dir.join("manifest.json").is_file());
 
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn activate_empty_assets_does_not_prune_just_fetched_files() {
+        let (root, state) = temp_state("activate-empty");
+        let ver = "v-empty";
+        let root_dir = state.web_root.join("roots").join(ver_dir(ver));
+        write_file(&root_dir.join("index.html"), b"<html/>").unwrap();
+        let hashed = state.web_root.join("files").join("assets/chunk.js");
+        write_file(&hashed, b"js").unwrap();
+        state.activate(ver, &[]).unwrap();
+        assert_eq!(state.current_version(), ver);
+        assert!(
+            hashed.is_file(),
+            "empty assets must not GC just-fetched hashed files"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

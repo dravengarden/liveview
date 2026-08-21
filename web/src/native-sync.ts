@@ -25,16 +25,14 @@ import {
   setReplicaOfflineProbe,
 } from "./replica/mod.ts";
 
-const SCHEME = "lvsync://localhost";
-
-/** True only inside the native shell (where the lvsync:// plugin is registered). */
+/** True only inside the native shell (thin `lvsync://` host is registered). */
 export function nativeSyncAvailable(): boolean {
   return "__TAURI_INTERNALS__" in globalThis;
 }
 
-/** Drop-in `fetch` for reader content. On the IDB replica path it resolves
- *  store-first for manifest resources and cache/network-first for url-keyed
- *  lists. `fresh` is accepted for API compatibility. */
+/** Drop-in `fetch` for reader content. Resolves through the TypeScript IDB
+ *  replica (store-first for manifest resources; cache/network-first for
+ *  url-keyed lists). `fresh` is accepted for API compatibility. */
 export async function contentFetch(
   url: string,
   opts?: { fresh?: boolean; cacheFirst?: boolean },
@@ -45,24 +43,8 @@ export async function contentFetch(
       offline: isLikelyOffline() || nativeNetworkClass() === "none",
     });
   }
-  if (!nativeSyncAvailable()) return fetch(url);
-  try {
-    // cacheFirst: serve the cached copy WITHOUT a network round-trip for a
-    // deploy-stable map on a hot path (e.g. audioHash's /api/manifest, which the
-    // audio switch awaits — a network-first stall there hangs playback even though
-    // the bytes are local). The url-keyed path is network-first otherwise.
-    const cf = opts?.cacheFirst ? "&cf=1" : "";
-    const r = await fetch(
-      `${SCHEME}/resolve?u=${encodeURIComponent(url)}${cf}`,
-    );
-    if (r.status === 200) {
-      return new Response(await r.arrayBuffer(), { status: 200 });
-    }
-    return new Response(null, { status: 504, statusText: "offline" });
-  } catch {
-    // Scheme failed unexpectedly — last resort to the network (online only).
-    return navigator.onLine ? fetch(url) : new Response(null, { status: 504 });
-  }
+  // Replica is the only store; leftover `native` flags map to idb.
+  return fetch(url);
 }
 
 /** Primary `src` for a book-cover `<img>`. Cover bytes are content-addressed DAG
@@ -72,28 +54,19 @@ export async function contentFetch(
  *  handler fall back to the offline lvsync cache. */
 export function coverSrc(slug: string): string {
   const u = `/api/cover?book=${encodeURIComponent(slug)}`;
-  if (replicaFlag() === "idb") {
-    return artworkBlobSrc("cover", slug) ?? remoteUrl(u);
-  }
-  return nativeSyncAvailable() ? remoteUrl(u) : u;
+  return artworkBlobSrc("cover", slug) ?? remoteUrl(u);
 }
 
 /** Wide, text-free DAG artwork for LiveView cards and hero surfaces. */
 export function backdropSrc(slug: string): string {
   const u = `/api/backdrop?book=${encodeURIComponent(slug)}`;
-  if (replicaFlag() === "idb") {
-    return artworkBlobSrc("backdrop", slug) ?? remoteUrl(u);
-  }
-  return nativeSyncAvailable() ? remoteUrl(u) : u;
+  return artworkBlobSrc("backdrop", slug) ?? remoteUrl(u);
 }
 
 /** Compact opaque DAG rendition used by scrolling shelf cards. */
 export function cardBackdropSrc(slug: string): string {
   const u = `/api/card-backdrop?book=${encodeURIComponent(slug)}`;
-  if (replicaFlag() === "idb") {
-    return artworkBlobSrc("card-backdrop", slug) ?? remoteUrl(u);
-  }
-  return nativeSyncAvailable() ? remoteUrl(u) : u;
+  return artworkBlobSrc("card-backdrop", slug) ?? remoteUrl(u);
 }
 
 /** Offline fallback for a failed native cover request. Returns `true` only when
@@ -103,42 +76,12 @@ export function recoverCoverImage(
   image: HTMLImageElement,
   slug: string,
 ): boolean {
-  if (replicaFlag() === "idb") {
-    if (image.dataset["lvCover"] === slug) return false;
-    image.dataset["lvCover"] = slug;
-    void materializeArtworkSrc("cover", slug).then((url) => {
-      if (url) image.src = url;
-      else image.style.display = "none";
-    });
-    return true;
-  }
-  if (!nativeSyncAvailable()) return false;
-  const u = `/api/cover?book=${encodeURIComponent(slug)}`;
-  const fallback = `${SCHEME}/resolve?u=${encodeURIComponent(u)}`;
-  if (image.src !== fallback && image.dataset["lvCover"] !== slug) {
-    image.src = fallback;
-    return true;
-  }
   if (image.dataset["lvCover"] === slug) return false;
-
-  // Some physical WKWebViews reject a custom-scheme URL specifically when it
-  // is assigned to <img src>, although fetch() through the same registered
-  // scheme succeeds. Materialize those bytes as a WebKit-owned blob URL. This
-  // is attempted only after both the ordinary remote URL and direct scheme URL
-  // fail, so normal browsers and healthy native loads keep lazy image loading.
   image.dataset["lvCover"] = slug;
-  void fetch(fallback)
-    .then((response) => {
-      if (!response.ok) throw new Error(`cover ${response.status}`);
-      return response.blob();
-    })
-    .then((blob) => {
-      image.src = URL.createObjectURL(blob);
-    })
-    .catch((error: unknown) => {
-      console.warn("cover image recovery failed", { slug, error });
-      image.style.display = "none";
-    });
+  void materializeArtworkSrc("cover", slug).then((url) => {
+    if (url) image.src = url;
+    else image.style.display = "none";
+  });
   return true;
 }
 
@@ -148,36 +91,12 @@ export function recoverBackdropImage(
   image: HTMLImageElement,
   slug: string,
 ): boolean {
-  if (replicaFlag() === "idb") {
-    if (image.dataset["lvBackdrop"] === slug) return false;
-    image.dataset["lvBackdrop"] = slug;
-    void materializeArtworkSrc("backdrop", slug).then((url) => {
-      if (url) image.src = url;
-      else image.style.display = "none";
-    });
-    return true;
-  }
-  if (!nativeSyncAvailable()) return false;
-  const u = `/api/backdrop?book=${encodeURIComponent(slug)}`;
-  const fallback = `${SCHEME}/resolve?u=${encodeURIComponent(u)}`;
-  if (image.src !== fallback && image.dataset["lvBackdrop"] !== slug) {
-    image.src = fallback;
-    return true;
-  }
   if (image.dataset["lvBackdrop"] === slug) return false;
   image.dataset["lvBackdrop"] = slug;
-  void fetch(fallback)
-    .then((response) => {
-      if (!response.ok) throw new Error(`backdrop ${response.status}`);
-      return response.blob();
-    })
-    .then((blob) => {
-      image.src = URL.createObjectURL(blob);
-    })
-    .catch((error: unknown) => {
-      console.warn("backdrop image recovery failed", { slug, error });
-      image.style.display = "none";
-    });
+  void materializeArtworkSrc("backdrop", slug).then((url) => {
+    if (url) image.src = url;
+    else image.style.display = "none";
+  });
   return true;
 }
 
@@ -193,23 +112,14 @@ export function recoverCardBackdropImage(
   image: HTMLImageElement,
   slug: string,
 ): boolean {
-  const cardUrl = `/api/card-backdrop?book=${encodeURIComponent(slug)}`;
   const stage = image.dataset["lvCardBackdrop"];
-  if (replicaFlag() === "idb") {
-    if (stage === "idb") return false;
-    image.dataset["lvCardBackdrop"] = "idb";
-    void materializeArtworkSrc("card-backdrop", slug).then((url) => {
-      if (url) image.src = url;
-      else image.style.display = "none";
-    });
-    return true;
-  }
-  if (nativeSyncAvailable() && stage === undefined) {
-    image.dataset["lvCardBackdrop"] = "cache";
-    image.src = `${SCHEME}/resolve?u=${encodeURIComponent(cardUrl)}`;
-    return true;
-  }
-  return false;
+  if (stage === "idb") return false;
+  image.dataset["lvCardBackdrop"] = "idb";
+  void materializeArtworkSrc("card-backdrop", slug).then((url) => {
+    if (url) image.src = url;
+    else image.style.display = "none";
+  });
+  return true;
 }
 
 /** Per-book offline coverage (not currently surfaced by the panel; kept for the type). */
@@ -233,46 +143,23 @@ export interface CacheStats {
   books: BookStat[];
 }
 
-/** Global non-audio content totals from the Rust store: [cached, total, cb, tb]. */
+/** Global non-audio content totals from the IDB replica agg row. */
 export async function nativeCacheStats(): Promise<CacheStats> {
-  if (replicaFlag() === "idb") {
-    const s = await replicaCacheStats();
-    return {
-      net: "wifi",
-      cached: s.cached,
-      total: s.total,
-      cb: s.cachedBytes,
-      tb: s.totalBytes,
-      books: [],
-    };
-  }
-  const r = await fetch(`${SCHEME}/stats`);
-  if (r.status !== 200) throw new Error("stats unavailable");
-  const a = (await r.json()) as [number, number, number, number];
+  const s = await replicaCacheStats();
   return {
-    net: "wifi", // content isn't wifi-gated; OfflineSection takes net from audio
-    cached: a[0] ?? 0,
-    total: a[1] ?? 0,
-    cb: a[2] ?? 0,
-    tb: a[3] ?? 0,
+    net: "wifi",
+    cached: s.cached,
+    total: s.total,
+    cb: s.cachedBytes,
+    tb: s.totalBytes,
     books: [],
   };
 }
 
-/** Eager-pull the whole corpus's non-audio content into the Rust store. Resolves to
- *  bytes downloaded this run; long-running, so poll {@link nativeCacheStats} for
- *  live progress. Content is small (~tens of MB) so it is NOT WiFi-gated — the large
- *  audio download stays WiFi-gated in native-audio. `wifiOnly` is accepted for API
- *  compatibility but not enforced for content. */
+/** Eager-pull the whole corpus's non-audio content into the IDB replica. */
 export async function nativeSyncAll(_wifiOnly = false): Promise<number> {
-  if (replicaFlag() === "idb") {
-    await pullMissingTextArt();
-    return (await replicaCacheStats()).cachedBytes;
-  }
-  if (!nativeSyncAvailable()) return 0;
-  const r = await fetch(`${SCHEME}/sync_all`);
-  if (r.status !== 200) throw new Error("sync failed");
-  return Number(await r.text()) || 0;
+  await pullMissingTextArt();
+  return (await replicaCacheStats()).cachedBytes;
 }
 
 export interface NativeAudioResource {
@@ -282,38 +169,18 @@ export interface NativeAudioResource {
   path: string;
 }
 
-/** Audio/marks subset of the manifest already refreshed by the Rust plugin. */
+/** Audio/marks subset of the IDB replica path index. */
 export async function nativeAudioIndex(): Promise<NativeAudioResource[]> {
-  if (replicaFlag() === "idb") {
-    return replicaAudioIndex();
-  }
-  if (!nativeSyncAvailable()) return [];
-  const response = await fetch(`${SCHEME}/audio-index`);
-  if (!response.ok) throw new Error("audio index unavailable");
-  const body = (await response.json()) as { resources?: NativeAudioResource[] };
-  return body.resources ?? [];
+  return replicaAudioIndex();
 }
 
-/** Tell the native fetcher whether to fast-fail network reads. The plugin's
- *  content fetcher waits a 4s TCP connect-timeout per network-first MISS; offline,
- *  a single screen (e.g. switching to the audiobook) fires several such reads and
- *  each stalls 4s → the tap feels frozen. Flipping this when `navigator.onLine`
- *  goes false makes those misses fail INSTANTLY (cache hits are unaffected — they
- *  never touch the fetcher), so offline navigation is snappy. No-op off-shell. */
-function setNativeOffline(_on: boolean): void {
-  // Replica fail-fast is TS-owned (`setReplicaOfflineProbe`). The native
-  // `/offline` scheme route is gone with the content plugin.
-}
-
-/** Keep the native fast-fail flag in sync with connectivity so offline navigation
- *  never eats the per-request connect timeout.
+/** Keep replica fail-fast in sync with connectivity.
  *
  *  Two signals, because `navigator.onLine` is unreliable in WKWebView (it often
- *  stays `true` in airplane mode, so it alone never flips the flag — that was why
- *  the audiobook jump stayed laggy):
+ *  stays `true` in airplane mode):
  *   - navigator.onLine + online/offline events: instant WHEN they fire.
  *   - native NWPathMonitor push events: the reliable airplane-mode signal.
- *  Plus the plugin's own OFFLINE_UNTIL backstop catches anything these miss. */
+ */
 /** Last-known reliable offline state, kept fresh by NWPathMonitor events. Read
  *  this instead of `navigator.onLine`, which is unreliable
  *  in WKWebView (commonly stays `true` in airplane mode). */
@@ -353,7 +220,6 @@ export function startOfflineFlagSync(): void {
     knownOffline = offline; // reliable signal for the reader path (isLikelyOffline)
     if (offline === last) return;
     last = offline;
-    setNativeOffline(offline);
   };
   const applyNetwork = (net: NativeNetworkClass): void => {
     if (knownNetworkClass === net) return;
@@ -380,20 +246,7 @@ export function startOfflineFlagSync(): void {
  *  sync pump (useAudioPreloadDriver) downloads whatever's newly listed. No-op
  *  off-shell; never throws. */
 export async function nativeRefreshManifest(): Promise<string> {
-  if (replicaFlag() === "idb") {
-    return refreshReplicaManifest();
-  }
-  if (!nativeSyncAvailable()) return "";
-  // Skip offline: refresh re-fetches /api/dag (its own 4s connect timeout), wasted
-  // when we know there's no network. The next foreground (online) retries.
-  if (!navigator.onLine) return "";
-  try {
-    const response = await fetch(`${SCHEME}/refresh`);
-    return response.ok ? await response.text() : "";
-  } catch {
-    /* offline / transient — the next foreground retries */
-    return "";
-  }
+  return refreshReplicaManifest();
 }
 
 // ── Download preferences (persisted, shell-only). Auto-download defaults ON, and
@@ -414,9 +267,6 @@ export function setOfflineAuto(on: boolean): void {
 }
 export function setOfflineWifiOnly(on: boolean): void {
   globalThis.localStorage?.setItem(WIFI_KEY, on ? "1" : "0");
-  // Push to native so its BACKGROUND download sessions get the new cellular policy
-  // (allowsCellularAccess) — the web gate alone can't stop transfers already handed
-  // to the system daemon, which keep running while the app is suspended.
   // Native enforces this on its foreground `.default` pool via
   // allowsCellularAccess. Those sessions suspend when the app backgrounds —
   // that is the accepted ceiling; JS cannot continue transfers while suspended.
@@ -429,16 +279,7 @@ export function setOfflineWifiOnly(on: boolean): void {
  *  repeatedly — the native side guards against concurrent runs, and a WiFi-only
  *  refusal is a no-op until WiFi returns (the settings poll re-fires it). */
 export async function ensureAutoSync(): Promise<void> {
-  if (replicaFlag() === "idb") {
-    if (currentReplicaPolicy().mode !== "eager") return;
-    try {
-      await nativeSyncAll(offlineWifiOnly());
-    } catch {
-      /* transient; the next poll/startup retries */
-    }
-    return;
-  }
-  if (!nativeSyncAvailable()) return;
+  if (currentReplicaPolicy().mode !== "eager") return;
   try {
     await nativeSyncAll(offlineWifiOnly());
   } catch {

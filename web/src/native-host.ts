@@ -38,7 +38,7 @@ export const HOST_PROTOCOL_V1_NAV_TYPES = [
   "ready",
 ] as const;
 
-/** Media-cache kinds. Native does not implement these yet; wrappers no-op. */
+/** Media-cache kinds. Implemented on the iOS `lvNativeAudio` handler; no-op off-shell. */
 export const HOST_PROTOCOL_V1_CACHE_KINDS = [
   "cacheFromUrl",
   "cacheHas",

@@ -1,16 +1,28 @@
+import { readAgg } from "./agg.ts";
 import { deleteBlob, getBlobRecord, hasBlob, putBlob } from "./blobs.ts";
-import { enqueueCacheDelete, enqueueCacheFromUrl } from "./media-bridge.ts";
-import { allPathRecords } from "./manifest.ts";
+import { forEachCursor, withTxn } from "./idb.ts";
+import {
+  enqueueCacheDelete,
+  enqueueCacheFromUrl,
+  isCacheQueued,
+} from "./media-bridge.ts";
+import { allPathRecords, pathRecordForHash } from "./manifest.ts";
 import { currentReplicaPolicy, persistBodyForKind } from "./policy.ts";
 import {
-  enqueueFetch,
   getWorklist,
   mutateWorklistUnlocked,
   removeFetch,
   removeFetches,
   withWorklistLock,
 } from "./worklist.ts";
-import { isAudioKind, type PathRecord } from "./schema.ts";
+import {
+  AGG_AUDIO,
+  INDEX_BY_KIND,
+  STORE_BLOBS,
+  isAudioKind,
+  type BlobRecord,
+  type PathRecord,
+} from "./schema.ts";
 import {
   joinRemoteUrl,
   runWithTimeBudget,
@@ -149,14 +161,62 @@ export async function missingTextArt(): Promise<ReplicaWorkerFillItem[]> {
   return out;
 }
 
+async function presentAudioHashes(): Promise<Set<string>> {
+  return withTxn([STORE_BLOBS], "readonly", async (txn) => {
+    const present = new Set<string>();
+    const index = txn.objectStore(STORE_BLOBS).index(INDEX_BY_KIND);
+    await forEachCursor<BlobRecord>(
+      index,
+      IDBKeyRange.only("audio"),
+      (value) => {
+        if (value.present === 1) present.add(value.hash);
+      },
+    );
+    return present;
+  });
+}
+
+/** Bound automatic fill to remaining cap (pinned + LRU headroom). One worklist
+ *  mutation; cacheFromUrl posts are constant-size and natively 6-wide. */
 export async function enqueueMissingAudio(): Promise<void> {
-  for (const rec of allPathRecords()) {
-    if (!isAudioKind(rec.kind)) continue;
-    if (await hasBlob(rec.hash)) continue;
-    const url = joinRemoteUrl(remoteBase, rec.url);
-    await enqueueFetch(rec.hash, url);
-    enqueueCacheFromUrl(rec.hash, url);
+  const cap = currentReplicaPolicy().capBytes;
+  const audio = await readAgg(AGG_AUDIO);
+  const present = await presentAudioHashes();
+  const queued = new Set((await getWorklist()).fetch.map((item) => item.hash));
+  let reserved = audio.cachedBytes;
+  for (const hash of queued) {
+    if (present.has(hash)) continue;
+    const rec = pathRecordForHash(hash);
+    reserved += rec && rec.bytes > 0 ? rec.bytes : 1;
   }
+  let remaining = Math.max(0, cap - reserved);
+  const missing: { hash: string; url: string; bytes: number }[] = [];
+  const seen = new Set<string>();
+  for (const rec of allPathRecords()) {
+    if (!isAudioKind(rec.kind) || seen.has(rec.hash)) continue;
+    seen.add(rec.hash);
+    if (present.has(rec.hash) || queued.has(rec.hash) || isCacheQueued(rec.hash)) {
+      continue;
+    }
+    const size = rec.bytes > 0 ? rec.bytes : 1;
+    if (remaining < size) continue;
+    remaining -= size;
+    missing.push({
+      hash: rec.hash,
+      url: joinRemoteUrl(remoteBase, rec.url),
+      bytes: size,
+    });
+  }
+  if (missing.length === 0) return;
+  await withWorklistLock(async () => {
+    await mutateWorklistUnlocked((wl) => {
+      const have = new Set(wl.fetch.map((item) => item.hash));
+      for (const item of missing) {
+        if (!have.has(item.hash)) wl.fetch.push({ hash: item.hash, url: item.url });
+      }
+    });
+  });
+  for (const item of missing) enqueueCacheFromUrl(item.hash, item.url);
 }
 
 export async function pullMissingTextArt(): Promise<void> {

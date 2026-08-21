@@ -17,12 +17,23 @@ function isAbsoluteUrl(url: string): boolean {
   }
 }
 
+/** Session-local set of hashes already posted to native this process. */
+const posted = new Set<string>();
+
+export function isCacheQueued(hash: string): boolean {
+  return posted.has(hash);
+}
+
 export function enqueueCacheFromUrl(hash: string, url: string): boolean {
   if (!isAbsoluteUrl(url)) return false;
-  return cacheFromUrl({ url, hash });
+  if (posted.has(hash)) return true;
+  const ok = cacheFromUrl({ url, hash });
+  if (ok) posted.add(hash);
+  return ok;
 }
 
 export function enqueueCacheDelete(hash: string): boolean {
+  posted.delete(hash);
   return cacheDelete({ hash });
 }
 
@@ -47,11 +58,13 @@ function isCacheProgress(detail: unknown): detail is HostCacheProgressEvent {
 }
 
 /** cacheProgress is a window CustomEvent; workers cannot see WKScriptMessage. */
-export function installMediaBridge(): () => void {
+export function installMediaBridge(onCached?: () => void): () => void {
   const listener = (event: Event): void => {
     const { detail } = event as CustomEvent<unknown>;
     if (!isCacheProgress(detail)) return;
-    void noteCacheProgress(detail.hash, detail.ok);
+    void noteCacheProgress(detail.hash, detail.ok).then(() => {
+      if (detail.ok) onCached?.();
+    });
   };
   globalThis.addEventListener("lv-native-audio", listener);
   return () => globalThis.removeEventListener("lv-native-audio", listener);

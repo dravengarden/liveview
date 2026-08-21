@@ -17,8 +17,10 @@ import { installMemoryIndexedDB, type MemoryIdbHandle } from "./memory-idb.ts";
 import { contentFetch } from "../native-sync.ts";
 import {
   artworkBlobSrc,
+  enqueueMissingAudio,
   initReplica,
   materializeArtworkSrc,
+  persistPolicy,
   pinAudio,
   replicaContentFetch,
   replicaFetchBudgetMs,
@@ -28,7 +30,7 @@ import {
   setReplicaOfflineProbe,
   setReplicaRemote,
 } from "./mod.ts";
-import { setPersistFullSizeArtwork } from "./policy.ts";
+import { loadPolicy, setPersistFullSizeArtwork } from "./policy.ts";
 import { REPLICA_FLAG_KEY } from "./schema.ts";
 import { missingTextArt } from "./sync.ts";
 import { enqueueFetch, getWorklist, setWorklist } from "./worklist.ts";
@@ -431,25 +433,10 @@ test("QuotaExceededError evicts unpinned image/text LRU in bounded batches", asy
   assert.equal(oldImg === undefined || oldTxt === undefined, true);
 });
 
-test("initReplica no-ops when lv.replica is native", async () => {
+test("leftover lv.replica=native maps to idb so it cannot strand a device", async () => {
   await setup();
-  storage.delete(REPLICA_FLAG_KEY);
-  assert.equal(replicaFlag(), "idb");
   storage.set(REPLICA_FLAG_KEY, "native");
-  assert.equal(replicaFlag(), "native");
-  await initReplica("eager");
-  await putBlob({
-    hash: "stay",
-    kind: "text",
-    bytes: 1,
-    pinned: 0,
-    mtime: 1,
-    present: 1,
-    data: buf("s"),
-  });
-  await setWorklist({ fetch: [], evict: ["stay"] });
-  await initReplica("eager");
-  assert.ok(await getBlobRecord("stay"));
+  assert.equal(replicaFlag(), "idb");
 });
 
 test("replica modules never getAll() blobs", async () => {
@@ -794,13 +781,32 @@ test("contentFetch with TAURI + lv.replica=idb never hits lvsync://resolve", asy
   }
 });
 
-test("native-sync facade checks lv.replica=idb before scheme resolve", async () => {
+test("native-sync facade never uses deleted scheme content routes", async () => {
   const src = await readFile(new URL("../native-sync.ts", import.meta.url), "utf8");
-  const fn = src.slice(src.indexOf("export async function contentFetch"));
-  const flagIdx = fn.indexOf('replicaFlag() === "idb"');
-  const resolveIdx = fn.indexOf("/resolve?u=");
-  assert.ok(flagIdx >= 0, "contentFetch must branch on replicaFlag");
-  assert.ok(resolveIdx > flagIdx, "idb replica must win over lvsync://resolve");
+  assert.equal(src.includes("/resolve?u="), false);
+  assert.equal(src.includes("/sync_all"), false);
+  assert.equal(src.includes("/audio-index"), false);
+  assert.equal(src.includes("lvsync://localhost/stats"), false);
   assert.equal(src.includes("replicaContentFetch"), true);
   assert.equal(src.includes("cacheCount"), false);
+});
+
+test("enqueueMissingAudio bounds the worklist to remaining cap in one mutation", async () => {
+  await setup();
+  await persistPolicy({ ...loadPolicy("eager"), capBytes: 10 });
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [
+      { path: "a/1", hash: "a1", kind: "audio", bytes: 6, url: "/api/blob/a1" },
+      { path: "a/2", hash: "a2", kind: "audio", bytes: 6, url: "/api/blob/a2" },
+      { path: "a/3", hash: "a3", kind: "audio", bytes: 6, url: "/api/blob/a3" },
+    ],
+  });
+  await enqueueMissingAudio();
+  const wl = await getWorklist();
+  assert.equal(wl.fetch.length, 1);
+  assert.equal(wl.fetch[0]?.hash, "a1");
+  await enqueueMissingAudio();
+  assert.equal((await getWorklist()).fetch.length, 1);
 });

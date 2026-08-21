@@ -19,13 +19,12 @@ await selectRemote();
 
 // When bundled into the native shell (local origin), point relative /api/* fetches
 // at the remote server so the app works; reader CONTENT still resolves offline via
-// the native plugin (contentFetch). No-op on the remote origin / PWA. Install
-// FIRST, before any module fires a fetch.
+// the TypeScript IDB replica (contentFetch). No-op on the remote origin / PWA.
+// Install FIRST, before any module fires a fetch.
 installApiShim();
 
-// Mirror connectivity into the native fetcher's fast-fail flag (BEFORE any content
-// fetch) so an offline cold launch never eats the 4s-per-miss connect timeout —
-// network-first reads fail instantly offline, cache hits are untouched. Native only.
+// Mirror connectivity into the replica fail-fast probe (BEFORE any content
+// fetch) so an offline cold launch never hangs a miss. Native only.
 startOfflineFlagSync();
 
 // Drain any cross-device writes (settings / progress) left pending from a prior

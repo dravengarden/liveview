@@ -1,6 +1,7 @@
 import { applyCachedDelta, readAgg } from "./agg.ts";
 import { forEachCursor, withTxn } from "./idb.ts";
 import { enqueueCacheDelete } from "./media-bridge.ts";
+import { currentReplicaPolicy } from "./policy.ts";
 import {
   AGG_AUDIO,
   type BlobRecord,
@@ -73,4 +74,15 @@ export async function evictUnpinnedAudioToFit(capBytes: number): Promise<number>
   );
   for (const rec of pending) enqueueCacheDelete(rec.hash);
   return pending.length;
+}
+
+let evictTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+
+/** Coalesce cap eviction across a burst of cacheProgress events. */
+export function scheduleEvictUnpinnedAudioToFit(): void {
+  if (evictTimer !== undefined) return;
+  evictTimer = globalThis.setTimeout(() => {
+    evictTimer = undefined;
+    void evictUnpinnedAudioToFit(currentReplicaPolicy().capBytes);
+  }, 200);
 }

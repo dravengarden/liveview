@@ -115,6 +115,8 @@ import WidgetKit
   private var dlQueue: [DLItem] = []
   private var dlQueueHead = 0
   private var dlQueuedKeys: Set<String> = []
+  /// Keys TS `cacheDelete`d. pump / publish / retry must not revive them.
+  private var dlDrop: Set<String> = []
   private var dlInflight = 0
   private var dlTimer: Timer?
   private var dlRetries: [String: Int] = [:]
@@ -423,6 +425,7 @@ import WidgetKit
       emitCacheProgress(key, true)
       return
     }
+    dlDrop.remove(key)
     if dlQueuedKeys.contains(key) || inFlight.contains(key) { return }
     dlQueue.append(DLItem(url: u, key: key))
     dlQueuedKeys.insert(key)
@@ -437,6 +440,12 @@ import WidgetKit
   private func cacheDelete(_ d: [String: Any]?) {
     guard let hash = d?["hash"] as? String else { return }
     let key = sanitizeKey(hash)
+    dlDrop.insert(key)
+    dlQueuedKeys.remove(key)
+    if dlQueueHead < dlQueue.count {
+      dlQueue = Array(dlQueue[dlQueueHead...].filter { $0.key != key })
+      dlQueueHead = 0
+    }
     let fm = FileManager.default
     try? fm.removeItem(at: fileURL(key))
     try? fm.removeItem(at: cacheDir.appendingPathComponent(key))
@@ -487,6 +496,7 @@ import WidgetKit
       let item = dlQueue[dlQueueHead]
       dlQueueHead += 1
       dlQueuedKeys.remove(item.key)
+      if dlDrop.contains(item.key) { continue }
       if onDisk(item.key) || inFlight.contains(item.key) {
         if onDisk(item.key) {
           noteCached(item.key)
@@ -535,6 +545,14 @@ import WidgetKit
     guard code == 200, publish(location, key) != nil else { return }
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
+      if self.dlDrop.contains(key) {
+        self.dlDrop.remove(key)
+        let fm = FileManager.default
+        try? fm.removeItem(at: self.fileURL(key))
+        try? fm.removeItem(at: self.cacheDir.appendingPathComponent(key))
+        self.cachedHashes.remove(key)
+        return
+      }
       self.dlRetries[key] = nil
       self.noteCached(key)
       self.emitCacheProgress(key, true)
@@ -554,6 +572,11 @@ import WidgetKit
       guard let self else { return }
       self.dlInflight = max(0, self.dlInflight - 1)
       self.inFlight.remove(key)
+      if self.dlDrop.contains(key) {
+        self.dlDrop.remove(key)
+        self.pump()
+        return
+      }
       if !cancelled, !self.onDisk(key), let url {
         let r = (self.dlRetries[key] ?? 0) + 1
         if r <= 3, !self.dlQueuedKeys.contains(key) {

@@ -9,6 +9,7 @@ import {
   withTxn,
 } from "./idb.ts";
 import { applyDag, hydratePathIndex, pathRecordForHash, resetPathIndex } from "./manifest.ts";
+import { scheduleEvictUnpinnedAudioToFit } from "./gc.ts";
 import {
   applyCellularPolicy,
   enqueueCacheFromUrl,
@@ -51,7 +52,11 @@ export {
   setPersistFullSizeArtwork,
 } from "./policy.ts";
 export { getWorklist, setWorklist, enqueueFetch, enqueueEvict } from "./worklist.ts";
-export { evictUnpinnedLru, evictUnpinnedAudioToFit } from "./gc.ts";
+export {
+  evictUnpinnedLru,
+  evictUnpinnedAudioToFit,
+  scheduleEvictUnpinnedAudioToFit,
+} from "./gc.ts";
 export { prepareBlobRecord, getBlobRecord, setPresent, deleteBlob } from "./blobs.ts";
 export { runWithTimeBudget, spawnReplicaWorker } from "./worker.ts";
 export { pullMissingTextArt, enqueueMissingAudio, setReplicaRemote } from "./sync.ts";
@@ -182,7 +187,9 @@ export async function initReplica(mode?: DataMode, opts?: {
   if (opts?.remoteBase) setReplicaRemote(opts.remoteBase, opts.origins ?? []);
   if (!policy.wifiOnly) applyCellularPolicy(true);
   else applyCellularPolicy(false);
-  if (!mediaUnsub) mediaUnsub = installMediaBridge();
+  if (!mediaUnsub) {
+    mediaUnsub = installMediaBridge(() => scheduleEvictUnpinnedAudioToFit());
+  }
   await importLegacyIndex();
   await hydratePathIndex();
   await replayWorklist();

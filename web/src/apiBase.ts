@@ -7,10 +7,10 @@
 //     at the real server. Reader CONTENT still goes through the TypeScript IDB
 //     replica (offline); this only covers the rest (audio/cover/progress/version…).
 //
-// Why BUNDLED at all: on a physical iOS device a REMOTE origin can't reach a
-// Rust-only Tauri plugin (its IPC falls back to the iOS Swift PluginManager which
-// only knows native plugins). A LOCAL origin reaches the Rust plugin AND the app
-// shell is available offline. See memory tauri-remote-ipc-needs-plugin.
+// Why BUNDLED at all: on a physical iOS device a REMOTE origin can't reach
+// Tauri plugin IPC reliably. A LOCAL `lvsync://localhost` origin reaches the
+// thin host AND keeps IndexedDB/localStorage. See memory
+// tauri-remote-ipc-needs-plugin.
 
 import { HOST_ORIGIN } from "./native-host.ts";
 
