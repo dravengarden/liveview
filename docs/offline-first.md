@@ -5,6 +5,14 @@ behaves *almost identically to online* — entering a page, play, pause, seek,
 navigate, resume all work with **zero network**. Network is for *acquiring new
 content*, never for *using already-acquired content*.
 
+**Storage ownership** is restated in §5 by
+[design/thin-native-idb-replica.md](design/thin-native-idb-replica.md): the
+TypeScript IndexedDB replica is the content store; native is a thin
+`lvsync://localhost` host. Prior gates remain — no Service Worker on iOS, O(1)
+Downloads stats, covers/backdrops as Merkle DAG resources, native background
+audio / lock-screen, scheme name `lvsync://localhost`, protocol version 1.
+Sqlite wipe of the retired native store is a gated follow-up.
+
 This document is the blueprint for the refactor; the phased plan lives in
 [offline-first-plan.md](offline-first-plan.md).
 
@@ -44,8 +52,9 @@ Detected once at startup: native shell present ⇒ `eager`, else `lazy`. A singl
 - **Loading is first-class** and must be polished on every path (skeletons /
   placeholders). Offline ⇒ whatever you've already opened + the active book's
   prefetch is available; the rest shows a graceful "not downloaded" state.
-- Storage = the Service Worker Cache API (already in `web/public/sw.js`), made
-  fully cache-first-by-hash on a persistent (non-version-wiped) cache.
+- Storage = the TypeScript IndexedDB replica for content; the Service Worker
+  (`web/public/sw.js`) remains the PWA app-shell cache. Native never registers
+  a SW.
 - Audio is budget-bound (quota + iOS eviction): current book + listened + LRU.
 
 ### eager — native (iOS + Mac, Tauri)
@@ -55,7 +64,8 @@ Detected once at startup: native shell present ⇒ `eager`, else `lazy`. A singl
   2. a leaf newer than the local replica (just deployed, not yet pulled — brief),
   3. audio still **generating server-side** (queued/running — the existing badge,
      a server wait, not a network load).
-- Storage = a **native content-addressed store** (not the SW), see §5.
+- Storage = the **TypeScript IndexedDB replica** (not the SW, not native
+  SQLite), see §5.
 - "Almost no loading" — but where genuinely unavoidable (the three cases) we
   still render a loading state.
 
@@ -63,8 +73,8 @@ Detected once at startup: native shell present ⇒ `eager`, else `lazy`. A singl
 ```
 useResource(pathOrHash) -> { data, loading, missing }
    resolver:
-     lazy:  cache.match(hash) ?? fetch(blob)         // loading until fetch
-     eager: nativeStore.get(hash)                     // sync hit; loading only on miss
+     lazy:  replica.get(hash) ?? fetch(blob)          // IDB; loading until fetch
+     eager: replica.get(hash)                         // IDB hit; loading only on miss
 ```
 Components bind to `{ loading, missing }` and never branch on the mode. The
 resolver and the mode decide how often each is true.
@@ -123,21 +133,34 @@ content updates and audio backfill; `chapter-ready` becomes a special case of
 
 ---
 
-## 5. Native eager storage (not the Service Worker)
+## 5. TypeScript replica (not the Service Worker, not native SQLite)
 
-A native content-addressed blob store in the Tauri Rust side, replacing the SW
-for the native app:
+**Ownership restatement.** The content-addressed replica lives in TypeScript
+IndexedDB (`web/src/replica/`), shared by the native host and the PWA. Native
+is a thin `lvsync://localhost` host (app-shell overlay, bounded media cache,
+AVPlayer) — not the Merkle store. See
+[design/thin-native-idb-replica.md](design/thin-native-idb-replica.md).
 
-- `blob(hash) -> bytes`, `has(hash) -> bool`, content-addressed on disk.
-- **Compression**: zstd (libzstd ships SIMD; the `zstd` crate links it).
-  - text-class (md/html/json/marks/units/spoken) → compress (typically 3–5×).
-  - **mp3 → store raw** (already compressed; zstd ≈ 1×). So compression helps
-    text a lot, audio not at all — and audio dominates the on-disk size. That is
-    fine: native disk is large; the win of compression is text density + fewer
-    bytes to sync, not shrinking audio.
-- The web layer talks to it via a bridge (`getBlob`/`hasBlob`); **audio streams
-  straight into the native AVPlayer by hash** (the gated native engine,
-  `native-audio.ts`, already does load-by-hash). SW stays only for web/PWA.
+- `blob(hash) -> bytes`, `has(hash) -> bool`, content-addressed in IDB
+  (text/units/spoken/marks/covers/backdrops/assets; audio **metadata** only).
+- **O(1) Downloads stats** from the maintained `agg` row (updated in the same
+  put/delete/`present` transaction). Opening Settings → Downloads never scans
+  IDB keys, never fetches `/api/dag` for totals, and never marshals resource
+  arrays across the WKWebView bridge.
+- Covers and backdrops remain first-class Merkle DAG resources enumerated in
+  `/api/dag`. Do not regress artwork to a URL-keyed side cache.
+- **Audio bodies** stay on disk in the native media cache so AVPlayer can play
+  them with lock-screen / background controls. IDB holds a `present` flag;
+  TypeScript owns pin/LRU/cap/worklist. The JS bridge never carries
+  corpus-sized payloads.
+- **No Service Worker in the native shell.** SW stays PWA-only. The historical
+  rejection of SW-on-iOS still stands.
+- Protocol version stays `1`. The document origin stays `lvsync://localhost`.
+- On-disk `lvsync.sqlite` / `dag.json` from the retired native store are **not**
+  wiped in this series (`POST /legacy-wipe` exists and is gated off).
+
+gzip/zstd of text-class in IDB is a later measurement, not part of this
+restatement. The original native-Rust zstd blob store is not the implementer.
 
 ---
 
@@ -189,7 +212,7 @@ acquired content is always network-free.
   deploys.
 - **Live-root churn during TTS** → accepted; diffs are O(1) leaf.
 - **Worker as DAG writer** → bounded (one leaf + path-to-root per completion).
-- **Native store correctness** → content-addressed = self-verifying (hash is the
+- **Replica correctness** → content-addressed = self-verifying (hash is the
   key); GC orphans on render_version bump.
 - **Migration risk** → keep legacy path endpoints as shims; ship phase-by-phase
   (see the plan), each independently deployable, offline-first delivered first.

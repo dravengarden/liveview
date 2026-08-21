@@ -1,7 +1,19 @@
 # Offline re-architecture: iOS-native (no Service Worker) + SQLite-backed store
 
-Status: **design / research** (no implementation yet). Tracked by tasks A1–A4
-(build split) and B1–B5 (SQLite + indexes), plus D0 (this doc).
+> **Status (storage ownership superseded).** This document is historical
+> research. SQLite + `plugins/lvsync` as the offline source of truth is
+> superseded by [thin-native IDB replica](design/thin-native-idb-replica.md):
+> the TypeScript IndexedDB replica (`web/src/replica/`) is the content store;
+> native is a thin `lvsync://localhost` host (protocol v1). **Still in force:**
+> do not register a Service Worker in the native shell (PWA-only); Downloads
+> stats are O(1) from a maintained aggregate (never scan files or marshal key
+> arrays); covers and backdrops stay Merkle DAG resources; background audio and
+> lock-screen stay native. Sqlite wipe of leftover `lvsync.sqlite` / `dag.json`
+> is a gated follow-up, not the cutover series.
+>
+> Originally tracked by tasks A1–A4 (build split) and B1–B5 (SQLite + indexes),
+> plus D0 (this doc). The diagnoses in §1 (fragile SW-on-iOS, scan-everything
+> stats) remain the reason those gates exist.
 
 ## 1. Why
 

@@ -22,11 +22,12 @@ material, operational guidance, research evidence, and historical notes.
 - [`design-system.md`](design-system.md) — Design System
 - [`offline-first-plan.md`](offline-first-plan.md) — Offline First Plan
 - [`offline-first.md`](offline-first.md) — Offline First
-- [`offline-rearchitecture.md`](offline-rearchitecture.md) — Offline Rearchitecture
+- [`offline-rearchitecture.md`](offline-rearchitecture.md) — Offline Rearchitecture (historical for storage ownership; SW-on-iOS rejection and O(1) stats still stand)
 - [`ota-optimization.md`](ota-optimization.md) — Ota Optimization
 
 ### Design
 
+- [`design/thin-native-idb-replica.md`](design/thin-native-idb-replica.md) — Thin Native IDB Replica (current storage ownership)
 - [`design/incremental-offline-pipeline.md`](design/incremental-offline-pipeline.md) — Incremental Offline Pipeline
 - [`design/interactive-view-authoring.md`](design/interactive-view-authoring.md) — Interactive View Authoring
 - [`design/interactive-view.md`](design/interactive-view.md) — Interactive View

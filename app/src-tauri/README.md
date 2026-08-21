@@ -12,8 +12,8 @@ mobile browsers cannot provide reliably:
 - background and lock-screen audiobook playback;
 - cover-first Home Screen and Lock Screen reading widgets;
 - native media controls and haptics;
-- a thin `lvsync://localhost` overlay host (OTA files native-fetched from baked origins);
-- TypeScript IndexedDB as the content replica (same origin).
+- a thin `lvsync://localhost` overlay host (protocol v1; OTA files native-fetched from baked origins);
+- TypeScript IndexedDB as the content replica (`web/src/replica/`, same origin). No Service Worker in this shell.
 
 ## Configure backend origins
 
@@ -66,7 +66,8 @@ platform scaffolding, then review the generated diff carefully.
   removes the WKWebView keyboard accessory strip.
 - `LaunchScreen.storyboard` and `LaunchBackground` provide matching light and
   dark launch surfaces.
-- `src/host.rs` owns the thin `lvsync://` overlay, origins, and host-info. Content replica is TypeScript IndexedDB.
+- `src/host.rs` owns the thin `lvsync://` overlay, origins, and host-info.
+  Content replica is TypeScript IndexedDB (`web/src/replica/`), not SQLite.
 
 If background playback pauses on a physical device, verify that the web audio
 element has an active MediaSession, confirm the Playback/SpokenAudio session is

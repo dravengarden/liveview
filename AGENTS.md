@@ -26,14 +26,15 @@ The native dependency graph can be checked without an Apple toolchain with
 ## Project boundaries
 
 - `src/` owns the server, CLI, content checking, and embedded reader delivery.
-- `web/` owns the React reader, PWA, and the TypeScript IDB replica.
+- `web/` owns the React reader, PWA, and the TypeScript IDB replica (`web/src/replica/`).
 - `app/` owns the native shell, thin `lvsync://localhost` host, and platform integration.
 - `tools/` contains deterministic repository utilities.
 
 The server reads deployed content from PostgreSQL and an S3-compatible object
 store. The TypeScript IDB replica is the content store; `lvsync://localhost`
 remains the document origin and thin host scheme. Native refreshes overlay
-bytes from a configured LiveView server.
+bytes from a configured LiveView server. Do not reintroduce `lv-sync/` or
+`plugins/lvsync/` as a content store.
 
 ## Development rules
 
@@ -63,7 +64,8 @@ bytes from a configured LiveView server.
   not a live mutual-exclusion mechanism.
 - Covers and backdrops are first-class content-addressed Merkle DAG resources.
   Keep their blob hashes in the deploy root and enumerate both in `/api/dag` so
-  native clients can verify, sync, retain, garbage-collect, and serve them offline.
+  the TypeScript replica (native host + PWA) can verify, sync, retain,
+  garbage-collect, and serve them offline.
   Do not regress artwork to a URL-keyed side cache.
 - Background audio and lock-screen controls are native-shell capabilities; do
   not assume a browser PWA can provide the same lifecycle guarantees on iOS.
