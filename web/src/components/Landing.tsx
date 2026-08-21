@@ -56,13 +56,16 @@ import { useI18n } from "@/i18n";
 import { localeDescriptor } from "@/locales/registry";
 import { useSyncStatus } from "@/syncStore";
 import {
+  buildBookSearchIndex,
   buildLibraryTaxonomy,
+  countTagFacetMatches,
   matchesTagFacets,
   type ReadingFilter,
   readingState,
-  searchScore,
+  scoreBookSearchIndex,
   sortCollectionNames,
   tagLabel,
+  tokenizeSearchQuery,
 } from "@/libraryDiscovery";
 import { ShelfCardArtwork } from "./CoverTile";
 import { ScrollToTopButton } from "./ScrollToTopButton";
@@ -850,6 +853,23 @@ export function Landing({
     () => new Map(libraryTaxonomy.tags.map((tag) => [tag.id, tag])),
     [libraryTaxonomy],
   );
+  const searchIndexes = useMemo(
+    () => new Map(books.map((book) => [book.slug, buildBookSearchIndex(book)])),
+    [books],
+  );
+  const queryTokens = useMemo(() => tokenizeSearchQuery(query), [query]);
+  // Score each book exactly once per query. The result is shared by the visible
+  // shelf and the facet preview counts below.
+  const searchScores = useMemo(() => {
+    const scores = new Map<string, number | null>();
+    for (const entry of entries) {
+      scores.set(
+        entry.book.slug,
+        scoreBookSearchIndex(searchIndexes.get(entry.book.slug)!, queryTokens),
+      );
+    }
+    return scores;
+  }, [entries, queryTokens, searchIndexes]);
   // A refreshed catalog can remove its last use of a tag. Drop that stale
   // selection instead of leaving the shelf trapped in an impossible filter.
   useEffect(() => {
@@ -892,14 +912,22 @@ export function Landing({
         continue;
       }
       if (!matchesTagFacets(e.book, selectedTags)) continue;
-      const score = searchScore(e.book, q);
+      const score = searchScores.get(e.book.slug) ?? null;
       if (score == null) continue;
       ranked.push({ entry: e, score });
     }
     if (q) ranked.sort((a, b) => b.score - a.score);
     return ranked.map(({ entry }) => entry);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entries, kind, query, readingFilter, selectedTags, progress]);
+  }, [
+    entries,
+    kind,
+    query,
+    readingFilter,
+    selectedTags,
+    progress,
+    searchScores,
+  ]);
 
   const discoveryActive = query.trim().length > 0 || selectedTags.size > 0 ||
     kind !== "all" || readingFilter !== "all";
@@ -928,34 +956,35 @@ export function Landing({
   // Disjunctive facet counts preview adding each candidate. Existing choices
   // in the same facet remain because facet values are ORed; other facets stay
   // as AND constraints.
-  const tagCounts = useMemo(() => {
-    const result = new Map<string, number>();
-    for (const tag of libraryTaxonomy.tags) {
-      const candidate = new Set(selectedTags);
-      candidate.add(tag.id);
-      let count = 0;
-      for (const entry of entries) {
-        if (kind !== "all" && !matchesKind(entry, kind)) continue;
-        if (
-          readingFilter !== "all" &&
-          readingState(progress[entry.book.slug]) !== readingFilter
-        ) continue;
-        if (searchScore(entry.book, query) == null) continue;
-        if (matchesTagFacets(entry.book, candidate)) count += 1;
-      }
-      result.set(tag.id, count);
+  const tagCountBooks = useMemo(() => {
+    const result: Book[] = [];
+    for (const entry of entries) {
+      if (kind !== "all" && !matchesKind(entry, kind)) continue;
+      if (
+        readingFilter !== "all" &&
+        readingState(progress[entry.book.slug]) !== readingFilter
+      ) continue;
+      if (searchScores.get(entry.book.slug) == null) continue;
+      result.push(entry.book);
     }
     return result;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     entries,
-    selectedTags,
     kind,
     readingFilter,
     progress,
-    query,
-    libraryTaxonomy,
+    searchScores,
   ]);
+  const tagCounts = useMemo(
+    () =>
+      countTagFacetMatches(
+        tagCountBooks,
+        libraryTaxonomy.tags,
+        selectedTags,
+      ),
+    [tagCountBooks, libraryTaxonomy.tags, selectedTags],
+  );
 
   // The ordered series sections (only when grouping by collection): named
   // collections use locale order and the "Other" catch-all remains last.

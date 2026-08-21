@@ -1,10 +1,14 @@
 import {
+  buildBookSearchIndex,
   buildLibraryTaxonomy,
+  countTagFacetMatches,
   discoveryTagIds,
   matchesTagFacets,
   readingState,
+  scoreBookSearchIndex,
   searchScore,
   sortCollectionNames,
+  tokenizeSearchQuery,
 } from "./libraryDiscovery.ts";
 import type { Book } from "@/types";
 
@@ -48,6 +52,67 @@ Deno.test("weighted search covers title, tags, series, author, and description",
   );
   assertEquals(searchScore(book, "ecology field") != null, true);
   assertEquals(searchScore(book, "astronomy"), null);
+  const index = buildBookSearchIndex(book);
+  assertEquals(
+    scoreBookSearchIndex(index, tokenizeSearchQuery("ecology field")),
+    searchScore(book, "ecology field"),
+  );
+});
+
+Deno.test("facet preview counts preserve OR-within and AND-across semantics", () => {
+  const books = [
+    book,
+    {
+      ...book,
+      slug: "forest-notes",
+      tags: ["subject.botany", "format.reference"],
+    },
+    {
+      ...book,
+      slug: "coastal-reference",
+      tags: ["subject.ecology", "format.reference"],
+    },
+  ];
+  const tags = buildLibraryTaxonomy(books).tags;
+  for (
+    const selected of [
+      new Set<string>(),
+      new Set(["subject.ecology"]),
+      new Set(["subject.ecology", "format.field-guide"]),
+    ]
+  ) {
+    const expected = new Map(tags.map((tag) => [
+      tag.id,
+      books.filter((entry) =>
+        matchesTagFacets(entry, new Set([...selected, tag.id]))
+      ).length,
+    ]));
+    assertEquals(
+      [...countTagFacetMatches(books, tags, selected)],
+      [...expected],
+    );
+  }
+});
+
+Deno.test("large sparse facet counts read each book's tags once", () => {
+  let tagReads = 0;
+  const tags = Array.from({ length: 1_533 }, (_, i) => `tag-${i}`);
+  const books = Array.from({ length: 150 }, (_, i) => {
+    const values = [tags[i % tags.length]!, tags[(i * 7) % tags.length]!];
+    const entry = { ...book, slug: `book-${i}` };
+    Object.defineProperty(entry, "tags", {
+      enumerable: true,
+      get: () => {
+        tagReads += 1;
+        return values;
+      },
+    });
+    return entry;
+  });
+  const taxonomy = tags.map((id) => ({ id, facet: "tags", label: id }));
+  const counts = countTagFacetMatches(books, taxonomy, new Set());
+  assertEquals(tagReads, books.length);
+  assertEquals(counts.size, tags.length);
 });
 
 Deno.test("tag matching is OR within facets and AND across facets", () => {
