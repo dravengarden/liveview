@@ -11,7 +11,7 @@ TypeScript IndexedDB replica is the content store; native is a thin
 `lvsync://localhost` host. Prior gates remain — no Service Worker on iOS, O(1)
 Downloads stats, covers/backdrops as Merkle DAG resources, native background
 audio / lock-screen, scheme name `lvsync://localhost`, protocol version 1.
-Sqlite wipe of the retired native store is a gated follow-up.
+Host boot deletes leftover `lvsync.sqlite` / `dag.json`; audio `.caf` files stay.
 
 This document is the blueprint for the refactor; the phased plan lives in
 [offline-first-plan.md](offline-first-plan.md).
@@ -157,8 +157,8 @@ AVPlayer) — not the Merkle store. See
 - **No Service Worker in the native shell.** SW stays PWA-only. The historical
   rejection of SW-on-iOS still stands.
 - Protocol version stays `1`. The document origin stays `lvsync://localhost`.
-- On-disk `lvsync.sqlite` / `dag.json` from the retired native store are **not**
-  wiped in this series (`POST /legacy-wipe` exists and is gated off).
+- Host boot deletes leftover `lvsync.sqlite` / `dag.json` / `_pins.json` from
+  the retired native store. Audio `lv-audio/*.caf` files stay as the media cache.
 
 gzip/zstd of text-class in IDB is a later measurement, not part of this
 restatement. The original native-Rust zstd blob store is not the implementer.

@@ -26,8 +26,6 @@ import {
   hostInfo,
   hostNavAvailable,
   hostOpenUrl,
-  legacyIndex,
-  legacyWipe,
   putFromUrl,
   setAllowsCellular,
 } from "./native-host.ts";
@@ -72,6 +70,8 @@ test("protocol v1 allow-lists reject LiveView-store kinds", () => {
   assert.equal(v1.has("/sync_all"), false);
   assert.equal(v1.has("/resolve"), false);
   assert.equal(v1.has("/stats"), false);
+  assert.equal(v1.has("/legacy-index"), false);
+  assert.equal(v1.has("/legacy-wipe"), false);
   for (const kind of [
     "pin",
     "unpin",
@@ -125,8 +125,6 @@ test("future wrappers exist and no-op when native APIs are absent", async () => 
   assert.equal(typeof appshellCurrent, "function");
   assert.equal(typeof appshellHas, "function");
   assert.equal(typeof appshellActivate, "function");
-  assert.equal(typeof legacyIndex, "function");
-  assert.equal(typeof legacyWipe, "function");
   assert.equal(typeof fetchHostOrigins, "function");
   assert.equal(typeof hostAppVersion, "function");
   assert.equal(typeof hostOpenUrl, "function");
@@ -149,8 +147,6 @@ test("future wrappers exist and no-op when native APIs are absent", async () => 
   assert.equal(await appshellCurrent(), "");
   assert.equal(await appshellHas("assets/index.js"), false);
   assert.equal(await appshellActivate("1"), false);
-  assert.equal(await legacyIndex(), null);
-  assert.equal(await legacyWipe(), false);
   assert.equal(await fetchHostOrigins(), null);
   assert.equal(await hostAppVersion(), null);
   assert.equal(await hostOpenUrl("https://example.test"), false);

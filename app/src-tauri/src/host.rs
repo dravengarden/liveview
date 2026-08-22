@@ -1,4 +1,4 @@
-//! Thin `lvsync://localhost` host: app-shell overlay, origins, and legacy export.
+//! Thin `lvsync://localhost` host: app-shell overlay and baked remote origins.
 //!
 //! Document origin is frozen as `lvsync://localhost` (IndexedDB / localStorage).
 //! Native fetches overlay bytes from baked `LIVEVIEW_REMOTE_ORIGINS` only — JS
@@ -21,10 +21,6 @@ const DEFAULT_REMOTE_ORIGINS: &str = "http://127.0.0.1:4160";
 /// native binary bump.
 pub const HOST_PROTOCOL: u32 = 1;
 
-/// Wipe of sqlite / dag.json / LvStore leftovers exists but stays off so a
-/// previous IPA can still roll back onto those files.
-const LEGACY_WIPE_ENABLED: bool = false;
-
 fn remote_origins() -> Vec<&'static str> {
     option_env!("LIVEVIEW_REMOTE_ORIGINS")
         .unwrap_or(DEFAULT_REMOTE_ORIGINS)
@@ -32,6 +28,41 @@ fn remote_origins() -> Vec<&'static str> {
         .map(str::trim)
         .filter(|origin| !origin.is_empty())
         .collect()
+}
+
+/// Retired native store leftovers. Audio `lv-audio/*.caf` files stay; they are
+/// the live media cache, not the old SQLite replica.
+fn purge_retired_store_files(data_dir: &Path) {
+    const STORE_FILES: &[&str] = &[
+        "lvsync.sqlite",
+        "lvsync.sqlite-wal",
+        "lvsync.sqlite-shm",
+        "dag.json",
+        "lv-index-audio.sqlite",
+        "lv-index-audio.sqlite-wal",
+        "lv-index-audio.sqlite-shm",
+    ];
+    const AUDIO_SIDECARS: &[&str] = &[
+        "_legacy-index.json",
+        "_legacy-imported",
+        "_pins.json",
+        "lv-index-audio.sqlite",
+        "lv-index-audio.sqlite-wal",
+        "lv-index-audio.sqlite-shm",
+    ];
+    let mut roots = vec![data_dir.to_path_buf()];
+    if let Some(parent) = data_dir.parent() {
+        roots.push(parent.to_path_buf());
+    }
+    for root in &roots {
+        for name in STORE_FILES {
+            let _ = std::fs::remove_file(root.join(name));
+        }
+        let audio = root.join("lv-audio");
+        for name in AUDIO_SIDECARS {
+            let _ = std::fs::remove_file(audio.join(name));
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -256,16 +287,15 @@ async fn dl(client: &reqwest::Client, path: &str) -> Result<Vec<u8>, String> {
 }
 
 pub struct HostState {
-    data_dir: PathBuf,
     web_root: PathBuf,
     native_version: String,
 }
 
 impl HostState {
     fn new(data_dir: PathBuf, native_version: String) -> Self {
+        purge_retired_store_files(&data_dir);
         let web_root = data_dir.join("web");
         Self {
-            data_dir,
             web_root,
             native_version,
         }
@@ -417,52 +447,6 @@ impl HostState {
         .to_string()
         .into_bytes()
     }
-
-    fn legacy_index_paths(&self) -> Vec<PathBuf> {
-        let mut paths = vec![self.data_dir.join("lv-audio").join("_legacy-index.json")];
-        if let Some(parent) = self.data_dir.parent() {
-            paths.push(parent.join("lv-audio").join("_legacy-index.json"));
-        }
-        paths
-    }
-
-    /// 200 + JSON once; after a successful read we mark imported so later GETs
-    /// are 204 (TS must not re-apply pins/`present`).
-    fn legacy_index(&self) -> (u16, Vec<u8>) {
-        for json_path in self.legacy_index_paths() {
-            let marker = json_path.with_file_name("_legacy-imported");
-            if marker.is_file() {
-                return (204, Vec::new());
-            }
-            if let Ok(bytes) = std::fs::read(&json_path) {
-                let _ = std::fs::write(marker, b"1");
-                return (200, bytes);
-            }
-        }
-        (404, b"not found".to_vec())
-    }
-
-    fn legacy_wipe(&self) -> (u16, Vec<u8>) {
-        if !LEGACY_WIPE_ENABLED {
-            return (403, b"gated".to_vec());
-        }
-        // Gated off: a future IPA can enable this after one stable IDB release.
-        let _ = std::fs::remove_file(self.data_dir.join("lvsync.sqlite"));
-        let _ = std::fs::remove_file(self.data_dir.join("dag.json"));
-        for json_path in self.legacy_index_paths() {
-            let dir = json_path.parent();
-            let _ = std::fs::remove_file(&json_path);
-            if let Some(dir) = dir {
-                let _ = std::fs::remove_file(dir.join("_legacy-imported"));
-                let _ = std::fs::remove_file(dir.join("_pins.json"));
-            }
-        }
-        if let Some(parent) = self.data_dir.parent() {
-            let _ = std::fs::remove_file(parent.join("lv-index-audio.sqlite"));
-        }
-        let _ = std::fs::remove_file(self.data_dir.join("lv-index-audio.sqlite"));
-        (200, b"ok".to_vec())
-    }
 }
 
 fn overlay_read(web_root: &Path, rel: &str) -> Option<Vec<u8>> {
@@ -592,13 +576,6 @@ async fn scheme_dispatch(
                 Err(e) => (409, e.into_bytes()),
             }
         }
-        "/legacy-index" => state.legacy_index(),
-        "/legacy-wipe" => {
-            if !post {
-                return (405, b"POST only".to_vec());
-            }
-            state.legacy_wipe()
-        }
         _ => (404, b"not found".to_vec()),
     }
 }
@@ -682,6 +659,31 @@ mod tests {
         let data = root.join("plugin");
         std::fs::create_dir_all(&data).unwrap();
         (root, HostState::new(data, "0.1.0-test".into()))
+    }
+
+    #[test]
+    fn host_boot_deletes_retired_store_files_and_keeps_audio() {
+        let root = std::env::temp_dir().join(format!(
+            "liveview-host-purge-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let data = root.join("plugin");
+        let audio = root.join("lv-audio");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(&audio).unwrap();
+        std::fs::write(data.join("lvsync.sqlite"), b"old").unwrap();
+        std::fs::write(data.join("dag.json"), b"{}").unwrap();
+        std::fs::write(audio.join("_legacy-index.json"), b"{}").unwrap();
+        std::fs::write(audio.join("_pins.json"), b"[]").unwrap();
+        std::fs::write(audio.join("abc.caf"), b"caf").unwrap();
+        let _state = HostState::new(data.clone(), "0.1.0-test".into());
+        assert!(!data.join("lvsync.sqlite").exists());
+        assert!(!data.join("dag.json").exists());
+        assert!(!audio.join("_legacy-index.json").exists());
+        assert!(!audio.join("_pins.json").exists());
+        assert!(audio.join("abc.caf").is_file());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -851,7 +853,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn origins_and_host_info_and_legacy_index_then_204() {
+    async fn origins_and_host_info_reject_retired_legacy_routes() {
         let (root, state) = temp_state("routes");
         let (status, body) = scheme_dispatch(&state, "GET", "/origins", "", b"").await;
         assert_eq!(status, 200);
@@ -865,28 +867,10 @@ mod tests {
         assert_eq!(info["nativeVersion"], "0.1.0-test");
         assert_eq!(info["debugEmbedded"], cfg!(debug_assertions));
 
-        let audio = state.data_dir.parent().unwrap().join("lv-audio");
-        std::fs::create_dir_all(&audio).unwrap();
-        std::fs::write(
-            audio.join("_legacy-index.json"),
-            br#"{"hashes":["abc"],"pins":["abc"]}"#,
-        )
-        .unwrap();
-        let (status, body) = scheme_dispatch(&state, "GET", "/legacy-index", "", b"").await;
-        assert_eq!(status, 200);
-        assert!(String::from_utf8_lossy(&body).contains("abc"));
         let (status, _) = scheme_dispatch(&state, "GET", "/legacy-index", "", b"").await;
-        assert_eq!(status, 204);
-
-        let (status, body) = scheme_dispatch(&state, "POST", "/legacy-wipe", "", b"").await;
-        assert_eq!(status, 403);
-        assert_eq!(body, b"gated");
-        // Gated wipe must not delete sqlite even if a leftover file is present.
-        std::fs::write(state.data_dir.join("lvsync.sqlite"), b"keep").unwrap();
-        std::fs::write(state.data_dir.join("dag.json"), b"{}").unwrap();
-        let _ = scheme_dispatch(&state, "POST", "/legacy-wipe", "", b"").await;
-        assert!(state.data_dir.join("lvsync.sqlite").is_file());
-        assert!(state.data_dir.join("dag.json").is_file());
+        assert_eq!(status, 404);
+        let (status, _) = scheme_dispatch(&state, "POST", "/legacy-wipe", "", b"").await;
+        assert_eq!(status, 404);
 
         let (status, _) = scheme_dispatch(&state, "GET", "/resolve", "u=/api/x", b"").await;
         assert_eq!(status, 404);

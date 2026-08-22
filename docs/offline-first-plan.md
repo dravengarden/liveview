@@ -76,8 +76,8 @@ refresh; no pull-to-refresh remains.
    [design/thin-native-idb-replica.md](design/thin-native-idb-replica.md).
 3. **Eager sync**: on launch + root change, mirror the DAG into the TypeScript
    replica (cold-sync progress UI). `dataMode='eager'` ⇒ resolver hits IDB;
-   `loading` only on the three genuine cases. Sqlite wipe of leftover
-   `lvsync.sqlite` / `dag.json` is a gated follow-up, not this series.
+   `loading` only on the three genuine cases. Host boot deletes leftover
+   `lvsync.sqlite` / `dag.json`; audio `.caf` files stay.
 
 **Exit:** native app, airplane mode from cold-synced state → every book/chapter
 opens + plays with no network, no loading.
