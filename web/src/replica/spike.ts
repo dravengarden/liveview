@@ -1,5 +1,9 @@
-import { openReplicaDb } from "./idb.ts";
+import { replicaStats } from "./agg.ts";
 import { putBlob } from "./blobs.ts";
+import { openReplicaDb } from "./idb.ts";
+import { replicaFlag } from "./policy.ts";
+import { refreshReplicaManifest } from "./resolve.ts";
+import { pullMissingTextArt } from "./sync.ts";
 
 export interface ReplicaSpikeResult {
   estimate: { usage: number; quota: number } | null;
@@ -126,8 +130,56 @@ export const SPIKE_EVAL_JS = `(() => {
   })();
 })()`;
 
+/** 600-frame gate while fill is in flight; does not wait for fill to finish. */
+export async function runReplicaFillGate(): Promise<Record<string, unknown>> {
+  const fill = (async () => {
+    await refreshReplicaManifest();
+    await pullMissingTextArt();
+  })();
+  let fillError: string | null = null;
+  void fill.catch((error: unknown) => {
+    fillError = error instanceof Error ? error.message : String(error);
+  });
+
+  let frames = 0;
+  let maxGap = 0;
+  let over50 = 0;
+  let last = performance.now();
+  while (frames < 600) {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    const now = performance.now();
+    const gap = now - last;
+    last = now;
+    frames += 1;
+    if (gap > maxGap) maxGap = gap;
+    if (gap > 50) over50 += 1;
+  }
+
+  let persist: boolean | "denied" | "unsupported" = "unsupported";
+  try {
+    persist = await measurePersist();
+  } catch {
+    persist = "denied";
+  }
+
+  return {
+    origin: globalThis.location?.origin ?? "",
+    flag: replicaFlag(),
+    frames,
+    maxGap,
+    over50,
+    fillError,
+    persist,
+    estimate: await measureEstimate(),
+    stats: await replicaStats(),
+  };
+}
+
 export function installReplicaSpike(): void {
   const g = globalThis as Record<string, unknown>;
   g["__lvReplicaSpike"] = runReplicaSpike;
   g["__lvReplicaSpikeEval"] = SPIKE_EVAL_JS;
+  g["__lvReplicaFillGate"] = runReplicaFillGate;
 }
