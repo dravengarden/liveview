@@ -4,11 +4,12 @@ import { App } from "./App";
 import { I18nProvider } from "./i18n";
 import { AudioPlayerProvider } from "./audio/player";
 import { installHaptics } from "./_shell";
-import { BUNDLED, installApiShim, selectRemote } from "./apiBase";
+import { BUNDLED, installApiShim, REMOTE, selectRemote } from "./apiBase";
 import { startOfflineFlagSync } from "./native-sync";
 import { startSyncQueue } from "./syncQueue";
 import { startApm } from "./apm";
 import { startOtaUpdater } from "./otaUpdater";
+import { initReplica, replicaFlag } from "./replica/mod.ts";
 import "./styles/index.css";
 
 // Choose a reachable native endpoint before any subsystem captures/uses REMOTE.
@@ -38,6 +39,11 @@ startApm();
 // App-bundle hot-update: check the server for a newer web bundle (incremental,
 // content-addressed) and reload into it when ready. Native shell only.
 startOtaUpdater();
+
+// Replica is opt-in; missing flag keeps the native content path.
+if (replicaFlag() === "idb") {
+  void initReplica(undefined, { remoteBase: REMOTE, origins: [REMOTE] });
+}
 
 // Global haptic delegation: ONE listener set buzzes every MUI control (button /
 // toggle / card / chip / Select), custom `cursor:pointer` clickable, text input,
