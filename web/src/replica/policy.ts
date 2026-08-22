@@ -8,7 +8,6 @@ import {
   type MetaRecord,
   type ReplicaFlag,
   type ReplicaPolicy,
-  REPLICA_FLAG_KEY,
 } from "./schema.ts";
 import { idbRequest, withTxn } from "./idb.ts";
 
@@ -24,9 +23,9 @@ function readStorage(key: string): string | null {
 }
 
 export function replicaFlag(): ReplicaFlag {
-  const value = readStorage(REPLICA_FLAG_KEY);
-  if (value === "idb" || value === "native") return value;
-  return "native";
+  // Native content store is gone. Map leftover `native` flags (PR3 opt-in
+  // testing) so a stale localStorage value cannot 504 every contentFetch.
+  return "idb";
 }
 
 export function isAppShell(): boolean {

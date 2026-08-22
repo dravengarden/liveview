@@ -38,7 +38,7 @@ export const HOST_PROTOCOL_V1_NAV_TYPES = [
   "ready",
 ] as const;
 
-/** Media-cache kinds. Native does not implement these yet; wrappers no-op. */
+/** Media-cache kinds. Implemented on the iOS `lvNativeAudio` handler; no-op off-shell. */
 export const HOST_PROTOCOL_V1_CACHE_KINDS = [
   "cacheFromUrl",
   "cacheHas",
@@ -68,8 +68,7 @@ export const HOST_PROTOCOL_V1_TAURI_COMMANDS = [
   HOST_CMD_HAPTIC_VIBRATE,
 ] as const;
 
-/** LiveView-store kinds still forwarded because native still implements them.
- *  Not part of protocol v1. */
+/** LiveView-store kinds protocol v1 rejects. Native no longer implements them. */
 export const LEGACY_AUDIO_STORE_KINDS = [
   "prefetch",
   "pin",
@@ -347,27 +346,90 @@ export async function legacyWipe(): Promise<boolean> {
   return response?.ok === true;
 }
 
-/** Enqueue a media-cache download. `url` must be absolute. No-op until native
- *  implements `cacheFromUrl`. */
+const hostPending = new Map<string, (json: string) => void>();
+let hostResolverInstalled = false;
+let hostSeq = 0;
+
+function ensureHostResolver(): void {
+  if (hostResolverInstalled) return;
+  hostResolverInstalled = true;
+  (globalThis as unknown as {
+    __lvHostResolve?: (id: string, json: string) => void;
+  }).__lvHostResolve = (id, json) => {
+    const r = hostPending.get(id);
+    if (r) {
+      hostPending.delete(id);
+      r(json);
+    }
+  };
+}
+
+function hostReply(id: string, timeoutMs: number): Promise<string> {
+  return new Promise((resolve) => {
+    hostPending.set(id, resolve);
+    setTimeout(() => {
+      if (hostPending.delete(id)) resolve("");
+    }, timeoutMs);
+  });
+}
+
+/** Enqueue a media-cache download. `url` must be absolute. */
 export function cacheFromUrl(args: { url: string; hash: string }): boolean {
   if (!isAbsoluteUrl(args.url)) return false;
   return postHostAudio({ kind: "cacheFromUrl", data: args });
 }
 
-/** Play-path probe. Returns `{ has: false }` until native implements reply. */
+function abandonHostReply(id: string): void {
+  const r = hostPending.get(id);
+  if (!r) return;
+  hostPending.delete(id);
+  r("");
+}
+
+/** Play-path probe. `{ has: false }` when the handler is absent / times out. */
 export async function cacheHas(
-  _args: { hash: string },
+  args: { hash: string },
 ): Promise<{ has: boolean }> {
-  return { has: false };
+  if (!hostAudioAvailable()) return { has: false };
+  ensureHostResolver();
+  const id = `h${++hostSeq}`;
+  const pending = hostReply(id, 5_000);
+  if (!postHostAudio({ kind: "cacheHas", data: { id, hash: args.hash } })) {
+    abandonHostReply(id);
+    return { has: false };
+  }
+  const json = await pending;
+  if (!json) return { has: false };
+  try {
+    const o = JSON.parse(json) as { has?: unknown };
+    return { has: o.has === true };
+  } catch {
+    return { has: false };
+  }
 }
 
 export function cacheDelete(args: { hash: string }): boolean {
   return postHostAudio({ kind: "cacheDelete", data: args });
 }
 
-/** Repair-only scalar. Returns `{ count: 0 }` until native implements reply. */
+/** Repair-only scalar. `{ count: 0 }` when the handler is absent / times out. */
 export async function cacheCount(): Promise<{ count: number }> {
-  return { count: 0 };
+  if (!hostAudioAvailable()) return { count: 0 };
+  ensureHostResolver();
+  const id = `c${++hostSeq}`;
+  const pending = hostReply(id, 8_000);
+  if (!postHostAudio({ kind: "cacheCount", data: { id } })) {
+    abandonHostReply(id);
+    return { count: 0 };
+  }
+  const json = await pending;
+  if (!json) return { count: 0 };
+  try {
+    const o = JSON.parse(json) as { count?: unknown };
+    return { count: typeof o.count === "number" ? o.count : 0 };
+  } catch {
+    return { count: 0 };
+  }
 }
 
 export function setAllowsCellular(args: { on: boolean }): boolean {

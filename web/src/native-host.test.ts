@@ -81,7 +81,7 @@ test("protocol v1 allow-lists reject LiveView-store kinds", () => {
   ] as const) {
     assert.ok(
       (LEGACY_AUDIO_STORE_KINDS as readonly string[]).includes(kind),
-      `${kind} stays on LEGACY_AUDIO_STORE_KINDS`,
+      `${kind} is listed as rejected, not protocol v1`,
     );
     assert.equal(
       (HOST_PROTOCOL_V1_MEDIA_KINDS as readonly string[]).includes(kind),

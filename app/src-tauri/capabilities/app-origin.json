@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "app-origin",
-  "description": "The SPA loads from the plugin-served OTA origin lvsync://localhost/app/. That origin needs its own core, haptics, and opener grants because capabilities are matched per origin.",
+  "description": "The SPA loads from the host-served OTA origin lvsync://localhost/app/. That origin needs its own core, haptics, and opener grants because capabilities are matched per origin.",
   "windows": ["main"],
   "remote": {
     "urls": ["lvsync://localhost", "lvsync://localhost/*"]

@@ -43,7 +43,6 @@
           relative = lib.removePrefix "${root}/" pathString;
           excludedTrees = [
             "app"
-            "lv-sync"
             "plugins"
           ];
           excluded = lib.any (tree: relative == tree || lib.hasPrefix "${tree}/" relative) excludedTrees;

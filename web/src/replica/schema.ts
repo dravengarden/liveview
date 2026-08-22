@@ -32,7 +32,7 @@ export const AGG_ARTWORK = "artwork";
 
 export const APM_MAX_ROWS = 5000;
 
-/** Origin-scoped flag; missing or unknown values mean native. */
+/** Origin-scoped flag; missing, unknown, or leftover `native` values mean idb. */
 export const REPLICA_FLAG_KEY = "lv.replica";
 
 export const WIFI_ONLY_KEY = "lv.offline.wifiOnly";

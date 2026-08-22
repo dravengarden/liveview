@@ -23,19 +23,19 @@ export {
   setOfflineWifiOnly,
 } from "@/native-sync";
 
-// Audio store + native player bridge.
+// Native player bridge + generic media-cache enqueue.
 export {
-  type AudioStats,
+  cacheCount,
+  cacheDelete,
+  cacheFromUrl,
+  cacheHas,
   nativeAudioAvailable,
   nativeAudioLoad,
   nativeAudioPause,
-  nativeAudioPin,
   nativeAudioPlay,
   nativeAudioRequestState,
   nativeAudioSeek,
-  nativeAudioSetCap,
   nativeAudioSetRate,
-  nativeAudioStats,
   nativeAudioStop,
-  nativeAudioUnpin,
+  setAllowsCellular,
 } from "@/native-audio";

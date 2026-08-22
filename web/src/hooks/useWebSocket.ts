@@ -75,9 +75,9 @@ export function useWebSocket(
           const msg = raw as unknown as WsMessage;
           if (msg.type === "AppVersion") {
             // SERVER PUSH: the server announces its current app-bundle version on
-            // connect (and a deploy = restart = reconnect = a fresh push). Ask the
-            // native plugin to probe + incrementally pull + flip to it, then reload
-            // silently. Off the native shell runOtaCheck is a no-op.
+            // connect (and a deploy = restart = reconnect = a fresh push). TS
+            // probes /app-dist, putFromUrl + activate, then reloads silently.
+            // Off the native shell runOtaCheck is a no-op.
             void runOtaCheck();
           } else if (msg.type === "ContentUpdate") {
             onContentUpdateRef.current(

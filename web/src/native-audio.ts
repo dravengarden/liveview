@@ -19,6 +19,14 @@
 
 import { hostAudioAvailable, postHostAudio } from "./native-host.ts";
 
+export {
+  cacheCount,
+  cacheDelete,
+  cacheFromUrl,
+  cacheHas,
+  setAllowsCellular,
+} from "./native-host.ts";
+
 /** A track to load into the native player. */
 export interface NativeAudioTrack {
   /** Absolute media URL (the native URLSession can't resolve a relative path). */
@@ -65,7 +73,8 @@ export type NativeAudioEvent =
   }
   | { readonly type: "next" }
   | { readonly type: "prev" }
-  | { readonly type: "error"; readonly message: string };
+  | { readonly type: "error"; readonly message: string }
+  | { readonly type: "cacheProgress"; readonly hash: string; readonly ok: boolean };
 
 type OutMsg =
   | { readonly kind: "load"; readonly data: NativeAudioTrack }
@@ -75,22 +84,6 @@ type OutMsg =
   | { readonly kind: "state" }
   | { readonly kind: "seek"; readonly data: { readonly position: number } }
   | { readonly kind: "rate"; readonly data: { readonly rate: number } }
-  | {
-    readonly kind: "prefetch";
-    readonly data: { readonly url: string; readonly hash?: string };
-  }
-  | {
-    readonly kind: "pin";
-    readonly data: { readonly items: { url: string; hash: string }[] };
-  }
-  | {
-    readonly kind: "reconcile";
-    readonly data: { readonly root: string; readonly baseURL: string };
-  }
-  | { readonly kind: "unpin"; readonly data: { readonly keys: string[] } }
-  | { readonly kind: "setCap"; readonly data: { readonly bytes: number } }
-  | { readonly kind: "setWifiOnly"; readonly data: { readonly on: boolean } }
-  | { readonly kind: "audioStats"; readonly data: { readonly id: string } }
   | { readonly kind: "widgetSnapshot"; readonly data: NativeWidgetSnapshot };
 
 function send(message: OutMsg): boolean {
@@ -145,126 +138,6 @@ export function nativeAudioRequestState(): boolean {
  * widget independently keeps its network fallback for Personal Team builds. */
 export function nativeWidgetPublish(data: NativeWidgetSnapshot): boolean {
   return send({ kind: "widgetSnapshot", data });
-}
-
-/** Download a chapter into the offline cache WITHOUT playing it (save-offline).
- *  Keyed by `hash` (else the URL). No-op off-shell. */
-export function nativeAudioPrefetch(url: string, hash?: string): boolean {
-  return send({
-    kind: "prefetch",
-    data: hash !== undefined ? { url, hash } : { url },
-  });
-}
-
-// ── Offline pinning (per-book audio download) + store stats. The audio store is
-// durable (Application Support) with two tiers: PINNED (user-downloaded, never
-// evicted) and auto (LRU-capped, cached as a side-effect of playing).
-
-/** MANUAL download: pin a book's chapters (protected — never auto-evicted). */
-export function nativeAudioPin(items: { url: string; hash: string }[]): boolean {
-  return send({ kind: "pin", data: { items } });
-}
-
-/** Reconcile automatic downloads from lv-sync's durable Merkle manifest.
- * This constant-size command replaces recurring resource arrays over WKWebView. */
-export function nativeAudioReconcile(root: string, baseURL: string): boolean {
-  return send({ kind: "reconcile", data: { root, baseURL } });
-}
-
-/** Set the audio storage budget (bytes); native evicts evictable audio to fit. */
-export function nativeAudioSetCap(bytes: number): boolean {
-  return send({ kind: "setCap", data: { bytes } });
-}
-
-/** Push the "prefetch on WiFi only" preference to the native downloader. Native
- *  enforces it on its BACKGROUND download sessions via `allowsCellularAccess` —
- *  the web's own WiFi gate only stops ENQUEUING and can't reach transfers that
- *  keep running in the system daemon while the app is suspended. Push it at
- *  startup and whenever the toggle changes. No-op off-shell. */
-export function nativeAudioSetWifiOnly(on: boolean): boolean {
-  return send({ kind: "setWifiOnly", data: { on } });
-}
-
-/** Remove (delete) a book's audio — the only way audio leaves the durable store
- *  (nothing is auto-evicted). `keys` are the sanitized content hashes. */
-export function nativeAudioUnpin(keys: string[]): boolean {
-  return send({ kind: "unpin", data: { keys } });
-}
-
-/** Audio store state for the Downloads UI. `cached` is the set of cache keys
- *  (sanitized content hashes) on disk; the caller maps them to books via the
- *  manifest. `usedBytes` is total durable audio storage used (no cap — it's data,
- *  not a cache). */
-export interface AudioStats {
-  usedBytes: number;
-  /** Storage budget in bytes (the user's max-storage setting). */
-  cap: number;
-  /** Bytes held by PINNED (manually-downloaded, eviction-protected) books. */
-  pinnedBytes: number;
-  /** Count of cached blobs — the O(1) SQLite aggregate. Lets the Downloads UI show
-   *  done/total WITHOUT diffing the full `cached` array against the manifest. */
-  cachedCount: number;
-  /** The pinned (protected) subset. */
-  pinned: string[];
-  /** Live network path type — drives the "prefetch on WiFi only" gate for the large
-   *  audio download (the WiFi-gated one). Moved here from the retired content layer. */
-  net: "wifi" | "cell" | "none";
-  /** Download diagnostics (native downloader): tasks in flight, items queued,
-   *  completions since launch, and the most recent non-cancel transfer error.
-   *  Surfaced in the Downloads panel so a stalled fill is debuggable on-device. */
-  dlInflight?: number;
-  dlQueued?: number;
-  dlDone?: number;
-  dlErr?: string;
-}
-
-const audioPending = new Map<string, (json: string) => void>();
-let audioResolverInstalled = false;
-function ensureAudioResolver(): void {
-  if (audioResolverInstalled) return;
-  audioResolverInstalled = true;
-  (globalThis as unknown as {
-    __lvAudioResolve?: (id: string, json: string) => void;
-  }).__lvAudioResolve = (id, json) => {
-    const r = audioPending.get(id);
-    if (r) {
-      audioPending.delete(id);
-      r(json);
-    }
-  };
-}
-let audioSeq = 0;
-
-/** Query the native audio store (null off-shell or on timeout). */
-export async function nativeAudioStats(): Promise<AudioStats | null> {
-  if (!nativeAudioAvailable()) return null;
-  ensureAudioResolver();
-  const id = `a${++audioSeq}`;
-  const json = await new Promise<string>((resolve) => {
-    audioPending.set(id, resolve);
-    send({ kind: "audioStats", data: { id } });
-    setTimeout(() => {
-      if (audioPending.delete(id)) resolve("");
-    }, 20_000);
-  });
-  if (!json) return null;
-  try {
-    const o = JSON.parse(json) as Partial<AudioStats>;
-    return {
-      usedBytes: o.usedBytes ?? 0,
-      cap: o.cap ?? 0,
-      pinnedBytes: o.pinnedBytes ?? 0,
-      cachedCount: o.cachedCount ?? 0,
-      pinned: o.pinned ?? [],
-      net: o.net ?? "wifi",
-      ...(o.dlInflight != null ? { dlInflight: o.dlInflight } : {}),
-      ...(o.dlQueued != null ? { dlQueued: o.dlQueued } : {}),
-      ...(o.dlDone != null ? { dlDone: o.dlDone } : {}),
-      ...(o.dlErr != null ? { dlErr: o.dlErr } : {}),
-    };
-  } catch {
-    return null;
-  }
 }
 
 /**

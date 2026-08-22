@@ -15,7 +15,7 @@
 just dev              # start the web and server development processes
 just build            # build the embedded release binary
 just check            # formatting, linting, and type checks
-just test             # Rust, plugin, and web tests
+just test             # Rust, native-host, and web tests
 just verify           # the complete local quality gate
 nix build             # reproducible package build
 ```
@@ -26,15 +26,14 @@ The native dependency graph can be checked without an Apple toolchain with
 ## Project boundaries
 
 - `src/` owns the server, CLI, content checking, and embedded reader delivery.
-- `web/` owns the React reader and PWA.
-- `lv-sync/` owns the platform-independent offline synchronization core.
-- `plugins/lvsync/` exposes offline synchronization to Tauri.
-- `app/` owns the native shell and platform integration.
+- `web/` owns the React reader, PWA, and the TypeScript IDB replica.
+- `app/` owns the native shell, thin `lvsync://localhost` host, and platform integration.
 - `tools/` contains deterministic repository utilities.
 
 The server reads deployed content from PostgreSQL and an S3-compatible object
-store. A native client resolves cached content through the `lvsync://` custom
-scheme and refreshes it from a configured LiveView server.
+store. The TypeScript IDB replica is the content store; `lvsync://localhost`
+remains the document origin and thin host scheme. Native refreshes overlay
+bytes from a configured LiveView server.
 
 ## Development rules
 
@@ -69,7 +68,7 @@ scheme and refreshes it from a configured LiveView server.
 - Background audio and lock-screen controls are native-shell capabilities; do
   not assume a browser PWA can provide the same lifecycle guarantees on iOS.
 - Keep remote-origin selection aligned between `web/src/apiBase.ts` and
-  `plugins/lvsync`.
+  the native host's baked `LIVEVIEW_REMOTE_ORIGINS`.
 - Treat manifest `tags` as author-owned, lowercase search keywords. Keep them
   precise and portable. A `facet.value` tag opts into a dynamically derived
   facet; unnamespaced values remain ordinary Tags. Never add a built-in subject

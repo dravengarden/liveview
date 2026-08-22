@@ -7,7 +7,7 @@ default:
   @just --list
 
 toolchain-check:
-  actual="$(rustc --version --verbose | awk '/^release:/ { print $2 }')"; for manifest in Cargo.toml lv-sync/Cargo.toml plugins/lvsync/Cargo.toml app/src-tauri/Cargo.toml; do required="$(cargo metadata --manifest-path "$manifest" --no-deps --format-version 1 | jq -r '.packages[0].rust_version')"; test "$required" = "$actual" || { echo "$manifest rust-version $required does not match pinned rustc $actual" >&2; exit 1; }; done
+  actual="$(rustc --version --verbose | awk '/^release:/ { print $2 }')"; for manifest in Cargo.toml app/src-tauri/Cargo.toml; do required="$(cargo metadata --manifest-path "$manifest" --no-deps --format-version 1 | jq -r '.packages[0].rust_version')"; test "$required" = "$actual" || { echo "$manifest rust-version $required does not match pinned rustc $actual" >&2; exit 1; }; done
 
 # Verify the repository-owned UI primitives are present.
 shell:
@@ -54,8 +54,6 @@ uninstall:
 # Format all Rust workspaces.
 fmt:
   cargo fmt
-  cargo fmt --manifest-path lv-sync/Cargo.toml
-  cargo fmt --manifest-path plugins/lvsync/Cargo.toml
   cargo fmt --manifest-path app/src-tauri/Cargo.toml
   nixfmt flake.nix
 
@@ -63,10 +61,6 @@ fmt:
 check: shell
   cargo fmt --check
   cargo clippy --locked --all-targets -- -D warnings
-  cargo fmt --manifest-path lv-sync/Cargo.toml --check
-  CARGO_TARGET_DIR={{native-target-dir}} cargo clippy --locked --manifest-path lv-sync/Cargo.toml --all-targets -- -D warnings
-  cargo fmt --manifest-path plugins/lvsync/Cargo.toml --check
-  CARGO_TARGET_DIR={{native-target-dir}} cargo clippy --locked --manifest-path plugins/lvsync/Cargo.toml --all-targets -- -D warnings
   cargo fmt --manifest-path app/src-tauri/Cargo.toml --check
   CARGO_TARGET_DIR={{native-target-dir}} cargo clippy --locked --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings
   nixfmt --check flake.nix
@@ -76,17 +70,13 @@ check: shell
 dependencies:
   cargo deny check
   cargo machete --with-metadata
-  cargo deny --manifest-path lv-sync/Cargo.toml check
-  cargo machete --with-metadata lv-sync
-  cargo deny --manifest-path plugins/lvsync/Cargo.toml check --config deny-native.toml
-  cargo machete --with-metadata plugins/lvsync
   cargo deny --manifest-path app/src-tauri/Cargo.toml check --config deny-native.toml
+  cargo machete --with-metadata app/src-tauri
 
 # Run all Rust and web tests.
 test:
   cargo test --locked --all-targets
-  CARGO_TARGET_DIR={{native-target-dir}} cargo test --locked --manifest-path lv-sync/Cargo.toml
-  CARGO_TARGET_DIR={{native-target-dir}} cargo test --locked --manifest-path plugins/lvsync/Cargo.toml --all-targets
+  CARGO_TARGET_DIR={{native-target-dir}} cargo test --locked --manifest-path app/src-tauri/Cargo.toml --all-targets
   cd web && deno task test
 
 # Check the native dependency graph without requiring an Apple toolchain.
@@ -99,8 +89,7 @@ check-fast:
 
 test-fast:
   cargo nextest run --locked --all-targets
-  CARGO_TARGET_DIR={{native-target-dir}} cargo nextest run --locked --manifest-path lv-sync/Cargo.toml
-  CARGO_TARGET_DIR={{native-target-dir}} cargo nextest run --locked --manifest-path plugins/lvsync/Cargo.toml --all-targets
+  CARGO_TARGET_DIR={{native-target-dir}} cargo nextest run --locked --manifest-path app/src-tauri/Cargo.toml --all-targets
 
 # Opt-in clean-rebuild cache until representative A/B measurements justify a
 # default wrapper for this repository.
@@ -113,12 +102,12 @@ cache-stats:
 # Preview bounded local artifact cleanup while preserving recently used builds.
 cache-prune-dry root-max="20GB" workspace-max="4GB":
   cargo sweep --dry-run --maxsize {{root-max}} .
-  cargo sweep --dry-run --maxsize {{workspace-max}} lv-sync plugins/lvsync app/src-tauri
+  cargo sweep --dry-run --maxsize {{workspace-max}} app/src-tauri
 
 # Bound long-lived local artifact caches without forcing a complete rebuild.
 cache-prune root-max="20GB" workspace-max="4GB":
   cargo sweep --maxsize {{root-max}} .
-  cargo sweep --maxsize {{workspace-max}} lv-sync plugins/lvsync app/src-tauri
+  cargo sweep --maxsize {{workspace-max}} app/src-tauri
 
 # Verify the installed iOS Simulator bridge plugin.
 plugin-check:
@@ -130,7 +119,5 @@ verify: toolchain-check check dependencies test build native-metadata plugin-che
 # Remove generated Rust and web build output.
 clean:
   cargo clean
-  cargo clean --manifest-path lv-sync/Cargo.toml
-  cargo clean --manifest-path plugins/lvsync/Cargo.toml
   cargo clean --manifest-path app/src-tauri/Cargo.toml
   rm -rf web/dist web/node_modules
