@@ -15,7 +15,8 @@
 import { HOST_ORIGIN } from "./native-host.ts";
 
 const CONFIGURED_REMOTES = (
-  (import.meta.env["VITE_LIVEVIEW_ORIGINS"] as string | undefined) ??
+  (import.meta as { env?: { VITE_LIVEVIEW_ORIGINS?: string } }).env
+    ?.VITE_LIVEVIEW_ORIGINS ??
     "http://127.0.0.1:4160"
 )
   .split(",")

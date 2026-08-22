@@ -19,6 +19,7 @@ import {
   persistPolicy,
   replicaFlag,
 } from "./policy.ts";
+import { resetArtworkObjectUrls } from "./resolve.ts";
 import {
   APM_MAX_ROWS,
   INDEX_APM_TS,
@@ -48,6 +49,19 @@ export { evictUnpinnedLru } from "./gc.ts";
 export { prepareBlobRecord, getBlobRecord, setPresent, deleteBlob } from "./blobs.ts";
 export { runWithTimeBudget, spawnReplicaWorker } from "./worker.ts";
 export { pullMissingTextArt, setReplicaRemote } from "./sync.ts";
+export {
+  artworkBlobSrc,
+  materializeArtworkSrc,
+  refreshReplicaManifest,
+  replicaAudioIndex,
+  replicaCacheStats,
+  replicaContentFetch,
+  replicaFetchBudgetMs,
+  replicaIsOffline,
+  setReplicaOfflineProbe,
+} from "./resolve.ts";
+export { contentReplicaStats } from "./agg.ts";
+export { currentReplicaPolicy } from "./policy.ts";
 export type {
   BlobRecord,
   DataMode,
@@ -58,6 +72,10 @@ export type {
   Resource,
   Worklist,
 } from "./schema.ts";
+export type {
+  ReplicaAudioResource,
+  ReplicaContentFetchOpts,
+} from "./resolve.ts";
 
 export function replicaStats(): ReturnType<typeof readReplicaStats> {
   return readReplicaStats();
@@ -120,6 +138,7 @@ export async function initReplica(mode?: DataMode, opts?: {
 }
 
 export async function resetReplica(): Promise<void> {
+  resetArtworkObjectUrls();
   resetPathIndex();
   await deleteReplicaDb();
 }

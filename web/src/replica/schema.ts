@@ -18,6 +18,12 @@ export const META_ROOT = "root";
 export const META_PROTOCOL_VERSION = "protocol_version";
 export const META_POLICY = "policy";
 export const META_WORKLIST = "worklist";
+/** Url-keyed metadata cache (`/api/manifest`, settings, progress, …). */
+export const META_URL_PREFIX = "url:";
+
+/** Overall replica fetch budget (body included). Instant fail when net === "none". */
+export const REPLICA_FETCH_MS = 15_000;
+export const REPLICA_DAG_MS = 30_000;
 
 export const AGG_ALL = "all";
 export const AGG_AUDIO = "audio";

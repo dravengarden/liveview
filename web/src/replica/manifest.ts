@@ -28,6 +28,53 @@ import {
 
 let pathIndex = new Map<string, PathRecord>();
 let hashUrls = new Map<string, string>();
+let urlIndex = new Map<string, PathRecord>();
+let hashIndex = new Map<string, PathRecord>();
+
+/** Percent-decode so encodeURIComponent reads match DAG URLs. */
+export function percentDecode(url: string): string {
+  let out = "";
+  for (let i = 0; i < url.length; i++) {
+    const ch = url[i];
+    if (ch === "%" && i + 2 < url.length) {
+      const hi = Number.parseInt(url.slice(i + 1, i + 3), 16);
+      if (!Number.isNaN(hi)) {
+        out += String.fromCharCode(hi);
+        i += 2;
+        continue;
+      }
+    }
+    out += ch ?? "";
+  }
+  return out;
+}
+
+/** Origin-relative path+query, percent-decoded, for by-url lookup. */
+export function normalizeReplicaUrl(url: string): string {
+  let path = url.trim();
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(path)) {
+    try {
+      const parsed = new URL(path);
+      path = parsed.pathname + parsed.search;
+    } catch {
+      // keep the raw string
+    }
+  }
+  return percentDecode(path);
+}
+
+function rememberUrl(url: string, rec: PathRecord): void {
+  const norm = normalizeReplicaUrl(url);
+  if (norm && !urlIndex.has(norm)) urlIndex.set(norm, rec);
+}
+
+function indexRecord(rec: PathRecord): void {
+  pathIndex.set(rec.path, rec);
+  if (!hashUrls.has(rec.hash)) hashUrls.set(rec.hash, rec.url);
+  if (!hashIndex.has(rec.hash)) hashIndex.set(rec.hash, rec);
+  rememberUrl(rec.url, rec);
+  rememberUrl(`/api/blob/${rec.hash}`, rec);
+}
 
 export function pathByHashUrl(hash: string): string | undefined {
   return hashUrls.get(hash);
@@ -38,10 +85,12 @@ export function pathRecord(path: string): PathRecord | undefined {
 }
 
 export function pathRecordForHash(hash: string): PathRecord | undefined {
-  for (const rec of pathIndex.values()) {
-    if (rec.hash === hash) return rec;
-  }
-  return undefined;
+  return hashIndex.get(hash);
+}
+
+export function pathRecordByUrl(url: string): PathRecord | undefined {
+  const norm = normalizeReplicaUrl(url);
+  return urlIndex.get(norm) ?? hashIndex.get(norm.replace(/^\/api\/blob\//, ""));
 }
 
 export function allPathRecords(): PathRecord[] {
@@ -51,6 +100,8 @@ export function allPathRecords(): PathRecord[] {
 export function resetPathIndex(): void {
   pathIndex = new Map();
   hashUrls = new Map();
+  urlIndex = new Map();
+  hashIndex = new Map();
 }
 
 export function rejectNewerProtocol(version: number): void {
@@ -219,8 +270,7 @@ export async function applyDag(manifest: Manifest): Promise<void> {
       },
     );
 
-    pathIndex = nextPaths;
-    hashUrls = nextUrls;
+    adoptPathIndex(nextPaths, nextUrls);
 
     const posted: string[] = [];
     for (const hash of droppedAudio) {
@@ -244,8 +294,29 @@ export async function hydratePathIndex(): Promise<void> {
       if (!nextUrls.has(value.hash)) nextUrls.set(value.hash, value.url);
     });
   });
+  adoptPathIndex(nextPaths, nextUrls);
+}
+
+const pathIndexListeners = new Set<() => void>();
+
+/** Fires after the in-memory path/url index is replaced (applyDag / hydrate). */
+export function onPathIndexAdopted(fn: () => void): () => void {
+  pathIndexListeners.add(fn);
+  return () => {
+    pathIndexListeners.delete(fn);
+  };
+}
+
+function adoptPathIndex(
+  nextPaths: Map<string, PathRecord>,
+  nextUrls: Map<string, string>,
+): void {
   pathIndex = nextPaths;
   hashUrls = nextUrls;
+  urlIndex = new Map();
+  hashIndex = new Map();
+  for (const rec of nextPaths.values()) indexRecord(rec);
+  for (const fn of pathIndexListeners) fn();
 }
 
 export async function readRoot(): Promise<string | null> {

@@ -12,13 +12,29 @@
 //
 // Off the shell (PWA / browser) the scheme is absent → every helper falls back to a
 // normal `fetch` (the service worker handles offline there).
+//
+// When localStorage `lv.replica` is `idb`, reader content, covers, Downloads
+// stats, and eager text/art fill go through the TypeScript replica instead. The
+// native scheme remains the default fallback until the native cutover.
 
 import {
   nativeAudioSetWifiOnly,
   nativeAudioStats,
   onNativeAudioEvent,
-} from "@/native-audio";
-import { remoteUrl } from "@/apiBase";
+} from "./native-audio.ts";
+import { remoteUrl } from "./apiBase.ts";
+import {
+  artworkBlobSrc,
+  currentReplicaPolicy,
+  materializeArtworkSrc,
+  pullMissingTextArt,
+  refreshReplicaManifest,
+  replicaAudioIndex,
+  replicaCacheStats,
+  replicaContentFetch,
+  replicaFlag,
+  setReplicaOfflineProbe,
+} from "./replica/mod.ts";
 
 const SCHEME = "lvsync://localhost";
 
@@ -36,6 +52,12 @@ export async function contentFetch(
   url: string,
   opts?: { fresh?: boolean; cacheFirst?: boolean },
 ): Promise<Response> {
+  if (replicaFlag() === "idb") {
+    return replicaContentFetch(url, {
+      ...(opts?.cacheFirst === true ? { cacheFirst: true } : {}),
+      offline: isLikelyOffline() || nativeNetworkClass() === "none",
+    });
+  }
   if (!nativeSyncAvailable()) return fetch(url);
   try {
     // cacheFirst: serve the cached copy WITHOUT a network round-trip for a
@@ -63,18 +85,27 @@ export async function contentFetch(
  *  handler fall back to the offline lvsync cache. */
 export function coverSrc(slug: string): string {
   const u = `/api/cover?book=${encodeURIComponent(slug)}`;
+  if (replicaFlag() === "idb") {
+    return artworkBlobSrc("cover", slug) ?? remoteUrl(u);
+  }
   return nativeSyncAvailable() ? remoteUrl(u) : u;
 }
 
 /** Wide, text-free DAG artwork for LiveView cards and hero surfaces. */
 export function backdropSrc(slug: string): string {
   const u = `/api/backdrop?book=${encodeURIComponent(slug)}`;
+  if (replicaFlag() === "idb") {
+    return artworkBlobSrc("backdrop", slug) ?? remoteUrl(u);
+  }
   return nativeSyncAvailable() ? remoteUrl(u) : u;
 }
 
 /** Compact opaque DAG rendition used by scrolling shelf cards. */
 export function cardBackdropSrc(slug: string): string {
   const u = `/api/card-backdrop?book=${encodeURIComponent(slug)}`;
+  if (replicaFlag() === "idb") {
+    return artworkBlobSrc("card-backdrop", slug) ?? remoteUrl(u);
+  }
   return nativeSyncAvailable() ? remoteUrl(u) : u;
 }
 
@@ -85,6 +116,15 @@ export function recoverCoverImage(
   image: HTMLImageElement,
   slug: string,
 ): boolean {
+  if (replicaFlag() === "idb") {
+    if (image.dataset["lvCover"] === slug) return false;
+    image.dataset["lvCover"] = slug;
+    void materializeArtworkSrc("cover", slug).then((url) => {
+      if (url) image.src = url;
+      else image.style.display = "none";
+    });
+    return true;
+  }
   if (!nativeSyncAvailable()) return false;
   const u = `/api/cover?book=${encodeURIComponent(slug)}`;
   const fallback = `${SCHEME}/resolve?u=${encodeURIComponent(u)}`;
@@ -121,6 +161,15 @@ export function recoverBackdropImage(
   image: HTMLImageElement,
   slug: string,
 ): boolean {
+  if (replicaFlag() === "idb") {
+    if (image.dataset["lvBackdrop"] === slug) return false;
+    image.dataset["lvBackdrop"] = slug;
+    void materializeArtworkSrc("backdrop", slug).then((url) => {
+      if (url) image.src = url;
+      else image.style.display = "none";
+    });
+    return true;
+  }
   if (!nativeSyncAvailable()) return false;
   const u = `/api/backdrop?book=${encodeURIComponent(slug)}`;
   const fallback = `${SCHEME}/resolve?u=${encodeURIComponent(u)}`;
@@ -159,6 +208,15 @@ export function recoverCardBackdropImage(
 ): boolean {
   const cardUrl = `/api/card-backdrop?book=${encodeURIComponent(slug)}`;
   const stage = image.dataset["lvCardBackdrop"];
+  if (replicaFlag() === "idb") {
+    if (stage === "idb") return false;
+    image.dataset["lvCardBackdrop"] = "idb";
+    void materializeArtworkSrc("card-backdrop", slug).then((url) => {
+      if (url) image.src = url;
+      else image.style.display = "none";
+    });
+    return true;
+  }
   if (nativeSyncAvailable() && stage === undefined) {
     image.dataset["lvCardBackdrop"] = "cache";
     image.src = `${SCHEME}/resolve?u=${encodeURIComponent(cardUrl)}`;
@@ -190,6 +248,17 @@ export interface CacheStats {
 
 /** Global non-audio content totals from the Rust store: [cached, total, cb, tb]. */
 export async function nativeCacheStats(): Promise<CacheStats> {
+  if (replicaFlag() === "idb") {
+    const s = await replicaCacheStats();
+    return {
+      net: "wifi",
+      cached: s.cached,
+      total: s.total,
+      cb: s.cachedBytes,
+      tb: s.totalBytes,
+      books: [],
+    };
+  }
   const r = await fetch(`${SCHEME}/stats`);
   if (r.status !== 200) throw new Error("stats unavailable");
   const a = (await r.json()) as [number, number, number, number];
@@ -209,6 +278,10 @@ export async function nativeCacheStats(): Promise<CacheStats> {
  *  audio download stays WiFi-gated in native-audio. `wifiOnly` is accepted for API
  *  compatibility but not enforced for content. */
 export async function nativeSyncAll(_wifiOnly = false): Promise<number> {
+  if (replicaFlag() === "idb") {
+    await pullMissingTextArt();
+    return (await replicaCacheStats()).cachedBytes;
+  }
   if (!nativeSyncAvailable()) return 0;
   const r = await fetch(`${SCHEME}/sync_all`);
   if (r.status !== 200) throw new Error("sync failed");
@@ -224,6 +297,9 @@ export interface NativeAudioResource {
 
 /** Audio/marks subset of the manifest already refreshed by the Rust plugin. */
 export async function nativeAudioIndex(): Promise<NativeAudioResource[]> {
+  if (replicaFlag() === "idb") {
+    return replicaAudioIndex();
+  }
   if (!nativeSyncAvailable()) return [];
   const response = await fetch(`${SCHEME}/audio-index`);
   if (!response.ok) throw new Error("audio index unavailable");
@@ -285,6 +361,9 @@ export function isLikelyOffline(): boolean {
 }
 
 export function startOfflineFlagSync(): void {
+  setReplicaOfflineProbe(
+    () => isLikelyOffline() || nativeNetworkClass() === "none",
+  );
   if (!nativeSyncAvailable()) return;
   let last: boolean | null = null;
   const apply = (offline: boolean): void => {
@@ -320,6 +399,9 @@ export function startOfflineFlagSync(): void {
  *  sync pump (useAudioPreloadDriver) downloads whatever's newly listed. No-op
  *  off-shell; never throws. */
 export async function nativeRefreshManifest(): Promise<string> {
+  if (replicaFlag() === "idb") {
+    return refreshReplicaManifest();
+  }
   if (!nativeSyncAvailable()) return "";
   // Skip offline: refresh re-fetches /api/dag (its own 4s connect timeout), wasted
   // when we know there's no network. The next foreground (online) retries.
@@ -363,6 +445,15 @@ export function setOfflineWifiOnly(on: boolean): void {
  *  repeatedly — the native side guards against concurrent runs, and a WiFi-only
  *  refusal is a no-op until WiFi returns (the settings poll re-fires it). */
 export async function ensureAutoSync(): Promise<void> {
+  if (replicaFlag() === "idb") {
+    if (currentReplicaPolicy().mode !== "eager") return;
+    try {
+      await nativeSyncAll(offlineWifiOnly());
+    } catch {
+      /* transient; the next poll/startup retries */
+    }
+    return;
+  }
   if (!nativeSyncAvailable()) return;
   try {
     await nativeSyncAll(offlineWifiOnly());
