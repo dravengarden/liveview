@@ -67,9 +67,9 @@ unnecessary compositing.
 ## Offline content is verifiable
 
 Text, audio, covers, backdrops, and document assets are content-addressed Merkle
-DAG resources. Native clients must be able to verify, synchronize, retain,
-garbage-collect, and serve them offline without a URL-keyed side cache becoming
-an alternate source of truth.
+DAG resources. The TypeScript replica (native host + PWA) must be able to
+verify, synchronize, retain, garbage-collect, and serve them offline without a
+URL-keyed side cache becoming an alternate source of truth.
 
 ## Reading and listening survive lifecycle changes
 

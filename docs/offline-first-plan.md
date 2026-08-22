@@ -67,12 +67,17 @@ refresh; no pull-to-refresh remains.
 1. **DAG unify** (design §4): worker folds audio/marks hashes into the leaf →
    live root; `RootChanged` covers audio backfill. `src/server/audio.rs`,
    `src/sync/`.
-2. **Native content-addressed store** (Tauri Rust): zstd (SIMD) for text-class,
-   raw mp3; `getBlob`/`hasBlob` bridge; audio→native AVPlayer by hash. Replaces
-   the SW for native.
-3. **Eager sync**: on launch + `RootChanged`, mirror the whole DAG into the native
-   store (cold-sync progress UI). `dataMode='eager'` ⇒ resolver hits the native
-   store; `loading` only on the three genuine cases.
+2. **TypeScript IndexedDB replica** (`web/src/replica/`): content-addressed
+   blobs + manifest + O(1) `agg`; eager fill of text/art. Audio **metadata** in
+   IDB; audio **bodies** in the native media cache for AVPlayer (lock-screen /
+   background stay native). Replaces the SW for native — SW stays PWA-only;
+   SW-on-iOS remains rejected. Native is a thin `lvsync://localhost` host
+   (protocol v1), not a SQLite content store. See
+   [design/thin-native-idb-replica.md](design/thin-native-idb-replica.md).
+3. **Eager sync**: on launch + root change, mirror the DAG into the TypeScript
+   replica (cold-sync progress UI). `dataMode='eager'` ⇒ resolver hits IDB;
+   `loading` only on the three genuine cases. Sqlite wipe of leftover
+   `lvsync.sqlite` / `dag.json` is a gated follow-up, not this series.
 
 **Exit:** native app, airplane mode from cold-synced state → every book/chapter
 opens + plays with no network, no loading.
