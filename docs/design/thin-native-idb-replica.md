@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Status** | Accepted (rev 3). Storage ownership landed in the thin-native series. Sqlite wipe remains a gated follow-up. Present-tense "current state" sections below are the pre-cutover decision record. |
+| **Status** | Accepted (rev 4). Storage ownership landed in the thin-native series. Host boot deletes leftover sqlite/`dag.json`; `/legacy-index` and `/legacy-wipe` are gone. Present-tense "current state" sections below are the pre-cutover decision record. |
 | **Author** | LiveView |
 | **Date** | 2026-08-21 |
 | **Supersedes (storage ownership)** | [docs/offline-first.md](../offline-first.md) §5 (native blob store), [docs/offline-first-plan.md](../offline-first-plan.md) P3 native store, [docs/offline-rearchitecture.md](../offline-rearchitecture.md) (SQLite + Rust plugin as source of truth), [docs/ota-optimization.md](../ota-optimization.md) (plugin-owned app-root store) |
@@ -12,7 +12,7 @@
 
 ## Overview
 
-**Landed.** The TypeScript IndexedDB replica (`web/src/replica/`) is the only content Merkle DAG replica. Native is a thin `lvsync://localhost` host (protocol v1): app-shell overlay, bounded media cache, AVPlayer. `lv-sync/` and `plugins/lvsync/` are deleted. Sqlite wipe remains a gated follow-up. This file is the decision record; "current state" sections below describe the **pre-cutover** tree.
+**Landed.** The TypeScript IndexedDB replica (`web/src/replica/`) is the only content Merkle DAG replica. Native is a thin `lvsync://localhost` host (protocol v1): app-shell overlay, bounded media cache, AVPlayer. `lv-sync/` and `plugins/lvsync/` are deleted. Host boot deletes leftover `lvsync.sqlite` / `dag.json` / `_pins.json`; audio `.caf` files stay. This file is the decision record; "current state" sections below describe the **pre-cutover** tree.
 
 Before the cutover, LiveView's native iOS/macOS shell owned too much: a Rust Merkle replica (`lv-sync/` + `plugins/lvsync/`), a SQLite content-addressed blob store, an OTA app-bundle overlay served at `lvsync://localhost/app/`, an APM SQLite outbox, a Swift audio file cache with its own SQLite index (`LvStore.swift`), and the download/retention/stats machinery that feeds Settings → Downloads. The TypeScript reader was a client of that native data plane via `contentFetch` (`web/src/native-sync.ts`) and `lvsync://` scheme fetches.
 

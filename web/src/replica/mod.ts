@@ -1,5 +1,5 @@
 import { replicaStats as readReplicaStats } from "./agg.ts";
-import { getBlob, getBlobRecord, hasBlob, putBlob, setPinned } from "./blobs.ts";
+import { getBlob, hasBlob, putBlob, setPinned } from "./blobs.ts";
 import {
   closeReplicaDb,
   deleteReplicaDb,
@@ -15,7 +15,6 @@ import {
   enqueueCacheFromUrl,
   installMediaBridge,
 } from "./media-bridge.ts";
-import { legacyIndex } from "../native-host.ts";
 import {
   loadPolicy,
   persistPolicy,
@@ -116,25 +115,6 @@ export async function ackApmEvents(ids: readonly string[]): Promise<void> {
   });
 }
 
-async function importLegacyIndex(): Promise<void> {
-  const idx = await legacyIndex();
-  if (!idx) return;
-  const pins = new Set(idx.pins);
-  for (const hash of idx.hashes) {
-    if (!hash) continue;
-    const old = await getBlobRecord(hash);
-    const pinned = old?.pinned === 1 || pins.has(hash) ? 1 : 0;
-    await putBlob({
-      hash,
-      kind: "audio",
-      bytes: old?.bytes ?? 0,
-      pinned,
-      mtime: old?.mtime ?? Date.now(),
-      present: 1,
-    });
-  }
-}
-
 export async function putApmEvent(event: ApmRecord): Promise<boolean> {
   return withTxn([STORE_APM], "readwrite", async (txn) => {
     const store = txn.objectStore(STORE_APM);
@@ -190,7 +170,6 @@ export async function initReplica(mode?: DataMode, opts?: {
   if (!mediaUnsub) {
     mediaUnsub = installMediaBridge(() => scheduleEvictUnpinnedAudioToFit());
   }
-  await importLegacyIndex();
   await hydratePathIndex();
   await replayWorklist();
 }

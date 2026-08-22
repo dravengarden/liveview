@@ -8,8 +8,8 @@
 > do not register a Service Worker in the native shell (PWA-only); Downloads
 > stats are O(1) from a maintained aggregate (never scan files or marshal key
 > arrays); covers and backdrops stay Merkle DAG resources; background audio and
-> lock-screen stay native. Sqlite wipe of leftover `lvsync.sqlite` / `dag.json`
-> is a gated follow-up, not the cutover series.
+> lock-screen stay native. Host boot deletes leftover `lvsync.sqlite` /
+> `dag.json`; audio `.caf` files stay.
 >
 > Originally tracked by tasks A1–A4 (build split) and B1–B5 (SQLite + indexes),
 > plus D0 (this doc). The diagnoses in §1 (fragile SW-on-iOS, scan-everything

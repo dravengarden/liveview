@@ -54,8 +54,6 @@ export const HOST_PROTOCOL_V1_APPSHELL_ROUTES = [
   "/appshell/has",
   "/appshell/putFromUrl",
   "/appshell/activate",
-  "/legacy-index",
-  "/legacy-wipe",
   "/origins",
 ] as const;
 
@@ -90,11 +88,6 @@ export interface HostInfo {
   readonly protocol: number;
   readonly nativeVersion: string;
   readonly debugEmbedded: boolean;
-}
-
-export interface HostLegacyIndex {
-  readonly hashes: readonly string[];
-  readonly pins: readonly string[];
 }
 
 export type HostCacheProgressEvent = {
@@ -313,36 +306,6 @@ export async function appshellActivate(
     init.headers = { "content-type": "application/json" };
   }
   const response = await hostFetch(`/appshell/activate?${qs}`, init);
-  return response?.ok === true;
-}
-
-export async function legacyIndex(): Promise<HostLegacyIndex | null> {
-  const response = await hostFetch("/legacy-index");
-  if (response == null || response.status !== 200) return null;
-  try {
-    const raw: unknown = await response.json();
-    if (!raw || typeof raw !== "object") return null;
-    const o = raw as Record<string, unknown>;
-    const hashes = o["hashes"];
-    const pins = o["pins"];
-    if (!Array.isArray(hashes) || !Array.isArray(pins)) return null;
-    if (
-      hashes.some((h) => typeof h !== "string") ||
-      pins.some((p) => typeof p !== "string")
-    ) {
-      return null;
-    }
-    return {
-      hashes: hashes as string[],
-      pins: pins as string[],
-    };
-  } catch {
-    return null;
-  }
-}
-
-export async function legacyWipe(): Promise<boolean> {
-  const response = await hostFetch("/legacy-wipe", { method: "POST" });
   return response?.ok === true;
 }
 

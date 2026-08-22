@@ -232,7 +232,7 @@ import WidgetKit
     c.observeAudioSession()
     c.startTimeObserver()
     c.purgeForeignAudio()
-    c.seedHashSetAndExportLegacy()
+    c.seedHashSet()
   }
 
   /// One-time cleanup: delete any audio file that is NOT the current compressed
@@ -256,19 +256,12 @@ import WidgetKit
     fm.createFile(atPath: marker.path, contents: Data())
   }
 
-  /// Scan lv-audio off-main, seed the hash-set, and write `_legacy-index.json`
-  /// once so TS can import present/pins without 3k cacheHas round-trips.
-  private func seedHashSetAndExportLegacy() {
+  /// Scan lv-audio off-main and seed the hash-set. Sidecar files from the
+  /// retired sqlite store are deleted; `.caf` bodies stay.
+  private func seedHashSet() {
     let dir = cacheDir
     hashSetQueue.async { [weak self] in
-      let (hashes, pins) = Self.scanLegacy(dir)
-      let dest = dir.appendingPathComponent("_legacy-index.json")
-      if !FileManager.default.fileExists(atPath: dest.path) {
-        let obj: [String: Any] = ["hashes": Array(hashes), "pins": Array(pins)]
-        if let data = try? JSONSerialization.data(withJSONObject: obj) {
-          try? data.write(to: dest, options: .atomic)
-        }
-      }
+      let hashes = Self.scanCacheDir(dir)
       DispatchQueue.main.async {
         guard let self else { return }
         self.cachedHashes = hashes
@@ -277,10 +270,32 @@ import WidgetKit
     }
   }
 
-  /// Directory scan + `.caf`/legacy migration. Must not run on the UI path.
-  private static func scanLegacy(_ dir: URL) -> (Set<String>, Set<String>) {
-    var hashes = Set<String>()
+  /// Directory scan + extension-less → `.caf` rename. Must not run on the UI path.
+  private static func scanCacheDir(_ dir: URL) -> Set<String> {
     let fm = FileManager.default
+    for name in [
+      "_legacy-index.json",
+      "_legacy-imported",
+      "_pins.json",
+      "lv-index-audio.sqlite",
+      "lv-index-audio.sqlite-wal",
+      "lv-index-audio.sqlite-shm",
+    ] {
+      try? fm.removeItem(at: dir.appendingPathComponent(name))
+    }
+    let parent = dir.deletingLastPathComponent()
+    for name in [
+      "lvsync.sqlite",
+      "lvsync.sqlite-wal",
+      "lvsync.sqlite-shm",
+      "dag.json",
+      "lv-index-audio.sqlite",
+      "lv-index-audio.sqlite-wal",
+      "lv-index-audio.sqlite-shm",
+    ] {
+      try? fm.removeItem(at: parent.appendingPathComponent(name))
+    }
+    var hashes = Set<String>()
     if let files = try? fm.contentsOfDirectory(
       at: dir, includingPropertiesForKeys: nil
     ) {
@@ -301,13 +316,7 @@ import WidgetKit
         if !key.isEmpty { hashes.insert(key) }
       }
     }
-    var pins = Set<String>()
-    let pinsFile = dir.appendingPathComponent("_pins.json")
-    if let d = try? Data(contentsOf: pinsFile),
-       let a = try? JSONDecoder().decode([String].self, from: d) {
-      pins = Set(a).intersection(hashes)
-    }
-    return (hashes, pins)
+    return hashes
   }
 
   private init(webView: WKWebView) {
@@ -460,7 +469,7 @@ import WidgetKit
     }
     let dir = cacheDir
     hashSetQueue.async { [weak self] in
-      let (hashes, _) = Self.scanLegacy(dir)
+      let hashes = Self.scanCacheDir(dir)
       DispatchQueue.main.async {
         guard let self else { return }
         if !self.hashSetReady {
