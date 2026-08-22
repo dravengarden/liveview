@@ -15,19 +15,20 @@
 //   trick was unreliable to the point of never firing, so it was removed. On a
 //   non-Tauri iOS browser haptics are simply a no-op — a platform limitation.)
 
+import {
+  HOST_CMD_HAPTIC_IMPACT,
+  HOST_CMD_HAPTIC_NOTIFICATION,
+  HOST_CMD_HAPTIC_SELECTION,
+  invokeHost,
+} from "../native-host.ts";
+
 /** iOS UIImpactFeedbackGenerator styles. Discrete "something committed" tap. */
 export type HapticStyle = "light" | "medium" | "heavy" | "soft" | "rigid";
 /** iOS UINotificationFeedbackGenerator types. An async OUTCOME: done / needs-you /
  *  failed. */
 export type HapticNotification = "success" | "warning" | "error";
 
-// Tauri 2 injects this IPC bridge on the global inside a native shell. Accessed via
-// a string key so the leading-underscore global name doesn't trip the dangle lint.
-interface TauriInternals {
-  readonly invoke?: (cmd: string, args?: unknown) => Promise<unknown>;
-}
 type NativeSelectionBridge = Readonly<Record<string, unknown>>;
-const TAURI_INTERNALS_KEY = "__TAURI_INTERNALS__";
 const PREPARE_SELECTION_KEY = "__nativePrepareSelectionHaptic";
 const FIRE_SELECTION_KEY = "__nativeSelectionHaptic";
 let preparedSelectionUntil = -Infinity;
@@ -51,25 +52,7 @@ function shouldFire(): boolean {
 // (so the caller skips the web fallback); the invoke is fire-and-forget, the IIFE
 // swallows the rejection that happens if the plugin/permission isn't in the build.
 function nativeHaptic(command: string, args?: unknown): boolean {
-  try {
-    const internals = (globalThis as Record<string, unknown>)[
-      TAURI_INTERNALS_KEY
-    ] as TauriInternals | undefined;
-    const invoke = internals?.invoke;
-    if (typeof invoke !== "function") {
-      return false;
-    }
-    void (async (): Promise<void> => {
-      try {
-        await invoke(command, args);
-      } catch {
-        // plugin or permission missing in the native build — silent
-      }
-    })();
-    return true;
-  } catch {
-    return false;
-  }
+  return invokeHost(command, args);
 }
 
 function webVibrate(ms: number): void {
@@ -99,7 +82,7 @@ export function haptic(style: HapticStyle = "medium"): void {
   if (!shouldFire()) {
     return;
   }
-  if (nativeHaptic("plugin:haptics|impact_feedback", { style })) {
+  if (nativeHaptic(HOST_CMD_HAPTIC_IMPACT, { style })) {
     return;
   }
   webVibrate(STYLE_VIBRATE_MS[style]);
@@ -111,7 +94,7 @@ export function notificationHaptic(type: HapticNotification): void {
   if (!shouldFire()) {
     return;
   }
-  if (nativeHaptic("plugin:haptics|notification_feedback", { type })) {
+  if (nativeHaptic(HOST_CMD_HAPTIC_NOTIFICATION, { type })) {
     return;
   }
   webVibrate(type === "error" ? 30 : 20);
@@ -145,7 +128,7 @@ export function selectionHaptic(): void {
     firePrepared();
     return;
   }
-  if (nativeHaptic("plugin:haptics|selection_feedback")) {
+  if (nativeHaptic(HOST_CMD_HAPTIC_SELECTION)) {
     return;
   }
   webVibrate(6);

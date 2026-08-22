@@ -18,44 +18,20 @@
 // false and the caller keeps its existing web navigation — the PWA is completely
 // untouched. Android intentionally rides the web path for now.
 
+import { hostNavAvailable, postHostNav } from "./native-host.ts";
+
 type OutMsg =
   | { readonly type: "push"; readonly id: string }
   | { readonly type: "pop" }
   | { readonly type: "ready" };
 
-interface WebKitHandler {
-  postMessage(message: unknown): void;
-}
-
-// WKWebView injects `window.webkit.messageHandlers.<name>` only for handlers the
-// native owner registered. Bracket access keeps the strict index-signature lint
-// happy and yields `WebKitHandler | undefined`.
-function nativeHandler(): WebKitHandler | null {
-  const w = globalThis as {
-    webkit?: { messageHandlers?: Readonly<Record<string, WebKitHandler>> };
-  };
-  return w.webkit?.messageHandlers?.["lvNativeNav"] ?? null;
-}
-
 function send(message: OutMsg): boolean {
-  const h = nativeHandler();
-  if (!h) {
-    return false;
-  }
-  try {
-    // This is WKScriptMessageHandler.postMessage (one-arg, native iOS bridge), NOT
-    // window.postMessage — there is no targetOrigin.
-    // oxlint-disable-next-line unicorn/require-post-message-target-origin
-    h.postMessage(message);
-    return true;
-  } catch {
-    return false;
-  }
+  return postHostNav(message);
 }
 
 /** True only inside the native iOS shell that carries the nav bridge. */
 export function nativeNavAvailable(): boolean {
-  return nativeHandler() !== null;
+  return hostNavAvailable();
 }
 
 /**

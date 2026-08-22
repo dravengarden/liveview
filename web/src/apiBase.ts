@@ -12,6 +12,8 @@
 // only knows native plugins). A LOCAL origin reaches the Rust plugin AND the app
 // shell is available offline. See memory tauri-remote-ipc-needs-plugin.
 
+import { HOST_ORIGIN } from "./native-host.ts";
+
 const CONFIGURED_REMOTES = (
   (import.meta.env["VITE_LIVEVIEW_ORIGINS"] as string | undefined) ??
     "http://127.0.0.1:4160"
@@ -46,7 +48,7 @@ function normalizeOrigins(value: unknown): string[] {
 async function nativeOrigins(): Promise<string[]> {
   if (!BUNDLED) return [];
   try {
-    const response = await fetch("lvsync://localhost/origins", {
+    const response = await fetch(`${HOST_ORIGIN}/origins`, {
       cache: "no-store",
     });
     if (!response.ok) return [];

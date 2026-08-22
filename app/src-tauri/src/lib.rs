@@ -3,6 +3,9 @@
 // content; native code adds offline storage, background audio,
 // lock-screen controls, haptics, and app-settings integration that a PWA cannot.
 //
+// Document origin is frozen as `lvsync://localhost` (IndexedDB/localStorage
+// persistence). Do not rename it.
+//
 // The shell also exposes the opener plugin (the error UI's "去设置开启" button →
 // iOS app-settings page) and the haptics plugin (the bundled UI buzzes controls
 // via installHaptics() — iOS Safari/PWA has no reliable
