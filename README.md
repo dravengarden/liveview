@@ -305,7 +305,7 @@ liveview --config liveview.toml --host 0.0.0.0 --port 4160
 | `LIVEVIEW_APM_VL_URL` | Optional VictoriaLogs-compatible APM ingest URL |
 | `LIVEVIEW_APM_TOKEN[_FILE]` | Bearer token or token file for the optional APM sink |
 | `LIVEVIEW_APM_ALLOW_UNAUTHENTICATED` | Explicitly permit a configured APM sink without a token; defaults to false |
-| `LIVEVIEW_ALLOWED_ORIGINS` | Comma-separated exact CORS origins; unset permits same-origin requests only |
+| `LIVEVIEW_ALLOWED_ORIGINS` | Extra comma-separated exact CORS origins. `lvsync://localhost` and `tauri://localhost` are always allowed so the native WKWebView can `fetch` `/api`. Wildcard `*` is rejected |
 | `LIVEVIEW_ACCESS_TOKEN[_FILE]` | Optional bearer token expected on every API and WebSocket request |
 
 The default Nix package has no speech provider. `.#liveview-with-edge-tts`
@@ -327,12 +327,13 @@ endpoint appears in the reader.
 > `LIVEVIEW_ACCESS_TOKEN`. This proxy-injected mode also covers media and
 > WebSocket requests that browser APIs cannot decorate directly.
 
-Same-origin access is the default. A native shell or separately hosted reader
-must enumerate each exact origin in `LIVEVIEW_ALLOWED_ORIGINS`; wildcard CORS
-is deliberately rejected. For example:
+The native WKWebView origin (`lvsync://localhost`, plus `tauri://localhost` for
+older shells) is always on the CORS allow-list. A separately hosted reader
+must still enumerate each extra exact origin in `LIVEVIEW_ALLOWED_ORIGINS`;
+wildcard CORS is deliberately rejected. For example:
 
 ```bash
-export LIVEVIEW_ALLOWED_ORIGINS='tauri://localhost,https://reader.example.org'
+export LIVEVIEW_ALLOWED_ORIGINS='https://reader.example.org'
 ```
 
 ## Architecture

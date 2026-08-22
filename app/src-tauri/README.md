@@ -27,7 +27,13 @@ export LIVEVIEW_REMOTE_ORIGINS="$VITE_LIVEVIEW_ORIGINS"
 
 Both layers race the configured origins and keep the first healthy route. A
 plain checkout defaults to `http://127.0.0.1:4160` and contains no deployment-
-specific endpoints.
+specific endpoints. That loopback default is only reachable from the same
+host: **iOS Simulator and physical devices cannot use it**. Device and
+simulator builds must bake a host those runtimes can reach (LAN or public
+HTTPS). Do not commit private addresses.
+
+The LiveView server always CORS-allows `lvsync://localhost`. Redeploy the
+server before expecting a thin-host IPA to `fetch` `/api/dag` or `/api/blob`.
 
 `tools/lvbuild.sh` also compiles the first remote origin into the WidgetKit
 extension. The widget keeps its own last-good cover/progress cache, and uses an

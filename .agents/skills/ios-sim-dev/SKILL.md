@@ -41,18 +41,20 @@ From the liveview worktree on hawk:
 ```bash
 nix develop -c just build-web
 rsync -a --delete web/dist-app/ macbook-air:liveview/web/dist-app/
-rsync -a --exclude target/ --exclude gen/apple/build/ --exclude gen/apple/Externals/ app/ macbook-air:liveview/app/
-rsync -a --exclude target/ lv-sync/ macbook-air:liveview/lv-sync/
-rsync -a --exclude target/ plugins/lvsync/ macbook-air:liveview/plugins/lvsync/
-ssh macbook-air 'bash -s' < tools/lvbuild-sim.sh
+rsync -a --delete --exclude target/ --exclude gen/apple/build/ --exclude gen/apple/Externals/ \
+  app/ macbook-air:liveview/app/
+ssh macbook-air 'rm -rf liveview/lv-sync liveview/plugins/lvsync'
+ssh macbook-air "LIVEVIEW_REMOTE_ORIGINS='${LIVEVIEW_REMOTE_ORIGINS:-}' bash -s" \
+  < tools/lvbuild-sim.sh
 ```
 
-Build and sync the native SPA plus all three native trees. `app/src-tauri` uses
-path dependencies outside `app/`, so syncing only the shell can silently compile
-stale native code already present on the Mac. Tauri embeds `dist-app` in the Rust
-static library; `lvbuild-sim.sh` hashes it and invalidates `gen/apple/Externals`
-when its bytes change. A successful Xcode build without this invalidation can
-still launch an older UI.
+`--delete` on `app/` is required so retired Swift (for example `LvStore.swift`)
+does not keep compiling. `lv-sync` and `plugins/lvsync` no longer exist; remove
+any leftover copies on the Mac. Bake a backend the Simulator can reach in
+`LIVEVIEW_REMOTE_ORIGINS` (not hawk's `127.0.0.1`). Tauri embeds `dist-app` in
+the Rust static library; `lvbuild-sim.sh` hashes it and invalidates
+`gen/apple/Externals` when its bytes change. A successful Xcode build without
+this invalidation can still launch an older UI.
 
 Native Swift, Objective-C++, Rust, manifest, or Tauri configuration changes require a rebuild. Pure SPA changes may use the project's documented HMR loop when available.
 

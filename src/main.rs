@@ -1334,6 +1334,13 @@ impl HttpPolicy {
                 .parse::<HeaderValue>()
                 .map_err(|error| format!("invalid access token: {error}"))?;
         }
+        let mut allowed_origins = allowed_origins;
+        // WKWebView document origin after the content store moved to TS fetch.
+        for origin in ["lvsync://localhost", "tauri://localhost"] {
+            if !allowed_origins.iter().any(|value| value == origin) {
+                allowed_origins.push(origin.parse().expect("static origin"));
+            }
+        }
         Ok(Self {
             allowed_origins,
             access_token,
@@ -1422,16 +1429,18 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
         // current DAG shrinks by roughly an order of magnitude with gzip).
         .layer(tower_http::compression::CompressionLayer::new());
 
-    // Same-origin is the secure default. Native shells and separately hosted
-    // frontends opt into exact origins; wildcard reflection is never implicit.
-    if !policy.allowed_origins.is_empty() {
-        api_router = api_router.layer(
-            tower_http::cors::CorsLayer::new()
-                .allow_origin(policy.allowed_origins)
-                .allow_methods([Method::GET, Method::POST, Method::PUT])
-                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
-        );
-    }
+    // Native shells always appear in `allowed_origins`. Extra reader hosts are
+    // exact opt-in via LIVEVIEW_ALLOWED_ORIGINS; wildcard reflection is rejected.
+    api_router = api_router.layer(
+        tower_http::cors::CorsLayer::new()
+            .allow_origin(policy.allowed_origins)
+            .allow_methods([Method::GET, Method::POST, Method::PUT])
+            .allow_headers([
+                header::AUTHORIZATION,
+                header::CONTENT_TYPE,
+                header::IF_NONE_MATCH,
+            ]),
+    );
 
     #[cfg(feature = "embedded")]
     {
@@ -2959,9 +2968,11 @@ mod apm_tests {
     use tower::ServiceExt;
 
     #[test]
-    fn http_policy_defaults_to_same_origin_without_authentication() {
+    fn http_policy_defaults_to_native_shell_origins_without_authentication() {
         let policy = HttpPolicy::parse(None, None).unwrap();
-        assert!(policy.allowed_origins.is_empty());
+        assert_eq!(policy.allowed_origins.len(), 2);
+        assert_eq!(policy.allowed_origins[0], "lvsync://localhost");
+        assert_eq!(policy.allowed_origins[1], "tauri://localhost");
         assert!(policy.access_token.is_none());
     }
 
@@ -2972,8 +2983,9 @@ mod apm_tests {
             Some("proxy-secret".into()),
         )
         .unwrap();
-        assert_eq!(policy.allowed_origins.len(), 2);
+        assert_eq!(policy.allowed_origins.len(), 3);
         assert_eq!(policy.allowed_origins[0], "tauri://localhost");
+        assert_eq!(policy.allowed_origins[2], "lvsync://localhost");
         assert_eq!(policy.access_token.as_deref(), Some("proxy-secret"));
         assert!(HttpPolicy::parse(Some("*"), None).is_err());
         assert!(HttpPolicy::parse(Some("reader.example.org"), None).is_err());
@@ -3027,6 +3039,40 @@ mod apm_tests {
         assert_eq!(
             response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
             Some(&HeaderValue::from_static("https://reader.example.org"))
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_allows_lvsync_localhost_and_if_none_match() {
+        let policy = HttpPolicy::parse(None, None).unwrap();
+        let app = build_app_with_policy(state_with(None).await, policy);
+        let response = app
+            .oneshot(
+                axum::http::Request::builder()
+                    .method(Method::OPTIONS)
+                    .uri("/api/books")
+                    .header(header::ORIGIN, "lvsync://localhost")
+                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                    .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "if-none-match")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+            Some(&HeaderValue::from_static("lvsync://localhost"))
+        );
+        let allowed = response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        assert!(
+            allowed.contains("if-none-match"),
+            "preflight must allow If-None-Match, got {allowed:?}"
         );
     }
 

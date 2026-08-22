@@ -1,16 +1,23 @@
 #!/bin/bash
 # Headless iOS SIMULATOR build + install + launch for fast, signing-free testing.
 # Runs ON the Mac (ssh macbook-air 'bash -s' < tools/lvbuild-sim.sh [SIM_UDID]).
-# Builds from the consolidated layout: ~/liveview/app (synced from main/app) with
-# the plugin at ~/liveview/plugins/lvsync (../../plugins/lvsync from src-tauri).
+# Builds from ~/liveview/app (synced from hawk app/) and ~/liveview/web/dist-app.
+# `lv-sync` / `plugins/lvsync` are gone; content lives in the TS IDB replica.
 #
 # Why: the device build (lvbuild.sh) needs keychain unlock + provisioning and
 # installs to physical iPhone/iPad. A SIMULATOR build needs NO code-signing, so
-# it's the fast inner loop for verifying the app (build split, bundled SPA,
-# SQLite, offline) without the device. Screenshot is captured to ~/lvsim.png.
+# it's the fast inner loop for verifying the app (bundled SPA, thin host,
+# IDB replica, native audio) without the device. Screenshot is captured to ~/lvsim.png.
+#
+# Bake a reachable backend: `LIVEVIEW_REMOTE_ORIGINS` is compile-time. The iOS
+# Simulator cannot use the host's 127.0.0.1. Forward the var from hawk, e.g.
+# ssh macbook-air "LIVEVIEW_REMOTE_ORIGINS='$LIVEVIEW_REMOTE_ORIGINS' bash -s" < tools/lvbuild-sim.sh
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
 export LIVEVIEW_WIDGET_SERVER_URL="${LIVEVIEW_WIDGET_SERVER_URL:-}"
+if [[ -z "${LIVEVIEW_REMOTE_ORIGINS:-}" || "${LIVEVIEW_REMOTE_ORIGINS}" == *127.0.0.1* ]]; then
+  echo "WARN: LIVEVIEW_REMOTE_ORIGINS is unset or loopback; the Simulator cannot reach the Mac/hawk 127.0.0.1" >&2
+fi
 
 # Default sim: iPhone 17 (was Booted in `simctl list`). Override via $1.
 SIM="${1:-D89613B8-4B25-4486-A690-5A7205AC2788}"

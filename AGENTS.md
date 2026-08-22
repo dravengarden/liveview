@@ -70,7 +70,10 @@ bytes from a configured LiveView server. Do not reintroduce `lv-sync/` or
 - Background audio and lock-screen controls are native-shell capabilities; do
   not assume a browser PWA can provide the same lifecycle guarantees on iOS.
 - Keep remote-origin selection aligned between `web/src/apiBase.ts` and
-  the native host's baked `LIVEVIEW_REMOTE_ORIGINS`.
+  the native host's baked `LIVEVIEW_REMOTE_ORIGINS`. Simulator and device
+  builds must not rely on `http://127.0.0.1:4160` — that address is the
+  guest/host loopback, not hawk. The server always CORS-allows
+  `lvsync://localhost` so TypeScript `fetch` of `/api` works from WKWebView.
 - Treat manifest `tags` as author-owned, lowercase search keywords. Keep them
   precise and portable. A `facet.value` tag opts into a dynamically derived
   facet; unnamespaced values remain ordinary Tags. Never add a built-in subject
