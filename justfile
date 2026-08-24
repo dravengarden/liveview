@@ -13,6 +13,10 @@ toolchain-check:
 shell:
   @test -f web/src/_shell/mod.ts
 
+# Verify the standalone product website's metadata, anchors, and local assets.
+website-check:
+  deno run --allow-read tools/check-website.ts
+
 # Start the frontend and backend development servers.
 dev: shell
   #!/usr/bin/env bash
@@ -58,7 +62,7 @@ fmt:
   nixfmt flake.nix
 
 # Run formatting, linting, and type checks.
-check: shell
+check: shell website-check
   cargo fmt --check
   cargo clippy --locked --all-targets -- -D warnings
   cargo fmt --manifest-path app/src-tauri/Cargo.toml --check

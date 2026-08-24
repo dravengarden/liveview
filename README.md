@@ -16,6 +16,7 @@
 </p>
 
 <p align="center">
+  <a href="https://dravengarden.github.io/liveview/">Official website</a> ·
   <a href="#product-tour">Screenshots</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#create-a-library">Authoring</a> ·
@@ -28,6 +29,9 @@ LiveView turns a directory of Markdown, technical assets, translations, and
 audio into a polished self-hosted library. The same rendering contract powers
 local preview, publication checks, the responsive web reader, and the native
 offline client.
+
+Explore the reading, listening, technical-format, and offline experience on the
+[official LiveView website](https://dravengarden.github.io/liveview/).
 
 Start locally with no database or object store. Add PostgreSQL, S3-compatible
 storage, incremental Merkle synchronization, and the Tauri shell only when the
