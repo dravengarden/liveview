@@ -1,14 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <!-- Platform launchers apply their own mask; keep the source opaque and square. -->
-  <defs>
-    <linearGradient id="knowledge-sprout-bg" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#071b1d"/>
-      <stop offset="1" stop-color="#174f4a"/>
-    </linearGradient>
-  </defs>
-  <rect width="1024" height="1024" fill="url(#knowledge-sprout-bg)"/>
-  <path d="M512 816V450" stroke="#f8f0df" stroke-width="74" stroke-linecap="round"/>
-  <path d="M512 560c-178-18-258-122-234-310 176 18 258 122 234 310z" fill="#f8f0df"/>
-  <path d="M512 650c178-18 258-122 234-310-176 18-258 122-234 310z" fill="#7d61ff"/>
-  <circle cx="512" cy="450" r="54" fill="#ffb51b"/>
+  <rect width="1024" height="1024" fill="#f8f1e5"/>
+  <path d="M168 394c126 0 233 42 318 124v302c-83-78-190-119-318-119V394Z" fill="#172a55"/>
+  <path d="M538 518c85-82 192-124 318-124v307c-128 0-235 41-318 119V518Z" fill="#67416f"/>
+  <path d="M512 184c13 60 47 94 107 107-60 13-94 47-107 107-13-60-47-94-107-107 60-13 94-47 107-107Z" fill="#e3a128"/>
 </svg>

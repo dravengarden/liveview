@@ -1,13 +1,15 @@
-/** Canonical LiveView Knowledge Sprout identity tokens. */
+/** Canonical LiveView Living Book identity tokens. */
 export const LIVEVIEW_BRAND = {
   ink: "#17191f",
   inkRaised: "#1b1d21",
-  paper: "#f8f0df",
-  paperRaised: "#fffaf0",
-  accent: "#7d61ff",
-  activity: "#ffb51b",
-  backdropDeep: "#071b1d",
-  backdropTeal: "#174f4a",
+  paper: "#f8f1e5",
+  paperRaised: "#fffaf2",
+  navy: "#172a55",
+  plum: "#67416f",
+  accent: "#67416f",
+  activity: "#e3a128",
+  backdropDeep: "#101b38",
+  backdropTeal: "#352747",
   muted: "#74736f",
   darkMuted: "#92969b",
 } as const;

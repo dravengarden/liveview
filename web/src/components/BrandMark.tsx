@@ -1,11 +1,11 @@
 import type React from "react";
 
 interface BrandMarkProps extends React.SVGProps<SVGSVGElement> {
-  /** Use one colour where the full Knowledge Sprout palette is unavailable. */
+  /** Use one colour where the full Living Book palette is unavailable. */
   monochrome?: boolean;
 }
 
-/** The canonical LiveView Knowledge Sprout mark. */
+/** The canonical LiveView Living Book mark. */
 export function BrandMark({
   monochrome = false,
   ...props
@@ -13,24 +13,16 @@ export function BrandMark({
   return (
     <svg viewBox="0 0 1024 1024" aria-hidden="true" {...props}>
       <path
-        d="M512 816V450"
-        stroke="currentColor"
-        strokeWidth="74"
-        strokeLinecap="round"
+        d="M144 354c136 0 252 45 344 134v326c-90-84-205-128-344-128V354Z"
+        fill={monochrome ? "currentColor" : "var(--lv-brand-navy, #172a55)"}
       />
       <path
-        d="M512 560c-178-18-258-122-234-310 176 18 258 122 234 310z"
-        fill="currentColor"
+        d="M536 488c92-89 208-134 344-134v332c-139 0-254 44-344 128V488Z"
+        fill={monochrome ? "currentColor" : "var(--lv-brand-plum, #67416f)"}
       />
       <path
-        d="M512 650c178-18 258-122 234-310-176 18-258 122-234 310z"
-        fill={monochrome ? "currentColor" : "var(--lv-accent, #7d61ff)"}
-      />
-      <circle
-        cx="512"
-        cy="450"
-        r="54"
-        fill={monochrome ? "currentColor" : "var(--lv-activity, #ffb51b)"}
+        d="M512 126c14 65 51 102 116 116-65 14-102 51-116 116-14-65-51-102-116-116 65-14 102-51 116-116Z"
+        fill={monochrome ? "currentColor" : "var(--lv-activity, #e3a128)"}
       />
     </svg>
   );

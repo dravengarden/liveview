@@ -2,7 +2,8 @@
 
 The standalone product website is a dependency-free static site. It keeps the
 marketing surface separate from the reader application while reusing LiveView's
-canonical brand and current product screenshots.
+canonical Living Book brand and current product screenshots. Its visual system
+uses warm paper, navy and plum page fields, and an amber live-state spark.
 
 Production URL: https://dravengarden.github.io/liveview/
 

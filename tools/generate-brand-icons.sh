@@ -38,7 +38,8 @@ done < <(
     "$ROOT/web/public/apple-touch-icon.png" \
     "$ROOT/web/public/icon-192.png" \
     "$ROOT/web/public/icon-512.png" \
-    "$ROOT/web/public/maskable-512.png"
+    "$ROOT/web/public/maskable-512.png" \
+    "$ROOT/website/assets/apple-touch-icon.png"
 )
 
 magick "$SOURCE" -define icon:auto-resize=256,128,64,48,32,16 \

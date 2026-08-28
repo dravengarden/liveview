@@ -305,6 +305,14 @@ export function useTheme(): UseThemeResult {
     document.documentElement.style.setProperty("--lv-nav-divider", c.divider);
     document.documentElement.style.setProperty("--lv-accent", c.primary);
     document.documentElement.style.setProperty(
+      "--lv-brand-navy",
+      LIVEVIEW_BRAND.navy,
+    );
+    document.documentElement.style.setProperty(
+      "--lv-brand-plum",
+      LIVEVIEW_BRAND.plum,
+    );
+    document.documentElement.style.setProperty(
       "--lv-activity",
       LIVEVIEW_BRAND.activity,
     );

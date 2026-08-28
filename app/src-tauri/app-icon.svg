@@ -1,9 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <rect width="1024" height="1024" fill="#0d1117"/>
-  <!-- favicon glyph (32u), scaled to ~40% + centred = the apple-touch framing
-       (the PWA's iOS home icon): small glyph, lots of black around it. -->
-  <g transform="translate(192,192) scale(20)">
-    <rect x="6" y="8" width="12" height="16" rx="2" fill="none" stroke="#8b949e" stroke-width="1.5"/>
-    <rect x="14" y="12" width="12" height="12" rx="2" fill="#ffffff"/>
-  </g>
+  <rect width="1024" height="1024" fill="#f8f1e5"/>
+  <path d="M168 394c126 0 233 42 318 124v302c-83-78-190-119-318-119V394Z" fill="#172a55"/>
+  <path d="M538 518c85-82 192-124 318-124v307c-128 0-235 41-318 119V518Z" fill="#67416f"/>
+  <path d="M512 184c13 60 47 94 107 107-60 13-94 47-107 107-13-60-47-94-107-107 60-13 94-47 107-107Z" fill="#e3a128"/>
 </svg>

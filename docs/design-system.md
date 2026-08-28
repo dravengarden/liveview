@@ -1,21 +1,21 @@
 # LiveView design system
 
 LiveView is an editorial product with live state, not a glass dashboard. Its
-identity is the **Knowledge Sprout**: reading and listening grow from a shared
-live point. The visual system should feel quiet enough for long reading and
-precise enough for synchronization, progress, and playback.
+identity is the **Living Book**: a quiet open volume illuminated by one precise
+spark. The visual system should feel calm enough for long reading and exact
+enough for synchronization, progress, and playback.
 
 ## Identity
 
 - Wordmark: `LiveView`. Use the mark as a separate leading or trailing element;
   never substitute it for a letter.
-- Mark: a shared stem, two asymmetric leaves, and one live node. The paper leaf
-  represents reading, the violet leaf represents alternate renditions, and the
-  amber junction is the current live state. Preserve their proportions and
-  asymmetric silhouette.
-- Ink: `#17191f`; paper: `#f8f0df`; raised paper: `#fffaf0`; interaction violet:
-  `#7d61ff`; activity amber: `#ffb51b`; deep backdrop: `#071b1d`; backdrop teal:
-  `#174f4a`.
+- Mark: two asymmetric open pages and one four-point spark. The navy page is the
+  durable publication, the plum page is its alternate renditions, and the amber
+  spark is the live moment of reading, listening, or discovery. Preserve the
+  open centre, flat colour, and generous clear space.
+- Ink: `#17191f`; paper: `#f8f1e5`; raised paper: `#fffaf2`; book navy:
+  `#172a55`; rendition plum: `#67416f`; activity amber: `#e3a128`; deep backdrop:
+  `#101b38`; secondary backdrop: `#352747`.
 - Use the full-colour mark when colour is available. Monochrome is for print and
   system contexts that remove colour.
 
@@ -30,7 +30,7 @@ forces RGBA output because Tauri rejects grayscale-plus-alpha PNGs at startup.
   step, a hairline, and spacing before they use shadow.
 - Artwork remains content, not chrome. Text sits on a static high-opacity scrim
   so covers stay legible without live blur.
-- Violet is the primary interaction colour. Amber is reserved for live,
+- Plum is the primary interaction colour. Amber is reserved for live,
   playing, syncing, or newly changed state; it is not a generic selection colour
   or large decorative background.
 - UI typography is a neutral sans with tight display spacing. Reading typography
