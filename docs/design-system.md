@@ -13,9 +13,9 @@ enough for synchronization, progress, and playback.
   durable publication, the plum page is its alternate renditions, and the amber
   spark is the live moment of reading, listening, or discovery. Preserve the
   open centre, flat colour, and generous clear space.
-- Ink: `#17191f`; paper: `#f8f1e5`; raised paper: `#fffaf2`; book navy:
-  `#172a55`; rendition plum: `#67416f`; activity amber: `#e3a128`; deep backdrop:
-  `#101b38`; secondary backdrop: `#352747`.
+- Ink: `#17191f`; paper: `#f8f1e5`; raised paper: `#fffaf2`; icon mist:
+  `#edf0fb`; book navy: `#19376d`; rendition plum: `#754b86`; activity amber:
+  `#f0a51f`; deep backdrop: `#101b38`; secondary backdrop: `#3c294d`.
 - Use the full-colour mark when colour is available. Monochrome is for print and
   system contexts that remove colour.
 
