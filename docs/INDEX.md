@@ -19,7 +19,7 @@ material, operational guidance, research evidence, and historical notes.
 ### Core documents
 
 - [`core-requirements.md`](core-requirements.md) — Core Requirements
-- [`design-system.md`](design-system.md) — Design System
+- [`design-system.md`](design-system.md) — Living Book identity, colour, material, motion, and responsive contracts
 - [`offline-first-plan.md`](offline-first-plan.md) — Offline First Plan
 - [`offline-first.md`](offline-first.md) — Offline First
 - [`offline-rearchitecture.md`](offline-rearchitecture.md) — Offline Rearchitecture (historical for storage ownership; SW-on-iOS rejection and O(1) stats still stand)
@@ -35,4 +35,4 @@ material, operational guidance, research evidence, and historical notes.
 
 ### Website
 
-- [`../website/README.md`](../website/README.md) — Standalone product website development and verification
+- [`../website/README.md`](../website/README.md) — Standalone product website, Living Book visual direction, and verification

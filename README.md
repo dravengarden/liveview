@@ -1,15 +1,15 @@
 <p align="center">
-  <img src="web/public/brand-mark.svg" alt="LiveView Living Book mark" width="104">
-</p>
-
-<p align="center">
-  <img src="docs/assets/liveview-hero.png" alt="LiveView — a self-hosted reader for Markdown books and technical documents" width="100%">
+  <img src="web/public/brand-mark.svg" alt="LiveView Living Book mark" width="128">
 </p>
 
 <h1 align="center">LiveView</h1>
 
 <p align="center">
   <strong>Publish technical books that are as good to listen to and use offline as they are to read.</strong>
+</p>
+
+<p align="center">
+  <img src="docs/assets/liveview-hero.png" alt="LiveView — a self-hosted reader for Markdown books and technical documents" width="100%">
 </p>
 
 <p align="center">
@@ -34,8 +34,9 @@ audio into a polished self-hosted library. The same rendering contract powers
 local preview, publication checks, the responsive web reader, and the native
 offline client.
 
-Its Living Book identity pairs two open pages with a single spark: one durable
-publication, ready to be read, heard, and explored in more than one form.
+Its Living Book identity layers ivory and lavender pages beneath three precise
+glints: one durable publication, ready to be read, heard, and explored in more
+than one form.
 
 Explore the reading, listening, technical-format, and offline experience on the
 [official LiveView website](https://dravengarden.github.io/liveview/).

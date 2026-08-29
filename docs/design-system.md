@@ -1,23 +1,26 @@
 # LiveView design system
 
 LiveView is an editorial product with live state, not a glass dashboard. Its
-identity is the **Living Book**: a quiet open volume illuminated by one precise
-spark. The visual system should feel calm enough for long reading and exact
-enough for synchronization, progress, and playback.
+identity is the **Living Book**: a quiet layered volume illuminated by three
+precise glints. The visual system should feel calm enough for long reading and
+exact enough for synchronization, progress, and playback.
 
 ## Identity
 
 - Wordmark: `LiveView`. Use the mark as a separate leading or trailing element;
   never substitute it for a letter.
-- Mark: two tall, curved open pages and a paired four-point sparkle. The navy page is the
-  durable publication, the plum page is its alternate renditions, and the amber
-  spark is the live moment of reading, listening, or discovery. Preserve the
-  narrow open centre, shallow lower edge, flat colour, and generous clear space.
+- Mark: two tall open pages, a second page layer visible only at the sides and
+  lower edge, and a gold-led trio of four-point glints. The ivory page is the
+  durable publication, the lavender page is its alternate rendition, and the
+  central amber glint is the live moment of reading, listening, or discovery.
+  Preserve the narrow open centre, layered lower edge, flat colour, and generous
+  clear space.
 - Ink: `#17191f`; paper: `#f8f1e5`; raised paper: `#fffaf2`; book navy:
   `#19376d`; rendition plum: `#754b86`; activity amber: `#f0a51f`; deep
   backdrop: `#101b38`; secondary backdrop: `#3c294d`. The launcher icon uses
-  midnight indigo `#182353`, warm ivory `#f5eadb`, magic plum `#bd91cd`,
-  luminous amber `#f5b63b`, and a soft-gold secondary sparkle `#ffda72`; it
+  midnight indigo `#111a3d`, warm ivory `#fff5e6`, magic lavender `#b394df`,
+  page-edge purple `#9f79d1`, luminous amber `#f5b940`, and glint purple
+  `#8f63c6`; it
   never uses a white or near-white background.
 - Use the full-colour mark when colour is available. Monochrome is for print and
   system contexts that remove colour.
