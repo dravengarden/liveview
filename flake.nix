@@ -136,7 +136,7 @@
         dontFixup = true;
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-618jUxPF2geWRctcpRId9n9pJZchPHnQKZYj19k4KU8=";
+        outputHash = "sha256-+GeDEtsuzl2K6gO8A0UYg4LnCRH+p7Y3kdgrfn/z/QM=";
       };
 
       liveview-web = pkgs.stdenvNoCC.mkDerivation {
