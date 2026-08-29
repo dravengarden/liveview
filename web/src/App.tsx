@@ -1901,7 +1901,13 @@ export function App(): React.JSX.Element {
               // Near-opaque and deliberately unblurred. A fixed backdrop-filter
               // forces WKWebView to re-rasterize every frame of the scroller
               // underneath it, even though the result is barely visible.
-              bgcolor: (t) => alpha(t.palette.background.default, 0.94),
+              // The spatial Contents rail extends behind this fixed strip. Let
+              // NavShell temporarily hand it the rail surface while open;
+              // otherwise the strip keeps the reading-page tint and leaves a
+              // visible band above the rail on iOS. With no rail override the
+              // original near-opaque reading material remains unchanged.
+              bgcolor: (t) =>
+                `var(--lv-safe-area-bg, ${alpha(t.palette.background.default, 0.94)})`,
             }}
           />
         )}

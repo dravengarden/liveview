@@ -234,6 +234,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /spatial && mobileOpen[\s\S]{0,120}setProperty\("--lv-safe-area-bg", "var\(--lv-nav-bg\)"\)[\s\S]{0,180}removeProperty\("--lv-safe-area-bg"\)/,
     "an open spatial drawer must extend its surface through the iOS status-bar safe area",
   );
+  assertPresent(
+    shell,
+    /bgcolor:\s*\(t\)\s*=>\s*`var\(--lv-safe-area-bg, \$\{alpha\(t\.palette\.background\.default, 0\.94\)\}\)`/,
+    "the fixed iOS status-bar material must consume the spatial drawer safe-area surface",
+  );
   assertAbsent(
     navShell.match(/data-spatial-drawer[\s\S]{0,700}/)?.[0] ?? "",
     /borderRight/,
