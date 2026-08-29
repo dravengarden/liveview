@@ -231,13 +231,13 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     navShell,
-    /spatial && mobileOpen[\s\S]{0,120}setProperty\("--lv-safe-area-bg", "var\(--lv-nav-bg\)"\)[\s\S]{0,180}removeProperty\("--lv-safe-area-bg"\)/,
-    "an open spatial drawer must extend its surface through the iOS status-bar safe area",
+    /spatial && mobileOpen[\s\S]{0,120}setProperty\("--lv-safe-area-bg", "var\(--lv-nav-bg\)"\)[\s\S]{0,120}setAttribute\("data-lv-spatial-drawer-open", ""\)[\s\S]{0,240}removeAttribute\("data-lv-spatial-drawer-open"\)/,
+    "an open spatial drawer must publish both its safe-area surface and a physical repaint boundary",
   );
   assertPresent(
     shell,
-    /bgcolor:\s*\(t\)\s*=>\s*`var\(--lv-safe-area-bg, \$\{alpha\(t\.palette\.background\.default, 0\.94\)\}\)`/,
-    "the fixed iOS status-bar material must consume the spatial drawer safe-area surface",
+    /data-lv-status-bar-material[\s\S]{0,1400}html\[data-lv-spatial-drawer-open\] &[\s\S]{0,80}display:\s*"none"/,
+    "the fixed iOS status-bar material must leave the compositor while the spatial drawer owns that edge",
   );
   assertAbsent(
     navShell.match(/data-spatial-drawer[\s\S]{0,700}/)?.[0] ?? "",

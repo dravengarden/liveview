@@ -1890,6 +1890,7 @@ export function App(): React.JSX.Element {
         {navbarAtBottom && (
           <Box
             aria-hidden
+            data-lv-status-bar-material
             sx={{
               position: "fixed",
               top: 0,
@@ -1901,13 +1902,18 @@ export function App(): React.JSX.Element {
               // Near-opaque and deliberately unblurred. A fixed backdrop-filter
               // forces WKWebView to re-rasterize every frame of the scroller
               // underneath it, even though the result is barely visible.
-              // The spatial Contents rail extends behind this fixed strip. Let
-              // NavShell temporarily hand it the rail surface while open;
-              // otherwise the strip keeps the reading-page tint and leaves a
-              // visible band above the rail on iOS. With no rail override the
-              // original near-opaque reading material remains unchanged.
+              // The spatial Contents rail extends behind this fixed strip. A
+              // physical WKWebView may keep the old compositor raster when only
+              // a CSS variable repaints this layer, even though computed styles
+              // already expose the new colour. Remove the fixed layer while the
+              // drawer is open so the drawer and translated reader each paint
+              // their own part of the safe area. Recreate it on close to retain
+              // the original near-opaque reading material while scrolling.
               bgcolor: (t) =>
                 `var(--lv-safe-area-bg, ${alpha(t.palette.background.default, 0.94)})`,
+              "html[data-lv-spatial-drawer-open] &": {
+                display: "none",
+              },
             }}
           />
         )}

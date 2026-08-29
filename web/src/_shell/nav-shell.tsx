@@ -186,20 +186,25 @@ export function NavShell(props: NavShellProps): ReactNode {
   const spatialSettleRef = useRef<SpatialDrawerSettle | null>(null);
 
   // The native iOS status-bar safe area exposes the document root rather than
-  // the drawer element. While the spatial rail is open, hand that strip the
+  // the drawer element. While the spatial rail is open, hand that canvas the
   // same resolved surface token as the rail; otherwise warm themes show a
-  // bgDefault band above a bgPaper drawer. The theme owns the fallback, so
-  // closing or unmounting restores the reading surface without a hard-coded
-  // colour.
+  // bgDefault band above a bgPaper drawer. Also publish an explicit open-state
+  // attribute so the app-level fixed status material can be REMOVED while the
+  // drawer itself owns this edge. Physical WKWebView can retain the old raster
+  // for a fixed layer whose background only changes through a custom property;
+  // removing that compositor layer is the reliable repaint boundary.
   useEffect(() => {
     const root = document.documentElement;
     if (spatial && mobileOpen) {
       root.style.setProperty("--lv-safe-area-bg", "var(--lv-nav-bg)");
+      root.setAttribute("data-lv-spatial-drawer-open", "");
     } else {
       root.style.removeProperty("--lv-safe-area-bg");
+      root.removeAttribute("data-lv-spatial-drawer-open");
     }
     return () => {
       root.style.removeProperty("--lv-safe-area-bg");
+      root.removeAttribute("data-lv-spatial-drawer-open");
     };
   }, [mobileOpen, spatial]);
 
