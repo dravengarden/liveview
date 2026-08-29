@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createTheme, type Theme as MuiTheme } from "@mui/material/styles";
+import {
+  alpha,
+  createTheme,
+  type Theme as MuiTheme,
+} from "@mui/material/styles";
 import { persisted, useStore } from "@/_store/mod.ts";
 import { LIVEVIEW_BRAND, LIVEVIEW_RADII } from "@/brand";
 import type { Theme, ThemeMode, ThemeVariant } from "@/types";
@@ -132,64 +136,64 @@ function getThemeColors(theme: Theme): ThemeColors {
     case "light":
       return {
         primary: LIVEVIEW_BRAND.accent,
-        bgDefault: LIVEVIEW_BRAND.paper,
-        bgPaper: LIVEVIEW_BRAND.paperRaised,
-        textPrimary: LIVEVIEW_BRAND.ink,
-        textSecondary: LIVEVIEW_BRAND.muted,
-        divider: "#d8d4cb",
+        bgDefault: "#f6f3ee",
+        bgPaper: "#fffdf9",
+        textPrimary: "#242129",
+        textSecondary: "#706b73",
+        divider: "#e2ddd5",
       };
     case "sepia":
       // Warm cream for long-form reading (~25% lower radiance than white).
       // Brown text on cream keeps ~7:1 contrast without the glare of black.
       return {
         primary: LIVEVIEW_BRAND.accent,
-        bgDefault: "#f4ecd8",
-        bgPaper: "#ece0c8",
-        textPrimary: "#5b4636",
-        textSecondary: "#7d6b58",
-        divider: "#ddd0b8",
+        bgDefault: "#f3ecdf",
+        bgPaper: "#fcf7ee",
+        textPrimary: "#453c35",
+        textSecondary: "#74685f",
+        divider: "#dfd3c1",
       };
     case "dark":
       return {
-        primary: LIVEVIEW_BRAND.accent,
-        bgDefault: "#0f1012",
-        bgPaper: LIVEVIEW_BRAND.inkRaised,
-        textPrimary: "#f2f0ea",
-        textSecondary: LIVEVIEW_BRAND.darkMuted,
-        divider: "#34363a",
+        primary: LIVEVIEW_BRAND.iconPagePlum,
+        bgDefault: "#11131a",
+        bgPaper: "#1a1d26",
+        textPrimary: "#f2efe9",
+        textSecondary: "#a4a1aa",
+        divider: "#30343e",
       };
     case "night":
       // Warm, low-blue-light dark for night reading; off-white (not pure
       // white) text to avoid halation, amber accent instead of cool blue.
       return {
-        primary: LIVEVIEW_BRAND.accent,
-        bgDefault: "#1b1714",
-        bgPaper: "#241f1a",
-        textPrimary: "#d6cbbd",
-        textSecondary: "#9a8f80",
-        divider: "#3a322b",
+        primary: LIVEVIEW_BRAND.iconPagePlum,
+        bgDefault: "#191715",
+        bgPaper: "#24211d",
+        textPrimary: "#e5ddd1",
+        textSecondary: "#a99d8f",
+        divider: "#3a332c",
       };
     case "lavender":
       // Soft lavender light theme (cowboy's palette): a desaturated pinkish
       // violet page with a violet-600 accent — calm for long reading.
       return {
         primary: LIVEVIEW_BRAND.accent,
-        bgDefault: "#f4ecf7",
-        bgPaper: "#faf6fd",
-        textPrimary: "#1c1428",
-        textSecondary: "#6b5b8a",
-        divider: "#e2d6f0",
+        bgDefault: "#f4f1f7",
+        bgPaper: "#fcfafd",
+        textPrimary: "#29232f",
+        textSecondary: "#746a7e",
+        divider: "#e3dce8",
       };
     case "plum":
       // Deep purple-black dark theme (cowboy's): reads as purple, not black,
       // with a violet-400 accent and soft off-white text.
       return {
-        primary: LIVEVIEW_BRAND.accent,
-        bgDefault: "#15111d",
-        bgPaper: "#1f1a2c",
-        textPrimary: "#ede9fe",
-        textSecondary: "#a899c4",
-        divider: "#322a44",
+        primary: LIVEVIEW_BRAND.iconPagePlum,
+        bgDefault: "#171321",
+        bgPaper: "#221c30",
+        textPrimary: "#f0ebf7",
+        textSecondary: "#afa2c0",
+        divider: "#383047",
       };
   }
 }
@@ -390,6 +394,18 @@ export function useTheme(): UseThemeResult {
         // for desktop density — "mobile never small". Desktop keeps the compact size.
         MuiIconButton: {
           styleOverrides: {
+            root: {
+              color: colors.textSecondary,
+              transition:
+                "background-color 140ms ease, color 140ms ease, transform 140ms ease",
+              "@media (hover: hover)": {
+                "&:hover": {
+                  color: colors.primary,
+                  backgroundColor: alpha(colors.primary, 0.08),
+                },
+              },
+              "&:active": { transform: "scale(0.96)" },
+            },
             sizeSmall: {
               "@media (pointer: coarse)": { width: 40, height: 40 },
             },
@@ -403,7 +419,18 @@ export function useTheme(): UseThemeResult {
         },
         MuiOutlinedInput: {
           styleOverrides: {
-            root: { borderRadius: LIVEVIEW_RADII.control },
+            root: {
+              borderRadius: LIVEVIEW_RADII.control,
+              backgroundColor: colors.bgPaper,
+            },
+          },
+        },
+        MuiCard: {
+          styleOverrides: {
+            root: {
+              backgroundImage: "none",
+              borderColor: colors.divider,
+            },
           },
         },
         MuiChip: {

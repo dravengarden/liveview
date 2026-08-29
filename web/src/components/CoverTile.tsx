@@ -76,7 +76,7 @@ export function CoverTile({
 }
 
 /** Purpose-built wide artwork for a shelf card. A uniform theme-paper veil makes
- *  the whole card read as one material; a subtle top wash protects the title
+ *  the whole card read as one material; a high-opacity static wash protects text
  *  without creating the old opaque-left / clear-right split. No filters or
  *  backdrop blur: shelf artwork must remain cheap to composite while scrolling. */
 export function ShelfCardArtwork(
@@ -130,17 +130,17 @@ export function ShelfCardArtwork(
             }, linear-gradient(180deg, ${
               alpha(
                 theme.palette.background.paper,
-                theme.palette.mode === "dark" ? 0.66 : 0.72,
+                theme.palette.mode === "dark" ? 0.86 : 0.9,
               )
             } 0%, ${
               alpha(
                 theme.palette.background.paper,
-                theme.palette.mode === "dark" ? 0.54 : 0.6,
+                theme.palette.mode === "dark" ? 0.8 : 0.84,
               )
             } 34%, ${
               alpha(
                 theme.palette.background.paper,
-                theme.palette.mode === "dark" ? 0.5 : 0.56,
+                theme.palette.mode === "dark" ? 0.76 : 0.8,
               )
             } 100%)`,
         }}

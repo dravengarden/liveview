@@ -111,17 +111,17 @@ interface ThemeColors {
 function getThemeColors(themeValue: Theme): ThemeColors {
   switch (themeValue) {
     case "light":
-      return { bg: "#ffffff", fg: "#1f2328", accent: "#0969da" };
+      return { bg: "#f6f3ee", fg: "#242129", accent: "#754b86" };
     case "sepia":
-      return { bg: "#f4ecd8", fg: "#5b4636", accent: "#9a5b3d" };
+      return { bg: "#f3ecdf", fg: "#453c35", accent: "#754b86" };
     case "lavender":
-      return { bg: "#f4ecf7", fg: "#1c1428", accent: "#7c3aed" };
+      return { bg: "#f4f1f7", fg: "#29232f", accent: "#754b86" };
     case "dark":
-      return { bg: "#0d1117", fg: "#e6edf3", accent: "#58a6ff" };
+      return { bg: "#11131a", fg: "#f2efe9", accent: "#ae8dde" };
     case "night":
-      return { bg: "#1b1714", fg: "#d6cbbd", accent: "#d9a066" };
+      return { bg: "#191715", fg: "#e5ddd1", accent: "#ae8dde" };
     case "plum":
-      return { bg: "#15111d", fg: "#ede9fe", accent: "#a78bfa" };
+      return { bg: "#171321", fg: "#f0ebf7", accent: "#ae8dde" };
   }
 }
 
@@ -201,326 +201,345 @@ export function SettingsButton({
         )}
 
         {seg === "settings" && (
-        <Stack spacing={2.25}>
-        {/* ── Theme: palette pair + light/dark mode ──────────────────────── */}
-        <Stack spacing={1.5}>
-          <Typography variant="overline" color="text.secondary">
-            {t("settings.theme")}
-          </Typography>
+          <Stack spacing={2.25}>
+            {/* ── Theme: palette pair + light/dark mode ──────────────────────── */}
+            <Stack spacing={1.5}>
+              <Typography variant="overline" color="text.secondary">
+                {t("settings.theme")}
+              </Typography>
 
-          {/* Palette — a light/dark colour pair (each swatch previews both). */}
-          <Stack spacing={1}>
-            <Typography variant="body2">{t("settings.palette")}</Typography>
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                gap: 1,
-              }}
-            >
-              {VARIANT_OPTIONS.map((option) => {
-                const isSelected = variant === option.value;
-                const lightC = getThemeColors(
-                  THEME_VARIANTS[option.value].light,
-                );
-                const darkC = getThemeColors(THEME_VARIANTS[option.value].dark);
-                return (
-                  <Box
-                    key={option.value}
-                    onClick={() => onVariantChange(option.value)}
-                    sx={{
-                      cursor: "pointer",
-                      borderRadius: 1,
-                      border: 2,
-                      borderColor: isSelected ? "primary.main" : "divider",
-                      overflow: "hidden",
-                      transition: "border-color 0.15s ease",
-                      "&:hover": {
-                        borderColor: isSelected
-                          ? "primary.main"
-                          : "text.secondary",
-                      },
-                    }}
-                  >
-                    <Box
-                      sx={{ height: 44, display: "flex", position: "relative" }}
-                    >
-                      {[lightC, darkC].map((c, i) => (
-                        <Box
-                          key={i}
-                          sx={{
-                            flex: 1,
-                            bgcolor: c.bg,
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <Box
-                            sx={{
-                              width: 18,
-                              height: 3,
-                              bgcolor: c.accent,
-                              borderRadius: 0.5,
-                            }}
-                          />
-                        </Box>
-                      ))}
-                      {isSelected && (
-                        <Box
-                          sx={{
-                            position: "absolute",
-                            top: 3,
-                            right: 3,
-                            width: 16,
-                            height: 16,
-                            borderRadius: "50%",
-                            bgcolor: "primary.main",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                          }}
-                        >
-                          <CheckIcon
-                            sx={{ fontSize: rem(11), color: "white" }}
-                          />
-                        </Box>
-                      )}
-                    </Box>
-                    <Typography
-                      variant="caption"
-                      sx={{
-                        display: "block",
-                        textAlign: "center",
-                        py: 0.5,
-                        fontSize: "0.72rem",
-                        bgcolor: "background.paper",
-                      }}
-                    >
-                      {t(`theme.${option.value}`)}
-                    </Typography>
-                  </Box>
-                );
-              })}
-            </Box>
-          </Stack>
-
-          {/* Mode — which half of the pair, or follow the OS. */}
-          <Stack spacing={1}>
-            <Typography variant="body2">{t("settings.mode")}</Typography>
-            <ToggleButtonGroup
-              size="small"
-              exclusive
-              value={mode}
-              onChange={(_, value: ThemeMode | null) => {
-                if (value) onModeChange(value);
-              }}
-              sx={{ width: "100%", "& .MuiToggleButton-root": { flex: 1 } }}
-            >
-              {MODE_OPTIONS.map((m) => (
-                <ToggleButton key={m} value={m}>
-                  {t(`mode.${m}`)}
-                </ToggleButton>
-              ))}
-            </ToggleButtonGroup>
-          </Stack>
-        </Stack>
-
-        {/* ── Reading: font + layout ─────────────────────────────────────── */}
-        <Stack spacing={1.5}>
-          <Typography variant="overline" color="text.secondary">
-            {t("settings.reading")}
-          </Typography>
-
-          {
-            /* Font — collapsible. Collapsed shows the current face previewed in
-              itself; expanding drops the full picker; choosing auto-collapses.
-              Each card previews its own @fontsource woff2 (lazy once selected). */
-          }
-          {fontOpen
-            ? (
-              <Stack spacing={0.75}>
+              {/* Palette — a light/dark colour pair (each swatch previews both). */}
+              <Stack spacing={1}>
+                <Typography variant="body2">{t("settings.palette")}</Typography>
                 <Box
-                  onClick={() => setFontOpen(false)}
                   sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    cursor: "pointer",
-                    px: 0.5,
+                    display: "grid",
+                    gridTemplateColumns: "repeat(3, 1fr)",
+                    gap: 1,
                   }}
                 >
-                  <Typography variant="body2">{t("settings.font")}</Typography>
-                  <CollapseIcon sx={{ color: "text.secondary" }} />
-                </Box>
-                {FONT_PRESETS.map((preset) => {
-                  const isSelected = fontId === preset.id;
-                  return (
-                    <Box
-                      key={preset.id}
-                      onClick={() => {
-                        onFontChange(preset.id);
-                        setFontOpen(false);
-                      }}
-                      sx={fontCardSx(isSelected)}
-                    >
-                      <Box sx={{ minWidth: 0 }}>
-                        <Typography
+                  {VARIANT_OPTIONS.map((option) => {
+                    const isSelected = variant === option.value;
+                    const lightC = getThemeColors(
+                      THEME_VARIANTS[option.value].light,
+                    );
+                    const darkC = getThemeColors(
+                      THEME_VARIANTS[option.value].dark,
+                    );
+                    return (
+                      <Box
+                        key={option.value}
+                        onClick={() => onVariantChange(option.value)}
+                        sx={{
+                          cursor: "pointer",
+                          borderRadius: 1,
+                          border: 2,
+                          borderColor: isSelected ? "primary.main" : "divider",
+                          overflow: "hidden",
+                          transition: "border-color 0.15s ease",
+                          "&:hover": {
+                            borderColor: isSelected
+                              ? "primary.main"
+                              : "text.secondary",
+                          },
+                        }}
+                      >
+                        <Box
                           sx={{
-                            fontFamily: preset.stack,
-                            fontSize: "1.05rem",
-                            lineHeight: 1.3,
+                            height: 44,
+                            display: "flex",
+                            position: "relative",
                           }}
-                          noWrap
                         >
-                          {preset.label} · 阅读 Aa
-                        </Typography>
+                          {[lightC, darkC].map((c, i) => (
+                            <Box
+                              key={i}
+                              sx={{
+                                flex: 1,
+                                bgcolor: c.bg,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                              }}
+                            >
+                              <Box
+                                sx={{
+                                  width: 18,
+                                  height: 3,
+                                  bgcolor: c.accent,
+                                  borderRadius: 0.5,
+                                }}
+                              />
+                            </Box>
+                          ))}
+                          {isSelected && (
+                            <Box
+                              sx={{
+                                position: "absolute",
+                                top: 3,
+                                right: 3,
+                                width: 16,
+                                height: 16,
+                                borderRadius: "50%",
+                                bgcolor: "primary.main",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                              }}
+                            >
+                              <CheckIcon
+                                sx={{ fontSize: rem(11), color: "white" }}
+                              />
+                            </Box>
+                          )}
+                        </Box>
                         <Typography
                           variant="caption"
-                          color="text.secondary"
-                          noWrap
+                          sx={{
+                            display: "block",
+                            textAlign: "center",
+                            py: 0.5,
+                            fontSize: "0.72rem",
+                            bgcolor: "background.paper",
+                          }}
                         >
-                          {preset.note}
+                          {t(`theme.${option.value}`)}
                         </Typography>
                       </Box>
-                      {isSelected && (
-                        <CheckIcon fontSize="medium" color="primary" />
-                      )}
-                    </Box>
-                  );
-                })}
-              </Stack>
-            )
-            : (
-              // Collapsed summary — the current face, tap to change.
-              <Box
-                onClick={() => setFontOpen(true)}
-                aria-label={t("settings.font")}
-                sx={fontCardSx(false)}
-              >
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography variant="caption" color="text.secondary">
-                    {t("settings.font")}
-                  </Typography>
-                  <Typography
-                    sx={{
-                      fontFamily: selectedFont?.stack,
-                      fontSize: "1.05rem",
-                      lineHeight: 1.3,
-                    }}
-                    noWrap
-                  >
-                    {selectedFont?.label} · 阅读 Aa
-                  </Typography>
+                    );
+                  })}
                 </Box>
-                <ExpandIcon sx={{ color: "text.secondary" }} />
-              </Box>
-            )}
+              </Stack>
 
-          {
-            /* Reading font size — a multiplier on the reading text only (shown
+              {/* Mode — which half of the pair, or follow the OS. */}
+              <Stack spacing={1}>
+                <Typography variant="body2">{t("settings.mode")}</Typography>
+                <ToggleButtonGroup
+                  size="small"
+                  exclusive
+                  value={mode}
+                  onChange={(_, value: ThemeMode | null) => {
+                    if (value) onModeChange(value);
+                  }}
+                  sx={{ width: "100%", "& .MuiToggleButton-root": { flex: 1 } }}
+                >
+                  {MODE_OPTIONS.map((m) => (
+                    <ToggleButton key={m} value={m}>
+                      {t(`mode.${m}`)}
+                    </ToggleButton>
+                  ))}
+                </ToggleButtonGroup>
+              </Stack>
+            </Stack>
+
+            {/* ── Reading: font + layout ─────────────────────────────────────── */}
+            <Stack spacing={1.5}>
+              <Typography variant="overline" color="text.secondary">
+                {t("settings.reading")}
+              </Typography>
+
+              {
+                /* Font — collapsible. Collapsed shows the current face previewed in
+              itself; expanding drops the full picker; choosing auto-collapses.
+              Each card previews its own @fontsource woff2 (lazy once selected). */
+              }
+              {fontOpen
+                ? (
+                  <Stack spacing={0.75}>
+                    <Box
+                      onClick={() => setFontOpen(false)}
+                      sx={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        cursor: "pointer",
+                        px: 0.5,
+                      }}
+                    >
+                      <Typography variant="body2">
+                        {t("settings.font")}
+                      </Typography>
+                      <CollapseIcon sx={{ color: "text.secondary" }} />
+                    </Box>
+                    {FONT_PRESETS.map((preset) => {
+                      const isSelected = fontId === preset.id;
+                      return (
+                        <Box
+                          key={preset.id}
+                          onClick={() => {
+                            onFontChange(preset.id);
+                            setFontOpen(false);
+                          }}
+                          sx={fontCardSx(isSelected)}
+                        >
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography
+                              sx={{
+                                fontFamily: preset.stack,
+                                fontSize: "1.05rem",
+                                lineHeight: 1.3,
+                              }}
+                              noWrap
+                            >
+                              {preset.label} · 阅读 Aa
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              noWrap
+                            >
+                              {preset.note}
+                            </Typography>
+                          </Box>
+                          {isSelected && (
+                            <CheckIcon fontSize="medium" color="primary" />
+                          )}
+                        </Box>
+                      );
+                    })}
+                  </Stack>
+                )
+                : (
+                  // Collapsed summary — the current face, tap to change.
+                  <Box
+                    onClick={() => setFontOpen(true)}
+                    aria-label={t("settings.font")}
+                    sx={fontCardSx(false)}
+                  >
+                    <Box sx={{ minWidth: 0 }}>
+                      <Typography variant="caption" color="text.secondary">
+                        {t("settings.font")}
+                      </Typography>
+                      <Typography
+                        sx={{
+                          fontFamily: selectedFont?.stack,
+                          fontSize: "1.05rem",
+                          lineHeight: 1.3,
+                        }}
+                        noWrap
+                      >
+                        {selectedFont?.label} · 阅读 Aa
+                      </Typography>
+                    </Box>
+                    <ExpandIcon sx={{ color: "text.secondary" }} />
+                  </Box>
+                )}
+
+              {
+                /* Reading font size — a multiplier on the reading text only (shown
               as a percentage); the chrome stays at its fixed size. */
-          }
-          <Row
-            label={t("settings.fontSize")}
-            desc={t("settings.fontSizeDesc")}
-            control={
-              <Select
-                size="small"
-                value={nearest(menuBarSettings.fontScale, FONT_SCALE_PRESETS)}
-                onChange={(e) => onFontScaleChange(Number(e.target.value))}
-                sx={{ minWidth: 104 }}
-              >
-                {FONT_SCALE_PRESETS.map((v) => (
-                  <MenuItem key={v} value={v}>
-                    {`${Math.round(v * 100)}%`}
-                  </MenuItem>
-                ))}
-              </Select>
-            }
-          />
+              }
+              <Row
+                label={t("settings.fontSize")}
+                desc={t("settings.fontSizeDesc")}
+                control={
+                  <Select
+                    size="small"
+                    value={nearest(
+                      menuBarSettings.fontScale,
+                      FONT_SCALE_PRESETS,
+                    )}
+                    onChange={(e) => onFontScaleChange(Number(e.target.value))}
+                    sx={{ minWidth: 104 }}
+                  >
+                    {FONT_SCALE_PRESETS.map((v) => (
+                      <MenuItem key={v} value={v}>
+                        {`${Math.round(v * 100)}%`}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                }
+              />
 
-          {
-            /* Reading margin — left/right padding of the reading column (works on
+              {
+                /* Reading margin — left/right padding of the reading column (works on
               mobile, unlike a max-width). */
-          }
-          <Row
-            label={t("settings.margin")}
-            desc={t("settings.marginDesc")}
-            control={
-              <Select
-                size="small"
-                value={nearest(menuBarSettings.contentMaxWidth, MARGIN_PRESETS)}
-                onChange={(e) =>
-                  onContentMaxWidthChange(Number(e.target.value))}
-                sx={{ minWidth: 104 }}
-              >
-                {MARGIN_PRESETS.map((v) => (
-                  <MenuItem key={v} value={v}>
-                    {`${v}px`}
-                  </MenuItem>
-                ))}
-              </Select>
-            }
-          />
+              }
+              <Row
+                label={t("settings.margin")}
+                desc={t("settings.marginDesc")}
+                control={
+                  <Select
+                    size="small"
+                    value={nearest(
+                      menuBarSettings.contentMaxWidth,
+                      MARGIN_PRESETS,
+                    )}
+                    onChange={(e) =>
+                      onContentMaxWidthChange(Number(e.target.value))}
+                    sx={{ minWidth: 104 }}
+                  >
+                    {MARGIN_PRESETS.map((v) => (
+                      <MenuItem key={v} value={v}>
+                        {`${v}px`}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                }
+              />
 
-          <Row
-            label={t("settings.lineHeight")}
-            desc={t("settings.lineHeightDesc")}
-            control={
-              <Select
-                size="small"
-                value={nearest(menuBarSettings.lineHeight, LINE_HEIGHT_PRESETS)}
-                onChange={(e) => onLineHeightChange(Number(e.target.value))}
-                sx={{ minWidth: 104 }}
-              >
-                {LINE_HEIGHT_PRESETS.map((v) => (
-                  <MenuItem key={v} value={v}>
-                    {v.toFixed(1)}
-                  </MenuItem>
-                ))}
-              </Select>
-            }
-          />
-        </Stack>
+              <Row
+                label={t("settings.lineHeight")}
+                desc={t("settings.lineHeightDesc")}
+                control={
+                  <Select
+                    size="small"
+                    value={nearest(
+                      menuBarSettings.lineHeight,
+                      LINE_HEIGHT_PRESETS,
+                    )}
+                    onChange={(e) => onLineHeightChange(Number(e.target.value))}
+                    sx={{ minWidth: 104 }}
+                  >
+                    {LINE_HEIGHT_PRESETS.map((v) => (
+                      <MenuItem key={v} value={v}>
+                        {v.toFixed(1)}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                }
+              />
+            </Stack>
 
-        {/* Bookshelf grouping (and sort + kind filter) now live in the shelf's
+            {
+              /* Bookshelf grouping (and sort + kind filter) now live in the shelf's
             own Sort & Filter control — organizing the shelf belongs there, not in
-            app preferences. */}
+            app preferences. */
+            }
 
-        {/* ── Interface language ─────────────────────────────────────────── */}
-        <Stack spacing={1}>
-          <Typography variant="overline" color="text.secondary">
-            {t("settings.language")}
-          </Typography>
-          <ToggleButtonGroup
-            size="small"
-            exclusive
-            value={lang}
-            onChange={(_, value: string | null) => {
-              const language = UI_LANGUAGES.find(({ id }) => id === value);
-              if (language) setLang(language.id);
-            }}
-          >
-            {UI_LANGUAGES.map(({ id, label }) => (
-              <ToggleButton key={id} value={id}>{label}</ToggleButton>
-            ))}
-          </ToggleButtonGroup>
-        </Stack>
+            {/* ── Interface language ─────────────────────────────────────────── */}
+            <Stack spacing={1}>
+              <Typography variant="overline" color="text.secondary">
+                {t("settings.language")}
+              </Typography>
+              <ToggleButtonGroup
+                size="small"
+                exclusive
+                value={lang}
+                onChange={(_, value: string | null) => {
+                  const language = UI_LANGUAGES.find(({ id }) => id === value);
+                  if (language) setLang(language.id);
+                }}
+              >
+                {UI_LANGUAGES.map(({ id, label }) => (
+                  <ToggleButton key={id} value={id}>{label}</ToggleButton>
+                ))}
+              </ToggleButtonGroup>
+            </Stack>
 
-        {/* ── About ──────────────────────────────────────────────────────── */}
-        <Stack spacing={0.5}>
-          <Typography variant="overline" color="text.secondary">
-            {t("settings.about")}
-          </Typography>
-          <Typography variant="body2" color="text.secondary">
-            {t("settings.aboutText")}
-          </Typography>
-          <Typography variant="caption" color="text.disabled">
-            build {BUILD_ID}
-          </Typography>
-        </Stack>
-        </Stack>
+            {/* ── About ──────────────────────────────────────────────────────── */}
+            <Stack spacing={0.5}>
+              <Typography variant="overline" color="text.secondary">
+                {t("settings.about")}
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {t("settings.aboutText")}
+              </Typography>
+              <Typography variant="caption" color="text.disabled">
+                build {BUILD_ID}
+              </Typography>
+            </Stack>
+          </Stack>
         )}
 
         {seg === "downloads" && <OfflineSection />}

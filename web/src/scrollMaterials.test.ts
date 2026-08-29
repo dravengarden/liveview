@@ -160,6 +160,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "shelf cards must use the compact DAG artwork rendition",
   );
   assertPresent(
+    artwork,
+    /theme\.palette\.mode === "dark" \? 0\.86 : 0\.9[\s\S]{0,420}0\.76 : 0\.8/,
+    "shelf artwork must keep a static high-opacity text-protection wash",
+  );
+  assertPresent(
     nativeSync,
     /\/api\/card-backdrop\?book=/,
     "the compact rendition must have a stable origin URL for native sync",
@@ -178,6 +183,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     landing,
     /<TextField[\s\S]{0,200}\bvalue=\{query\}/,
     "the iOS shelf search must not control the native input and replace IME marked text",
+  );
+  assertPresent(
+    landing,
+    /minWidth: \{ xs: 44, sm: "auto" \}[\s\S]{0,700}display: \{ xs: "none", sm: "inline" \}/,
+    "the phone toolbar must preserve search width with an icon-only filter action",
   );
   assertPresent(
     landing,
@@ -221,8 +231,8 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     temporaryNav,
-    /position: "absolute"[\s\S]{0,240}bottom: "max\(env\(safe-area-inset-bottom, 0px\), 12px\)"/,
-    "the spatial close island must overlay the scroll region without reserving layout space",
+    /data-temporary-nav-header[\s\S]{0,220}minHeight: spatial \? 58 : 52/,
+    "temporary navigation must provide a clear header below the safe area",
   );
   assertAbsent(
     temporaryNav,
@@ -231,18 +241,18 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     temporaryNav,
-    /key: "back"[\s\S]{0,100}label: backLabel[\s\S]{0,100}icon: <ChevronLeftIcon/,
-    "the spatial navigation back affordance must live in its bottom action island",
+    /aria-label=\{backLabel\}[\s\S]{0,100}startIcon=\{<ChevronLeftIcon/,
+    "the spatial navigation back affordance must be labelled in its header",
+  );
+  assertAbsent(
+    temporaryNav,
+    /MobileSheetActionGroup|FloatingActionIsland|backdropFilter/,
+    "temporary navigation fixed chrome",
   );
   assertPresent(
     temporaryNav,
-    /\{!spatial && \(/,
-    "Cowboy-style spatial navigation must leave the rail headerless",
-  );
-  assertPresent(
-    temporaryNav,
-    /justifyContent: "space-between"[\s\S]{0,400}key: "back"[\s\S]{0,500}key: "close"/,
-    "spatial navigation must split back and close into calm edge action islands",
+    /aria-label="Close navigation"[\s\S]{0,200}bgcolor: \(theme\) =>/,
+    "the close action must use a quiet theme-tonal header control",
   );
   assertPresent(
     sidebar,
@@ -260,9 +270,9 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "the playing chapter must keep a distinct marker without becoming selected",
   );
   assertPresent(
-    sidebar,
-    /pb: "var\(--temporary-nav-overlay-clearance, 0px\)"[\s\S]{0,120}scrollPaddingBottom:/,
-    "the final navigation row must scroll clear of the floating dismiss island",
+    temporaryNav,
+    /"--temporary-nav-overlay-clearance": "0px"/,
+    "header navigation must not reserve dead space for removed floating actions",
   );
   assertPresent(
     sidebar,

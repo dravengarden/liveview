@@ -1,9 +1,7 @@
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import CloseIcon from "@mui/icons-material/Close";
-import { Box, IconButton, Typography } from "@mui/material";
+import { alpha, Box, Button, IconButton, Typography } from "@mui/material";
 import type { ReactNode } from "react";
-
-import { MobileSheetActionGroup } from "./bottom-sheet.tsx";
 
 export function TemporaryNav(
   { title, backLabel, onBack, onClose, spatial, children }: {
@@ -24,100 +22,82 @@ export function TemporaryNav(
         flexDirection: "column",
       }}
     >
-      {!spatial && (
-        <Box
+      <Box
+        data-temporary-nav-header
+        sx={{
+          minHeight: spatial ? 58 : 52,
+          px: 1.25,
+          display: "grid",
+          gridTemplateColumns: "minmax(92px, 1fr) auto minmax(92px, 1fr)",
+          alignItems: "center",
+          borderBottom: 1,
+          borderColor: "divider",
+          bgcolor: "background.paper",
+        }}
+      >
+        {onBack && backLabel
+          ? (
+            <Button
+              aria-label={backLabel}
+              onClick={onBack}
+              startIcon={<ChevronLeftIcon />}
+              sx={{
+                justifySelf: "start",
+                minWidth: 0,
+                px: 0.5,
+                color: "primary.main",
+                fontSize: "0.78rem",
+                "& .MuiButton-startIcon": { mr: 0.125 },
+              }}
+            >
+              {backLabel}
+            </Button>
+          )
+          : <Box />}
+        <Typography
+          variant="subtitle2"
+          noWrap
+          sx={{ fontWeight: 720, letterSpacing: "-0.015em" }}
+        >
+          {title}
+        </Typography>
+        <IconButton
+          aria-label="Close navigation"
+          onClick={onClose}
           sx={{
-            minHeight: 52,
-            px: 1,
-            display: "grid",
-            gridTemplateColumns: "minmax(88px, 1fr) auto minmax(88px, 1fr)",
-            alignItems: "center",
-            borderBottom: 1,
-            borderColor: "divider",
+            justifySelf: "end",
+            width: 40,
+            height: 40,
+            color: "text.secondary",
+            bgcolor: (theme) =>
+              alpha(
+                theme.palette.primary.main,
+                theme.palette.mode === "dark" ? 0.16 : 0.08,
+              ),
+            "@media (hover: hover)": {
+              "&:hover": {
+                bgcolor: (theme) =>
+                  alpha(
+                    theme.palette.primary.main,
+                    theme.palette.mode === "dark" ? 0.22 : 0.13,
+                  ),
+              },
+            },
           }}
         >
-          {onBack && backLabel
-            ? (
-              <IconButton
-                aria-label={backLabel}
-                onClick={onBack}
-                sx={{
-                  justifySelf: "start",
-                  width: 40,
-                  height: 40,
-                  color: "primary.main",
-                  border: 1,
-                  borderColor: "divider",
-                  bgcolor: "action.hover",
-                }}
-              >
-                <ChevronLeftIcon />
-              </IconButton>
-            )
-            : <Box />}
-          <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-            {title}
-          </Typography>
-          <IconButton
-            aria-label="Close navigation"
-            onClick={onClose}
-            sx={{ justifySelf: "end" }}
-          >
-            <CloseIcon />
-          </IconButton>
-        </Box>
-      )}
+          <CloseIcon fontSize="small" />
+        </IconButton>
+      </Box>
       <Box
         sx={{
           position: "relative",
           flex: 1,
           minHeight: 0,
           overflow: "hidden",
-          "--temporary-nav-overlay-clearance": spatial
-            ? "calc(84px + env(safe-area-inset-bottom, 0px))"
-            : "0px",
+          "--temporary-nav-overlay-clearance": "0px",
         }}
       >
         {children}
-        {spatial && (
-          <Box
-            sx={{
-              position: "absolute",
-              zIndex: 3,
-              left: 0,
-              right: 0,
-              bottom: "max(env(safe-area-inset-bottom, 0px), 12px)",
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              px: 2,
-              pointerEvents: "none",
-            }}
-          >
-            {onBack && backLabel && (
-              <Box sx={{ width: 54, flex: "0 0 54px" }}>
-                <MobileSheetActionGroup
-                  actions={[{
-                    key: "back",
-                    label: backLabel,
-                    onPress: onBack,
-                    icon: <ChevronLeftIcon aria-hidden fontSize="small" />,
-                  }]}
-                />
-              </Box>
-            )}
-            <Box sx={{ width: 54, flex: "0 0 54px" }}>
-              <MobileSheetActionGroup
-                actions={[{
-                  key: "close",
-                  label: "Close navigation",
-                  onPress: onClose,
-                  icon: <CloseIcon aria-hidden fontSize="small" />,
-                }]}
-              />
-            </Box>
-          </Box>
-        )}
       </Box>
     </Box>
   );

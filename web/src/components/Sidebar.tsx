@@ -129,6 +129,7 @@ function TreeItem({
           // Taller, finger-friendly rows on touch screens; compact on desktop.
           py: { xs: 0.75, md: 0.5 },
           minHeight: { xs: 44, md: 32 },
+          position: "relative",
           transition: "background-color 140ms ease, color 140ms ease",
           "&.Mui-selected": {
             bgcolor: (theme) =>
@@ -136,6 +137,17 @@ function TreeItem({
                 theme.palette.primary.main,
                 theme.palette.mode === "dark" ? 0.18 : 0.11,
               ),
+            "&::before": {
+              content: '""',
+              position: "absolute",
+              left: 4,
+              top: 10,
+              bottom: 10,
+              width: 3,
+              borderRadius: 999,
+              bgcolor: "primary.main",
+            },
+            "& .MuiTypography-root": { fontWeight: 650 },
             "&:hover": {
               bgcolor: (theme) =>
                 alpha(
@@ -492,9 +504,9 @@ export function Sidebar({
           // scroller, so keep it independently promoted on touch devices.
           WebkitOverflowScrolling: "touch",
           transform: "translateZ(0)",
-          // The spatial drawer's Close island floats over this scroller. Keep
-          // normal rows flowing behind it, but provide enough trailing content
-          // clearance for the final row to scroll fully above the island.
+          // TemporaryNav publishes any chrome clearance. The conventional
+          // header currently needs none at the foot, but retaining the variable
+          // keeps this body compatible with other shell presentations.
           pb: "var(--temporary-nav-overlay-clearance, 0px)",
           scrollPaddingBottom: "var(--temporary-nav-overlay-clearance, 0px)",
           // Avoid retaining a second tiled compositor layer while the whole
@@ -502,7 +514,7 @@ export function Sidebar({
           "[data-spatial-drawer-moving] &": { transform: "none" },
         }}
       >
-        <List dense disablePadding>
+        <List dense disablePadding sx={{ py: 0.75 }}>
           {tree.map((node) => (
             <TreeItem
               key={node.path}

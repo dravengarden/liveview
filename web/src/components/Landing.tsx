@@ -1236,7 +1236,7 @@ export function Landing({
             }),
           // Extra side margin on mobile so the end controls (search box /
           // settings) clear the iPhone's rounded screen corners.
-          px: { xs: 2.5, md: 6 },
+          px: { xs: 1.5, sm: 2.5, md: 6 },
         }}
       >
         <Box
@@ -1245,7 +1245,7 @@ export function Landing({
             mx: "auto",
             display: "flex",
             alignItems: "center",
-            gap: 1,
+            gap: { xs: 0.75, sm: 1 },
             minHeight: 44,
           }}
         >
@@ -1342,15 +1342,26 @@ export function Landing({
                   aria-label={t("landing.sortFilter")}
                   sx={{
                     flexShrink: 0,
+                    minWidth: { xs: 44, sm: "auto" },
+                    width: { xs: 44, sm: "auto" },
+                    px: { xs: 0, sm: 1.25 },
                     textTransform: "none",
                     color: "text.secondary",
                     borderColor: "divider",
                     whiteSpace: "nowrap",
+                    "& .MuiButton-startIcon": {
+                      m: { xs: 0, sm: "0 8px 0 -4px" },
+                    },
                   }}
                 >
-                  {activeFilterCount > 0
-                    ? t("landing.filtersN", { n: activeFilterCount })
-                    : t(`sort.${sort}`)}
+                  <Box
+                    component="span"
+                    sx={{ display: { xs: "none", sm: "inline" } }}
+                  >
+                    {activeFilterCount > 0
+                      ? t("landing.filtersN", { n: activeFilterCount })
+                      : t(`sort.${sort}`)}
+                  </Box>
                 </Button>
               </Badge>
             </>
