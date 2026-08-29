@@ -240,14 +240,15 @@ export function PlaybackBar(
 
   return (
     <>
-      {/* ONE frosted slab spanning this transport AND the bottom nav bar right
+      {/* ONE material slab spans this transport AND the bottom nav bar right
           below it. The bar renders bare (NavShell `barTransparent`) over the
-          slab's bottom `--shell-bar-h`, so a SINGLE backdrop-filter backs both —
-          one continuous pane of glass. Two separate frosted layers never match
-          (they sample different page content), which was the seam. Height tracks
-          the measured transport (`--lv-transport-h`) + the bar (`--shell-bar-h`;
-          0 on desktop, where the bar is a top sibling and this is just the
-          transport's own glass). */}
+          slab's bottom `--shell-bar-h`, so both controls remain one continuous
+          surface without a seam. This slab travels with the complete reader
+          surface during spatial drawer gestures; do not hide it from the
+          trailing workspace preview. Height tracks the measured transport
+          (`--lv-transport-h`) + the bar (`--shell-bar-h`; 0 on desktop, where
+          the bar is a top sibling and this is just the transport's own
+          material). */}
       <Box
         aria-hidden
         data-lv-playback-bar="true"

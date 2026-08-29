@@ -386,13 +386,18 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     playbackBar,
+    /aria-hidden[\s\S]{0,80}data-lv-playback-bar="true"[\s\S]{0,300}height: "calc\(var\(--lv-transport-h, 0px\) \+ var\(--shell-bar-h, 0px\)\)"/,
+    "playback must retain a shared material behind the transport and bottom navigation",
+  );
+  assertPresent(
+    playbackBar,
     /aria-pressed=\{follow\.following\}[\s\S]{0,300}color: follow\.following \? "primary\.main" : "text\.secondary"[\s\S]{0,160}bgcolor: "transparent"[\s\S]{0,100}boxShadow: "none"/,
     "the active read-along follow control must highlight only its icon",
   );
-  assertPresent(
+  assertAbsent(
     mobileStyles,
     /\[data-spatial-drawer\]\[aria-hidden="false"\][\s\S]{0,100}~\s*\[data-spatial-drawer-surface\][\s\S]{0,100}\[data-lv-playback-bar="true"\][\s\S]{0,160}visibility:\s*hidden;[\s\S]{0,80}pointer-events:\s*none;/,
-    "the playback transport must disappear from the trailing spatial-drawer preview",
+    "the spatial drawer preview must preserve playback chrome",
   );
   assertPresent(
     detentSheet,

@@ -40,20 +40,6 @@ body {
   -webkit-touch-callout: none;
 }
 
-/* The mobile spatial drawer leaves a narrow preview of the translated reader
-   surface visible at the trailing edge. Keep the playback transport out of
-   that preview while navigation is open: the transport belongs to the reader,
-   not to the navigation surface, and its controls are otherwise exposed as a
-   clipped, non-actionable strip beside the drawer. Visibility preserves the
-   measured overlay geometry so opening/closing the drawer cannot move the
-   reader or change its scroll reservation. */
-[data-spatial-drawer][aria-hidden="false"]
-  ~ [data-spatial-drawer-surface]
-  [data-lv-playback-bar="true"] {
-  visibility: hidden;
-  pointer-events: none;
-}
-
 /* The exceptions: actual reading text and form fields stay selectable. (The
    read-aloud long-press handler still toggles an inline `user-select: none` on
    .markdown-body while paused — inline wins, so seek-on-long-press is unaffected;
