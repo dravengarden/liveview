@@ -76,6 +76,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     themeHook,
+    /backgroundColor\s*=\s*`var\(--lv-safe-area-bg, \$\{c\.bgDefault\}\)`/,
+    "the document safe area must accept a temporary shell-owned surface",
+  );
+  assertPresent(
+    themeHook,
     /setProperty\("--lv-nav-bg", c\.bgPaper\)[\s\S]{0,300}setProperty\(\s*"--lv-nav-fg", c\.textPrimary\)/,
     "the active theme must publish the contents-rail surface and foreground",
   );
@@ -223,6 +228,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     navShell,
     /data-spatial-drawer[\s\S]{0,500}width: \{ xs: "min\(84%, 360px\)", sm: "min\(52%, 440px\)" \}/,
     "mobile Contents must use Cowboy's full-height spatial side navigation proportions",
+  );
+  assertPresent(
+    navShell,
+    /spatial && mobileOpen[\s\S]{0,120}setProperty\("--lv-safe-area-bg", "var\(--lv-nav-bg\)"\)[\s\S]{0,180}removeProperty\("--lv-safe-area-bg"\)/,
+    "an open spatial drawer must extend its surface through the iOS status-bar safe area",
   );
   assertAbsent(
     navShell.match(/data-spatial-drawer[\s\S]{0,700}/)?.[0] ?? "",

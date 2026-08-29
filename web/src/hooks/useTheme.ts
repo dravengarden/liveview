@@ -280,7 +280,8 @@ export function useTheme(): UseThemeResult {
     // washing out its text in dark mode, only in the bundled local-origin app).
     // Colouring documentElement (html) seals that gap.
     const c = getThemeColors(theme);
-    document.documentElement.style.backgroundColor = c.bgDefault;
+    document.documentElement.style.backgroundColor =
+      `var(--lv-safe-area-bg, ${c.bgDefault})`;
     // Markdown is rendered by authored CSS outside MUI's `sx` token resolver.
     // Publish the page surface once so its centred column never falls back to a
     // hard-coded white card on tinted light themes.

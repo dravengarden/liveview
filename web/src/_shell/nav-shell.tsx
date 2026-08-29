@@ -185,6 +185,24 @@ export function NavShell(props: NavShellProps): ReactNode {
   const spatialMaskRef = useRef<HTMLDivElement | null>(null);
   const spatialSettleRef = useRef<SpatialDrawerSettle | null>(null);
 
+  // The native iOS status-bar safe area exposes the document root rather than
+  // the drawer element. While the spatial rail is open, hand that strip the
+  // same resolved surface token as the rail; otherwise warm themes show a
+  // bgDefault band above a bgPaper drawer. The theme owns the fallback, so
+  // closing or unmounting restores the reading surface without a hard-coded
+  // colour.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (spatial && mobileOpen) {
+      root.style.setProperty("--lv-safe-area-bg", "var(--lv-nav-bg)");
+    } else {
+      root.style.removeProperty("--lv-safe-area-bg");
+    }
+    return () => {
+      root.style.removeProperty("--lv-safe-area-bg");
+    };
+  }, [mobileOpen, spatial]);
+
   const closeMobile = useCallback(() => {
     if (spatialSettleRef.current) {
       spatialSettleRef.current(false);
