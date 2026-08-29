@@ -13,15 +13,15 @@ export function BrandMark({
   return (
     <svg viewBox="0 0 1024 1024" aria-hidden="true" {...props}>
       <path
-        d="M140 365C300 392 430 452 484 522V748C390 687 274 648 140 632V365Z"
+        d="M212 330C340 352 447 420 494 522V860C418 787 321 744 212 724V330Z"
         fill={monochrome ? "currentColor" : "var(--lv-brand-navy, #19376d)"}
       />
       <path
-        d="M540 522C594 452 724 392 884 365V632C750 648 634 687 540 748V522Z"
+        d="M530 522C577 420 684 352 812 330V724C703 744 606 787 530 860V522Z"
         fill={monochrome ? "currentColor" : "var(--lv-brand-plum, #754b86)"}
       />
       <path
-        d="M512 190C525 285 565 320 690 335C565 350 525 385 512 475C499 385 459 350 334 335C459 320 499 285 512 190Z"
+        d="M512 110C523 225 556 292 668 330C556 368 523 405 512 470C501 405 468 368 356 330C468 292 501 225 512 110Z"
         fill={monochrome ? "currentColor" : "var(--lv-activity, #f0a51f)"}
       />
     </svg>
