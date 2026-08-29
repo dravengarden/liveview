@@ -13,13 +13,15 @@ exact enough for synchronization, progress, and playback.
   lower edge, and a gold-led trio of four-point glints. The ivory page is the
   durable publication, the lavender page is its alternate rendition, and the
   central amber glint is the live moment of reading, listening, or discovery.
-  Preserve the narrow open centre, layered lower edge, flat colour, and generous
-  clear space.
+  Preserve the broad curved page spread, open centre, fine second-page outline,
+  separated glints, and generous clear space. The main glint must not overlap
+  the book.
 - Ink: `#17191f`; paper: `#f8f1e5`; raised paper: `#fffaf2`; book navy:
   `#19376d`; rendition plum: `#754b86`; activity amber: `#f0a51f`; deep
   backdrop: `#101b38`; secondary backdrop: `#3c294d`. The launcher icon uses
-  midnight indigo `#111a3d`, warm ivory `#fff5e6`, magic lavender `#b394df`,
-  page-edge purple `#9f79d1`, luminous amber `#f5b940`, and glint purple
+  midnight indigo `#111a3d` between deep navy `#081831` and midnight plum
+  `#241542`, warm ivory `#fff7e9`, magic lavender `#ae8dde`, page-edge purple
+  `#936dce`, luminous amber `#f5bd48`, and glint purple
   `#8f63c6`; it
   never uses a white or near-white background.
 - Use the full-colour mark when colour is available. Monochrome is for print and

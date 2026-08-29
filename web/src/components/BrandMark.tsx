@@ -1,4 +1,5 @@
 import type React from "react";
+import { useId } from "react";
 
 interface BrandMarkProps extends React.SVGProps<SVGSVGElement> {
   /** Use one colour where the full Living Book palette is unavailable. */
@@ -10,52 +11,71 @@ export function BrandMark({
   monochrome = false,
   ...props
 }: BrandMarkProps): React.JSX.Element {
+  const nightGradientId = useId();
+
   return (
     <svg viewBox="0 0 1024 1024" aria-hidden="true" {...props}>
       {!monochrome && (
-        <rect
-          width="1024"
-          height="1024"
-          rx="224"
-          fill="var(--lv-brand-icon-bg, #111a3d)"
-        />
+        <>
+          <defs>
+            <linearGradient id={nightGradientId} x1="0" y1="1" x2="1" y2="0">
+              <stop offset="0" stopColor="#081831" />
+              <stop offset="0.58" stopColor="#111a3d" />
+              <stop offset="1" stopColor="#241542" />
+            </linearGradient>
+          </defs>
+          <rect
+            width="1024"
+            height="1024"
+            rx="224"
+            fill={`url(#${nightGradientId})`}
+          />
+        </>
       )}
       <path
-        d="M168 434H198V728C318 746 415 786 494 852L479 878C394 817 291 783 168 772V434Z"
+        d="M174 462V780C300 792 405 830 488 894"
+        fill="none"
+        stroke={monochrome
+          ? "currentColor"
+          : "var(--lv-brand-page-light, #fff7e9)"}
+        strokeWidth="28"
+        strokeLinecap="square"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M850 462V780C724 792 619 830 536 894"
+        fill="none"
+        stroke={monochrome
+          ? "currentColor"
+          : "var(--lv-brand-page-edge, #936dce)"}
+        strokeWidth="28"
+        strokeLinecap="square"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M218 414C342 421 442 472 498 554V850C418 782 324 744 218 728V414Z"
         fill={monochrome
           ? "currentColor"
-          : "var(--lv-brand-page-light, #fff5e6)"}
+          : "var(--lv-brand-page-light, #fff7e9)"}
       />
       <path
-        d="M826 434H856V772C733 783 630 817 545 878L530 852C609 786 706 746 826 728V434Z"
+        d="M526 554C582 472 682 421 806 414V728C700 744 606 782 526 850V554Z"
         fill={monochrome
           ? "currentColor"
-          : "var(--lv-brand-page-edge, #9f79d1)"}
+          : "var(--lv-brand-page-plum, #ae8dde)"}
       />
       <path
-        d="M218 364C350 389 450 472 494 574V844C418 772 324 730 218 714V364Z"
-        fill={monochrome
-          ? "currentColor"
-          : "var(--lv-brand-page-light, #fff5e6)"}
+        d="M512 148C523 228 557 267 637 284C557 301 523 340 512 420C501 340 467 301 387 284C467 267 501 228 512 148Z"
+        fill={monochrome ? "currentColor" : "var(--lv-activity, #f5bd48)"}
       />
       <path
-        d="M530 574C574 472 674 389 806 364V714C700 730 606 772 530 844V574Z"
-        fill={monochrome
-          ? "currentColor"
-          : "var(--lv-brand-page-plum, #b394df)"}
-      />
-      <path
-        d="M512 166C523 253 559 295 646 316C559 337 523 379 512 466C501 379 465 337 378 316C465 295 501 253 512 166Z"
-        fill={monochrome ? "currentColor" : "var(--lv-activity, #f5b940)"}
-      />
-      <path
-        d="M326 260C331 300 348 319 388 328C348 337 331 356 326 396C321 356 304 337 264 328C304 319 321 300 326 260Z"
+        d="M326 244C331 282 347 300 385 308C347 316 331 334 326 372C321 334 305 316 267 308C305 300 321 282 326 244Z"
         fill={monochrome
           ? "currentColor"
           : "var(--lv-brand-page-light, #fffaf0)"}
       />
       <path
-        d="M708 260C713 300 730 319 770 328C730 337 713 356 708 396C703 356 686 337 646 328C686 319 703 300 708 260Z"
+        d="M698 244C703 282 719 300 757 308C719 316 703 334 698 372C693 334 677 316 639 308C677 300 693 282 698 244Z"
         fill={monochrome
           ? "currentColor"
           : "var(--lv-brand-glint-plum, #8f63c6)"}
