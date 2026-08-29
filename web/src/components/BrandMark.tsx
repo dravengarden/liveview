@@ -21,8 +21,12 @@ export function BrandMark({
         fill={monochrome ? "currentColor" : "var(--lv-brand-plum, #754b86)"}
       />
       <path
-        d="M512 110C523 225 556 292 668 330C556 368 523 405 512 470C501 405 468 368 356 330C468 292 501 225 512 110Z"
+        d="M448 118C458 215 496 262 588 282C496 302 458 349 448 446C438 349 400 302 308 282C400 262 438 215 448 118Z"
         fill={monochrome ? "currentColor" : "var(--lv-activity, #f0a51f)"}
+      />
+      <path
+        d="M654 102C659 146 677 166 720 176C677 186 659 206 654 250C649 206 631 186 588 176C631 166 649 146 654 102Z"
+        fill={monochrome ? "currentColor" : "var(--lv-activity-soft, #f7c95c)"}
       />
     </svg>
   );
