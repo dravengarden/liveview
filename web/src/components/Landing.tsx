@@ -18,13 +18,15 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   Typography,
+  useMediaQuery,
 } from "@mui/material";
-import { alpha, type Theme } from "@mui/material/styles";
+import { alpha, type Theme, useTheme } from "@mui/material/styles";
 import {
   Article as DocsIcon,
   Clear as ClearIcon,
   ExpandMore as ExpandMoreIcon,
   Headphones as AudiobookIcon,
+  KeyboardHide as KeyboardHideIcon,
   MenuBook as BookIcon,
   Search as SearchIcon,
   Tune as TuneIcon,
@@ -786,6 +788,8 @@ export function Landing({
   navbarAtBottom,
 }: LandingProps): React.JSX.Element {
   const { t, lang } = useI18n();
+  const theme = useTheme();
+  const isPhone = useMediaQuery(theme.breakpoints.down("sm"));
   const locale = localeDescriptor(lang).htmlLang;
   const sort = useShelfSort();
   // Books whose audiobook audio is still generating — drives the card micro-badge.
@@ -801,12 +805,25 @@ export function Landing({
   const group = useShelfGroup();
   const collapsed = useCollapsedGroups();
   const [query, setQuery] = useState("");
+  const [searchFocused, setSearchFocused] = useState(false);
+  const searchEditing = isPhone && searchFocused;
   // Keep the native input uncontrolled. iOS WebKit owns marked text while a
   // Chinese/Japanese/Korean IME is composing; feeding every provisional value
   // back through React's `value` prop replaces that marked range and leaves the
   // keyboard showing candidates while the field itself appears frozen.
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchComposingRef = useRef(false);
+  const clearSearch = (): void => {
+    searchComposingRef.current = false;
+    if (searchInputRef.current) {
+      searchInputRef.current.value = "";
+      searchInputRef.current.focus();
+    }
+    setQuery("");
+  };
+  const dismissSearchKeyboard = (): void => {
+    searchInputRef.current?.blur();
+  };
   // Single-choice kind filter ("all" = no narrowing). Audio-only books fall under
   // "book" — they share the card, so they're never a separate filter.
   const [kind, setKind] = useState<FilterKind>("all");
@@ -1234,12 +1251,27 @@ export function Landing({
               borderBottom: 1,
               pt: "calc(env(safe-area-inset-top, 0px) + 8px)",
             }),
-          // Extra side margin on mobile so the end controls (search box /
-          // settings) clear the iPhone's rounded screen corners.
-          px: { xs: 1.5, sm: 2.5, md: 6 },
+          // Focused phone search is the sole toolbar control, so let it use the
+          // whole safe horizontal span. The compact row keeps a little more air
+          // around its three separate controls.
+          pl: {
+            xs: searchEditing
+              ? "max(env(safe-area-inset-left, 0px), 8px)"
+              : 1.5,
+            sm: 2.5,
+            md: 6,
+          },
+          pr: {
+            xs: searchEditing
+              ? "max(env(safe-area-inset-right, 0px), 8px)"
+              : 1.5,
+            sm: 2.5,
+            md: 6,
+          },
         }}
       >
         <Box
+          data-lv-search-editing={searchEditing ? "true" : "false"}
           sx={{
             width: "100%",
             mx: "auto",
@@ -1262,7 +1294,20 @@ export function Landing({
               <TextField
                 size="small"
                 inputRef={searchInputRef}
+                data-lv-search-field="true"
                 defaultValue=""
+                onFocus={() => setSearchFocused(true)}
+                onBlur={() => setSearchFocused(false)}
+                onKeyDown={(e) => {
+                  const nativeEvent = e.nativeEvent as KeyboardEvent;
+                  if (
+                    e.key === "Enter" && !searchComposingRef.current &&
+                    !nativeEvent.isComposing
+                  ) {
+                    e.preventDefault();
+                    dismissSearchKeyboard();
+                  }
+                }}
                 onCompositionStart={() => {
                   searchComposingRef.current = true;
                 }}
@@ -1283,31 +1328,34 @@ export function Landing({
                 }}
                 placeholder={t("landing.search")}
                 aria-label={t("landing.search")}
+                inputProps={{
+                  "data-lv-search-input": "true",
+                  enterKeyHint: "search",
+                }}
                 InputProps={{
                   startAdornment: (
                     <InputAdornment position="start">
                       <SearchIcon fontSize="medium" />
                     </InputAdornment>
                   ),
-                  endAdornment: query
+                  endAdornment: query || searchEditing
                     ? (
                       // ui.md §7: no edge="end" (negative margin pins the target to the
                       // iOS back-swipe edge); floor to a ≥40px touch target on phones and
                       // keep the adornment off the safe-area edge.
                       <InputAdornment
                         position="end"
-                        sx={{ pr: "max(env(safe-area-inset-right), 8px)" }}
+                        sx={{
+                          gap: 0.25,
+                          pr: "max(env(safe-area-inset-right), 8px)",
+                        }}
                       >
                         <IconButton
                           size="small"
-                          onClick={() => {
-                            searchComposingRef.current = false;
-                            if (searchInputRef.current) {
-                              searchInputRef.current.value = "";
-                              searchInputRef.current.focus();
-                            }
-                            setQuery("");
-                          }}
+                          data-lv-search-clear="true"
+                          disabled={!query}
+                          onPointerDown={(e) => e.preventDefault()}
+                          onClick={clearSearch}
                           aria-label={t("landing.searchClear")}
                           sx={{
                             width: { xs: 40, lg: 32 },
@@ -1316,6 +1364,24 @@ export function Landing({
                         >
                           <ClearIcon fontSize="medium" />
                         </IconButton>
+                        {searchEditing && (
+                          <IconButton
+                            size="small"
+                            data-lv-search-dismiss="true"
+                            onPointerDown={(e) => {
+                              // Perform the blur before this focused-only
+                              // control unmounts. onClick remains for keyboard
+                              // activation and non-pointer assistive input.
+                              e.preventDefault();
+                              dismissSearchKeyboard();
+                            }}
+                            onClick={dismissSearchKeyboard}
+                            aria-label={t("landing.searchHideKeyboard")}
+                            sx={{ width: 40, height: 40 }}
+                          >
+                            <KeyboardHideIcon fontSize="medium" />
+                          </IconButton>
+                        )}
                       </InputAdornment>
                     )
                     : null,
@@ -1328,42 +1394,6 @@ export function Landing({
                   (always set); a primary dot flags an active kind filter (the
                   occasional state). Replaces the old two-dropdown clutter. */
               }
-              <Badge
-                color="primary"
-                badgeContent={activeFilterCount}
-                invisible={activeFilterCount === 0}
-                sx={{ flexShrink: 0 }}
-              >
-                <Button
-                  size="small"
-                  variant="outlined"
-                  startIcon={<TuneIcon fontSize="small" />}
-                  onClick={() => setSfOpen(true)}
-                  aria-label={t("landing.sortFilter")}
-                  sx={{
-                    flexShrink: 0,
-                    minWidth: { xs: 44, sm: "auto" },
-                    width: { xs: 44, sm: "auto" },
-                    px: { xs: 0, sm: 1.25 },
-                    textTransform: "none",
-                    color: "text.secondary",
-                    borderColor: "divider",
-                    whiteSpace: "nowrap",
-                    "& .MuiButton-startIcon": {
-                      m: { xs: 0, sm: "0 8px 0 -4px" },
-                    },
-                  }}
-                >
-                  <Box
-                    component="span"
-                    sx={{ display: { xs: "none", sm: "inline" } }}
-                  >
-                    {activeFilterCount > 0
-                      ? t("landing.filtersN", { n: activeFilterCount })
-                      : t(`sort.${sort}`)}
-                  </Box>
-                </Button>
-              </Badge>
             </>
           )}
           {
@@ -1371,16 +1401,57 @@ export function Landing({
               history widget was removed — sort by "Read" surfaces the same thing,
               and each card now carries its own last-read stamp. */
           }
-          <Box
-            sx={{
-              flexShrink: 0,
-              display: "flex",
-              alignItems: "center",
-              gap: 0.5,
-            }}
-          >
-            {settingsSlot}
-          </Box>
+          {!searchEditing && (
+            <Box
+              data-lv-shelf-actions
+              sx={{
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
+                gap: { xs: 0.75, sm: 1 },
+              }}
+            >
+              {books.length > 0 && (
+                <Badge
+                  color="primary"
+                  badgeContent={activeFilterCount}
+                  invisible={activeFilterCount === 0}
+                  sx={{ flexShrink: 0 }}
+                >
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<TuneIcon fontSize="small" />}
+                    onClick={() => setSfOpen(true)}
+                    aria-label={t("landing.sortFilter")}
+                    sx={{
+                      flexShrink: 0,
+                      minWidth: { xs: 44, sm: "auto" },
+                      width: { xs: 44, sm: "auto" },
+                      px: { xs: 0, sm: 1.25 },
+                      textTransform: "none",
+                      color: "text.secondary",
+                      borderColor: "divider",
+                      whiteSpace: "nowrap",
+                      "& .MuiButton-startIcon": {
+                        m: { xs: 0, sm: "0 8px 0 -4px" },
+                      },
+                    }}
+                  >
+                    <Box
+                      component="span"
+                      sx={{ display: { xs: "none", sm: "inline" } }}
+                    >
+                      {activeFilterCount > 0
+                        ? t("landing.filtersN", { n: activeFilterCount })
+                        : t(`sort.${sort}`)}
+                    </Box>
+                  </Button>
+                </Badge>
+              )}
+              {settingsSlot}
+            </Box>
+          )}
         </Box>
       </Box>
 

@@ -200,6 +200,31 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /onCompositionStart[\s\S]{0,500}onCompositionEnd[\s\S]{0,500}nativeEvent\.isComposing/,
     "the shelf search must defer discovery updates until IME composition commits",
   );
+  assertPresent(
+    landing,
+    /const searchEditing = isPhone && searchFocused[\s\S]{0,900}const dismissSearchKeyboard/,
+    "phone search must have an explicit focus-owned editing mode",
+  );
+  assertPresent(
+    landing,
+    /data-lv-search-field[\s\S]{0,240}onFocus=\{\(\) => setSearchFocused\(true\)\}[\s\S]{0,120}onBlur=\{\(\) => setSearchFocused\(false\)\}/,
+    "phone search must expand on focus and restore the shelf actions on blur",
+  );
+  assertPresent(
+    landing,
+    /data-lv-search-clear[\s\S]{0,300}landing\.searchClear/,
+    "expanded phone search must expose a clear action",
+  );
+  assertPresent(
+    landing,
+    /data-lv-search-dismiss[\s\S]{0,900}landing\.searchHideKeyboard/,
+    "expanded phone search must expose a keyboard-dismiss action",
+  );
+  assertPresent(
+    landing,
+    /!searchEditing && \([\s\S]{0,180}data-lv-shelf-actions/,
+    "filter and settings actions must yield the phone toolbar while search is editing",
+  );
   assertAbsent(
     landing,
     /\bcontain\s*:/,
