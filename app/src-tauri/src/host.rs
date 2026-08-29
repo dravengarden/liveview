@@ -158,11 +158,45 @@ fn ver_dir(version: &str) -> String {
         .collect()
 }
 
+fn decode_query_component(value: &str) -> Option<String> {
+    fn hex_nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' => {
+                let high = hex_nibble(*bytes.get(index + 1)?)?;
+                let low = hex_nibble(*bytes.get(index + 2)?)?;
+                decoded.push((high << 4) | low);
+                index += 3;
+            }
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
 fn query_get(query: &str, k: &str) -> Option<String> {
     query.split('&').find_map(|kv| {
         let mut it = kv.splitn(2, '=');
-        if it.next() == Some(k) {
-            it.next().map(str::to_string)
+        if it.next().and_then(decode_query_component).as_deref() == Some(k) {
+            it.next().and_then(decode_query_component)
         } else {
             None
         }
@@ -696,7 +730,7 @@ mod tests {
 
     #[test]
     fn put_from_url_is_path_only_and_ignores_u() {
-        let query = "p=assets/index-abc.js&u=https://evil.example/x.js";
+        let query = "p=assets%2Findex-abc.js&u=https%3A%2F%2Fevil.example%2Fx.js";
         let p = query_get(query, "p").unwrap();
         assert_eq!(p, "assets/index-abc.js");
         let plan = overlay_put_plan(&p, query_get(query, "v").as_deref()).unwrap();
@@ -708,6 +742,24 @@ mod tests {
             PutPlan::Index { .. } => panic!("hashed path must not use roots/"),
         }
         assert!(query_get(query, "u").is_some(), "fixture still carries u=");
+    }
+
+    #[test]
+    fn query_parameters_follow_url_encoding() {
+        assert_eq!(
+            query_get("p=assets%2Findex-abc.js", "p").as_deref(),
+            Some("assets/index-abc.js")
+        );
+        assert_eq!(
+            query_get("v=assets%2Findex-new.js", "v").as_deref(),
+            Some("assets/index-new.js")
+        );
+        assert_eq!(
+            query_get("label=read+later", "label").as_deref(),
+            Some("read later")
+        );
+        assert_eq!(query_get("p=assets%2", "p"), None);
+        assert_eq!(query_get("p=assets%GGfile", "p"), None);
     }
 
     #[test]
