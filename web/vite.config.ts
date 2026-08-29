@@ -260,6 +260,13 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       outDir: isApp ? "dist-app" : "dist",
+      // Keep every generated native OTA asset at the bundle root. Shells
+      // released before 0.1.21 did not URL-decode `/` in host query values;
+      // nested `assets/foo.js` was therefore persisted as the literal
+      // `assets%2Ffoo.js` and activation could never find it. A flat app build
+      // is consumable by both that installed host and the corrected v1 host.
+      // The PWA keeps its conventional /assets/ layout.
+      assetsDir: isApp ? "" : "assets",
       emptyOutDir: true,
       sourcemap: false,
       minify: "oxc",

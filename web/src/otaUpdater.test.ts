@@ -18,9 +18,9 @@ test("OTA reload URL cache-busts the WebView while preserving reader state", () 
   assert.equal(
     otaReloadUrl(
       "lvsync://localhost/app/?theme=dark#sui/chapter-2",
-      "assets/index-new.js",
+      "index-new.js",
     ),
-    "lvsync://localhost/app/?theme=dark&lv-ota=assets%2Findex-new.js#sui/chapter-2",
+    "lvsync://localhost/app/?theme=dark&lv-ota=index-new.js#sui/chapter-2",
   );
 });
 
@@ -68,14 +68,14 @@ test("runOtaCheck uses path-only putFromUrl and reloads lvsync://localhost/app",
       );
     }
     if (url === `${HOST_ORIGIN}/appshell/current`) {
-      return Promise.resolve(new Response("assets/index-old.js", { status: 200 }));
+      return Promise.resolve(new Response("index-old.js", { status: 200 }));
     }
     if (url.includes("/app-dist/manifest.json")) {
       return Promise.resolve(
         new Response(
           JSON.stringify({
-            version: "assets/index-new.js",
-            files: ["index.html", "assets/chunk.js"],
+            version: "index-new.js",
+            files: ["index.html", "chunk.js"],
           }),
           { status: 200 },
         ),
@@ -118,12 +118,12 @@ test("runOtaCheck uses path-only putFromUrl and reloads lvsync://localhost/app",
   );
   assert.equal(
     indexPut && new URL(indexPut.url).searchParams.get("v"),
-    "assets/index-new.js",
+    "index-new.js",
   );
   assert.equal(replaced.length, 1);
   assert.equal(
     replaced[0],
-    otaReloadUrl(href, "assets/index-new.js"),
+    otaReloadUrl(href, "index-new.js"),
   );
   assert.ok(replaced[0]?.startsWith("lvsync://localhost/app/"));
 });

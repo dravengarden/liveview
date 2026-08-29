@@ -47,7 +47,7 @@ const BUILD_ID = ((): string => {
   try {
     const src = [...document.querySelectorAll<HTMLScriptElement>("script[src]")]
       .map((e) => e.src)
-      .find((s) => /\/assets\/index-/.test(s));
+      .find((s) => /\/(?:assets\/)?index-/.test(s));
     return src ? (/index-([A-Za-z0-9_-]+)\.js/.exec(src)?.[1] ?? "dev") : "dev";
   } catch {
     return "dev";

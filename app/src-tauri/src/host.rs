@@ -123,10 +123,27 @@ where
     })
 }
 
-fn entry_bundle(html: &str) -> Option<&str> {
-    let start = html.find("assets/index-")?;
-    let end = html[start..].find(".js")?;
-    Some(&html[start..start + end + 3])
+fn entry_bundle(html: &str) -> Option<String> {
+    let mut offset = 0;
+    while let Some(relative_start) = html[offset..].find("index-") {
+        let start = offset + relative_start;
+        let tail = &html[start..];
+        let relative_end = tail.find(".js")?;
+        let bare = &tail[..relative_end + 3];
+        if bare
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            let prefix = if html[..start].ends_with("assets/") {
+                "assets/"
+            } else {
+                ""
+            };
+            return Some(format!("{prefix}{bare}"));
+        }
+        offset = start + "index-".len();
+    }
+    None
 }
 
 /// An installed shell update must get one chance to boot its embedded SPA. OTA
@@ -142,7 +159,7 @@ fn activate_embedded_upgrade(data_dir: &Path, embedded_index: &[u8]) {
     };
     let web_root = data_dir.join("web");
     let marker = web_root.join("embedded-current");
-    if std::fs::read_to_string(&marker).ok().as_deref() == Some(version) {
+    if std::fs::read_to_string(&marker).ok().as_deref() == Some(version.as_str()) {
         return;
     }
     let _ = std::fs::create_dir_all(&web_root);
@@ -948,12 +965,12 @@ mod tests {
         std::fs::create_dir_all(&web).unwrap();
         std::fs::write(web.join("current"), "assets/index-old.js").unwrap();
 
-        let index = br#"<script type="module" src="./assets/index-new.js"></script>"#;
+        let index = br#"<script type="module" src="./index-new.js"></script>"#;
         activate_embedded_upgrade(&root, index);
         assert!(!web.join("current").exists());
         assert_eq!(
             std::fs::read_to_string(web.join("embedded-current")).unwrap(),
-            "assets/index-new.js"
+            "index-new.js"
         );
 
         std::fs::write(web.join("current"), "assets/index-server.js").unwrap();
@@ -964,6 +981,19 @@ mod tests {
         );
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn entry_bundle_accepts_flat_and_legacy_vite_paths() {
+        assert_eq!(
+            entry_bundle(r#"<script type="module" src="./index-flat.js"></script>"#).as_deref(),
+            Some("index-flat.js")
+        );
+        assert_eq!(
+            entry_bundle(r#"<script type="module" src="./assets/index-legacy.js"></script>"#)
+                .as_deref(),
+            Some("assets/index-legacy.js")
+        );
     }
 
     #[test]

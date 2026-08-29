@@ -211,12 +211,30 @@ fn app_version() -> Option<String> {
     None
 }
 
-/// Pull Vite's content-hashed entry-bundle name out of index.html. Returns e.g.
-/// `assets/index-D4f8aB2c.js`.
+/// Pull Vite's content-hashed entry-bundle name out of index.html. New native
+/// OTA builds are flat (`index-D4f8aB2c.js`) so pre-0.1.21 hosts never receive
+/// a URL-encoded slash; the PWA keeps the legacy `assets/index-...js` form.
 fn entry_bundle(html: &str) -> Option<String> {
-    let start = html.find("assets/index-")?;
-    let end = html[start..].find(".js")?;
-    Some(html[start..start + end + 3].to_owned())
+    let mut offset = 0;
+    while let Some(relative_start) = html[offset..].find("index-") {
+        let start = offset + relative_start;
+        let tail = &html[start..];
+        let relative_end = tail.find(".js")?;
+        let bare = &tail[..relative_end + 3];
+        if bare
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        {
+            let prefix = if html[..start].ends_with("assets/") {
+                "assets/"
+            } else {
+                ""
+            };
+            return Some(format!("{prefix}{bare}"));
+        }
+        offset = start + "index-".len();
+    }
+    None
 }
 
 /// Read the current index.html so `/version` can extract the bundle id. Embedded
@@ -2970,6 +2988,21 @@ mod apm_tests {
     use super::*;
     use crate::store::fs::FsStore;
     use tower::ServiceExt;
+
+    #[test]
+    fn entry_bundle_accepts_flat_native_and_nested_pwa_paths() {
+        assert_eq!(
+            entry_bundle(
+                r#"<link href="./index-style.css"><script src="./index-flat.js"></script>"#
+            )
+            .as_deref(),
+            Some("index-flat.js")
+        );
+        assert_eq!(
+            entry_bundle(r#"<script src="/assets/index-pwa.js"></script>"#).as_deref(),
+            Some("assets/index-pwa.js")
+        );
+    }
 
     #[test]
     fn http_policy_defaults_to_native_shell_origins_without_authentication() {

@@ -39,7 +39,20 @@ async function identical(left: string, right: string): Promise<boolean> {
 }
 
 await Deno.remove(out, { recursive: true }).catch(() => undefined);
-const manifest = await files(app);
+const appFiles = await files(app);
+// KaTeX's stable public files ship in every native IPA and remain available
+// through the embedded fallback when an OTA overlay does not contain them.
+// Excluding that one immutable directory keeps the OTA transport flat so
+// pre-0.1.21 hosts (which persisted URL-encoded slashes literally) can receive
+// the bootstrap bundle. Any other nested output is a compatibility regression.
+const manifest = appFiles.filter((rel) => !rel.startsWith("katex/"));
+const nested = manifest.filter((rel) => rel.includes("/"));
+if (nested.length > 0) {
+  throw new Error(
+    "stage-app-bundle: native OTA paths must stay flat for legacy host compatibility:\n" +
+      nested.map((rel) => `  ${rel}`).join("\n"),
+  );
+}
 let copied = 0;
 let shared = 0;
 for (const rel of manifest) {
