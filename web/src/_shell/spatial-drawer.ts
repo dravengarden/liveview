@@ -28,6 +28,7 @@ export function bindSpatialDrawer({
   drawer,
   drawerMask,
   phone,
+  reservedLeadingEdge = 0,
   getOpen,
   setOpen,
   onPrepareThreshold,
@@ -38,6 +39,10 @@ export function bindSpatialDrawer({
   readonly drawer: HTMLElement;
   readonly drawerMask: HTMLElement;
   readonly phone: boolean;
+  /** Leave this many leading-edge pixels to the host's native-style back
+   *  gesture while the drawer is closed. An open drawer still owns the full
+   *  surface so it can always be swiped closed. */
+  readonly reservedLeadingEdge?: number;
   readonly getOpen: () => boolean;
   readonly setOpen: (open: boolean) => void;
   readonly onPrepareThreshold?: () => void;
@@ -157,8 +162,10 @@ export function bindSpatialDrawer({
   const onTouchStart = (event: TouchEvent): void => {
     const [touch] = event.touches;
     const target = event.target instanceof HTMLElement ? event.target : null;
+    const startOpen = getOpen();
     if (
       !touch || hasExpandedSelection() ||
+      (!startOpen && touch.clientX <= reservedLeadingEdge) ||
       target?.closest("input,textarea,[contenteditable='true'],[data-spatial-drawer-ignore]") ||
       hasHorizontalScroller(event.target, gestureTarget)
     ) {
@@ -166,7 +173,6 @@ export function bindSpatialDrawer({
       return;
     }
     const now = performance.now();
-    const startOpen = getOpen();
     const width = drawerWidth();
     presentationWidth = width;
     onPrepareThreshold?.();

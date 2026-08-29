@@ -206,6 +206,11 @@ export function NavShell(props: NavShellProps): ReactNode {
       drawer,
       drawerMask: mask,
       phone: isPhone,
+      // The app-level iOS-style edge swipe uses the first 28px to return to
+      // the bookshelf. Let that gesture win there; the rest of the reading
+      // surface still opens Contents, and an open drawer keeps the full width
+      // available for swipe-to-close.
+      reservedLeadingEdge: onBack ? 28 : 0,
       getOpen: () => mobileOpenRef.current,
       setOpen: setMobileOpen,
       onPrepareThreshold: prepareSelectionHaptic,
@@ -216,7 +221,7 @@ export function NavShell(props: NavShellProps): ReactNode {
       spatialSettleRef.current = null;
       binding.dispose();
     };
-  }, [isPhone, spatial]);
+  }, [isPhone, onBack, spatial]);
 
   useEffect(() => {
     if (!spatial || !mobileOpen) {

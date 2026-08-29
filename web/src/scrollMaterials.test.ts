@@ -290,6 +290,16 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "the spatial drawer must prewarm and fire the native selection generator around its threshold",
   );
   assertPresent(
+    navShell,
+    /reservedLeadingEdge:\s*onBack \? 28 : 0/,
+    "the reader must reserve the iOS back-swipe edge instead of letting Contents steal it",
+  );
+  assertPresent(
+    spatialDrawer,
+    /!startOpen && touch\.clientX <= reservedLeadingEdge/,
+    "a closed spatial drawer must yield its reserved leading edge to host navigation",
+  );
+  assertPresent(
     nativeTweaks,
     /UISelectionFeedbackGenerator[\s\S]{0,900}prepare-selection[\s\S]{0,300}selectionChanged/,
     "the native shell must retain and prewarm a selection generator for the spatial drawer",
