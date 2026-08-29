@@ -371,8 +371,8 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     playbackBar,
-    /aria-pressed=\{follow\.following\}[\s\S]{0,500}bgcolor: follow\.following[\s\S]{0,500}boxShadow: follow\.following/,
-    "the active read-along follow control must retain a visible selected surface",
+    /aria-pressed=\{follow\.following\}[\s\S]{0,300}color: follow\.following \? "primary\.main" : "text\.secondary"[\s\S]{0,160}bgcolor: "transparent"[\s\S]{0,100}boxShadow: "none"/,
+    "the active read-along follow control must highlight only its icon",
   );
   assertPresent(
     mobileStyles,
