@@ -87,6 +87,24 @@ The Tauri app has a separate, tracked Cargo lockfile. `time` is pinned for
 compatibility with the current Tauri dependency graph. The Mac/iOS Simulator is
 the authoritative native UI and background-audio validation target.
 
+Treat the native shell as a stable compatibility layer, not as the ordinary
+reader release channel:
+
+- Ship reader UI, TypeScript behavior, themes, and other ordinary web features
+  through the server-hosted app-bundle OTA path. These changes must not require
+  a SideStore release or app reinstall.
+- Publish through SideStore only when the native binary, entitlement, extension,
+  icon, embedded native asset, baked origin, or other native configuration
+  changes.
+- Keep the native host interface backward compatible with installed shells.
+  Prefer additive commands and fields, preserve existing command semantics, and
+  require TypeScript callers to feature-detect new capabilities and degrade
+  safely on older shells.
+- Never make a routine web deployment depend on a newly released native
+  interface. If an incompatible native change is unavoidable, version it,
+  provide an explicit migration and compatibility window, and treat it as a
+  separately validated native release.
+
 Use the repo-local `ios-sim-dev` skill for simulator builds, WKWebView
 inspection, selector-driven interaction, screenshots, and light/dark visual
 verification. Physical-device signing credentials, distribution channels, and
