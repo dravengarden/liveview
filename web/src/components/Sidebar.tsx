@@ -74,8 +74,8 @@ interface TreeItemProps {
   /** "book" mode hides file icons and the root folder; see {@link Sidebar}. */
   bookMode: boolean;
   currentPath: string | null;
-  /** The chapter the audio engine is playing (this book), marked distinctly and
-   *  treated as selected — see {@link Sidebar}. Null when nothing plays here. */
+  /** The chapter the audio engine is playing in this book. It gets a distinct
+   *  marker without becoming the navigation selection. */
   playingPath: string | null;
   currentLang: string | undefined;
   expandedPaths: Set<string>;
@@ -96,10 +96,10 @@ function TreeItem({
 }: TreeItemProps): React.JSX.Element {
   const isExpanded = expandedPaths.has(node.path);
   const isPlaying = playingPath === node.path;
-  // Highlight the VIEWED chapter, plus the PLAYING one — which is what the
-  // read-along reader shows, and can differ from `currentPath` once the
-  // engine→view sync lapses (see Sidebar `playingPath`).
-  const isSelected = currentPath === node.path || isPlaying;
+  // Navigation selection belongs exclusively to the chapter in the reader.
+  // Playback is an independent state and uses the trailing equalizer marker;
+  // merging both into `selected` makes two rows look simultaneously active.
+  const isSelected = currentPath === node.path;
   // Book-spine chapters carry per-language titles; show the current edition's,
   // falling back to `name` (the default edition's title) for untranslated
   // chapters and for plain file-tree nodes that have no `titles`.
@@ -256,8 +256,8 @@ interface SidebarProps {
   tree: TreeNode[];
   currentPath: string | null;
   /** The chapter the audio engine is playing in the open book (null when none).
-   *  The list marks it distinctly and treats it as selected, so it reflects what
-   *  the read-along reader shows even when `currentPath` has drifted off it. */
+   *  The list marks it distinctly without changing the current navigation
+   *  selection. */
   playingPath?: string | null;
   /** "book" mode (book.toml-driven) renders a clean titled spine — no file
    *  icons, root folder already dropped upstream. "docs" mode renders the raw
@@ -393,8 +393,7 @@ export function Sidebar({
         flexDirection: "column",
         backgroundColor: (theme) =>
           `var(--lv-nav-bg, ${theme.palette.background.paper})`,
-        color: (theme) =>
-          `var(--lv-nav-fg, ${theme.palette.text.primary})`,
+        color: (theme) => `var(--lv-nav-fg, ${theme.palette.text.primary})`,
       }}
     >
       {showHeader && (

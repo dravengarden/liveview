@@ -251,6 +251,16 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     sidebar,
+    /const isSelected = currentPath === node\.path;/,
+    "only the viewed chapter may own the navigation selected state",
+  );
+  assertPresent(
+    sidebar,
+    /\{isPlaying && \([\s\S]{0,180}<PlayingIcon/,
+    "the playing chapter must keep a distinct marker without becoming selected",
+  );
+  assertPresent(
+    sidebar,
     /pb: "var\(--temporary-nav-overlay-clearance, 0px\)"[\s\S]{0,120}scrollPaddingBottom:/,
     "the final navigation row must scroll clear of the floating dismiss island",
   );
