@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { otaReloadUrl } from "./otaReloadUrl.ts";
 import { HOST_ORIGIN } from "./native-host.ts";
 import { runOtaCheck } from "./otaUpdater.ts";
+
+test("OTA updater retries across every iOS foreground recovery surface", async () => {
+  const source = await readFile(new URL("./otaUpdater.ts", import.meta.url), "utf8");
+  for (const event of ["visibilitychange", "pageshow", "focus", "online"]) {
+    assert.match(source, new RegExp(`addEventListener\\(\"${event}\"`));
+  }
+  assert.match(source, /setInterval\(checkForUpdate, 60_000\)/);
+  assert.match(source, /visibilityState !== "hidden"/);
+});
 
 test("OTA reload URL cache-busts the WebView while preserving reader state", () => {
   assert.equal(

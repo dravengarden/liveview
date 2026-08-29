@@ -1429,21 +1429,8 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
         // current DAG shrinks by roughly an order of magnitude with gzip).
         .layer(tower_http::compression::CompressionLayer::new());
 
-    // Native shells always appear in `allowed_origins`. Extra reader hosts are
-    // exact opt-in via LIVEVIEW_ALLOWED_ORIGINS; wildcard reflection is rejected.
-    api_router = api_router.layer(
-        tower_http::cors::CorsLayer::new()
-            .allow_origin(policy.allowed_origins)
-            .allow_methods([Method::GET, Method::POST, Method::PUT])
-            .allow_headers([
-                header::AUTHORIZATION,
-                header::CONTENT_TYPE,
-                header::IF_NONE_MATCH,
-            ]),
-    );
-
     #[cfg(feature = "embedded")]
-    {
+    let app = {
         api_router
             // OTA web bundle for the native shell (more specific than /{*path}).
             .route(
@@ -1456,10 +1443,10 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
             .route("/{*path}", get(embedded_assets::serve_root))
             .fallback(get(embedded_assets::serve_index))
             .layer(Extension(state))
-    }
+    };
 
     #[cfg(not(feature = "embedded"))]
-    {
+    let app = {
         use tower_http::services::ServeDir;
         let serve_dir = ServeDir::new("web/dist")
             .append_index_html_on_directories(true)
@@ -1467,7 +1454,24 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
         api_router
             .fallback_service(serve_dir)
             .layer(Extension(state))
-    }
+    };
+
+    // Native shells always appear in `allowed_origins`. Extra reader hosts are
+    // exact opt-in via LIVEVIEW_ALLOWED_ORIGINS; wildcard reflection is rejected.
+    // Apply CORS after the embedded/static routes are attached: OTA requests use
+    // If-None-Match, so WKWebView preflights /app-dist/manifest.json as well as
+    // /api. Layering only the API router makes that preflight fall through to a
+    // GET-only asset route and fail with 405 before the updater sees a manifest.
+    app.layer(
+        tower_http::cors::CorsLayer::new()
+            .allow_origin(policy.allowed_origins)
+            .allow_methods([Method::GET, Method::POST, Method::PUT])
+            .allow_headers([
+                header::AUTHORIZATION,
+                header::CONTENT_TYPE,
+                header::IF_NONE_MATCH,
+            ]),
+    )
 }
 
 /// Bind (auto-picking a free port from 4159 upward when unspecified) and serve.
@@ -3046,34 +3050,38 @@ mod apm_tests {
     async fn cors_allows_lvsync_localhost_and_if_none_match() {
         let policy = HttpPolicy::parse(None, None).unwrap();
         let app = build_app_with_policy(state_with(None).await, policy);
-        let response = app
-            .oneshot(
-                axum::http::Request::builder()
-                    .method(Method::OPTIONS)
-                    .uri("/api/books")
-                    .header(header::ORIGIN, "lvsync://localhost")
-                    .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
-                    .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "if-none-match")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
-            Some(&HeaderValue::from_static("lvsync://localhost"))
-        );
-        let allowed = response
-            .headers()
-            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        assert!(
-            allowed.contains("if-none-match"),
-            "preflight must allow If-None-Match, got {allowed:?}"
-        );
+        for path in ["/api/books", "/app-dist/manifest.json"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method(Method::OPTIONS)
+                        .uri(path)
+                        .header(header::ORIGIN, "lvsync://localhost")
+                        .header(header::ACCESS_CONTROL_REQUEST_METHOD, "GET")
+                        .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "if-none-match")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "preflight path {path}");
+            assert_eq!(
+                response.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN),
+                Some(&HeaderValue::from_static("lvsync://localhost")),
+                "preflight path {path}"
+            );
+            let allowed = response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            assert!(
+                allowed.contains("if-none-match"),
+                "preflight path {path} must allow If-None-Match, got {allowed:?}"
+            );
+        }
     }
 
     #[test]

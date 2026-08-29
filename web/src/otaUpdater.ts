@@ -18,6 +18,8 @@ import { nativeSyncAvailable } from "./native-sync.ts";
 import { otaReloadUrl } from "./otaReloadUrl.ts";
 
 let applying = false;
+let checking = false;
+let started = false;
 
 interface WebManifest {
   version?: string;
@@ -25,9 +27,10 @@ interface WebManifest {
 }
 
 /** Probe + (if newer) incrementally download the app bundle, then reload into it.
- *  Called on load and on every server `AppVersion` WS push. Idempotent. */
+ *  Called on load, foreground recovery, and every `AppVersion` push. */
 export async function runOtaCheck(): Promise<void> {
-  if (applying || !nativeSyncAvailable()) return;
+  if (applying || checking || !nativeSyncAvailable()) return;
+  checking = true;
   try {
     const info = await hostInfo();
     // Native `web_get` already returns None in debug; skip the apply so a
@@ -67,12 +70,29 @@ export async function runOtaCheck(): Promise<void> {
     );
   } catch {
     // offline / transient / not the native shell — ignore
+  } finally {
+    checking = false;
   }
 }
 
-/** One on-load check (safety net before the WS connects). The live path is the
- *  server's AppVersion WS push → runOtaCheck. No-op off the native shell. */
+/** Check on load, server push, and every foreground/network recovery surface.
+ *  iOS can resume a WKWebView without reloading it and can leave a suspended
+ *  WebSocket looking OPEN in JavaScript, so AppVersion alone is insufficient.
+ *  The minute probe is a cheap ETag-backed final safety net. */
 export function startOtaUpdater(): void {
-  if (!nativeSyncAvailable()) return;
-  void runOtaCheck();
+  if (!nativeSyncAvailable() || started) return;
+  started = true;
+  const checkForUpdate = (): void => {
+    // WKWebView can remain `visible` through background/resume. Suppress only
+    // the explicit hidden state, matching Cowboy's mobile recovery contract.
+    if (globalThis.document.visibilityState !== "hidden") {
+      void runOtaCheck();
+    }
+  };
+  globalThis.document.addEventListener("visibilitychange", checkForUpdate);
+  globalThis.addEventListener("pageshow", checkForUpdate);
+  globalThis.addEventListener("focus", checkForUpdate);
+  globalThis.addEventListener("online", checkForUpdate);
+  globalThis.setInterval(checkForUpdate, 60_000);
+  checkForUpdate();
 }
