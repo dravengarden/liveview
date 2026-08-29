@@ -39,6 +39,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const temporaryNav = await source("_shell/temporary-nav.tsx");
   const sidebar = await source("components/Sidebar.tsx");
   const playbackBar = await source("components/PlaybackBar.tsx");
+  const spatialPlayback = await source("components/SpatialPlaybackPreview.tsx");
   const detentSheet = await source("_shell/detent-sheet.tsx");
   const lightboxGestures = await source("_shell/image-lightbox-gestures.ts");
   const nativeSync = await source("native-sync.ts");
@@ -226,7 +227,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     navShell,
-    /data-spatial-drawer[\s\S]{0,500}width: \{ xs: "min\(84%, 360px\)", sm: "min\(52%, 440px\)" \}/,
+    /const SPATIAL_PHONE_WIDTH = "min\(84%, 360px\)";[\s\S]{0,100}const SPATIAL_TABLET_WIDTH = "min\(52%, 440px\)";[\s\S]{0,14000}data-spatial-drawer[\s\S]{0,500}width: \{ xs: SPATIAL_PHONE_WIDTH, sm: SPATIAL_TABLET_WIDTH \}/,
     "mobile Contents must use Cowboy's full-height spatial side navigation proportions",
   );
   assertPresent(
@@ -383,6 +384,36 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     playbackBar,
     /data-lv-playback-bar="true"/,
     "the playback transport must expose an app-owned marker for mobile drawer chrome",
+  );
+  assertPresent(
+    navShell,
+    /data-lv-spatial-backdrop[\s\S]{0,2200}data-spatial-drawer-ignore[\s\S]{0,100}data-lv-spatial-accessory/,
+    "the spatial drawer must keep an explicit backdrop and stationary companion rail",
+  );
+  assertPresent(
+    navShell,
+    /left: \{ xs: SPATIAL_PHONE_WIDTH, sm: SPATIAL_TABLET_WIDTH \}[\s\S]{0,180}bottom: "calc\(var\(--shell-bar-h, 0px\) \+ 12px\)"/,
+    "the spatial companion must occupy the visible rail above the bottom navigation",
+  );
+  assertPresent(
+    shell,
+    /spatialAccessory=\{currentPath[\s\S]{0,260}<SpatialPlaybackPreview[\s\S]{0,100}onStartCurrent=\{handleReadAloud\}/,
+    "the reader must provide playback in the drawer even before a session is loaded",
+  );
+  assertPresent(
+    spatialPlayback,
+    /const loaded = nowPlaying !== null[\s\S]{0,2400}onClick=\{loaded \? togglePlay : onStartCurrent\}/,
+    "the spatial playback control must start an idle reader and pause or resume a loaded session",
+  );
+  assertPresent(
+    spatialPlayback,
+    /const wideRail = useMediaQuery\(theme\.breakpoints\.up\("sm"\)\)[\s\S]{0,500}if \(wideRail && loaded\) return <><\/>/,
+    "the compact playback control must yield to the complete transport on tablet widths",
+  );
+  assertAbsent(
+    spatialPlayback,
+    /backdropFilter|WebkitBackdropFilter|\bfilter:/,
+    "the spatial playback companion",
   );
   assertPresent(
     playbackBar,

@@ -28,12 +28,30 @@
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import MenuIcon from "@mui/icons-material/Menu";
 import TocIcon from "@mui/icons-material/Toc";
-import { alpha, Box, Button, IconButton, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import {
+  alpha,
+  Box,
+  Button,
+  IconButton,
+  Tooltip,
+  Typography,
+  useMediaQuery,
+  useTheme,
+} from "@mui/material";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { prepareSelectionHaptic, selectionHaptic } from "./haptics.ts";
 import { MobileNavigation } from "./mobile-navigation.tsx";
-import { bindSpatialDrawer, type SpatialDrawerSettle } from "./spatial-drawer.ts";
+import {
+  bindSpatialDrawer,
+  type SpatialDrawerSettle,
+} from "./spatial-drawer.ts";
 import { TemporaryNav } from "./temporary-nav.tsx";
 
 // Width below which nav collapses to a hamburger + top drawer. `lg` (1200px),
@@ -42,6 +60,8 @@ import { TemporaryNav } from "./temporary-nav.tsx";
 // drawer rather than a cramped desktop sidebar.
 type Breakpoint = "sm" | "md" | "lg" | "xl" | number;
 const BOTTOM_PAD = "max(calc(env(safe-area-inset-bottom, 0px) - 22px), 6px)";
+const SPATIAL_PHONE_WIDTH = "min(84%, 360px)";
+const SPATIAL_TABLET_WIDTH = "min(52%, 440px)";
 
 function barTopPadding(bottom: boolean, transparent: boolean): string | number {
   if (!bottom) {
@@ -80,6 +100,10 @@ export interface NavShellProps {
   /** Actions that live inside temporary navigation on touch layouts and return
    *  to the app bar beside `actions` on desktop (for example Settings). */
   readonly navigationActions?: ReactNode;
+  /** Compact app-owned control shown in the trailing rail while a spatial
+   *  mobile drawer is open. The shell owns its placement; the app owns its
+   *  semantics (for LiveView this is the stable playback entry point). */
+  readonly spatialAccessory?: ReactNode;
   /** Where the bar sits. Default "top". "bottom" makes it a mobile-browser-style
    *  bottom bar (the content fills above it, the nav drawer slides UP from it),
    *  and the bar owns the home-indicator inset instead of the notch. Apps gate
@@ -128,6 +152,7 @@ export function NavShell(props: NavShellProps): ReactNode {
     onBack,
     actions,
     navigationActions,
+    spatialAccessory,
     barPosition = "top",
     barFrosted = false,
     barTransparent = false,
@@ -136,7 +161,9 @@ export function NavShell(props: NavShellProps): ReactNode {
   const bottom = barPosition === "bottom";
   const theme = useTheme();
   const isMobile = useMediaQuery(
-    typeof breakpoint === "number" ? `(max-width:${breakpoint - 0.05}px)` : theme.breakpoints.down(breakpoint),
+    typeof breakpoint === "number"
+      ? `(max-width:${breakpoint - 0.05}px)`
+      : theme.breakpoints.down(breakpoint),
   );
   const isPhone = useMediaQuery(theme.breakpoints.down("sm"));
   const spatial = isMobile && mobilePresentation === "sidebar";
@@ -366,7 +393,7 @@ export function NavShell(props: NavShellProps): ReactNode {
             position: "absolute",
             zIndex: 0,
             inset: 0,
-            width: { xs: "min(84%, 360px)", sm: "min(52%, 440px)" },
+            width: { xs: SPATIAL_PHONE_WIDTH, sm: SPATIAL_TABLET_WIDTH },
             maxWidth: "calc(100% - 48px)",
             height: "100%",
             pt: "env(safe-area-inset-top, 0px)",
@@ -530,7 +557,10 @@ export function NavShell(props: NavShellProps): ReactNode {
               aria-label="toggle navigation"
               onClick={onToggle}
               size="small"
-              sx={{ width: { xs: 40, sm: 48, lg: 36 }, height: { xs: 40, sm: 48, lg: 36 } }}
+              sx={{
+                width: { xs: 40, sm: 48, lg: 36 },
+                height: { xs: 40, sm: 48, lg: 36 },
+              }}
             >
               {toggleIcon}
             </IconButton>
@@ -539,7 +569,12 @@ export function NavShell(props: NavShellProps): ReactNode {
             <Button
               onClick={onBack}
               endIcon={<Typography color="text.disabled">/</Typography>}
-              sx={{ minWidth: 0, px: 0.5, textTransform: "none", color: "text.secondary" }}
+              sx={{
+                minWidth: 0,
+                px: 0.5,
+                textTransform: "none",
+                color: "text.secondary",
+              }}
             >
               {backLabel}
             </Button>
@@ -621,6 +656,7 @@ export function NavShell(props: NavShellProps): ReactNode {
         {spatial && (
           <Box
             role="button"
+            data-lv-spatial-backdrop
             tabIndex={mobileOpen ? 0 : -1}
             aria-label="Close navigation"
             aria-hidden={!mobileOpen}
@@ -651,6 +687,30 @@ export function NavShell(props: NavShellProps): ReactNode {
           />
         )}
       </Box>
+      {spatial && spatialAccessory && (
+        <Box
+          aria-hidden={!mobileOpen}
+          data-spatial-drawer-ignore
+          data-lv-spatial-accessory
+          sx={{
+            position: "absolute",
+            // This rail is a sibling of the translated reader, so it remains
+            // inside the actually-visible trailing 16% instead of being clipped
+            // with the reader's full-width transport. It sits above the reader's
+            // tap-to-close backdrop only for this bounded control.
+            zIndex: (t) => t.zIndex.modal,
+            left: { xs: SPATIAL_PHONE_WIDTH, sm: SPATIAL_TABLET_WIDTH },
+            right: 0,
+            bottom: "calc(var(--shell-bar-h, 0px) + 12px)",
+            display: mobileOpen ? "flex" : "none",
+            justifyContent: "center",
+            alignItems: "center",
+            pointerEvents: mobileOpen ? "auto" : "none",
+          }}
+        >
+          {spatialAccessory}
+        </Box>
+      )}
     </Box>
   );
 }

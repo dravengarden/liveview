@@ -37,6 +37,7 @@ import {
   ReconnectBanner,
   SettingsButton,
   Sidebar,
+  SpatialPlaybackPreview,
   SyncIndicator,
 } from "@/components";
 import {
@@ -1980,6 +1981,18 @@ export function App(): React.JSX.Element {
               // behind both itself and this bar, so the bar renders bare (one pane
               // of glass, no seam). Otherwise the bar keeps its own frost.
               barTransparent={navbarAtBottom && transportShown}
+              // The translated reader leaves only a narrow trailing rail while
+              // Contents is open. Keep one stationary playback entry there even
+              // when no player session is loaded yet; the full transport remains
+              // inside the reader for the ordinary closed-drawer view.
+              spatialAccessory={currentPath &&
+                  (rendition === "text" || nowPlaying !== null)
+                ? (
+                  <SpatialPlaybackPreview
+                    onStartCurrent={handleReadAloud}
+                  />
+                )
+                : undefined}
               title={
                 <Box
                   role="button"
