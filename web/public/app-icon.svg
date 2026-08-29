@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
   <!-- Platform launchers apply their own mask; keep the source opaque and square. -->
-  <rect width="1024" height="1024" fill="#edf0fb"/>
-  <path d="M168 394c126 0 233 42 318 124v302c-83-78-190-119-318-119V394Z" fill="#19376d"/>
-  <path d="M538 518c85-82 192-124 318-124v307c-128 0-235 41-318 119V518Z" fill="#754b86"/>
-  <path d="M512 184c13 60 47 94 107 107-60 13-94 47-107 107-13-60-47-94-107-107 60-13 94-47 107-107Z" fill="#f0a51f"/>
+  <rect width="1024" height="1024" fill="#182353"/>
+  <path d="M140 365C300 392 430 452 484 522V748C390 687 274 648 140 632V365Z" fill="#f5eadb"/>
+  <path d="M540 522C594 452 724 392 884 365V632C750 648 634 687 540 748V522Z" fill="#bd91cd"/>
+  <path d="M512 190C525 285 565 320 690 335C565 350 525 385 512 475C499 385 459 350 334 335C459 320 499 285 512 190Z" fill="#f5b63b"/>
 </svg>

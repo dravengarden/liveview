@@ -9,13 +9,15 @@ enough for synchronization, progress, and playback.
 
 - Wordmark: `LiveView`. Use the mark as a separate leading or trailing element;
   never substitute it for a letter.
-- Mark: two asymmetric open pages and one four-point spark. The navy page is the
+- Mark: two tall, curved open pages and one wide four-point spark. The navy page is the
   durable publication, the plum page is its alternate renditions, and the amber
   spark is the live moment of reading, listening, or discovery. Preserve the
-  open centre, flat colour, and generous clear space.
-- Ink: `#17191f`; paper: `#f8f1e5`; raised paper: `#fffaf2`; icon mist:
-  `#edf0fb`; book navy: `#19376d`; rendition plum: `#754b86`; activity amber:
-  `#f0a51f`; deep backdrop: `#101b38`; secondary backdrop: `#3c294d`.
+  narrow open centre, shallow lower edge, flat colour, and generous clear space.
+- Ink: `#17191f`; paper: `#f8f1e5`; raised paper: `#fffaf2`; book navy:
+  `#19376d`; rendition plum: `#754b86`; activity amber: `#f0a51f`; deep
+  backdrop: `#101b38`; secondary backdrop: `#3c294d`. The launcher icon uses
+  midnight indigo `#182353`, warm ivory `#f5eadb`, magic plum `#bd91cd`, and
+  luminous amber `#f5b63b`; it never uses a white or near-white background.
 - Use the full-colour mark when colour is available. Monochrome is for print and
   system contexts that remove colour.
 
