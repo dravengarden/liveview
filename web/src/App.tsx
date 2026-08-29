@@ -1813,7 +1813,6 @@ export function App(): React.JSX.Element {
           <AudiobookIcon sx={{ fontSize: rem(22) }} />
         </IconButton>
       )}
-      {settingsButton}
     </>
   );
 
@@ -2027,6 +2026,7 @@ export function App(): React.JSX.Element {
                 />
               )}
               actions={bookActions}
+              navigationActions={settingsButton}
             >
               {untranslated && (
                 <Alert severity="info" square sx={{ py: 0.25 }}>

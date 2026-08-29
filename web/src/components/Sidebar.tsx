@@ -453,10 +453,12 @@ export function Sidebar({
           sx={{
             display: "flex",
             alignItems: "center",
-            gap: 1,
-            px: 1,
-            py: 0.75,
-            borderBottom: 1,
+            justifyContent: showHeader ? "flex-start" : "center",
+            gap: showHeader ? 1 : 0,
+            px: showHeader ? 1 : 1.5,
+            pt: showHeader ? 0.75 : 1.25,
+            pb: showHeader ? 0.75 : 1,
+            borderBottom: showHeader ? 1 : 0,
             borderColor: (theme) =>
               `var(--lv-nav-divider, ${theme.palette.divider})`,
           }}
@@ -464,6 +466,7 @@ export function Sidebar({
           <Typography
             variant="caption"
             sx={{
+              display: showHeader ? "block" : "none",
               flexShrink: 0,
               color: (theme) =>
                 `var(--lv-nav-fg-dim, ${theme.palette.text.secondary})`,
@@ -480,7 +483,15 @@ export function Sidebar({
                 onSwitchLang(value);
               }
             }}
-            sx={{ flexWrap: "wrap" }}
+            sx={{
+              flexWrap: "wrap",
+              width: showHeader ? "auto" : "100%",
+              maxWidth: showHeader ? "none" : 220,
+              "& .MuiToggleButton-root": {
+                flex: showHeader ? "0 0 auto" : 1,
+                minHeight: showHeader ? 32 : 40,
+              },
+            }}
           >
             {langs.map((l) => (
               <ToggleButton

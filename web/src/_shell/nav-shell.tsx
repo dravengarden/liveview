@@ -77,6 +77,9 @@ export interface NavShellProps {
   readonly onBack?: () => void;
   /** App-specific top-bar actions (e.g. settings), placed at the bar's end. */
   readonly actions?: ReactNode;
+  /** Actions that live inside temporary navigation on touch layouts and return
+   *  to the app bar beside `actions` on desktop (for example Settings). */
+  readonly navigationActions?: ReactNode;
   /** Where the bar sits. Default "top". "bottom" makes it a mobile-browser-style
    *  bottom bar (the content fills above it, the nav drawer slides UP from it),
    *  and the bar owns the home-indicator inset instead of the notch. Apps gate
@@ -124,6 +127,7 @@ export function NavShell(props: NavShellProps): ReactNode {
     backLabel,
     onBack,
     actions,
+    navigationActions,
     barPosition = "top",
     barFrosted = false,
     barTransparent = false,
@@ -276,6 +280,7 @@ export function NavShell(props: NavShellProps): ReactNode {
       onBack={onBack}
       onClose={closeMobile}
       spatial={spatial}
+      actions={navigationActions}
     >
       {navBody}
     </TemporaryNav>
@@ -526,6 +531,7 @@ export function NavShell(props: NavShellProps): ReactNode {
             }}
           >
             {actions}
+            {!isMobile && navigationActions}
           </Box>
         </Box>
 
@@ -607,7 +613,17 @@ export function NavShell(props: NavShellProps): ReactNode {
               zIndex: (t) => t.zIndex.modal - 1,
               pointerEvents: mobileOpen ? "auto" : "none",
               cursor: mobileOpen ? "pointer" : "default",
-              bgcolor: "transparent",
+              // Cowboy keeps the trailing workspace legible as spatial context,
+              // but subdued enough that the revealed rail is unquestionably the
+              // active plane. A flat tint is compositor-cheap and avoids blur.
+              bgcolor: (t) =>
+                mobileOpen
+                  ? alpha(
+                    t.palette.common.black,
+                    t.palette.mode === "dark" ? 0.18 : 0.08,
+                  )
+                  : "transparent",
+              transition: "background-color 180ms ease",
             }}
           />
         )}

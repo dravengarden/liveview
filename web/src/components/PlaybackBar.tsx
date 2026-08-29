@@ -115,8 +115,37 @@ export function PlaybackBar(
           ? t("audiobook.following")
           : t("audiobook.follow")}
         onClick={follow.onToggle}
-        color={follow.following ? "primary" : "default"}
-        sx={{ width: tap(44), height: tap(44) }}
+        aria-pressed={follow.following}
+        sx={{
+          width: tap(44),
+          height: tap(44),
+          color: follow.following ? "primary.main" : "text.secondary",
+          bgcolor: follow.following
+            ? (theme) =>
+              alpha(
+                theme.palette.primary.main,
+                theme.palette.mode === "dark" ? 0.2 : 0.12,
+              )
+            : "transparent",
+          boxShadow: follow.following
+            ? (theme) =>
+              `inset 0 0 0 1px ${
+                alpha(
+                  theme.palette.primary.main,
+                  theme.palette.mode === "dark" ? 0.34 : 0.2,
+                )
+              }`
+            : "none",
+          "&:hover": {
+            bgcolor: follow.following
+              ? (theme) =>
+                alpha(
+                  theme.palette.primary.main,
+                  theme.palette.mode === "dark" ? 0.24 : 0.16,
+                )
+              : undefined,
+          },
+        }}
       >
         <MyLocation sx={{ fontSize: rem(26) }} />
       </IconButton>

@@ -231,28 +231,43 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     temporaryNav,
-    /data-temporary-nav-header[\s\S]{0,220}minHeight: spatial \? 58 : 52/,
-    "temporary navigation must provide a clear header below the safe area",
-  );
-  assertAbsent(
-    temporaryNav,
-    /calc\(76px \+ env\(safe-area-inset-bottom/,
-    "the spatial navigation scroll region",
+    /if \(spatial\)[\s\S]{0,900}data-temporary-nav-actions/,
+    "mobile spatial navigation must use Cowboy-style bottom action islands instead of a header",
   );
   assertPresent(
     temporaryNav,
-    /aria-label=\{backLabel\}[\s\S]{0,100}startIcon=\{<ChevronLeftIcon/,
-    "the spatial navigation back affordance must be labelled in its header",
-  );
-  assertAbsent(
-    temporaryNav,
-    /MobileSheetActionGroup|FloatingActionIsland|backdropFilter/,
-    "temporary navigation fixed chrome",
+    /"--temporary-nav-overlay-clearance":[\s\S]{0,80}86px \+ env\(safe-area-inset-bottom/,
+    "the spatial navigation scroller must clear its floating bottom actions",
   );
   assertPresent(
     temporaryNav,
-    /aria-label="Close navigation"[\s\S]{0,200}bgcolor: \(theme\) =>/,
-    "the close action must use a quiet theme-tonal header control",
+    /DrawerActionIsland width=\{54\}[\s\S]{0,220}aria-label=\{backLabel \?\? "Back"\}/,
+    "the spatial navigation back affordance must live in the bottom leading island",
+  );
+  assertPresent(
+    temporaryNav,
+    /DrawerActionIsland width=\{actions \? 108 : 54\}[\s\S]{0,600}aria-label="Close navigation"[\s\S]{0,800}\{actions\}/,
+    "the trailing Cowboy-style island must group close with app navigation actions",
+  );
+  assertAbsent(
+    temporaryNav,
+    /backdropFilter|WebkitBackdropFilter|\bfilter:/,
+    "the fixed drawer actions must keep Cowboy geometry without live-filtering scrolling content",
+  );
+  assertPresent(
+    navShell,
+    /actions=\{navigationActions\}/,
+    "settings-like navigation actions must move into the mobile rail and remain in desktop chrome",
+  );
+  assertPresent(
+    navShell,
+    /!isMobile && navigationActions/,
+    "navigation actions must remain beside reader actions on desktop",
+  );
+  assertPresent(
+    navShell,
+    /mobileOpen[\s\S]{0,180}palette\.common\.black[\s\S]{0,180}transition: "background-color 180ms ease"/,
+    "the trailing reader preview must use a cheap Cowboy-style dim tint instead of blur",
   );
   assertPresent(
     sidebar,
@@ -268,11 +283,6 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     sidebar,
     /\{isPlaying && \([\s\S]{0,180}<PlayingIcon/,
     "the playing chapter must keep a distinct marker without becoming selected",
-  );
-  assertPresent(
-    temporaryNav,
-    /"--temporary-nav-overlay-clearance": "0px"/,
-    "header navigation must not reserve dead space for removed floating actions",
   );
   assertPresent(
     sidebar,
@@ -320,6 +330,31 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "the spatial drawer must release temporary compositor hints after movement settles",
   );
   assertPresent(
+    spatialDrawer,
+    /surface\.style\.transform = `translate3d\(\$\{String\(offset\)\}px,0,0\)`/,
+    "the reader surface must stay on Cowboy's translation-only compositor path",
+  );
+  assertAbsent(
+    spatialDrawer,
+    /surface\.style\.(?:borderRadius|boxShadow|opacity)/,
+    "the heavy reader surface must not be clipped, shadowed, or faded during drawer motion",
+  );
+  assertPresent(
+    spatialDrawer,
+    /drawerMask\.style\.boxShadow[\s\S]{0,120}-18px 0 42px/,
+    "the empty drawer mask must own the spatial edge shadow",
+  );
+  assertPresent(
+    spatialDrawer,
+    /event\.stopPropagation\(\);[\s\S]{0,180}Math\.abs\(dx\) < 12/,
+    "clear vertical intent must release the drawer before its horizontal lock distance",
+  );
+  assertPresent(
+    spatialDrawer,
+    /requestIdleCallback\(finish, \{ timeout: 180 \}\)/,
+    "drawer compositor hints must release after the settle frame without blocking touch paint",
+  );
+  assertPresent(
     sidebar,
     /\[data-spatial-drawer-moving\] &[\s\S]{0,80}transform:\s*"none"/,
     "the sidebar must collapse its nested tiled layer during direct drawer manipulation",
@@ -333,6 +368,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     playbackBar,
     /data-lv-playback-bar="true"/,
     "the playback transport must expose an app-owned marker for mobile drawer chrome",
+  );
+  assertPresent(
+    playbackBar,
+    /aria-pressed=\{follow\.following\}[\s\S]{0,500}bgcolor: follow\.following[\s\S]{0,500}boxShadow: follow\.following/,
+    "the active read-along follow control must retain a visible selected surface",
   );
   assertPresent(
     mobileStyles,
