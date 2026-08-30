@@ -644,7 +644,6 @@ export function MarkdownViewer({
       // (re-rendered per mode), so leave it transparent and let the lightbox's
       // mode-matched plate show through instead of being inverted back to light.
       clone.style.backgroundColor = isMermaid ? "transparent" : "#ffffff";
-      let xml = new XMLSerializer().serializeToString(clone);
       // Mermaid bakes each node box's width from its label measured IN-PAGE with
       // `font-family: var(--lv-reading-font), …` (the head of MERMAID_FONT_FAMILY).
       // A serialized standalone SVG shown via <img> is an ISOLATED document with
@@ -652,14 +651,30 @@ export function MarkdownViewer({
       // next named family — a different font whose (esp. mixed CJK+Latin) metrics
       // run wider than the baked box, so labels CLIP in the lightbox (the page
       // render is fine). Substitute the var's resolved value into the snapshot so
-      // it uses the exact font stack the boxes were sized with. (Pure string
-      // swap, not var-in-<img> resolution, which isn't reliable across engines.)
+      // it uses the exact font stack the boxes were sized with. Do this on the
+      // clone DOM BEFORE serializing: the resolved stack contains quoted family
+      // names, and replacing the already-serialized XML would inject raw quotes
+      // into style attributes, producing a broken image in iOS WKWebView.
       const readingFont = getComputedStyle(document.documentElement)
         .getPropertyValue("--lv-reading-font")
         .trim();
       if (readingFont) {
-        xml = xml.replaceAll("var(--lv-reading-font)", readingFont);
+        const replaceFont = (value: string): string =>
+          value.replaceAll("var(--lv-reading-font)", readingFont);
+        for (const node of [clone, ...clone.querySelectorAll("*")]) {
+          for (const attr of [...node.attributes]) {
+            if (attr.value.includes("var(--lv-reading-font)")) {
+              node.setAttribute(attr.name, replaceFont(attr.value));
+            }
+          }
+        }
+        for (const style of clone.querySelectorAll("style")) {
+          if (style.textContent?.includes("var(--lv-reading-font)")) {
+            style.textContent = replaceFont(style.textContent);
+          }
+        }
       }
+      const xml = new XMLSerializer().serializeToString(clone);
       return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(xml)}`;
     };
     const diagrams: HTMLElement[] = [

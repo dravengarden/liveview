@@ -616,6 +616,16 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "lightbox image decode must refresh cached geometry before gestures",
   );
   assertPresent(
+    markdownViewer,
+    /for \(const attr of \[\.\.\.node\.attributes\]\)[\s\S]{0,240}node\.setAttribute\(attr\.name, replaceFont\(attr\.value\)\)[\s\S]{0,500}new XMLSerializer\(\)\.serializeToString\(clone\)/,
+    "diagram font substitution must occur on the SVG DOM before XML serialization",
+  );
+  assertAbsent(
+    markdownViewer,
+    /serializeToString\(clone\)[\s\S]{0,600}\.replaceAll\("var\(--lv-reading-font\)"/,
+    "serialized SVG attributes must not receive unescaped font-family quotes",
+  );
+  assertPresent(
     shell,
     /display: activeSlug === null \? "flex" : "none"/,
     "the mounted bookshelf must leave layout and paint while a reader is open",
