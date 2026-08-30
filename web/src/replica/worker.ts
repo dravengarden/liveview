@@ -116,7 +116,12 @@ async function workerFill(items: ReplicaWorkerFillItem[]): Promise<void> {
   for (const item of items) {
     const url = joinRemoteUrl(workerRemoteBase, item.url);
     if (isAudioKind(item.kind)) {
-      self.postMessage({ type: "media", hash: item.hash, url });
+      self.postMessage({
+        type: "media",
+        hash: item.hash,
+        url,
+        bytes: item.bytes,
+      });
       continue;
     }
     textArt.push(item);
@@ -159,7 +164,11 @@ async function workerFill(items: ReplicaWorkerFillItem[]): Promise<void> {
     }
   });
   if (fallback) {
-    self.postMessage({ type: "fallback", reason: "indexeddb", items: fallback });
+    self.postMessage({
+      type: "fallback",
+      reason: "indexeddb",
+      items: fallback,
+    });
   }
 }
 
@@ -175,7 +184,11 @@ if (inDedicatedWorker()) {
     if (msg.type === "fill") {
       void workerFill(msg.items).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : "worker fill";
-        self.postMessage({ type: "fallback", reason: message, items: msg.items });
+        self.postMessage({
+          type: "fallback",
+          reason: message,
+          items: msg.items,
+        });
       });
     }
   });

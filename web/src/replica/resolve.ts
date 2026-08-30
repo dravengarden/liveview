@@ -3,6 +3,7 @@ import { contentReplicaStats } from "./agg.ts";
 import { getBlob, putBlob } from "./blobs.ts";
 import { idbRequest, withTxn } from "./idb.ts";
 import {
+  allPathRecords,
   applyDag,
   normalizeReplicaUrl,
   onPathIndexAdopted,
@@ -10,7 +11,6 @@ import {
   parseRoot,
   pathRecordByUrl,
   pathRecordForHash,
-  allPathRecords,
   readRoot,
 } from "./manifest.ts";
 import { persistBodyForKind } from "./policy.ts";
@@ -18,11 +18,11 @@ import {
   isArtworkKind,
   isAudioKind,
   META_URL_PREFIX,
+  type MetaRecord,
+  type PathRecord,
   REPLICA_DAG_MS,
   REPLICA_FETCH_MS,
   STORE_META,
-  type MetaRecord,
-  type PathRecord,
 } from "./schema.ts";
 import { replicaRemoteBase } from "./sync.ts";
 import { joinRemoteUrl } from "./worker.ts";
@@ -41,6 +41,7 @@ export interface ReplicaAudioResource {
   kind: "audio" | "marks";
   url: string;
   path: string;
+  bytes: number;
 }
 
 let offlineProbe = (): boolean =>
@@ -313,6 +314,7 @@ export function replicaAudioIndex(): ReplicaAudioResource[] {
       kind: rec.kind,
       url: rec.url,
       path: rec.path,
+      bytes: rec.bytes,
     });
   }
   return out;
@@ -346,7 +348,10 @@ export async function refreshReplicaManifest(): Promise<string> {
   }
   if (current && nextRoot === current) return current;
   try {
-    const dagResp = await fetchAbsolute(absoluteUrl("/api/dag"), REPLICA_DAG_MS);
+    const dagResp = await fetchAbsolute(
+      absoluteUrl("/api/dag"),
+      REPLICA_DAG_MS,
+    );
     if (!dagResp.ok) return current;
     const manifest = parseManifest(await dagResp.text());
     await applyDag(manifest);

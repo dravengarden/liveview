@@ -23,6 +23,8 @@ import { getMedia, putMedia } from "@/audioMediaIndex";
 export interface ChapterMedia {
   /** Audio content hash — the offline cache key the native player shares. */
   audioHash?: string;
+  /** Exact cached audio body length, used by native to reject partial files. */
+  audioBytes?: number;
   /** Marks (word/sentence timing) blob hash — fetch `/api/blob/<hash>` (cached). */
   marksHash?: string;
 }
@@ -36,14 +38,21 @@ const cache = new Map<string, Promise<Map<string, ChapterMedia>>>();
 async function fetchMap(slug: string): Promise<Map<string, ChapterMedia>> {
   const m = new Map<string, ChapterMedia>();
   try {
-    const res = await contentFetch(`/api/manifest/${encodeURIComponent(slug)}`, {
-      cacheFirst: true,
-    });
+    const res = await contentFetch(
+      `/api/manifest/${encodeURIComponent(slug)}`,
+      {
+        cacheFirst: true,
+      },
+    );
     if (res.ok) {
       const data = (await res.json()) as {
         chapters: {
           id: string;
-          audio?: { hash?: string | null; marks_hash?: string | null } | null;
+          audio?: {
+            hash?: string | null;
+            marks_hash?: string | null;
+            bytes?: number | null;
+          } | null;
         }[];
       };
       for (const ch of data.chapters) {
@@ -58,6 +67,10 @@ async function fetchMap(slug: string): Promise<Map<string, ChapterMedia>> {
         if (a < 0 || b < 0 || !ch.audio) continue;
         const media: ChapterMedia = {};
         if (ch.audio.hash) media.audioHash = ch.audio.hash;
+        const bytes = ch.audio.bytes;
+        if (typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0) {
+          media.audioBytes = Math.floor(bytes);
+        }
         if (ch.audio.marks_hash) media.marksHash = ch.audio.marks_hash;
         if (media.audioHash || media.marksHash) {
           m.set(`${ch.id.slice(a + 1, b)}/${ch.id.slice(b + 1)}`, media);

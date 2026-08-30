@@ -121,7 +121,7 @@ export function FloatingBubble({
   onOpenControls: () => void;
 }): React.JSX.Element | null {
   const { t } = useI18n();
-  const { nowPlaying, playing } = useAudioPlayer();
+  const { nowPlaying, playing, buffering } = useAudioPlayer();
   const { currentTime, duration } = useAudioTime();
 
   // A DetentSheet (settings / TOC / the PlaybackSheet itself) renders inline, so
@@ -186,7 +186,9 @@ export function FloatingBubble({
   // visible. It stays mounted (returns null while hidden) the whole session, so
   // `pos` can be stale from an earlier/taller viewport — without this the bubble
   // reappears docked off the bottom edge on phones.
-  const shown = nowPlaying != null && playing && !onPlayingPage && !suppressed;
+  const shown = nowPlaying != null && (playing || buffering) &&
+    !onPlayingPage &&
+    !suppressed;
   useLayoutEffect(() => {
     if (shown) setPos(resolve(stored.current.side, stored.current.topRatio));
   }, [shown]);
@@ -300,7 +302,9 @@ export function FloatingBubble({
   // the in-book controls remain the deliberate way back into that session.
   // Also hide on the playing book's own page (the bottom bar owns it there) and
   // when suppressed (the navbar read-aloud control already represents it).
-  if (!nowPlaying || !playing || onPlayingPage || suppressed) return null;
+  if (!nowPlaying || (!playing && !buffering) || onPlayingPage || suppressed) {
+    return null;
+  }
 
   const slug = nowPlaying.bookSlug;
   const pct = duration > 0 ? Math.min(100, (currentTime / duration) * 100) : 0;

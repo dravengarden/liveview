@@ -28,6 +28,7 @@ const LS_KEY = "lv.audioMediaIndex.v1";
 
 interface Entry {
   a?: string; // audio content hash
+  b?: number; // expected audio body bytes
   m?: string; // marks blob hash
 }
 
@@ -35,12 +36,14 @@ export interface DagMediaResource {
   hash: string;
   kind: string;
   path: string;
+  bytes?: number;
 }
 
 export interface ParsedMediaResource {
   key: string;
   kind: "audio" | "marks";
   hash: string;
+  bytes?: number;
 }
 
 /** Parse one DAG audio/marks resource without touching storage. */
@@ -56,11 +59,19 @@ export function parseMediaResource(
   const lang = parts[2] ?? "";
   const rel = parts.slice(3).join("/");
   if (!slug || !lang || !rel) return undefined;
-  return {
+  const parsed: ParsedMediaResource = {
     key: keyOf(slug, lang, rel),
     kind: resource.kind,
     hash: resource.hash,
   };
+  const bytes = resource.bytes;
+  if (
+    resource.kind === "audio" && typeof bytes === "number" &&
+    Number.isFinite(bytes) && bytes > 0
+  ) {
+    parsed.bytes = Math.floor(bytes);
+  }
+  return parsed;
 }
 
 // In-memory mirror of the persisted map, loaded once. `null` until first load.
@@ -101,11 +112,13 @@ export function getMedia(
   slug: string,
   lang: string,
   rel: string,
-): { audioHash?: string; marksHash?: string } | undefined {
+): { audioHash?: string; audioBytes?: number; marksHash?: string } | undefined {
   const e = load().get(keyOf(slug, lang, rel));
   if (!e) return undefined;
-  const out: { audioHash?: string; marksHash?: string } = {};
+  const out: { audioHash?: string; audioBytes?: number; marksHash?: string } =
+    {};
   if (e.a) out.audioHash = e.a;
+  if (e.b && e.b > 0) out.audioBytes = e.b;
   if (e.m) out.marksHash = e.m;
   return out.audioHash || out.marksHash ? out : undefined;
 }
@@ -117,15 +130,22 @@ export function putMedia(
   slug: string,
   lang: string,
   rel: string,
-  media: { audioHash?: string; marksHash?: string },
+  media: { audioHash?: string; audioBytes?: number; marksHash?: string },
 ): void {
   const m = load();
   const k = keyOf(slug, lang, rel);
   const prev = m.get(k) ?? {};
   const next: Entry = { ...prev };
-  if (media.audioHash) next.a = media.audioHash;
+  if (media.audioHash) {
+    if (media.audioHash !== prev.a) delete next.b;
+    next.a = media.audioHash;
+  }
+  const bytes = media.audioBytes;
+  if (typeof bytes === "number" && Number.isFinite(bytes) && bytes > 0) {
+    next.b = Math.floor(bytes);
+  }
   if (media.marksHash) next.m = media.marksHash;
-  if (next.a === prev.a && next.m === prev.m) return; // no change
+  if (next.a === prev.a && next.b === prev.b && next.m === prev.m) return; // no change
   m.set(k, next);
   persist(m);
 }
@@ -144,9 +164,12 @@ export function ingestDag(
     if (!parsed) continue;
     const prev = m.get(parsed.key) ?? {};
     const next: Entry = { ...prev };
-    if (parsed.kind === "audio") next.a = parsed.hash;
-    else next.m = parsed.hash;
-    if (next.a !== prev.a || next.m !== prev.m) {
+    if (parsed.kind === "audio") {
+      if (parsed.hash !== prev.a) delete next.b;
+      next.a = parsed.hash;
+      if (parsed.bytes) next.b = parsed.bytes;
+    } else next.m = parsed.hash;
+    if (next.a !== prev.a || next.b !== prev.b || next.m !== prev.m) {
       m.set(parsed.key, next);
       changed = true;
     }

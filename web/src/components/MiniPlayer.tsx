@@ -51,6 +51,7 @@ export function MiniPlayer(
     expanded,
     setExpanded,
     playing,
+    buffering,
     loading,
     canPrev,
     canNext,
@@ -181,14 +182,16 @@ export function MiniPlayer(
             <SkipPrevious sx={{ fontSize: rem(34) }} />
           </IconButton>
           <IconButton
-            aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
+            aria-label={playing || buffering
+              ? t("audiobook.pause")
+              : t("audiobook.play")}
             onClick={togglePlay}
             color="primary"
             sx={{ width: 60, height: 60 }}
           >
             {loading
               ? <CircularProgress size={rem(39)} color="inherit" />
-              : playing
+              : playing || buffering
               ? <Pause sx={{ fontSize: rem(39) }} />
               : <PlayArrow sx={{ fontSize: rem(39) }} />}
           </IconButton>

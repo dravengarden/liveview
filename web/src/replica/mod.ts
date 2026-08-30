@@ -8,57 +8,65 @@ import {
   openReplicaDb,
   withTxn,
 } from "./idb.ts";
-import { applyDag, hydratePathIndex, pathRecordForHash, resetPathIndex } from "./manifest.ts";
+import {
+  applyDag,
+  hydratePathIndex,
+  pathRecordForHash,
+  resetPathIndex,
+} from "./manifest.ts";
 import { scheduleEvictUnpinnedAudioToFit } from "./gc.ts";
 import {
   applyCellularPolicy,
   enqueueCacheFromUrl,
   installMediaBridge,
 } from "./media-bridge.ts";
-import {
-  loadPolicy,
-  persistPolicy,
-  replicaFlag,
-} from "./policy.ts";
+import { loadPolicy, persistPolicy, replicaFlag } from "./policy.ts";
 import { resetArtworkObjectUrls } from "./resolve.ts";
 import {
   APM_MAX_ROWS,
-  INDEX_APM_TS,
-  STORE_APM,
   type ApmRecord,
   type DataMode,
+  INDEX_APM_TS,
   isAudioKind,
+  STORE_APM,
 } from "./schema.ts";
 import { replayWorklist, replicaRemoteBase, setReplicaRemote } from "./sync.ts";
 import { joinRemoteUrl } from "./worker.ts";
 import { installReplicaSpike } from "./spike.ts";
 
-export {
-  applyDag,
-  getBlob,
-  hasBlob,
-  putBlob,
-  replicaFlag,
-  joinRemoteUrl,
-};
+export { applyDag, getBlob, hasBlob, joinRemoteUrl, putBlob, replicaFlag };
 export { parseManifest, parseRoot, rejectNewerProtocol } from "./manifest.ts";
 export { replicaWorkerInitMessage } from "./worker.ts";
 export { runReplicaSpike, SPIKE_EVAL_JS } from "./spike.ts";
 export {
   loadPolicy,
-  persistPolicy,
   persistBodyForKind,
+  persistPolicy,
   setPersistFullSizeArtwork,
 } from "./policy.ts";
-export { getWorklist, setWorklist, enqueueFetch, enqueueEvict } from "./worklist.ts";
 export {
-  evictUnpinnedLru,
+  enqueueEvict,
+  enqueueFetch,
+  getWorklist,
+  setWorklist,
+} from "./worklist.ts";
+export {
   evictUnpinnedAudioToFit,
+  evictUnpinnedLru,
   scheduleEvictUnpinnedAudioToFit,
 } from "./gc.ts";
-export { prepareBlobRecord, getBlobRecord, setPresent, deleteBlob } from "./blobs.ts";
+export {
+  deleteBlob,
+  getBlobRecord,
+  prepareBlobRecord,
+  setPresent,
+} from "./blobs.ts";
 export { runWithTimeBudget, spawnReplicaWorker } from "./worker.ts";
-export { pullMissingTextArt, enqueueMissingAudio, setReplicaRemote } from "./sync.ts";
+export {
+  enqueueMissingAudio,
+  pullMissingTextArt,
+  setReplicaRemote,
+} from "./sync.ts";
 export {
   artworkBlobSrc,
   materializeArtworkSrc,
@@ -150,7 +158,7 @@ export async function pinAudio(
     if (!rec || !isAudioKind(rec.kind)) continue;
     await setPinned(hash, 1);
     const url = joinRemoteUrl(remoteBase, rec.url);
-    enqueueCacheFromUrl(hash, url);
+    enqueueCacheFromUrl(hash, url, rec.bytes);
   }
 }
 

@@ -15,7 +15,8 @@ export const HOST_NAV_HANDLER = "lvNativeNav";
 export const HOST_CMD_APP_VERSION = "plugin:app|version";
 export const HOST_CMD_OPEN_URL = "plugin:opener|open_url";
 export const HOST_CMD_HAPTIC_IMPACT = "plugin:haptics|impact_feedback";
-export const HOST_CMD_HAPTIC_NOTIFICATION = "plugin:haptics|notification_feedback";
+export const HOST_CMD_HAPTIC_NOTIFICATION =
+  "plugin:haptics|notification_feedback";
 export const HOST_CMD_HAPTIC_SELECTION = "plugin:haptics|selection_feedback";
 export const HOST_CMD_HAPTIC_VIBRATE = "plugin:haptics|vibrate";
 
@@ -337,7 +338,9 @@ function hostReply(id: string, timeoutMs: number): Promise<string> {
 }
 
 /** Enqueue a media-cache download. `url` must be absolute. */
-export function cacheFromUrl(args: { url: string; hash: string }): boolean {
+export function cacheFromUrl(
+  args: { url: string; hash: string; bytes?: number },
+): boolean {
   if (!isAbsoluteUrl(args.url)) return false;
   return postHostAudio({ kind: "cacheFromUrl", data: args });
 }

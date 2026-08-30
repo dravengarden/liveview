@@ -3,8 +3,8 @@
 import {
   cacheDelete,
   cacheFromUrl,
-  setAllowsCellular,
   type HostCacheProgressEvent,
+  setAllowsCellular,
 } from "../native-host.ts";
 import { setPresent } from "./blobs.ts";
 
@@ -24,10 +24,22 @@ export function isCacheQueued(hash: string): boolean {
   return posted.has(hash);
 }
 
-export function enqueueCacheFromUrl(hash: string, url: string): boolean {
+export function enqueueCacheFromUrl(
+  hash: string,
+  url: string,
+  bytes?: number,
+): boolean {
   if (!isAbsoluteUrl(url)) return false;
   if (posted.has(hash)) return true;
-  const ok = cacheFromUrl({ url, hash });
+  const expectedBytes = typeof bytes === "number" && Number.isFinite(bytes) &&
+      bytes > 0
+    ? Math.floor(bytes)
+    : undefined;
+  const ok = cacheFromUrl({
+    url,
+    hash,
+    ...(expectedBytes ? { bytes: expectedBytes } : {}),
+  });
   if (ok) posted.add(hash);
   return ok;
 }
@@ -45,8 +57,8 @@ export async function noteCacheProgress(
   hash: string,
   ok: boolean,
 ): Promise<void> {
-  if (!ok) return;
-  await setPresent(hash, 1);
+  if (!ok) posted.delete(hash);
+  await setPresent(hash, ok ? 1 : 0);
 }
 
 function isCacheProgress(detail: unknown): detail is HostCacheProgressEvent {

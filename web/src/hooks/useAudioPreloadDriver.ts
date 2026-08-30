@@ -13,8 +13,8 @@ import { ingestDag } from "@/audioMediaIndex";
 import {
   enqueueMissingAudio,
   evictUnpinnedAudioToFit,
-  persistPolicy,
   loadPolicy,
+  persistPolicy,
 } from "@/replica/mod.ts";
 
 // Mirror of OfflineSection's storage budget key (the Settings → Downloads
@@ -57,12 +57,18 @@ export function useAudioPreloadDriver(): void {
         setAllowsCellular({ on: !policy.wifiOnly });
         await enqueueMissingAudio();
         await evictUnpinnedAudioToFit(policy.capBytes);
-        if (!root || globalThis.localStorage?.getItem(AUDIO_INDEX_ROOT_KEY) === root) {
-          return;
-        }
+        // Re-ingest the hydrated DAG index on every foreground. Older installs
+        // already have hashes in localStorage but not the newer byte lengths;
+        // waiting for a Merkle-root change would leave those entries unmigrated.
         const resources = await nativeAudioIndex();
         if (cancelled) return;
         ingestDag(resources);
+        if (
+          !root ||
+          globalThis.localStorage?.getItem(AUDIO_INDEX_ROOT_KEY) === root
+        ) {
+          return;
+        }
         globalThis.localStorage?.setItem(AUDIO_INDEX_ROOT_KEY, root);
         const slugs = [
           ...new Set(resources.map((r) => r.path.split("/")[0] ?? "")),

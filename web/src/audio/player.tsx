@@ -84,6 +84,8 @@ export interface AudioPlayer {
   /** Index of the sentence being spoken, or -1. */
   currentIdx: number;
   playing: boolean;
+  /** Native AVPlayer has play intent but is waiting for data/decoder readiness. */
+  buffering: boolean;
   /** True while fetching sentences + synthesizing audio (first play is slow). */
   loading: boolean;
   error: string | null;
@@ -281,7 +283,7 @@ interface AudioTimeStore {
   subscribe: (listener: () => void) => () => void;
 }
 const TimeCtx = createContext<AudioTimeStore | null>(null);
-const NOOP_SUBSCRIBE = (): (() => void) => () => undefined;
+const NOOP_SUBSCRIBE = (): () => void => () => undefined;
 
 export function AudioPlayerProvider(
   { children }: { children: React.ReactNode },
@@ -294,6 +296,7 @@ export function AudioPlayerProvider(
   const [transcriptUnavailable, setTranscriptUnavailable] = useState(false);
   const [currentIdx, setCurrentIdx] = useState(-1);
   const [playing, setPlaying] = useState(false);
+  const [buffering, setBuffering] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [rate, setRateState] = useState<number>(() => {
@@ -361,9 +364,11 @@ export function AudioPlayerProvider(
   const currentTimeRef = useRef(0);
   const durationRef = useRef(0);
   const playingRef = useRef(false);
+  const bufferingRef = useRef(false);
   currentTimeRef.current = currentTime;
   durationRef.current = duration;
   playingRef.current = playing;
+  bufferingRef.current = buffering;
 
   rateRef.current = rate;
 
@@ -409,6 +414,8 @@ export function AudioPlayerProvider(
       queueRef.current = q;
       setQueueIndex(qi);
       queueIndexRef.current = qi;
+      bufferingRef.current = false;
+      setBuffering(false);
       setLoading(true);
       setError(null);
       setSentences([]);
@@ -452,6 +459,9 @@ export function AudioPlayerProvider(
                 isBookEnd ? "&tail=bookend" : ""
               }`,
               ...(media.audioHash ? { hash: media.audioHash } : {}),
+              ...(!isBookEnd && media.audioBytes
+                ? { bytes: media.audioBytes }
+                : {}),
               position,
               rate: rateRef.current,
               title: np.chapterLabel,
@@ -789,11 +799,16 @@ export function AudioPlayerProvider(
           setDuration(ev.duration);
           break;
         case "playing":
+          bufferingRef.current = false;
+          setBuffering(false);
           setPlaying(true);
           setLoading(false);
           break;
         case "paused": {
+          bufferingRef.current = false;
+          setBuffering(false);
           setPlaying(false);
+          setLoading(false);
           const np = nowPlayingRef.current;
           if (np && currentTimeRef.current > 0) {
             persistPos(np.chapterPath, currentTimeRef.current);
@@ -807,12 +822,30 @@ export function AudioPlayerProvider(
           break;
         }
         case "ended":
+          bufferingRef.current = false;
+          setBuffering(false);
+          setLoading(false);
           handleEnded();
           break;
         case "canplay":
-          setLoading(false);
+          if (!bufferingRef.current) setLoading(false);
           break;
         case "waiting":
+          // Keep actual playback (`playing`) truthful, but remember play intent
+          // separately so every spinner remains tappable as a Pause action.
+          if (!bufferingRef.current) {
+            const np = nowPlayingRef.current;
+            logEvent("audio_waiting", {
+              book: np?.bookSlug,
+              chapter: np?.chapterPath,
+              position: currentTimeRef.current,
+            });
+          }
+          bufferingRef.current = true;
+          setBuffering(true);
+          setPlaying(false);
+          setLoading(true);
+          lastSleepTickRef.current = 0;
           break;
         case "next":
           nextChapter();
@@ -828,6 +861,8 @@ export function AudioPlayerProvider(
           // endless loading icon (offline + not-downloaded streams used to stall
           // forever). `error` (cleared on the next load) drives the disabled state.
           setError(ev.message);
+          bufferingRef.current = false;
+          setBuffering(false);
           setLoading(false);
           setPlaying(false);
           break;
@@ -1168,12 +1203,13 @@ export function AudioPlayerProvider(
   const togglePlay = useCallback(() => {
     const np = nowPlayingRef.current;
     if (nativeAudioAvailable()) {
-      const willPlay = !playingRef.current;
+      const active = playingRef.current || bufferingRef.current;
+      const willPlay = !active;
       logEvent(willPlay ? "audio_play" : "audio_pause", {
         book: np?.bookSlug,
         chapter: np?.chapterPath,
       });
-      if (playingRef.current) nativeAudioPause();
+      if (active) nativeAudioPause();
       else nativeAudioPlay();
       return;
     }
@@ -1350,6 +1386,9 @@ export function AudioPlayerProvider(
     setSentences([]);
     setTranscriptUnavailable(false);
     setCurrentIdx(-1);
+    bufferingRef.current = false;
+    setBuffering(false);
+    setLoading(false);
     setPlaying(false);
     setQueue([]);
     queueRef.current = [];
@@ -1389,6 +1428,7 @@ export function AudioPlayerProvider(
       transcriptUnavailable,
       currentIdx,
       playing,
+      buffering,
       loading,
       error,
       rate,
@@ -1419,6 +1459,7 @@ export function AudioPlayerProvider(
       transcriptUnavailable,
       currentIdx,
       playing,
+      buffering,
       loading,
       error,
       rate,

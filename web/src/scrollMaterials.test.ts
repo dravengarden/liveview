@@ -247,8 +247,8 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     floatingBubble,
-    /if \(!nowPlaying \|\| !playing \|\| onPlayingPage \|\| suppressed\) return null/,
-    "the floating playback bubble must stay out of the reader while playback is paused",
+    /if \(!nowPlaying \|\| \(!playing && !buffering\) \|\| onPlayingPage \|\| suppressed\) \{[\s\S]{0,40}return null;/,
+    "the floating playback bubble must hide only while playback is paused and not buffering",
   );
   assertPresent(
     navShell,

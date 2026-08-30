@@ -34,6 +34,8 @@ export interface NativeAudioTrack {
   /** Content hash (manifest audio_hash) — the offline cache key, so the same
    *  audio dedups + survives a re-render. Omit/empty ⇒ native keys by the URL. */
   readonly hash?: string;
+  /** Exact body length from the DAG/manifest. Optional for older web bundles. */
+  readonly bytes?: number;
   /** Resume position in seconds (0 = from the start). */
   readonly position: number;
   /** Playback rate (1 = normal). */
@@ -60,7 +62,11 @@ export interface NativeWidgetSnapshot {
  *  it (position drives the karaoke wipe; ended advances the chapter; next/prev
  *  are lock-screen track buttons the web's queue must service). */
 export type NativeAudioEvent =
-  | { readonly type: "time"; readonly position: number; readonly duration: number }
+  | {
+    readonly type: "time";
+    readonly position: number;
+    readonly duration: number;
+  }
   | { readonly type: "durationchange"; readonly duration: number }
   | { readonly type: "playing" }
   | { readonly type: "paused" }
@@ -74,7 +80,11 @@ export type NativeAudioEvent =
   | { readonly type: "next" }
   | { readonly type: "prev" }
   | { readonly type: "error"; readonly message: string }
-  | { readonly type: "cacheProgress"; readonly hash: string; readonly ok: boolean };
+  | {
+    readonly type: "cacheProgress";
+    readonly hash: string;
+    readonly ok: boolean;
+  };
 
 type OutMsg =
   | { readonly kind: "load"; readonly data: NativeAudioTrack }

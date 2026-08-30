@@ -13,10 +13,10 @@
 //
 // Protocol (web ⇄ native):
 //   web → native   (WKScriptMessage "lvNativeAudio"): {kind, data?}
-//       load {url, position, rate, title, artist, album, artworkUrl}
+//       load {url, hash?, bytes?, position, rate, title, artist, album, artworkUrl}
 //       play | pause | stop | state
 //       seek {position} | rate {rate}
-//       cacheFromUrl {url, hash} | cacheHas {id, hash} | cacheDelete {hash}
+//       cacheFromUrl {url, hash, bytes?} | cacheHas {id, hash} | cacheDelete {hash}
 //       cacheCount {id} | setAllowsCellular {on}
 //   native → web   (CustomEvent "lv-native-audio"): {type, ...}
 //       time {position, duration} | durationchange {duration}
@@ -77,7 +77,20 @@ import WidgetKit
   private var pendingSeek: Double = 0
   private var currentOriginURL: URL?
   private var currentCacheKey: String?
+  private var currentExpectedBytes: Int64 = 0
   private var playingFromCache = false
+  private var wantsToPlay = false
+
+  // A waiting AVPlayer is not proof that bytes will ever arrive. A truncated
+  // local CAF can expose the full header duration, play to the missing body, and
+  // then wait forever. Surface waiting truthfully and recover a bounded number
+  // of times: cached file → origin, then one fresh origin item. Never loop.
+  private static let stallRecoveryDelay: TimeInterval = 8
+  private static let maxRecoveryAttempts = 2
+  private var stallWorkItem: DispatchWorkItem?
+  private var playbackGeneration = 0
+  private var recoveryAttempts = 0
+  private var badCacheKeys: Set<String> = []
 
   // Playback files live in Application Support (NOT Caches — iOS purges Caches
   // under pressure). Keyed by content hash; TS owns pins/LRU/cap.
@@ -111,7 +124,7 @@ import WidgetKit
   // h2 flow-control window caps aggregate throughput to ~one stream's worth NO
   // MATTER how many streams are in flight. N independent sessions = N connections =
   // N parallel windows, restoring the ~tens-of-MB/s fill.
-  private struct DLItem { let url: URL; let key: String }
+  private struct DLItem { let url: URL; let key: String; let expectedBytes: Int64 }
   private var dlQueue: [DLItem] = []
   private var dlQueueHead = 0
   private var dlQueuedKeys: Set<String> = []
@@ -215,10 +228,12 @@ import WidgetKit
   }()
 
   private var timeObserver: Any?
+  private var timeControlObs: NSKeyValueObservation?
   private var statusObs: NSKeyValueObservation?
-  private var stallObs: NSKeyValueObservation?
+  private var bufferEmptyObs: NSKeyValueObservation?
   private var keepUpObs: NSKeyValueObservation?
   private var endObserver: NSObjectProtocol?
+  private var playbackStalledObserver: NSObjectProtocol?
 
   // MARK: Install
 
@@ -327,6 +342,12 @@ import WidgetKit
     // and playImmediately, playback stalls forever at 0:00 — the "this chapter
     // won't play" bug on a chapter resumed near its end.
     player.automaticallyWaitsToMinimizeStalling = true
+    timeControlObs = player.observe(\.timeControlStatus, options: [.new]) {
+      [weak self] player, _ in
+      DispatchQueue.main.async { [weak self] in
+        self?.handleTimeControlStatus(player.timeControlStatus)
+      }
+    }
     netMonitor.pathUpdateHandler = { [weak self] p in
       guard let self else { return }
       self.netPath = p
@@ -423,20 +444,25 @@ import WidgetKit
 
   // MARK: media cache
 
+  private func expectedByteCount(_ d: [String: Any]?) -> Int64 {
+    max(0, (d?["bytes"] as? NSNumber)?.int64Value ?? 0)
+  }
+
   private func cacheFromUrl(_ d: [String: Any]?) {
     guard let s = d?["url"] as? String, let u = URL(string: s),
           let scheme = u.scheme?.lowercased(), scheme == "http" || scheme == "https",
           let hash = d?["hash"] as? String else { return }
     let key = sanitizeKey(hash)
+    let expectedBytes = expectedByteCount(d)
     guard !key.isEmpty else { return }
-    if onDisk(key) {
+    if onDisk(key, expectedBytes: expectedBytes) {
       noteCached(key)
       emitCacheProgress(key, true)
       return
     }
     dlDrop.remove(key)
     if dlQueuedKeys.contains(key) || inFlight.contains(key) { return }
-    dlQueue.append(DLItem(url: u, key: key))
+    dlQueue.append(DLItem(url: u, key: key, expectedBytes: expectedBytes))
     dlQueuedKeys.insert(key)
     startScheduler()
   }
@@ -459,6 +485,7 @@ import WidgetKit
     try? fm.removeItem(at: fileURL(key))
     try? fm.removeItem(at: cacheDir.appendingPathComponent(key))
     cachedHashes.remove(key)
+    badCacheKeys.remove(key)
   }
 
   private func cacheCount(_ d: [String: Any]?) {
@@ -506,8 +533,8 @@ import WidgetKit
       dlQueueHead += 1
       dlQueuedKeys.remove(item.key)
       if dlDrop.contains(item.key) { continue }
-      if onDisk(item.key) || inFlight.contains(item.key) {
-        if onDisk(item.key) {
+      if onDisk(item.key, expectedBytes: item.expectedBytes) || inFlight.contains(item.key) {
+        if onDisk(item.key, expectedBytes: item.expectedBytes) {
           noteCached(item.key)
           emitCacheProgress(item.key, true)
         }
@@ -527,8 +554,18 @@ import WidgetKit
     inFlight.insert(item.key)
     dlInflight += 1
     let task = nextDLSession().downloadTask(with: item.url)
-    task.taskDescription = item.key
+    task.taskDescription = "\(item.key)|\(item.expectedBytes)"
     task.resume()
+  }
+
+  private func scheduledTask(_ description: String?) -> (key: String, expectedBytes: Int64)? {
+    guard let description else { return nil }
+    let parts = description.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+    guard let rawKey = parts.first else { return nil }
+    let key = String(rawKey)
+    guard !key.isEmpty else { return nil }
+    let expected = parts.count > 1 ? Int64(parts[1]) ?? 0 : 0
+    return (key, max(0, expected))
   }
 
   /// 2s tick: stop when the queue has fully drained, else keep pumping.
@@ -549,9 +586,11 @@ import WidgetKit
   /// only a 200 publishes.
   public func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                          didFinishDownloadingTo location: URL) {
-    guard let key = downloadTask.taskDescription else { return }
+    guard let scheduled = scheduledTask(downloadTask.taskDescription) else { return }
+    let key = scheduled.key
     let code = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
-    guard code == 200, publish(location, key) != nil else { return }
+    guard code == 200,
+          publish(location, key, expectedBytes: scheduled.expectedBytes) != nil else { return }
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       if self.dlDrop.contains(key) {
@@ -563,6 +602,7 @@ import WidgetKit
         return
       }
       self.dlRetries[key] = nil
+      self.badCacheKeys.remove(key)
       self.noteCached(key)
       self.emitCacheProgress(key, true)
     }
@@ -573,7 +613,8 @@ import WidgetKit
   /// hop to main for the shared scheduler state.
   public func urlSession(_ session: URLSession, task: URLSessionTask,
                          didCompleteWithError error: Error?) {
-    guard let key = task.taskDescription else { return }
+    guard let scheduled = scheduledTask(task.taskDescription) else { return }
+    let key = scheduled.key
     let url = task.originalRequest?.url
     let urlErr = error as? URLError
     let cancelled = urlErr?.code == .cancelled
@@ -586,11 +627,14 @@ import WidgetKit
         self.pump()
         return
       }
-      if !cancelled, !self.onDisk(key), let url {
+      if !cancelled,
+         !self.onDisk(key, expectedBytes: scheduled.expectedBytes), let url {
         let r = (self.dlRetries[key] ?? 0) + 1
         if r <= 3, !self.dlQueuedKeys.contains(key) {
           self.dlRetries[key] = r
-          self.dlQueue.append(DLItem(url: url, key: key))
+          self.dlQueue.append(DLItem(
+            url: url, key: key, expectedBytes: scheduled.expectedBytes
+          ))
           self.dlQueuedKeys.insert(key)
         } else if r > 3 {
           self.emitCacheProgress(key, false)
@@ -601,31 +645,42 @@ import WidgetKit
   }
 
   /// Move a freshly-downloaded temp file into the cache under `key`; returns bytes.
-  private func publish(_ tmp: URL, _ key: String) -> Int64? {
+  private func publish(_ tmp: URL, _ key: String, expectedBytes: Int64 = 0) -> Int64? {
     let dest = fileURL(key) // <key>.caf — see fileURL()
     let part = dest.appendingPathExtension("part")
     let fm = FileManager.default
+    let downloadedBytes = fileByteCount(tmp)
+    guard downloadedBytes > 0,
+          expectedBytes <= 0 || downloadedBytes == expectedBytes else { return nil }
     try? fm.removeItem(at: part)
-    try? fm.removeItem(at: dest)
     do {
       try fm.moveItem(at: tmp, to: part)
-      try fm.moveItem(at: part, to: dest)
+      if fm.fileExists(atPath: dest.path) {
+        _ = try fm.replaceItemAt(dest, withItemAt: part)
+      } else {
+        try fm.moveItem(at: part, to: dest)
+      }
     } catch {
       try? fm.removeItem(at: part)
       return nil
     }
-    return Int64((try? dest.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+    return downloadedBytes
   }
 
   private func load(_ d: [String: Any]?) {
     guard let d, let urlStr = d["url"] as? String, let url = URL(string: urlStr) else { return }
     let position = d["position"] as? Double ?? 0
+    wantsToPlay = false
+    player.pause()
     rate = d["rate"] as? Double ?? 1
     duration = 0
     let key = cacheKey(forURL: url, hash: d["hash"] as? String)
     currentOriginURL = url
     currentCacheKey = key
+    currentExpectedBytes = expectedByteCount(d)
     pendingSeek = position
+    recoveryAttempts = 0
+    playbackGeneration &+= 1
 
     teardownItem()
     // OFFLINE CACHE: if this chapter's audio is already fully cached on disk
@@ -633,7 +688,7 @@ import WidgetKit
     // the LOCAL file — fully offline + instant. Otherwise stream the origin AND
     // download it in the background so the NEXT play (and offline) is local.
     let item: AVPlayerItem
-    if let cached = cachedFileURL(key) {
+    if let cached = cachedFileURL(key, expectedBytes: currentExpectedBytes) {
       item = AVPlayerItem(url: cached)
       playingFromCache = true
     } else if netType() == "none" {
@@ -645,7 +700,7 @@ import WidgetKit
     } else {
       item = AVPlayerItem(url: url)
       playingFromCache = false
-      downloadToCache(url, key)
+      downloadToCache(url, key, expectedBytes: currentExpectedBytes)
     }
     observeItem(item)
     player.replaceCurrentItem(with: item)
@@ -663,16 +718,27 @@ import WidgetKit
   }
 
   private func play() {
+    wantsToPlay = true
     activateSession()
+    if player.currentItem == nil {
+      guard let origin = currentOriginURL, netType() != "none" else {
+        wantsToPlay = false
+        emit("{type:'error',message:'offline-uncached'}")
+        return
+      }
+      replaceWithOrigin(origin, position: currentPosition(), refreshCache: true)
+      return
+    }
     // Setting rate (not playImmediately) so automaticallyWaitsToMinimizeStalling
     // applies — AVPlayer buffers enough before starting instead of stalling on a
     // not-yet-ready stream. rate also carries the chosen speed (2x etc.).
     player.rate = Float(rate)
-    pushNowPlaying(playing: true, position: currentPosition())
-    emit("{type:'playing'}")
+    handleTimeControlStatus(player.timeControlStatus)
   }
 
   private func pause() {
+    wantsToPlay = false
+    cancelStallRecovery()
     player.pause()
     pushNowPlaying(playing: false, position: currentPosition())
     emit("{type:'paused'}")
@@ -687,7 +753,13 @@ import WidgetKit
     let d = duration
     if d > 0 { emit("{type:'durationchange',duration:\(d)}") }
     emit("{type:'time',position:\(currentPosition()),duration:\(d)}")
-    emit(isPlaying() ? "{type:'playing'}" : "{type:'paused'}")
+    if isPlaying() {
+      emit("{type:'playing'}")
+    } else if wantsToPlay {
+      emit("{type:'waiting'}")
+    } else {
+      emit("{type:'paused'}")
+    }
     emit("{type:'network',net:'\(netType())'}")
   }
 
@@ -702,16 +774,22 @@ import WidgetKit
 
   private func setRate(_ r: Double) {
     rate = r
-    if isPlaying() { player.rate = Float(r) } // changing rate while paused would start it
+    if wantsToPlay { player.rate = Float(r) } // changing rate while paused must not start it
     pushNowPlaying(playing: isPlaying(), position: currentPosition())
   }
 
   private func stop() {
+    wantsToPlay = false
+    cancelStallRecovery()
     player.pause()
     teardownItem()
     player.replaceCurrentItem(with: nil)
     nowPlayingInfo = [:]
     artworkURL = nil
+    currentOriginURL = nil
+    currentCacheKey = nil
+    currentExpectedBytes = 0
+    playingFromCache = false
     let center = MPNowPlayingInfoCenter.default()
     center.nowPlayingInfo = nil
     center.playbackState = .stopped
@@ -744,12 +822,6 @@ import WidgetKit
       guard let self else { return }
       switch it.status {
       case .readyToPlay:
-        // Apply the DEFERRED resume seek now that the item can handle it.
-        if self.pendingSeek > 0 {
-          let target = self.pendingSeek
-          self.pendingSeek = 0
-          self.player.seek(to: CMTime(seconds: target, preferredTimescale: 1000))
-        }
         let d = it.duration.seconds
         if d.isFinite, d > 0 {
           self.duration = d
@@ -757,25 +829,28 @@ import WidgetKit
           MPNowPlayingInfoCenter.default().nowPlayingInfo = self.nowPlayingInfo
           self.emit("{type:'durationchange',duration:\(d)}")
         }
-        self.emit("{type:'canplay'}")
-      case .failed:
-        // A cached LOCAL file should no longer fail now that it carries a .caf
-        // extension (AVURLAsset can infer the container). If it still does, DO NOT
-        // delete the download — deleting a perfectly-good offline file was the old
-        // "downloads vanish" death-loop. When ONLINE, re-stream from the origin as
-        // a fallback but KEEP the file; when OFFLINE, surface the error and keep
-        // the file for a later retry.
-        if self.playingFromCache, let origin = self.currentOriginURL,
-           self.netType() != "none" {
-          self.playingFromCache = false
-          let wasPlaying = self.isPlaying()
-          self.teardownItem()
-          let fresh = AVPlayerItem(url: origin)
-          self.observeItem(fresh)
-          self.player.replaceCurrentItem(with: fresh)
-          if wasPlaying { self.play() }
+        // Apply the DEFERRED resume seek only after the item is ready. Keep the
+        // play intent while pausing the transport for the exact seek, then resume.
+        let target = self.pendingSeek
+        self.pendingSeek = 0
+        if target > 0 {
+          self.player.pause()
+          self.player.seek(
+            to: CMTime(seconds: target, preferredTimescale: 1000),
+            toleranceBefore: .zero,
+            toleranceAfter: .zero
+          ) { [weak self, weak it] _ in
+            guard let self, let it, self.player.currentItem === it else { return }
+            self.emit("{type:'canplay'}")
+            if self.wantsToPlay { self.player.rate = Float(self.rate) }
+          }
         } else {
-          self.emit("{type:'error',message:'item failed'}")
+          self.emit("{type:'canplay'}")
+          if self.wantsToPlay { self.player.rate = Float(self.rate) }
+        }
+      case .failed:
+        DispatchQueue.main.async { [weak self] in
+          self?.recoverFailedItem()
         }
       default:
         break
@@ -784,22 +859,143 @@ import WidgetKit
     keepUpObs = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] it, _ in
       if it.isPlaybackLikelyToKeepUp { self?.emit("{type:'canplay'}") }
     }
-    stallObs = item.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self] it, _ in
-      if it.isPlaybackBufferEmpty { self?.emit("{type:'waiting'}") }
+    bufferEmptyObs = item.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self] it, _ in
+      if it.isPlaybackBufferEmpty { self?.handlePlaybackWaiting() }
     }
+    playbackStalledObserver = NotificationCenter.default.addObserver(
+      forName: .AVPlayerItemPlaybackStalled, object: item, queue: .main
+    ) { [weak self] _ in self?.handlePlaybackWaiting() }
     endObserver = NotificationCenter.default.addObserver(
       forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
     ) { [weak self] _ in
       guard let self else { return }
+      self.wantsToPlay = false
+      self.cancelStallRecovery()
       self.pushNowPlaying(playing: false, position: self.duration)
       self.emit("{type:'ended'}")
     }
   }
 
+  private func handleTimeControlStatus(_ status: AVPlayer.TimeControlStatus) {
+    guard player.currentItem != nil else { return }
+    switch status {
+    case .playing:
+      cancelStallRecovery()
+      pushNowPlaying(playing: true, position: currentPosition())
+      emit("{type:'playing'}")
+    case .waitingToPlayAtSpecifiedRate:
+      handlePlaybackWaiting()
+    case .paused:
+      if wantsToPlay {
+        handlePlaybackWaiting()
+      } else {
+        cancelStallRecovery()
+        pushNowPlaying(playing: false, position: currentPosition())
+        emit("{type:'paused'}")
+      }
+    @unknown default:
+      handlePlaybackWaiting()
+    }
+  }
+
+  private func handlePlaybackWaiting() {
+    guard wantsToPlay, player.currentItem != nil else { return }
+    pushNowPlaying(playing: false, position: currentPosition())
+    emit("{type:'waiting'}")
+    scheduleStallRecovery()
+  }
+
+  private func scheduleStallRecovery() {
+    guard wantsToPlay, stallWorkItem == nil else { return }
+    let generation = playbackGeneration
+    let work = DispatchWorkItem { [weak self] in
+      guard let self else { return }
+      self.stallWorkItem = nil
+      guard self.playbackGeneration == generation,
+            self.wantsToPlay, !self.isPlaying() else { return }
+      self.recoverStalledPlayback()
+    }
+    stallWorkItem = work
+    DispatchQueue.main.asyncAfter(
+      deadline: .now() + Self.stallRecoveryDelay,
+      execute: work
+    )
+  }
+
+  private func cancelStallRecovery() {
+    stallWorkItem?.cancel()
+    stallWorkItem = nil
+  }
+
+  private func recoverFailedItem() {
+    guard player.currentItem != nil else { return }
+    if playingFromCache, let origin = currentOriginURL, netType() != "none" {
+      recoveryAttempts += 1
+      replaceWithOrigin(origin, position: max(pendingSeek, currentPosition()), refreshCache: true)
+      return
+    }
+    guard wantsToPlay else {
+      failPlayback("item-failed")
+      return
+    }
+    recoverStalledPlayback()
+  }
+
+  private func recoverStalledPlayback() {
+    guard let origin = currentOriginURL, netType() != "none" else {
+      failPlayback("playback-stalled-offline")
+      return
+    }
+    guard recoveryAttempts < Self.maxRecoveryAttempts else {
+      failPlayback("playback-stalled")
+      return
+    }
+    recoveryAttempts += 1
+    let refreshCache = playingFromCache
+    NSLog(
+      "[native-audio] recovering stalled playback attempt=\(recoveryAttempts) cached=\(refreshCache)"
+    )
+    replaceWithOrigin(origin, position: currentPosition(), refreshCache: refreshCache)
+  }
+
+  private func replaceWithOrigin(_ origin: URL, position: Double, refreshCache: Bool) {
+    cancelStallRecovery()
+    playbackGeneration &+= 1
+    pendingSeek = max(0, position)
+    playingFromCache = false
+    if refreshCache, let key = currentCacheKey {
+      badCacheKeys.insert(key)
+      downloadToCache(
+        origin, key, expectedBytes: currentExpectedBytes, replaceExisting: true
+      )
+    }
+    teardownItem()
+    let fresh = AVPlayerItem(url: origin)
+    observeItem(fresh)
+    player.replaceCurrentItem(with: fresh)
+    if wantsToPlay {
+      player.rate = Float(rate)
+      handlePlaybackWaiting()
+    }
+  }
+
+  private func failPlayback(_ message: String) {
+    wantsToPlay = false
+    cancelStallRecovery()
+    player.pause()
+    pushNowPlaying(playing: false, position: currentPosition())
+    emit("{type:'error',message:'\(message)'}")
+  }
+
   private func teardownItem() {
+    cancelStallRecovery()
     statusObs?.invalidate(); statusObs = nil
     keepUpObs?.invalidate(); keepUpObs = nil
-    stallObs?.invalidate(); stallObs = nil
+    bufferEmptyObs?.invalidate(); bufferEmptyObs = nil
+    if let e = playbackStalledObserver {
+      NotificationCenter.default.removeObserver(e)
+      playbackStalledObserver = nil
+    }
     if let e = endObserver { NotificationCenter.default.removeObserver(e); endObserver = nil }
   }
 
@@ -808,7 +1004,7 @@ import WidgetKit
     return t.isFinite ? t : 0
   }
 
-  private func isPlaying() -> Bool { player.timeControlStatus == .playing || player.rate > 0 }
+  private func isPlaying() -> Bool { player.timeControlStatus == .playing }
 
   // MARK: Now Playing
 
@@ -913,7 +1109,7 @@ import WidgetKit
     cc.pauseCommand.addTarget { [weak self] _ in self?.pause(); return .success }
     cc.togglePlayPauseCommand.addTarget { [weak self] _ in
       guard let self else { return .commandFailed }
-      self.isPlaying() ? self.pause() : self.play()
+      self.wantsToPlay ? self.pause() : self.play()
       return .success
     }
     cc.nextTrackCommand.addTarget { [weak self] _ in self?.emit("{type:'next'}"); return .success }
@@ -987,22 +1183,51 @@ import WidgetKit
     return nil
   }
 
-  private func onDisk(_ key: String) -> Bool {
-    resolveFile(key) != nil
+  private func fileByteCount(_ url: URL) -> Int64 {
+    Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+  }
+
+  /// Presence alone is not enough: an interrupted URLSession can leave a CAF
+  /// whose header advertises the complete duration but whose media body ends in
+  /// the middle. Reject zero/truncated files before AVPlayer ever opens them.
+  private func validatedFile(_ key: String, expectedBytes: Int64) -> URL? {
+    guard !badCacheKeys.contains(key), let file = resolveFile(key) else { return nil }
+    let actual = fileByteCount(file)
+    guard actual > 0, expectedBytes <= 0 || actual == expectedBytes else {
+      let fm = FileManager.default
+      try? fm.removeItem(at: fileURL(key))
+      try? fm.removeItem(at: cacheDir.appendingPathComponent(key))
+      cachedHashes.remove(key)
+      emitCacheProgress(key, false)
+      NSLog(
+        "[native-audio] rejected cache key=\(key) actual=\(actual) expected=\(expectedBytes)"
+      )
+      return nil
+    }
+    return file
+  }
+
+  private func onDisk(_ key: String, expectedBytes: Int64 = 0) -> Bool {
+    validatedFile(key, expectedBytes: expectedBytes) != nil
   }
 
   /// The local file for a fully-cached key, or nil. Touches mtime so TS LRU can
   /// still treat recently-played audio as recent if it later stats the file.
-  private func cachedFileURL(_ key: String) -> URL? {
-    guard let f = resolveFile(key) else { return nil }
+  private func cachedFileURL(_ key: String, expectedBytes: Int64 = 0) -> URL? {
+    guard let f = validatedFile(key, expectedBytes: expectedBytes) else { return nil }
     try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: f.path)
     return f
   }
 
   /// Download `url` into the cache as `key`, once. Play-path want-it-NOW fetch.
-  private func downloadToCache(_ url: URL, _ key: String) {
-    let dest = fileURL(key)
-    if onDisk(key) || inFlight.contains(key) { return }
+  private func downloadToCache(
+    _ url: URL,
+    _ key: String,
+    expectedBytes: Int64 = 0,
+    replaceExisting: Bool = false
+  ) {
+    if (!replaceExisting && onDisk(key, expectedBytes: expectedBytes)) ||
+       inFlight.contains(key) { return }
     inFlight.insert(key)
     let task = fgSession.downloadTask(with: url) { [weak self] tmp, resp, _ in
       guard let self else { return }
@@ -1011,19 +1236,12 @@ import WidgetKit
         DispatchQueue.main.async { self.emitCacheProgress(key, false) }
         return
       }
-      let fm = FileManager.default
-      let part = dest.appendingPathExtension("part")
-      try? fm.removeItem(at: part)
-      try? fm.removeItem(at: dest)
-      do {
-        try fm.moveItem(at: tmp, to: part)
-        try fm.moveItem(at: part, to: dest)
-      } catch {
-        try? fm.removeItem(at: part)
+      guard self.publish(tmp, key, expectedBytes: expectedBytes) != nil else {
         DispatchQueue.main.async { self.emitCacheProgress(key, false) }
         return
       }
       DispatchQueue.main.async {
+        self.badCacheKeys.remove(key)
         self.noteCached(key)
         self.emitCacheProgress(key, true)
       }

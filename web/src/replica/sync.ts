@@ -17,17 +17,17 @@ import {
 } from "./worklist.ts";
 import {
   AGG_AUDIO,
-  INDEX_BY_KIND,
-  STORE_BLOBS,
-  isAudioKind,
   type BlobRecord,
+  INDEX_BY_KIND,
+  isAudioKind,
   type PathRecord,
+  STORE_BLOBS,
 } from "./schema.ts";
 import {
   joinRemoteUrl,
+  type ReplicaWorkerFillItem,
   runWithTimeBudget,
   spawnReplicaWorker,
-  type ReplicaWorkerFillItem,
 } from "./worker.ts";
 
 let remoteBase = "";
@@ -35,7 +35,10 @@ let origins: string[] = [];
 let worker: Worker | null = null;
 let workerFailed = false;
 
-export function setReplicaRemote(base: string, remoteOrigins: readonly string[] = []): void {
+export function setReplicaRemote(
+  base: string,
+  remoteOrigins: readonly string[] = [],
+): void {
   remoteBase = base;
   origins = [...remoteOrigins];
 }
@@ -52,7 +55,7 @@ async function fillOne(item: ReplicaWorkerFillItem): Promise<void> {
   const url = joinRemoteUrl(remoteBase, item.url);
   if (isAudioKind(item.kind)) {
     if (await hasBlob(item.hash)) return;
-    enqueueCacheFromUrl(item.hash, url);
+    enqueueCacheFromUrl(item.hash, url, item.bytes);
     return;
   }
   if (!persistBodyForKind(item.kind)) return;
@@ -100,12 +103,13 @@ type WorkerOut = {
   type?: string;
   hash?: string;
   url?: string;
+  bytes?: number;
   items?: ReplicaWorkerFillItem[];
 };
 
 async function onWorkerMessage(msg: WorkerOut | undefined): Promise<void> {
   if (msg?.type === "media" && msg.hash && msg.url) {
-    enqueueCacheFromUrl(msg.hash, msg.url);
+    enqueueCacheFromUrl(msg.hash, msg.url, msg.bytes);
     await removeFetch(msg.hash);
     return;
   }
@@ -195,7 +199,9 @@ export async function enqueueMissingAudio(): Promise<void> {
   for (const rec of allPathRecords()) {
     if (!isAudioKind(rec.kind) || seen.has(rec.hash)) continue;
     seen.add(rec.hash);
-    if (present.has(rec.hash) || queued.has(rec.hash) || isCacheQueued(rec.hash)) {
+    if (
+      present.has(rec.hash) || queued.has(rec.hash) || isCacheQueued(rec.hash)
+    ) {
       continue;
     }
     const size = rec.bytes > 0 ? rec.bytes : 1;
@@ -212,11 +218,15 @@ export async function enqueueMissingAudio(): Promise<void> {
     await mutateWorklistUnlocked((wl) => {
       const have = new Set(wl.fetch.map((item) => item.hash));
       for (const item of missing) {
-        if (!have.has(item.hash)) wl.fetch.push({ hash: item.hash, url: item.url });
+        if (!have.has(item.hash)) {
+          wl.fetch.push({ hash: item.hash, url: item.url });
+        }
       }
     });
   });
-  for (const item of missing) enqueueCacheFromUrl(item.hash, item.url);
+  for (const item of missing) {
+    enqueueCacheFromUrl(item.hash, item.url, item.bytes);
+  }
 }
 
 export async function pullMissingTextArt(): Promise<void> {
@@ -224,10 +234,12 @@ export async function pullMissingTextArt(): Promise<void> {
   if (items.length === 0) return;
   const w = ensureWorker();
   if (w) {
-    w.postMessage({ type: "fill", items } satisfies {
-      type: "fill";
-      items: ReplicaWorkerFillItem[];
-    });
+    w.postMessage(
+      { type: "fill", items } satisfies {
+        type: "fill";
+        items: ReplicaWorkerFillItem[];
+      },
+    );
     return;
   }
   await fillOnMainThreadAndDrain(items);

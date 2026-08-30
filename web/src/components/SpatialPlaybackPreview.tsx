@@ -29,12 +29,14 @@ export function SpatialPlaybackPreview({
   readonly onStartCurrent: () => void;
 }): React.JSX.Element {
   const { t } = useI18n();
-  const { nowPlaying, playing, loading, togglePlay } = useAudioPlayer();
+  const { nowPlaying, playing, buffering, loading, togglePlay } =
+    useAudioPlayer();
   const loaded = nowPlaying !== null;
+  const active = playing || buffering;
   const theme = useTheme();
   const wideRail = useMediaQuery(theme.breakpoints.up("sm"));
   const label = loaded
-    ? playing ? t("audiobook.pause") : t("audiobook.play")
+    ? active ? t("audiobook.pause") : t("audiobook.play")
     : t("audiobook.readAloud");
 
   // A tablet leaves enough of the translated reader visible for the complete
@@ -48,7 +50,7 @@ export function SpatialPlaybackPreview({
       data-lv-spatial-playback-preview
       data-state={loading
         ? "loading"
-        : playing
+        : active
         ? "playing"
         : loaded
         ? "paused"
@@ -97,23 +99,23 @@ export function SpatialPlaybackPreview({
         sx={{
           width: 44,
           height: 44,
-          color: playing ? LIVEVIEW_BRAND.activity : "primary.main",
+          color: active ? LIVEVIEW_BRAND.activity : "primary.main",
           "&:active": { transform: "scale(0.92)" },
         }}
       >
         {loading
           ? <CircularProgress size={rem(24)} color="inherit" />
-          : playing
+          : active
           ? <Pause sx={{ fontSize: rem(27) }} />
           : <PlayArrow sx={{ fontSize: rem(29) }} />}
       </IconButton>
       <Box
         aria-hidden
         sx={{
-          width: playing ? 16 : 5,
+          width: active ? 16 : 5,
           height: 4,
           borderRadius: 999,
-          bgcolor: playing ? LIVEVIEW_BRAND.activity : "divider",
+          bgcolor: active ? LIVEVIEW_BRAND.activity : "divider",
           transition: "width 160ms ease, background-color 160ms ease",
         }}
       />

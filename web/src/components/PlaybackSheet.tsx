@@ -8,16 +8,11 @@ import {
   Slider,
   Typography,
 } from "@mui/material";
-import {
-  Pause,
-  PlayArrow,
-  SkipNext,
-  SkipPrevious,
-} from "@mui/icons-material";
+import { Pause, PlayArrow, SkipNext, SkipPrevious } from "@mui/icons-material";
 import { Forward15Icon, Replay15Icon } from "./Skip15Icons";
 import { CoverTile } from "./CoverTile";
 import { BottomSheet } from "../_shell";
-import { SleepChip, SpeedChip, fmtTime } from "@/audio/playback-ui";
+import { fmtTime, SleepChip, SpeedChip } from "@/audio/playback-ui";
 import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
 
@@ -45,6 +40,7 @@ export function PlaybackSheet({
   const {
     nowPlaying,
     playing,
+    buffering,
     loading,
     error,
     canPrev,
@@ -73,7 +69,10 @@ export function PlaybackSheet({
 
   // A labelled config control (speed / sleep), stacked under a caption so the
   // bare value chip reads clearly out of the transport's context.
-  const labelled = (label: string, control: React.ReactNode): React.JSX.Element => (
+  const labelled = (
+    label: string,
+    control: React.ReactNode,
+  ): React.JSX.Element => (
     <Box
       sx={{
         display: "flex",
@@ -103,7 +102,10 @@ export function PlaybackSheet({
             <Typography variant="subtitle1" fontWeight={700} noWrap>
               {nowPlaying.chapterLabel}
             </Typography>
-            <Typography variant="caption" color="text.secondary" noWrap
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              noWrap
               sx={{ display: "block" }}
             >
               {nowPlaying.bookLabel}
@@ -125,14 +127,19 @@ export function PlaybackSheet({
             min={0}
             max={duration || 0}
             value={Math.min(currentTime, duration || 0)}
-            onChange={(_e, v) => seek(Number(v))}
+            onChange={(_e, v) =>
+              seek(Number(v))}
             aria-label={t("audiobook.seek")}
             sx={{ flex: 1 }}
           />
           <Typography
             variant="caption"
             color="text.secondary"
-            sx={{ fontVariantNumeric: "tabular-nums", minWidth: 36, textAlign: "right" }}
+            sx={{
+              fontVariantNumeric: "tabular-nums",
+              minWidth: 36,
+              textAlign: "right",
+            }}
           >
             {fmtTime(duration)}
           </Typography>
@@ -156,15 +163,19 @@ export function PlaybackSheet({
             <SkipPrevious sx={{ fontSize: rem(26) }} />
           </IconButton>
           <IconButton
-            onClick={() => skip(-15)}
+            onClick={() =>
+              skip(-15)}
             aria-label={t("audiobook.skipBack")}
             sx={{ width: tap(48), height: tap(48) }}
           >
             <Replay15Icon sx={{ fontSize: rem(26) }} />
           </IconButton>
           <IconButton
-            onClick={() => togglePlay()}
-            aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
+            onClick={() =>
+              togglePlay()}
+            aria-label={playing || buffering
+              ? t("audiobook.pause")
+              : t("audiobook.play")}
             sx={{
               width: tap(64),
               height: tap(64),
@@ -181,7 +192,7 @@ export function PlaybackSheet({
           >
             {loading
               ? <CircularProgress size={rem(34)} color="inherit" />
-              : playing
+              : playing || buffering
               ? <Pause sx={{ fontSize: rem(34) }} />
               : <PlayArrow sx={{ fontSize: rem(34) }} />}
           </IconButton>

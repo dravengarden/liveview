@@ -2,6 +2,14 @@ import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  appshellActivate,
+  appshellCurrent,
+  appshellHas,
+  cacheCount,
+  cacheDelete,
+  cacheFromUrl,
+  cacheHas,
+  fetchHostOrigins,
   HOST_CMD_HAPTIC_IMPACT,
   HOST_CMD_HAPTIC_NOTIFICATION,
   HOST_CMD_HAPTIC_SELECTION,
@@ -12,20 +20,12 @@ import {
   HOST_PROTOCOL_V1_MEDIA_KINDS,
   HOST_PROTOCOL_V1_NAV_TYPES,
   HOST_PROTOCOL_V1_TAURI_COMMANDS,
-  LEGACY_AUDIO_STORE_KINDS,
-  appshellActivate,
-  appshellCurrent,
-  appshellHas,
-  cacheCount,
-  cacheDelete,
-  cacheFromUrl,
-  cacheHas,
-  fetchHostOrigins,
   hostAppVersion,
   hostAudioAvailable,
   hostInfo,
   hostNavAvailable,
   hostOpenUrl,
+  LEGACY_AUDIO_STORE_KINDS,
   putFromUrl,
   setAllowsCellular,
 } from "./native-host.ts";
@@ -72,13 +72,15 @@ test("protocol v1 allow-lists reject LiveView-store kinds", () => {
   assert.equal(v1.has("/stats"), false);
   assert.equal(v1.has("/legacy-index"), false);
   assert.equal(v1.has("/legacy-wipe"), false);
-  for (const kind of [
-    "pin",
-    "unpin",
-    "reconcile",
-    "setCap",
-    "audioStats",
-  ] as const) {
+  for (
+    const kind of [
+      "pin",
+      "unpin",
+      "reconcile",
+      "setCap",
+      "audioStats",
+    ] as const
+  ) {
     assert.ok(
       (LEGACY_AUDIO_STORE_KINDS as readonly string[]).includes(kind),
       `${kind} is listed as rejected, not protocol v1`,
@@ -150,6 +152,45 @@ test("future wrappers exist and no-op when native APIs are absent", async () => 
   assert.equal(await fetchHostOrigins(), null);
   assert.equal(await hostAppVersion(), null);
   assert.equal(await hostOpenUrl("https://example.test"), false);
+});
+
+test("cacheFromUrl forwards optional integrity bytes additively", () => {
+  const scope = globalThis as unknown as {
+    webkit?: {
+      messageHandlers?: Record<
+        string,
+        { postMessage: (message: unknown) => void }
+      >;
+    };
+  };
+  const previous = scope.webkit;
+  const seen: unknown[] = [];
+  scope.webkit = {
+    messageHandlers: {
+      lvNativeAudio: { postMessage: (message) => seen.push(message) },
+    },
+  };
+  try {
+    assert.equal(
+      cacheFromUrl({
+        url: "https://example.test/audio.caf",
+        hash: "abc",
+        bytes: 123456,
+      }),
+      true,
+    );
+  } finally {
+    if (previous) scope.webkit = previous;
+    else delete scope.webkit;
+  }
+  assert.deepEqual(seen, [{
+    kind: "cacheFromUrl",
+    data: {
+      url: "https://example.test/audio.caf",
+      hash: "abc",
+      bytes: 123456,
+    },
+  }]);
 });
 
 test("putFromUrl is path-only and never sends u=", async () => {

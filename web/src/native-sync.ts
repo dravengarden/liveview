@@ -167,6 +167,7 @@ export interface NativeAudioResource {
   kind: "audio" | "marks";
   url: string;
   path: string;
+  bytes: number;
 }
 
 /** Audio/marks subset of the IDB replica path index. */

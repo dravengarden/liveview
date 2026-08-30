@@ -53,6 +53,7 @@ export function PlaybackBar(
   const { t } = useI18n();
   const {
     playing,
+    buffering,
     loading,
     canPrev,
     canNext,
@@ -167,14 +168,16 @@ export function PlaybackBar(
       </IconButton>
       <IconButton
         onClick={togglePlay}
-        disabled={loading}
+        disabled={loading && !buffering}
         color="primary"
-        aria-label={playing ? t("audiobook.pause") : t("audiobook.play")}
+        aria-label={playing || buffering
+          ? t("audiobook.pause")
+          : t("audiobook.play")}
         sx={{ width: tap(48), height: tap(48) }}
       >
         {loading
           ? <CircularProgress size={rem(32)} color="inherit" />
-          : playing
+          : playing || buffering
           ? <Pause sx={{ fontSize: rem(32) }} />
           : <PlayArrow sx={{ fontSize: rem(32) }} />}
       </IconButton>
@@ -208,7 +211,11 @@ export function PlaybackBar(
   const timeStart = (
     <Typography
       variant="caption"
-      sx={{ minWidth: 36, textAlign: "right", fontVariantNumeric: "tabular-nums" }}
+      sx={{
+        minWidth: 36,
+        textAlign: "right",
+        fontVariantNumeric: "tabular-nums",
+      }}
     >
       {fmtTime(currentTime)}
     </Typography>
@@ -240,7 +247,8 @@ export function PlaybackBar(
 
   return (
     <>
-      {/* ONE material slab spans this transport AND the bottom nav bar right
+      {
+        /* ONE material slab spans this transport AND the bottom nav bar right
           below it. The bar renders bare (NavShell `barTransparent`) over the
           slab's bottom `--shell-bar-h`, so both controls remain one continuous
           surface without a seam. This slab travels with the complete reader
@@ -248,7 +256,8 @@ export function PlaybackBar(
           trailing workspace preview. Height tracks the measured transport
           (`--lv-transport-h`) + the bar (`--shell-bar-h`; 0 on desktop, where
           the bar is a top sibling and this is just the transport's own
-          material). */}
+          material). */
+      }
       <Box
         aria-hidden
         data-lv-playback-bar="true"
@@ -302,55 +311,55 @@ export function PlaybackBar(
             }px)`,
         }}
       >
-      {oneRow
-        ? (
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 1,
-              minHeight: tap(48),
-            }}
-          >
-            <Box sx={earSx}>{followBtn}</Box>
-            {mainCluster}
-            {timeStart}
-            {scrubber}
-            {timeEnd}
-            <Box sx={earSx}>
-              <SpeedChip />
-            </Box>
-            <Box sx={earSx}>
-              <SleepChip />
-            </Box>
-          </Box>
-        )
-        : (
-          <>
-            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-              <Box sx={earSx}>{followBtn}</Box>
-              {timeStart}
-              {scrubber}
-              {timeEnd}
-            </Box>
+        {oneRow
+          ? (
             <Box
               sx={{
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "space-between",
+                gap: 1,
                 minHeight: tap(48),
               }}
             >
+              <Box sx={earSx}>{followBtn}</Box>
+              {mainCluster}
+              {timeStart}
+              {scrubber}
+              {timeEnd}
               <Box sx={earSx}>
                 <SpeedChip />
               </Box>
-              {mainCluster}
               <Box sx={earSx}>
                 <SleepChip />
               </Box>
             </Box>
-          </>
-        )}
+          )
+          : (
+            <>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <Box sx={earSx}>{followBtn}</Box>
+                {timeStart}
+                {scrubber}
+                {timeEnd}
+              </Box>
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  minHeight: tap(48),
+                }}
+              >
+                <Box sx={earSx}>
+                  <SpeedChip />
+                </Box>
+                {mainCluster}
+                <Box sx={earSx}>
+                  <SleepChip />
+                </Box>
+              </Box>
+            </>
+          )}
       </Box>
     </>
   );
