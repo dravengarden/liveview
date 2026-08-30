@@ -37,6 +37,7 @@ import {
   nativePositionConfirmsPlayback,
   type NativePositionSample,
 } from "./native-playback-truth";
+import { activeMarkIndex } from "./mark-index";
 import {
   type AudioPos,
   audioStores,
@@ -264,21 +265,6 @@ function playAudio(
       onError?.(e);
     }
   });
-}
-
-/** Map playback ms → sentence index via binary search over contiguous marks. */
-function markIndex(marks: Mark[], ms: number): number {
-  let lo = 0;
-  let hi = marks.length - 1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    const m = marks[mid];
-    if (!m) break;
-    if (ms < m.start_ms) hi = mid - 1;
-    else if (ms >= m.end_ms) lo = mid + 1;
-    else return mid;
-  }
-  return -1;
 }
 
 const Ctx = createContext<AudioPlayer | null>(null);
@@ -604,27 +590,50 @@ export function AudioPlayerProvider(
             if (loadSeq.current === seq) setTranscriptUnavailable(true);
           }
         })();
-        void (async () => {
+        const loadMarks = async (attempt = 0): Promise<void> => {
+          if (loadSeq.current !== seq) return;
+          let mdata: Mark[] | null = null;
+          const readMarks = async (
+            response: Response,
+          ): Promise<Mark[] | null> => {
+            if (!response.ok) return null;
+            try {
+              const data = (await response.json()) as Mark[];
+              return Array.isArray(data) && data.length > 0 ? data : null;
+            } catch {
+              return null;
+            }
+          };
           try {
-            // Resolve marks by their content HASH → /api/blob/<hash> (the cached
-            // form). Fall back to the live /api/marks?… (cache-first) only when the
-            // manifest had no marks hash (e.g. a never-warmed book online).
-            const mres = media.marksHash
-              ? await contentFetch(`/api/blob/${media.marksHash}`)
-              : await contentFetch(`/api/marks?${q1}`, { cacheFirst: true });
-            if (loadSeq.current === seq && mres.ok) {
-              const mdata = (await mres.json()) as Mark[];
-              if (loadSeq.current === seq) {
-                marksRef.current = mdata;
-                if (position > 0) {
-                  setCurrentIdx(markIndex(mdata, position * 1000));
-                }
-              }
+            // Prefer the content-addressed cached blob. A stale index or transient
+            // blob miss must not strand the player without highlighting, so fall
+            // back to the live endpoint and retry independently of audio.
+            if (media.marksHash) {
+              mdata = await readMarks(
+                await contentFetch(`/api/blob/${media.marksHash}`),
+              );
+            }
+            if (!mdata) {
+              mdata = await readMarks(
+                await contentFetch(`/api/marks?${q1}`, { cacheFirst: true }),
+              );
             }
           } catch {
-            // no highlight timing; audio unaffected
+            // Retried below; narration must remain independent of timing data.
           }
-        })();
+          if (loadSeq.current !== seq) return;
+          if (mdata) {
+            marksRef.current = mdata;
+            setCurrentIdx(
+              activeMarkIndex(mdata, currentTimeRef.current * 1000),
+            );
+            return;
+          }
+          if (attempt < 15) {
+            window.setTimeout(() => void loadMarks(attempt + 1), 2000);
+          }
+        };
+        void loadMarks();
       })();
     },
     [expectNativePlayback, persistSession, resetNativePlaybackProof],
@@ -704,7 +713,7 @@ export function AudioPlayerProvider(
     // background. (foreground is unchanged.)
     if (!document.hidden) {
       setCurrentTime(pos);
-      setCurrentIdx(markIndex(marksRef.current, pos * 1000));
+      setCurrentIdx(activeMarkIndex(marksRef.current, pos * 1000));
     }
     const np = nowPlayingRef.current;
     if (np && pos > 0) {
@@ -1288,7 +1297,7 @@ export function AudioPlayerProvider(
       // real playback position immediately so the highlight (and follow-scroll)
       // are correct the instant the reader reappears.
       setCurrentTime(a.currentTime);
-      setCurrentIdx(markIndex(marksRef.current, a.currentTime * 1000));
+      setCurrentIdx(activeMarkIndex(marksRef.current, a.currentTime * 1000));
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
@@ -1369,7 +1378,7 @@ export function AudioPlayerProvider(
       nativeAudioSeek(sec);
       // Snap the visual position immediately; the native `time` event follows.
       setCurrentTime(sec);
-      setCurrentIdx(markIndex(marksRef.current, sec * 1000));
+      setCurrentIdx(activeMarkIndex(marksRef.current, sec * 1000));
       return;
     }
     const a = audioRef.current;
@@ -1385,7 +1394,7 @@ export function AudioPlayerProvider(
       );
       nativeAudioSeek(t);
       setCurrentTime(t);
-      setCurrentIdx(markIndex(marksRef.current, t * 1000));
+      setCurrentIdx(activeMarkIndex(marksRef.current, t * 1000));
       return;
     }
     const a = audioRef.current;

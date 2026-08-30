@@ -8,6 +8,7 @@ import {
 import { haptic } from "../_shell";
 import { contentFetch } from "@/native-sync";
 import { useAudioPlayer, useAudioTime } from "@/audio/player";
+import { resolveReadAlongIndex } from "@/audio/mark-index";
 import type { Mark, SpokenUnits, Unit } from "@/types";
 
 /** Follow-mode controls the hook hands back, so the reader can show a
@@ -44,6 +45,8 @@ export interface ReadAlongFollow {
 const HL_GHOSTBUST = "lv-read-done"; // invisible; only forces a repaint
 const HL_SENTENCE = "lv-reading"; // whole current sentence (focus)
 const HL_ACTIVE = "lv-reading-active"; // read-so-far wipe within the current sentence
+const EMPTY_UNITS: Unit[] = [];
+const EMPTY_MARKS: Mark[] = [];
 
 interface HighlightLike {
   add(range: Range): void;
@@ -446,14 +449,43 @@ export function useInPlaceHighlight(
   scrollerRef: RefObject<HTMLElement | null>,
   currentPath: string | null,
 ): ReadAlongFollow {
-  const { nowPlaying, currentIdx, playing, seekToSentence } = useAudioPlayer();
+  const {
+    nowPlaying,
+    currentIdx: engineCurrentIdx,
+    playing,
+    seekToSentence,
+  } = useAudioPlayer();
   const active = nowPlaying?.rendition === "text" &&
     nowPlaying.chapterPath === currentPath;
+  const readAlongKey = active && nowPlaying
+    ? `${nowPlaying.chapterPath}\u0000${nowPlaying.lang}`
+    : "";
   // A background audiobook still ticks ~4 times per second. Do not make an
   // unrelated text chapter re-render its entire markdown tree for that clock.
   const { currentTime } = useAudioTime(active);
-  const [units, setUnits] = useState<Unit[]>([]);
-  const [marks, setMarks] = useState<Mark[]>([]);
+  const [resources, setResources] = useState<{
+    key: string;
+    units: Unit[];
+    marks: Mark[];
+  }>({ key: "", units: EMPTY_UNITS, marks: EMPTY_MARKS });
+  // Never expose one chapter's resources during the render in which the engine
+  // and viewer switch to another chapter. The old separate arrays stayed live
+  // until the new fetch resolved, letting a CSS Highlight bind to detached text
+  // from the previous page after rapid next/previous navigation.
+  const units = resources.key === readAlongKey
+    ? resources.units
+    : EMPTY_UNITS;
+  const marks = resources.key === readAlongKey
+    ? resources.marks
+    : EMPTY_MARKS;
+  // The engine loads marks best-effort so timing can never block sound. Derive
+  // from this viewer's independently recovered marks when available; otherwise
+  // retain the engine index until they arrive.
+  const currentIdx = resolveReadAlongIndex(
+    marks,
+    currentTime * 1000,
+    engineCurrentIdx,
+  );
   // Sticky follow: auto-scroll keeps the spoken line in view; a manual scroll
   // turns it off (so re-reading isn't fought), the jump button turns it back on.
   const [following, setFollowing] = useState(true);
@@ -497,6 +529,11 @@ export function useInPlaceHighlight(
   // by the trail + wipe effects. Keyed by the `units` identity it was built for.
   const locatedRef = useRef<Map<number, Located>>(new Map());
   const locatedForRef = useRef<Unit[] | null>(null);
+  const locatedDomRef = useRef<{
+    body: HTMLElement;
+    first: ChildNode | null;
+    last: ChildNode | null;
+  } | null>(null);
   const ensureLocated = useCallback((body: HTMLElement): Map<number, Located> => {
     // Rebuild when `units` changed OR the cached map is STALE — its located ranges
     // point at a DETACHED DOM. The latter is the auto-advance bug: the new chapter's
@@ -508,7 +545,15 @@ export function useInPlaceHighlight(
     // regardless of render timing.
     const sample: Located | undefined = locatedRef.current.values().next().value;
     const stale = !!sample && sample.map[0]?.node.isConnected === false;
-    if (locatedForRef.current !== units || stale) {
+    const dom = locatedDomRef.current;
+    // A chapter's innerHTML can commit AFTER its units. In that race the first
+    // locate runs against the previous (or empty) DOM and may produce an empty
+    // map, so there is no sample node for the stale check above. Fingerprint the
+    // rendered child generation as well: when React replaces the chapter HTML,
+    // the child identities change and the next playback tick relocates it.
+    const domChanged = !dom || dom.body !== body ||
+      dom.first !== body.firstChild || dom.last !== body.lastChild;
+    if (locatedForRef.current !== units || stale || domChanged) {
       // Number top-level blocks in document order — the same order spoken_units
       // assigns `blk`. Idempotent.
       const blocks = body.children;
@@ -517,6 +562,11 @@ export function useInPlaceHighlight(
       }
       locatedRef.current = locateChapter(body, units);
       locatedForRef.current = units;
+      locatedDomRef.current = {
+        body,
+        first: body.firstChild,
+        last: body.lastChild,
+      };
     }
     return locatedRef.current;
   }, [units]);
@@ -525,13 +575,20 @@ export function useInPlaceHighlight(
   // the engine's own load). Cleared when inactive.
   useEffect(() => {
     if (!active || !nowPlaying) {
-      setUnits([]);
-      setMarks([]);
+      setResources({ key: "", units: EMPTY_UNITS, marks: EMPTY_MARKS });
       return undefined;
     }
+    // Drop stale navigation anchors immediately. Resource state is keyed above,
+    // so this effect's first render already exposes empty arrays for a new page;
+    // these refs must obey the same chapter boundary.
+    curRangeRef.current = null;
+    curRangeIdxRef.current = -1;
+    locatedForRef.current = null;
     let cancelled = false;
     let timer: number | undefined;
     let attempts = 0;
+    let haveUnits = false;
+    let haveMarks = false;
     const q = `path=${encodeURIComponent(nowPlaying.chapterPath)}&lang=${
       encodeURIComponent(nowPlaying.lang)
     }&rendition=text`;
@@ -540,7 +597,9 @@ export function useInPlaceHighlight(
     // finishes) returns 404 / empty here. The engine refetches marks on play,
     // but this hook fired once on activation and used to give up — so the
     // "you are here" highlight stayed blank until you reopened the chapter ("刚
-    // 生成完没高亮"). Re-poll until the units land (bounded), then stop.
+    // 生成完没高亮"). Re-poll until BOTH resources land (bounded): stopping as
+    // soon as units arrived left currentIdx at -1 after a transient marks miss,
+    // even while audio and the progress bar continued normally.
     const load = (): void => {
       void Promise.all([
         contentFetch(`/api/units?${q}`).then((r) => (r.ok ? r.json() : null))
@@ -550,11 +609,29 @@ export function useInPlaceHighlight(
       ]).then(([u, m]: [SpokenUnits | null, Mark[] | null]) => {
         if (cancelled) return;
         const gotUnits = !!u && u.units.length > 0;
-        if (gotUnits) setUnits(u.units);
-        if (m && m.length > 0) setMarks(m);
-        // Units drive the locate; if they're not ready yet, the content is
-        // still generating — try again shortly, up to ~30s.
-        if (!gotUnits && attempts < 15) {
+        const gotMarks = !!m && m.length > 0;
+        const acceptUnits = gotUnits && !haveUnits;
+        const acceptMarks = gotMarks && !haveMarks;
+        if (gotUnits) {
+          haveUnits = true;
+        }
+        if (gotMarks) {
+          haveMarks = true;
+        }
+        if (acceptUnits || acceptMarks) {
+          setResources((previous) => {
+            const base = previous.key === readAlongKey
+              ? previous
+              : { key: readAlongKey, units: EMPTY_UNITS, marks: EMPTY_MARKS };
+            return {
+              key: readAlongKey,
+              units: acceptUnits ? u!.units : base.units,
+              marks: acceptMarks ? m! : base.marks,
+            };
+          });
+        }
+        // Either resource may race generation/cache recovery independently.
+        if ((!haveUnits || !haveMarks) && attempts < 15) {
           attempts += 1;
           timer = window.setTimeout(load, 2000);
         }
@@ -565,7 +642,7 @@ export function useInPlaceHighlight(
       cancelled = true;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [active, nowPlaying?.chapterPath, nowPlaying?.lang]);
+  }, [active, nowPlaying?.chapterPath, nowPlaying?.lang, readAlongKey]);
 
   // A fresh chapter should auto-follow from the top again.
   useEffect(() => {
