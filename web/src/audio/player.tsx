@@ -34,6 +34,10 @@ import { useI18n } from "@/i18n";
 import { logEvent } from "@/apm";
 import { loadServerSetting } from "@/syncBackends";
 import {
+  nativePositionConfirmsPlayback,
+  type NativePositionSample,
+} from "./native-playback-truth";
+import {
   type AudioPos,
   audioStores,
   type PersistedSession,
@@ -365,12 +369,64 @@ export function AudioPlayerProvider(
   const durationRef = useRef(0);
   const playingRef = useRef(false);
   const bufferingRef = useRef(false);
+  const nativePlaybackUnconfirmedRef = useRef(false);
+  const nativePositionSampleRef = useRef<NativePositionSample | null>(null);
+  const nativeOptimisticTimerRef = useRef<number | null>(null);
   currentTimeRef.current = currentTime;
   durationRef.current = duration;
   playingRef.current = playing;
   bufferingRef.current = buffering;
 
   rateRef.current = rate;
+
+  const clearNativeOptimisticTimer = useCallback(() => {
+    if (nativeOptimisticTimerRef.current == null) return;
+    window.clearTimeout(nativeOptimisticTimerRef.current);
+    nativeOptimisticTimerRef.current = null;
+  }, []);
+
+  const resetNativePlaybackProof = useCallback(() => {
+    clearNativeOptimisticTimer();
+    nativePlaybackUnconfirmedRef.current = false;
+    nativePositionSampleRef.current = null;
+  }, [clearNativeOptimisticTimer]);
+
+  const expectNativePlayback = useCallback((bounded: boolean) => {
+    clearNativeOptimisticTimer();
+    nativePlaybackUnconfirmedRef.current = true;
+    nativePositionSampleRef.current = {
+      position: currentTimeRef.current,
+      at: performance.now(),
+    };
+    playingRef.current = false;
+    bufferingRef.current = true;
+    setPlaying(false);
+    setBuffering(true);
+    setLoading(true);
+
+    if (!bounded) return;
+    // Protocol-v1 shells emit `playing` as soon as a rate is requested, even if
+    // AVPlayer stays paused. Give genuine playback several periodic ticks to
+    // prove itself, then converge both native and web state back to paused.
+    nativeOptimisticTimerRef.current = window.setTimeout(() => {
+      nativeOptimisticTimerRef.current = null;
+      if (!nativePlaybackUnconfirmedRef.current) return;
+      nativePlaybackUnconfirmedRef.current = false;
+      nativePositionSampleRef.current = null;
+      playingRef.current = false;
+      bufferingRef.current = false;
+      setPlaying(false);
+      setBuffering(false);
+      setLoading(false);
+      nativeAudioPause();
+      logEvent("audio_play_unconfirmed", {
+        book: nowPlayingRef.current?.bookSlug,
+        chapter: nowPlayingRef.current?.chapterPath,
+      });
+    }, 4000);
+  }, [clearNativeOptimisticTimer]);
+
+  useEffect(() => resetNativePlaybackProof, [resetNativePlaybackProof]);
 
   const persistSession = useCallback(
     (np: NowPlaying, q: Track[], qi: number) => {
@@ -405,8 +461,10 @@ export function AudioPlayerProvider(
   const loadTrack = useCallback(
     (np: NowPlaying, q: Track[], qi: number, autoplay: boolean) => {
       const audio = audioRef.current;
+      const native = nativeAudioAvailable();
       const seq = ++loadSeq.current;
       prefetchedFrom.current = null;
+      resetNativePlaybackProof();
 
       setNowPlaying(np);
       nowPlayingRef.current = np;
@@ -414,8 +472,10 @@ export function AudioPlayerProvider(
       queueRef.current = q;
       setQueueIndex(qi);
       queueIndexRef.current = qi;
-      bufferingRef.current = false;
-      setBuffering(false);
+      playingRef.current = false;
+      setPlaying(false);
+      bufferingRef.current = native && autoplay;
+      setBuffering(native && autoplay);
       setLoading(true);
       setError(null);
       setSentences([]);
@@ -435,6 +495,15 @@ export function AudioPlayerProvider(
         localStorage.getItem(posKey(np.chapterPath, np.lang)) ?? "",
       );
       const position = Number.isFinite(saved) && saved > 0 ? saved : 0;
+      currentTimeRef.current = position;
+      durationRef.current = 0;
+      if (native && autoplay) {
+        nativePlaybackUnconfirmedRef.current = true;
+        nativePositionSampleRef.current = {
+          position,
+          at: performance.now(),
+        };
+      }
       // Show the saved scrubber position up front (a PAUSED resume reads right away,
       // before the first tick); the sentence highlight follows once marks load.
       if (position > 0) setCurrentTime(position);
@@ -448,7 +517,7 @@ export function AudioPlayerProvider(
 
         // ── 1) AUDIO — play from local cache immediately. ────────────────────
         try {
-          if (nativeAudioAvailable()) {
+          if (native) {
             // The native AVPlayer (URLSession) needs an ABSOLUTE url in both shell
             // modes; it plays the cached file keyed by `hash` (offline-instant) and
             // only streams `url` on a true cache miss. /api/audio always serves the
@@ -471,7 +540,10 @@ export function AudioPlayerProvider(
                 encodeURIComponent(np.bookSlug)
               }`,
             });
-            if (autoplay) nativeAudioPlay();
+            if (autoplay) {
+              expectNativePlayback(true);
+              nativeAudioPlay();
+            }
           } else if (audio) {
             // Web <audio>: prefer the immutable content-addressed blob (served from
             // the persistent cache, offline-stable across deploys). The bookend +
@@ -495,13 +567,21 @@ export function AudioPlayerProvider(
           }
         } catch (e) {
           if (loadSeq.current === seq) {
+            resetNativePlaybackProof();
+            playingRef.current = false;
+            bufferingRef.current = false;
+            setPlaying(false);
+            setBuffering(false);
+            setLoading(false);
             setError(e instanceof Error ? e.message : String(e));
           }
         }
         // Audio is dispatched — the UI is no longer "loading" regardless of the
         // read-along fetches below (the native engine reports its own buffering via
         // the waiting/canplay events).
-        if (loadSeq.current === seq) setLoading(false);
+        if (loadSeq.current === seq && !(native && autoplay)) {
+          setLoading(false);
+        }
 
         // ── 2) READ-ALONG (sentences + marks) — best-effort, NON-FATAL. ──────
         // Drives the karaoke highlight only; cache-first, and a failure just means
@@ -547,7 +627,7 @@ export function AudioPlayerProvider(
         })();
       })();
     },
-    [persistSession],
+    [expectNativePlayback, persistSession, resetNativePlaybackProof],
   );
 
   // Advance/retreat within the queue, carrying the book identity forward.
@@ -684,6 +764,27 @@ export function AudioPlayerProvider(
     }
   }, [persistPos, pauseEngine]);
 
+  const handleNativePosition = useCallback((pos: number, dur: number) => {
+    const at = performance.now();
+    if (
+      nativePlaybackUnconfirmedRef.current &&
+      nativePositionConfirmsPlayback(
+        nativePositionSampleRef.current,
+        pos,
+        at,
+      )
+    ) {
+      resetNativePlaybackProof();
+      playingRef.current = true;
+      bufferingRef.current = false;
+      setPlaying(true);
+      setBuffering(false);
+      setLoading(false);
+    }
+    nativePositionSampleRef.current = { position: pos, at };
+    handlePosition(pos, dur);
+  }, [handlePosition, resetNativePlaybackProof]);
+
   // Chapter finished: clear the saved position and roll into the next chapter (or
   // stop at the book's end). Shared by the <audio> `ended` event + the native
   // engine's `ended` event.
@@ -698,6 +799,7 @@ export function AudioPlayerProvider(
     if (queueIndexRef.current < queueRef.current.length - 1) {
       goTo(queueIndexRef.current + 1, true);
     } else {
+      playingRef.current = false;
       setPlaying(false);
       setCurrentIdx(-1);
     }
@@ -721,9 +823,11 @@ export function AudioPlayerProvider(
       updatePositionState(audio);
     };
     const onPlay = (): void => {
+      playingRef.current = true;
       setPlaying(true);
     };
     const onPause = (): void => {
+      playingRef.current = false;
       setPlaying(false);
       // Flush the current position server-side so a pause is immediately
       // resumable on another device (force the write past the store's throttle).
@@ -753,6 +857,7 @@ export function AudioPlayerProvider(
     // transition that can change it, not just play/pause.
     const syncPlaying = (): void => {
       const real = !audio.paused;
+      playingRef.current = real;
       setPlaying((prev) => (prev === real ? prev : real));
     };
     const SYNC_EVENTS = [
@@ -793,18 +898,20 @@ export function AudioPlayerProvider(
     return onNativeAudioEvent((ev) => {
       switch (ev.type) {
         case "time":
-          handlePosition(ev.position, ev.duration);
+          handleNativePosition(ev.position, ev.duration);
           break;
         case "durationchange":
           setDuration(ev.duration);
           break;
         case "playing":
-          bufferingRef.current = false;
-          setBuffering(false);
-          setPlaying(true);
-          setLoading(false);
+          // Installed protocol-v1 shells report the requested rate, not
+          // AVPlayer's actual state. Keep the control pending until periodic
+          // media time proves that audio is genuinely advancing.
+          if (!playingRef.current) expectNativePlayback(true);
           break;
         case "paused": {
+          resetNativePlaybackProof();
+          playingRef.current = false;
           bufferingRef.current = false;
           setBuffering(false);
           setPlaying(false);
@@ -822,6 +929,8 @@ export function AudioPlayerProvider(
           break;
         }
         case "ended":
+          resetNativePlaybackProof();
+          playingRef.current = false;
           bufferingRef.current = false;
           setBuffering(false);
           setLoading(false);
@@ -841,6 +950,13 @@ export function AudioPlayerProvider(
               position: currentTimeRef.current,
             });
           }
+          clearNativeOptimisticTimer();
+          nativePlaybackUnconfirmedRef.current = true;
+          nativePositionSampleRef.current = {
+            position: currentTimeRef.current,
+            at: performance.now(),
+          };
+          playingRef.current = false;
           bufferingRef.current = true;
           setBuffering(true);
           setPlaying(false);
@@ -861,6 +977,8 @@ export function AudioPlayerProvider(
           // endless loading icon (offline + not-downloaded streams used to stall
           // forever). `error` (cleared on the next load) drives the disabled state.
           setError(ev.message);
+          resetNativePlaybackProof();
+          playingRef.current = false;
           bufferingRef.current = false;
           setBuffering(false);
           setLoading(false);
@@ -868,7 +986,16 @@ export function AudioPlayerProvider(
           break;
       }
     });
-  }, [handlePosition, handleEnded, persistPos, nextChapter, prevChapter]);
+  }, [
+    clearNativeOptimisticTimer,
+    expectNativePlayback,
+    handleEnded,
+    handleNativePosition,
+    nextChapter,
+    persistPos,
+    prevChapter,
+    resetNativePlaybackProof,
+  ]);
 
   // Re-sync to the native player on mount: a page reload wipes the web's in-memory
   // playing/position, but the native AVPlayer keeps going — without this the button
@@ -891,7 +1018,10 @@ export function AudioPlayerProvider(
     if (nativeAudioAvailable()) return undefined;
     if (!playing) return undefined;
     const id = window.setInterval(() => {
-      if (audioRef.current?.paused) setPlaying(false);
+      if (audioRef.current?.paused) {
+        playingRef.current = false;
+        setPlaying(false);
+      }
     }, 1000);
     return () => clearInterval(id);
   }, [playing]);
@@ -1209,8 +1339,18 @@ export function AudioPlayerProvider(
         book: np?.bookSlug,
         chapter: np?.chapterPath,
       });
-      if (active) nativeAudioPause();
-      else nativeAudioPlay();
+      if (active) {
+        resetNativePlaybackProof();
+        playingRef.current = false;
+        bufferingRef.current = false;
+        setPlaying(false);
+        setBuffering(false);
+        setLoading(false);
+        nativeAudioPause();
+      } else {
+        expectNativePlayback(true);
+        nativeAudioPlay();
+      }
       return;
     }
     const a = audioRef.current;
@@ -1222,7 +1362,7 @@ export function AudioPlayerProvider(
     if (a.paused) {
       playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
     } else a.pause();
-  }, []);
+  }, [expectNativePlayback, resetNativePlaybackProof]);
 
   const seek = useCallback((sec: number) => {
     if (nativeAudioAvailable()) {
@@ -1373,6 +1513,7 @@ export function AudioPlayerProvider(
   }, [playing, rate, nowPlaying]);
 
   const stop = useCallback(() => {
+    resetNativePlaybackProof();
     if (nativeAudioAvailable()) nativeAudioStop();
     const a = audioRef.current;
     if (a) {
@@ -1386,6 +1527,7 @@ export function AudioPlayerProvider(
     setSentences([]);
     setTranscriptUnavailable(false);
     setCurrentIdx(-1);
+    playingRef.current = false;
     bufferingRef.current = false;
     setBuffering(false);
     setLoading(false);
@@ -1406,7 +1548,7 @@ export function AudioPlayerProvider(
     // too. posStore resets to its empty initial.
     sessionStore.set(null);
     posStore.set({ path: "", t: 0 });
-  }, []);
+  }, [resetNativePlaybackProof]);
 
   // Within-sentence read fraction (0–1) for the karaoke read-so-far wipe: the
   // playhead's position between this sentence's start mark and the next one's.

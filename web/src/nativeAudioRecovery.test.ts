@@ -52,3 +52,19 @@ test("native waiting is observable, cancellable, and bounded", async () => {
   );
   assert.match(bar, /disabled=\{loading && !buffering\}/);
 });
+
+test("protocol-v1 playing events require advancing media time", async () => {
+  const player = await source("audio/player.tsx");
+
+  const playing = player.match(
+    /case "playing":[\s\S]*?\n\s*break;/,
+  )?.[0];
+  assert.ok(playing, "native playing event handler exists");
+  assert.match(playing, /expectNativePlayback\(true\)/);
+  assert.doesNotMatch(playing, /setPlaying\(true\)/);
+  assert.match(
+    player,
+    /nativePositionConfirmsPlayback\([\s\S]*?setPlaying\(true\)/,
+  );
+  assert.match(player, /nativeAudioPause\(\);[\s\S]*?audio_play_unconfirmed/);
+});

@@ -35,11 +35,12 @@ export function nativeSyncAvailable(): boolean {
  *  url-keyed lists). `fresh` is accepted for API compatibility. */
 export async function contentFetch(
   url: string,
-  opts?: { fresh?: boolean; cacheFirst?: boolean },
+  opts?: { fresh?: boolean; cacheFirst?: boolean; connectMs?: number },
 ): Promise<Response> {
   if (replicaFlag() === "idb") {
     return replicaContentFetch(url, {
       ...(opts?.cacheFirst === true ? { cacheFirst: true } : {}),
+      ...(opts?.connectMs !== undefined ? { connectMs: opts.connectMs } : {}),
       offline: isLikelyOffline() || nativeNetworkClass() === "none",
     });
   }

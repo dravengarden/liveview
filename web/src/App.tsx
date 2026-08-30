@@ -3,6 +3,7 @@ import { nativeNavPop, nativeNavPush, nativeNavReady } from "@/native-nav";
 import { remoteUrl } from "@/apiBase";
 import { nativeWidgetPublish } from "@/native-audio";
 import { contentFetch, ensureAutoSync, isLikelyOffline, nativeRefreshManifest } from "@/native-sync";
+import { fetchChapterResponse } from "@/contentLoad";
 import {
   useCallback,
   useEffect,
@@ -323,6 +324,10 @@ export function App(): React.JSX.Element {
   // (the shown edition may differ from `lang` when falling back).
   const currentPathRef = useRef<string | null>(null);
   const contentLangRef = useRef<string>("");
+  // Only the newest chapter request may change the reader. Playback-led chapter
+  // changes, rapid pager taps, and foreground refreshes can otherwise let an old
+  // failure replace a newer successful page with the full-screen retry state.
+  const fileLoadSeq = useRef(0);
   // Latest `openFile`, held in a ref so `loadFile` (deps []) can re-enter it for
   // the 404 self-heal without a useCallback dependency cycle.
   const openFileRef = useRef<
@@ -968,32 +973,34 @@ export function App(): React.JSX.Element {
   // an "untranslated" notice. `reqLang` stays the selected edition regardless.
   const loadFile = useCallback(
     async (path: string, reqLang: string, reqRendition: string) => {
+      const seq = ++fileLoadSeq.current;
       setCurrentPath(path);
       currentPathRef.current = path;
       setFileError(null);
       try {
-        const res = await contentFetch(
-          `/api/file?path=${encodeURIComponent(path)}&lang=${
-            encodeURIComponent(reqLang)
-          }&rendition=${encodeURIComponent(reqRendition)}`,
+        const url = `/api/file?path=${encodeURIComponent(path)}&lang=${
+          encodeURIComponent(reqLang)
+        }&rendition=${encodeURIComponent(reqRendition)}`;
+        const res = await fetchChapterResponse(
+          url,
+          contentFetch,
+          isLikelyOffline,
         );
+        if (seq !== fileLoadSeq.current) return;
         if (!res.ok) {
           console.error("Failed to fetch file:", path, res.status);
           // A failed path is most often the `<slug>/README.md` entry guess for a
           // book with no README (authored books open at `00-introduction.md`), or
           // a stale cross-book resume path. Self-heal to the book's real first
           // spine chapter instead of dead-ending on "Couldn't load this page".
-          // Trigger on 404 (web/real-fetch) AND 504 — the native shell's lvsync
-          // proxy (native-sync.ts contentFetch) collapses a remote 404 into 504,
-          // so a missing path looks like 504 in the app. Gate on RELIABLE offline
-          // detection (isLikelyOffline, NWPathMonitor-derived) — NOT navigator.onLine,
-          // which stays `true` in WKWebView airplane mode, so a genuine offline 504
-          // would otherwise churn the self-heal (resolveFirstChapter also 504s → null)
-          // and land on "failed" instead of the calm offline notice.
+          // The TypeScript replica now preserves a real 404. A 504 means a
+          // transient/offline miss and has already received one bounded retry;
+          // never redirect a valid chapter to the first page on that signal.
           const offline = isLikelyOffline();
-          if (!offline && (res.status === 404 || res.status === 504)) {
+          if (!offline && res.status === 404) {
             const slug = path.split("/")[0] ?? "";
             const first = await resolveFirstChapter(slug, reqRendition);
+            if (seq !== fileLoadSeq.current) return;
             if (first && first !== path) {
               void openFileRef.current?.(first, reqLang, reqRendition, true);
               return;
@@ -1006,10 +1013,12 @@ export function App(): React.JSX.Element {
           return;
         }
         const data = (await res.json()) as FileContent;
+        if (seq !== fileLoadSeq.current) return;
         // The server resolves overlay → base and reports the edition it served.
         // If that differs from what we asked for, the page isn't translated yet.
         contentLangRef.current = data.lang;
         const apply = (): void => {
+          if (seq !== fileLoadSeq.current) return;
           setCurrentFileType(data.file_type);
           setCurrentContent(data.content);
           setUntranslated(
@@ -1044,8 +1053,9 @@ export function App(): React.JSX.Element {
           apply();
         }
       } catch (e) {
+        if (seq !== fileLoadSeq.current) return;
         console.error("Failed to fetch file:", e);
-        setFileError(navigator.onLine ? "failed" : "offline");
+        setFileError(isLikelyOffline() ? "offline" : "failed");
       }
     },
     [],
@@ -1088,6 +1098,7 @@ export function App(): React.JSX.Element {
       // stack a back-button entry per toggle.
       writeHash(path, langForHash, renditionForHash, replace);
       if (renditionArg === "audio") {
+        fileLoadSeq.current += 1;
         // Audio renders the read-along off the engine (seeded by the
         // view→engine effect from `currentPath`), so there's no /api/file body
         // to fetch — just set the path.
@@ -1290,6 +1301,7 @@ export function App(): React.JSX.Element {
     // happens behind the snapshot. No-op (false) off-shell → unchanged web return.
     const native = nativeNavPop();
     writeHash(null, null, null, false);
+    fileLoadSeq.current += 1;
     setCurrentPath(null);
     currentPathRef.current = null;
     setCurrentContent(null);
@@ -1439,6 +1451,7 @@ export function App(): React.JSX.Element {
       const { path, lang: hashLang, rendition: hashRendition } = getHashState();
       if (!path) {
         // empty hash → the landing bookshelf
+        fileLoadSeq.current += 1;
         setCurrentPath(null);
         currentPathRef.current = null;
         setCurrentContent(null);

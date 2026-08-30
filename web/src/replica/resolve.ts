@@ -230,7 +230,14 @@ async function resolveManifest(
   let buffer: ArrayBuffer;
   try {
     const response = await fetchAbsolute(absoluteUrl(rec.url), budget);
-    if (!response.ok) return offline504();
+    // Preserve real client errors so the reader can distinguish a missing path
+    // from a transient/offline miss. The retired native proxy collapsed both to
+    // 504; the TypeScript replica owns this read path now.
+    if (!response.ok) {
+      return response.status >= 400 && response.status < 500
+        ? response
+        : offline504();
+    }
     buffer = await response.arrayBuffer();
   } catch {
     return offline504();
@@ -264,6 +271,7 @@ async function resolveKeyed(
     if (hit) return new Response(hit, { status: 200 });
   }
   const budget = replicaFetchBudgetMs(opts);
+  let clientFailure: Response | undefined;
   if (budget > 0) {
     try {
       const response = await fetchAbsolute(absoluteUrl(norm), budget);
@@ -276,13 +284,16 @@ async function resolveKeyed(
         }
         return new Response(buffer, { status: 200 });
       }
+      if (response.status >= 400 && response.status < 500) {
+        clientFailure = response;
+      }
     } catch {
       // fall through to last-good cache
     }
   }
   const fallback = await getUrlCache(norm);
   if (fallback) return new Response(fallback, { status: 200 });
-  return offline504();
+  return clientFailure ?? offline504();
 }
 
 /**

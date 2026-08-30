@@ -642,6 +642,20 @@ test("replica resolve returns 504 offline and does not hang", async () => {
   }
 });
 
+test("replica resolve preserves a real remote 404", async () => {
+  await setup();
+  const fetchMock = installFetch(() => new Response(null, { status: 404 }));
+  try {
+    const res = await replicaContentFetch(
+      "/api/file?path=book%2Fmissing.md&lang=en&rendition=text",
+    );
+    assert.equal(res.status, 404);
+    assert.equal(fetchMock.calls.length, 1);
+  } finally {
+    fetchMock.restore();
+  }
+});
+
 test("cover blob URL helper materializes from a local IDB body", async () => {
   await setup();
   const png = buf("PNG");
