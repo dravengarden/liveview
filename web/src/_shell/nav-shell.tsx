@@ -210,6 +210,7 @@ export function NavShell(props: NavShellProps): ReactNode {
   const spatialSurfaceRef = useRef<HTMLDivElement | null>(null);
   const spatialDrawerRef = useRef<HTMLDivElement | null>(null);
   const spatialMaskRef = useRef<HTMLDivElement | null>(null);
+  const spatialBackdropRef = useRef<HTMLDivElement | null>(null);
   const spatialSettleRef = useRef<SpatialDrawerSettle | null>(null);
 
   // The native iOS status-bar safe area exposes the document root rather than
@@ -251,7 +252,8 @@ export function NavShell(props: NavShellProps): ReactNode {
     const surface = spatialSurfaceRef.current;
     const drawer = spatialDrawerRef.current;
     const mask = spatialMaskRef.current;
-    if (!root || !surface || !drawer || !mask) {
+    const backdrop = spatialBackdropRef.current;
+    if (!root || !surface || !drawer || !mask || !backdrop) {
       return;
     }
     const binding = bindSpatialDrawer({
@@ -259,6 +261,7 @@ export function NavShell(props: NavShellProps): ReactNode {
       surface,
       drawer,
       drawerMask: mask,
+      backdrop,
       phone: isPhone,
       // The app-level iOS-style edge swipe uses the first 28px to return to
       // the bookshelf. Let that gesture win there; the rest of the reading
@@ -656,6 +659,7 @@ export function NavShell(props: NavShellProps): ReactNode {
         </Box>
         {spatial && (
           <Box
+            ref={spatialBackdropRef}
             role="button"
             data-lv-spatial-backdrop
             tabIndex={mobileOpen ? 0 : -1}
@@ -675,15 +679,17 @@ export function NavShell(props: NavShellProps): ReactNode {
               cursor: mobileOpen ? "pointer" : "default",
               // Cowboy keeps the trailing workspace legible as spatial context,
               // but subdued enough that the revealed rail is unquestionably the
-              // active plane. A flat tint is compositor-cheap and avoids blur.
+              // active plane. Keep the tint stable and let the spatial compositor
+              // drive its opacity with the drawer offset. Tying the colour to the
+              // delayed React open-state commit left a second 180ms full-screen
+              // fade after the close translation had already finished — visible
+              // on WKWebView as a backdrop flash.
               bgcolor: (t) =>
-                mobileOpen
-                  ? alpha(
-                    t.palette.common.black,
-                    t.palette.mode === "dark" ? 0.18 : 0.08,
-                  )
-                  : "transparent",
-              transition: "background-color 180ms ease",
+                alpha(
+                  t.palette.common.black,
+                  t.palette.mode === "dark" ? 0.18 : 0.08,
+                ),
+              opacity: 0,
             }}
           />
         )}

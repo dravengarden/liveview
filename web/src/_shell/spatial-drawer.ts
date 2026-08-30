@@ -32,6 +32,7 @@ export function bindSpatialDrawer({
   surface,
   drawer,
   drawerMask,
+  backdrop,
   phone,
   reservedLeadingEdge = 0,
   getOpen,
@@ -43,6 +44,7 @@ export function bindSpatialDrawer({
   readonly surface: HTMLElement;
   readonly drawer: HTMLElement;
   readonly drawerMask: HTMLElement;
+  readonly backdrop: HTMLElement;
   readonly phone: boolean;
   /** Leave this many leading-edge pixels to the host's native-style back
    *  gesture while the drawer is closed. An open drawer still owns the full
@@ -100,6 +102,7 @@ export function bindSpatialDrawer({
     drawer.style.transform = `translate3d(-${String(parallax)}px,0,0)`;
     drawer.style.opacity = String(0.72 + progress * 0.28);
     drawerMask.style.transform = `translate3d(${String(offset)}px,0,0)`;
+    backdrop.style.opacity = String(progress);
   };
   const scheduleRender = (offset: number, at: number, velocity: number): void => {
     pendingOffset = offset;
@@ -118,7 +121,7 @@ export function bindSpatialDrawer({
     });
   };
   const clearTransitions = (): void => {
-    for (const element of [surface, drawer, drawerMask]) {
+    for (const element of [surface, drawer, drawerMask, backdrop]) {
       element.style.removeProperty("transition");
       element.style.removeProperty("will-change");
     }
@@ -161,11 +164,15 @@ export function bindSpatialDrawer({
     surface.style.willChange = "transform";
     drawer.style.willChange = "transform,opacity";
     drawerMask.style.willChange = "transform";
+    backdrop.style.willChange = "opacity";
     surface.style.transition = `transform ${String(duration)}ms cubic-bezier(0.22,1,0.36,1)`;
     drawer.style.transition = `transform ${String(duration)}ms cubic-bezier(0.22,1,0.36,1),opacity ${
       String(duration)
     }ms cubic-bezier(0.22,1,0.36,1)`;
     drawerMask.style.transition = `transform ${String(duration)}ms cubic-bezier(0.22,1,0.36,1)`;
+    backdrop.style.transition = `opacity ${
+      String(duration)
+    }ms cubic-bezier(0.22,1,0.36,1)`;
     render(target);
     if (pendingThresholdHaptic) {
       pendingThresholdHaptic = false;
@@ -259,6 +266,8 @@ export function bindSpatialDrawer({
       drawer.style.willChange = "transform,opacity";
       drawerMask.style.transition = "none";
       drawerMask.style.willChange = "transform";
+      backdrop.style.transition = "none";
+      backdrop.style.willChange = "opacity";
     }
     gesture.locked = true;
     event.preventDefault();
@@ -351,7 +360,7 @@ export function bindSpatialDrawer({
           globalThis.clearTimeout(releaseIdle);
         }
       }
-      for (const element of [surface, drawer, drawerMask]) {
+      for (const element of [surface, drawer, drawerMask, backdrop]) {
         element.style.removeProperty("transform");
         element.style.removeProperty("opacity");
         element.style.removeProperty("transition");

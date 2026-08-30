@@ -322,8 +322,18 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     navShell,
-    /mobileOpen[\s\S]{0,180}palette\.common\.black[\s\S]{0,180}transition: "background-color 180ms ease"/,
-    "the trailing reader preview must use a cheap Cowboy-style dim tint instead of blur",
+    /bgcolor: \(t\) =>[\s\S]{0,220}palette\.common\.black[\s\S]{0,180}opacity: 0/,
+    "the trailing reader preview must keep a stable compositor-driven dim tint",
+  );
+  assertPresent(
+    spatialDrawer,
+    /backdrop\.style\.opacity = String\(progress\)/,
+    "the spatial backdrop must track the drawer's painted progress",
+  );
+  assertPresent(
+    spatialDrawer,
+    /backdrop\.style\.transition = `opacity \$\{\s*String\(duration\)/,
+    "the spatial backdrop must fade in the same compositor transaction as the drawer",
   );
   assertPresent(
     sidebar,
