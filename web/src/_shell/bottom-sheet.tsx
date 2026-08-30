@@ -81,15 +81,22 @@ export function FloatingActionIsland(
     maxWidth,
     minHeight = 54,
     rim = "defined",
+    tone = "adaptive",
   }: {
     readonly children: ReactNode;
     readonly columns?: string;
     readonly maxWidth?: number | string;
     readonly minHeight?: number | string;
     readonly rim?: "defined" | "soft";
+    /**
+     * `adaptive` follows the app theme. `dark` is for controls that always sit
+     * on a dark modal scrim, even when the underlying app uses a light theme.
+     */
+    readonly tone?: "adaptive" | "dark";
   },
 ): ReactNode {
   const softRim = rim === "soft";
+  const darkTone = tone === "dark";
   const topHighlightOpacity = (dark: boolean): number => {
     if (softRim) {
       return dark ? 0.14 : 0.48;
@@ -112,28 +119,45 @@ export function FloatingActionIsland(
         alignItems: "center",
         gap: 0.5,
         border: softRim ? 0 : 1,
-        borderColor: (t) => alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.18 : 0.62),
+        borderColor: darkTone
+          ? "rgba(255, 255, 255, 0.14)"
+          : (t) => alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.18 : 0.62),
         borderRadius: 999,
-        bgcolor: (t) => alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.48 : 0.42),
-        backgroundImage: (t) =>
-          [
-            `radial-gradient(120% 90% at 18% -18%, ${
-              alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.24 : 0.82)
-            } 0%, transparent 52%)`,
-            `linear-gradient(180deg, ${
-              alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.08 : 0.3)
-            } 0%, transparent 46%, ${alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.08 : 0.055)} 100%)`,
-          ].join(", "),
-        boxShadow: (t) => {
-          const topHighlight = topHighlightOpacity(t.palette.mode === "dark");
-          return [
-            `0 14px 38px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.42 : 0.16)}`,
-            `inset 0 1px 0 ${alpha(t.palette.common.white, topHighlight)}`,
-            `inset 0 -1px 0 ${alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.18 : 0.12)}`,
-          ].join(", ");
-        },
-        backdropFilter: "blur(34px) saturate(190%) contrast(108%)",
-        WebkitBackdropFilter: "blur(34px) saturate(190%) contrast(108%)",
+        bgcolor: darkTone
+          ? "rgba(24, 24, 28, 0.9)"
+          : (t) => alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.48 : 0.42),
+        backgroundImage: darkTone
+          ? (t) =>
+            `linear-gradient(180deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.012) 48%, ${
+              alpha(t.palette.primary.main, 0.055)
+            })`
+          : (t) =>
+            [
+              `radial-gradient(120% 90% at 18% -18%, ${
+                alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.24 : 0.82)
+              } 0%, transparent 52%)`,
+              `linear-gradient(180deg, ${
+                alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.08 : 0.3)
+              } 0%, transparent 46%, ${
+                alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.08 : 0.055)
+              } 100%)`,
+            ].join(", "),
+        boxShadow: darkTone
+          ? (t) =>
+            `0 14px 36px rgba(0, 0, 0, 0.44), inset 0 1px 0 rgba(255, 255, 255, 0.12), inset 0 -1px 0 ${
+              alpha(t.palette.primary.main, 0.14)
+            }`
+          : (t) => {
+            const topHighlight = topHighlightOpacity(t.palette.mode === "dark");
+            return [
+              `0 14px 38px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.42 : 0.16)}`,
+              `inset 0 1px 0 ${alpha(t.palette.common.white, topHighlight)}`,
+              `inset 0 -1px 0 ${alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.18 : 0.12)}`,
+            ].join(", ");
+          },
+        backdropFilter: darkTone ? "none" : "blur(34px) saturate(190%) contrast(108%)",
+        WebkitBackdropFilter: darkTone ? "none" : "blur(34px) saturate(190%) contrast(108%)",
+        color: darkTone ? "rgba(255, 255, 255, 0.88)" : undefined,
         userSelect: "none",
         WebkitUserSelect: "none",
         "&::before": {
@@ -143,12 +167,14 @@ export function FloatingActionIsland(
           pointerEvents: "none",
           inset: softRim ? 0 : 1,
           borderRadius: "inherit",
-          background: (t) =>
-            `linear-gradient(112deg, ${
-              alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.13 : 0.5)
-            } 0%, transparent 31%, transparent 68%, ${
-              alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.07 : 0.2)
-            } 100%)`,
+          background: darkTone
+            ? "linear-gradient(112deg, rgba(255, 255, 255, 0.08), transparent 31%, transparent 70%, rgba(255, 255, 255, 0.035))"
+            : (t) =>
+              `linear-gradient(112deg, ${
+                alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.13 : 0.5)
+              } 0%, transparent 31%, transparent 68%, ${
+                alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.07 : 0.2)
+              } 100%)`,
         },
         "&::after": {
           content: '""',
@@ -160,12 +186,14 @@ export function FloatingActionIsland(
           top: 1,
           height: "42%",
           borderRadius: "999px 999px 50% 50%",
-          background: (t) =>
-            `linear-gradient(180deg, ${
-              alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.16 : 0.58)
-            }, transparent)`,
-          filter: "blur(7px)",
-          opacity: 0.72,
+          background: darkTone
+            ? "linear-gradient(180deg, rgba(255, 255, 255, 0.09), transparent)"
+            : (t) =>
+              `linear-gradient(180deg, ${
+                alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.16 : 0.58)
+              }, transparent)`,
+          filter: darkTone ? "blur(6px)" : "blur(7px)",
+          opacity: darkTone ? 0.45 : 0.72,
         },
         "& > *": { position: "relative", zIndex: 1 },
       }}

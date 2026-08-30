@@ -615,6 +615,23 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /onImageLoad: settleGeometry[\s\S]{0,12000}onLoad=\{onImageLoad\}/,
     "lightbox image decode must refresh cached geometry before gestures",
   );
+  const imageLightbox = await source("_shell/image-lightbox.tsx");
+  const bottomSheet = await source("_shell/bottom-sheet.tsx");
+  assertPresent(
+    imageLightbox,
+    /<FloatingActionIsland maxWidth="100%" tone="dark">/,
+    "the lightbox controls must use an on-scrim tone instead of inheriting the reader theme",
+  );
+  assertPresent(
+    bottomSheet,
+    /const darkTone = tone === "dark";[\s\S]{0,2200}bgcolor: darkTone[\s\S]{0,120}"rgba\(24, 24, 28, 0\.9\)"[\s\S]{0,1800}backdropFilter: darkTone \? "none"/,
+    "the on-scrim island must stay dark and avoid a milky live blur",
+  );
+  assertPresent(
+    imageLightbox,
+    /const ctrlBtnSx:[\s\S]{0,500}color: "inherit"[\s\S]{0,360}"&\.Mui-disabled": \{ color: "rgba\(255, 255, 255, 0\.3\)" \}/,
+    "lightbox controls must keep light foreground contrast in every reader theme",
+  );
   assertPresent(
     markdownViewer,
     /for \(const attr of \[\.\.\.node\.attributes\]\)[\s\S]{0,240}node\.setAttribute\(attr\.name, replaceFont\(attr\.value\)\)[\s\S]{0,500}new XMLSerializer\(\)\.serializeToString\(clone\)/,

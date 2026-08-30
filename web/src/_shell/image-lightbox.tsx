@@ -279,7 +279,7 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
             pointerEvents: "auto",
           }}
         >
-          <FloatingActionIsland maxWidth="100%">
+          <FloatingActionIsland maxWidth="100%" tone="dark">
             <Box sx={barSx}>
               {images.length > 1
                 ? (
@@ -335,8 +335,10 @@ const dockStyle: React.CSSProperties = {
   pointerEvents: "none",
 };
 
-// The controls share the same liquid-glass island as mobile sheet actions.
-// Their individual hit targets remain distinct without hard separators.
+// The controls share the same island geometry as mobile sheet actions, but the
+// lightbox always requests its dark tone. The backdrop is near-black regardless
+// of the reader theme, so inheriting a light/sepia island would create a glaring
+// silver capsule with dark glyphs on this otherwise dark surface.
 const barSx = {
   display: "flex",
   alignItems: "center",
@@ -358,13 +360,13 @@ const ctrlBtnSx: NonNullable<React.ComponentProps<typeof IconButton>["sx"]> = {
   padding: 0,
   fontSize: "1rem",
   lineHeight: 1,
-  color: "text.primary",
+  color: "inherit",
   transition: "transform 160ms cubic-bezier(0.22, 1, 0.36, 1), background-color 160ms ease",
   "&:active": {
     transform: "scale(0.94)",
-    backgroundColor: "action.selected",
+    backgroundColor: "rgba(255, 255, 255, 0.1)",
   },
-  "&.Mui-disabled": { color: "text.disabled" },
+  "&.Mui-disabled": { color: "rgba(255, 255, 255, 0.3)" },
 };
 
 const ctrlIconSx = {
@@ -383,7 +385,7 @@ function ControlIcon({ path }: { readonly path: string }): React.JSX.Element {
 const counterSx = {
   flex: "0 0 auto",
   padding: "0 0.375rem",
-  color: "text.primary",
+  color: "inherit",
   fontSize: "0.8125rem",
   fontVariantNumeric: "tabular-nums",
   whiteSpace: "nowrap",
