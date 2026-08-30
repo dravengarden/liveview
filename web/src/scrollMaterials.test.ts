@@ -475,20 +475,20 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /\[data-spatial-drawer\]\[aria-hidden="false"\][\s\S]{0,100}~\s*\[data-spatial-drawer-surface\][\s\S]{0,100}\[data-lv-playback-bar="true"\][\s\S]{0,160}visibility:\s*hidden;[\s\S]{0,80}pointer-events:\s*none;/,
     "the spatial drawer preview must preserve playback chrome",
   );
-  assertPresent(
+  assertAbsent(
     mobileStyles,
-    /@media \(max-width: 599\.95px\)[\s\S]{0,240}\[data-spatial-drawer-moving\] \[data-lv-playback-bar="true"\][\s\S]{0,100}visibility: hidden;[\s\S]{0,80}pointer-events: none;/,
-    "direct phone manipulation must conceal clipped full-width playback chrome without changing its geometry",
+    /\[data-spatial-drawer-moving\][\s\S]{0,120}\[data-lv-playback-bar="true"\][\s\S]{0,120}visibility:\s*hidden/,
+    "direct spatial manipulation must keep the full playback bar attached to the reader",
+  );
+  assertAbsent(
+    mobileStyles,
+    /\[data-spatial-drawer-moving\][\s\S]{0,120}\[data-lv-spatial-accessory\][\s\S]{0,120}display:\s*flex/,
+    "compact playback must wait for the drawer's committed open state",
   );
   assertPresent(
-    mobileStyles,
-    /\[data-spatial-drawer-moving\] \[data-lv-shell-bar="true"\][\s\S]{0,100}background-color: var\(--lv-page-bg\);/,
-    "the bottom navigation must keep an opaque material while the playback slab is concealed",
-  );
-  assertPresent(
-    mobileStyles,
-    /\[data-spatial-drawer-moving\] \[data-lv-spatial-accessory\][\s\S]{0,100}display: flex;[\s\S]{0,80}pointer-events: none;/,
-    "the compact phone playback entry must replace the full transport during direct manipulation",
+    navShell,
+    /data-lv-spatial-accessory[\s\S]{0,1200}display: mobileOpen \? "flex" : "none"[\s\S]{0,300}pointerEvents: mobileOpen \? "auto" : "none"/,
+    "the compact playback entry must appear only after the spatial drawer settles open",
   );
   assertPresent(
     detentSheet,

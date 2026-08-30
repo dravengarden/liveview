@@ -698,10 +698,9 @@ export function NavShell(props: NavShellProps): ReactNode {
             // This rail is a sibling of the translated reader, so it remains
             // inside the actually-visible trailing 16% instead of being clipped
             // with the reader's full-width transport. It sits above the reader's
-            // tap-to-close backdrop only for this bounded control. The phone
-            // gesture stylesheet also reveals it during direct manipulation,
-            // before React commits `mobileOpen`, so the full transport never
-            // appears as a clipped half-control while the finger is down.
+            // tap-to-close backdrop only for this bounded control. Keep it hidden
+            // during direct manipulation so the full transport moves continuously
+            // with the reader; reveal it only after React commits `mobileOpen`.
             zIndex: (t) => t.zIndex.modal,
             left: { xs: SPATIAL_PHONE_WIDTH, sm: SPATIAL_TABLET_WIDTH },
             right: 0,

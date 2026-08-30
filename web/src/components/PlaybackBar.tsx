@@ -252,13 +252,12 @@ export function PlaybackBar(
           below it. The bar renders bare (NavShell `barTransparent`) over the
           slab's bottom `--shell-bar-h`, so both controls remain one continuous
           surface without a seam. This slab travels with the complete reader
-          surface and remains available in the settled spatial preview. During
-          direct phone manipulation, the shell temporarily conceals both slab
-          and controls while its compact stationary playback entry takes over;
-          visibility preserves this bar's measured geometry. Height tracks the
-          measured transport (`--lv-transport-h`) + the bar (`--shell-bar-h`; 0
-          on desktop, where the bar is a top sibling and this is just the
-          transport's own material). */
+          surface and remains visible while that surface follows a spatial
+          drawer gesture. Once the drawer settles open, its compact stationary
+          playback entry supplements the translated transport. Height tracks
+          the measured transport (`--lv-transport-h`) + the bar
+          (`--shell-bar-h`; 0 on desktop, where the bar is a top sibling and
+          this is just the transport's own material). */
       }
       <Box
         aria-hidden
