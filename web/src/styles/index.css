@@ -40,6 +40,29 @@ body {
   -webkit-touch-callout: none;
 }
 
+/* A phone's spatial Contents gesture starts as direct DOM manipulation; React
+   does not commit the open state until release. While the finger is down, the
+   full-width playback slab therefore moves with the reader and would otherwise
+   be clipped into a wide, partial control panel. Keep its measured geometry but
+   conceal its paint, give the exposed bottom nav its own opaque material, and
+   reveal the stationary compact playback entry early. The settled drawer keeps
+   the normal playback preview, and tablet widths retain their full transport. */
+@media (max-width: 599.95px) {
+  [data-spatial-drawer-moving] [data-lv-playback-bar="true"] {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
+  [data-spatial-drawer-moving] [data-lv-shell-bar="true"] {
+    background-color: var(--lv-page-bg);
+  }
+
+  [data-spatial-drawer-moving] [data-lv-spatial-accessory] {
+    display: flex;
+    pointer-events: none;
+  }
+}
+
 /* The exceptions: actual reading text and form fields stay selectable. (The
    read-aloud long-press handler still toggles an inline `user-select: none` on
    .markdown-body while paused — inline wins, so seek-on-long-press is unaffected;

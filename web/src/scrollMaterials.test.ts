@@ -417,6 +417,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     navShell,
+    /component="header"[\s\S]{0,100}data-lv-shell-bar="true"/,
+    "the bottom navigation must expose its material for direct spatial manipulation",
+  );
+  assertPresent(
+    navShell,
     /left: \{ xs: SPATIAL_PHONE_WIDTH, sm: SPATIAL_TABLET_WIDTH \}[\s\S]{0,180}bottom: "calc\(var\(--shell-bar-h, 0px\) \+ 12px\)"/,
     "the spatial companion must occupy the visible rail above the bottom navigation",
   );
@@ -454,6 +459,21 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     mobileStyles,
     /\[data-spatial-drawer\]\[aria-hidden="false"\][\s\S]{0,100}~\s*\[data-spatial-drawer-surface\][\s\S]{0,100}\[data-lv-playback-bar="true"\][\s\S]{0,160}visibility:\s*hidden;[\s\S]{0,80}pointer-events:\s*none;/,
     "the spatial drawer preview must preserve playback chrome",
+  );
+  assertPresent(
+    mobileStyles,
+    /@media \(max-width: 599\.95px\)[\s\S]{0,240}\[data-spatial-drawer-moving\] \[data-lv-playback-bar="true"\][\s\S]{0,100}visibility: hidden;[\s\S]{0,80}pointer-events: none;/,
+    "direct phone manipulation must conceal clipped full-width playback chrome without changing its geometry",
+  );
+  assertPresent(
+    mobileStyles,
+    /\[data-spatial-drawer-moving\] \[data-lv-shell-bar="true"\][\s\S]{0,100}background-color: var\(--lv-page-bg\);/,
+    "the bottom navigation must keep an opaque material while the playback slab is concealed",
+  );
+  assertPresent(
+    mobileStyles,
+    /\[data-spatial-drawer-moving\] \[data-lv-spatial-accessory\][\s\S]{0,100}display: flex;[\s\S]{0,80}pointer-events: none;/,
+    "the compact phone playback entry must replace the full transport during direct manipulation",
   );
   assertPresent(
     detentSheet,

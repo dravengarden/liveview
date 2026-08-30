@@ -444,6 +444,7 @@ export function NavShell(props: NavShellProps): ReactNode {
         <Box
           component="header"
           ref={barFrosted ? barRef : undefined}
+          data-lv-shell-bar="true"
           sx={{
             flexShrink: 0,
             // Bottom mode flips the bar below the content via flex order (one
@@ -697,7 +698,10 @@ export function NavShell(props: NavShellProps): ReactNode {
             // This rail is a sibling of the translated reader, so it remains
             // inside the actually-visible trailing 16% instead of being clipped
             // with the reader's full-width transport. It sits above the reader's
-            // tap-to-close backdrop only for this bounded control.
+            // tap-to-close backdrop only for this bounded control. The phone
+            // gesture stylesheet also reveals it during direct manipulation,
+            // before React commits `mobileOpen`, so the full transport never
+            // appears as a clipped half-control while the finger is down.
             zIndex: (t) => t.zIndex.modal,
             left: { xs: SPATIAL_PHONE_WIDTH, sm: SPATIAL_TABLET_WIDTH },
             right: 0,
