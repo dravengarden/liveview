@@ -77,6 +77,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     themeHook,
+    /case "sepia":[\s\S]{0,300}bgDefault: "#f3ecdf"[\s\S]{0,220}bgPaper: "#f7efe3"[\s\S]{0,220}divider: "#d8c9b2"/,
+    "the warm theme must keep a visible paper hierarchy instead of near-white chrome",
+  );
+  assertPresent(
+    themeHook,
     /backgroundColor\s*=\s*`var\(--lv-safe-area-bg, \$\{c\.bgDefault\}\)`/,
     "the document safe area must accept a temporary shell-owned surface",
   );
@@ -99,6 +104,16 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     markdownStyles,
     /background-color:\s*var\(--lv-page-bg,\s*#ffffff\)/,
     "the Markdown column must share the themed page instead of becoming a white card",
+  );
+  assertPresent(
+    mobileStyles,
+    /\[data-theme="sepia"\] \.markdown-body \{[^}]*background-color:\s*var\(--lv-page-bg\)/,
+    "the warm Markdown column must follow the resolved page canvas",
+  );
+  assertPresent(
+    mobileStyles,
+    /\[data-theme="sepia"\] \.markdown-body table tr \{[^}]*background-color:\s*var\(--lv-page-bg\)/,
+    "warm tables must not reintroduce the retired page cream",
   );
   assertPresent(
     viteConfig,

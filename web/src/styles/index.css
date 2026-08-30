@@ -323,7 +323,10 @@ textarea,
 [data-theme="sepia"] .markdown-body {
   color-scheme: light;
   color: #5b4636;
-  background-color: #f4ecd8;
+  /* useTheme owns the page canvas. Keeping a second historic cream here made
+     the prose column, chapter-end whitespace, and navigation rail look like
+     three unrelated off-whites after palette changes. */
+  background-color: var(--lv-page-bg);
 }
 
 [data-theme="sepia"] .markdown-body a {
@@ -355,7 +358,7 @@ textarea,
 }
 
 [data-theme="sepia"] .markdown-body table tr {
-  background-color: #f4ecd8;
+  background-color: var(--lv-page-bg);
   border-top-color: #ddd0b8;
 }
 

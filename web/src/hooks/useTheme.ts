@@ -148,10 +148,12 @@ function getThemeColors(theme: Theme): ThemeColors {
       return {
         primary: LIVEVIEW_BRAND.accent,
         bgDefault: "#f3ecdf",
-        bgPaper: "#fcf7ee",
+        // Keep raised chrome recognisably warm. The previous near-white paper
+        // washed out large surfaces such as the spatial contents rail.
+        bgPaper: "#f7efe3",
         textPrimary: "#453c35",
         textSecondary: "#74685f",
-        divider: "#dfd3c1",
+        divider: "#d8c9b2",
       };
     case "dark":
       return {
