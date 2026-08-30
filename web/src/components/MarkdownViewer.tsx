@@ -9,6 +9,7 @@ import { InteractiveViewInline } from "./viewers/InteractiveViewViewer";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { useInPlaceHighlight } from "@/hooks/useInPlaceHighlight";
 import { ensureScript, ensureStyle, publicAsset } from "@/ensureAsset";
+import { adaptMermaidLabelContrast } from "./mermaid-contrast";
 
 declare global {
   interface Window {
@@ -394,6 +395,7 @@ export function MarkdownViewer({
             );
             if (divs && divs.length > 0) {
               void window.mermaid.run({ nodes: divs }).then(() => {
+                adaptMermaidLabelContrast(divs);
                 setDiagramTick((tk) => tk + 1);
               });
             }
@@ -530,6 +532,7 @@ export function MarkdownViewer({
       });
       window.mermaid.initialize(mermaidConfig(isDarkScheme()));
       void window.mermaid.run({ nodes: divs }).then(() => {
+        adaptMermaidLabelContrast(divs);
         setDiagramTick((tk) => tk + 1);
       });
     });

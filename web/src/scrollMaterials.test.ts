@@ -642,6 +642,14 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /serializeToString\(clone\)[\s\S]{0,600}\.replaceAll\("var\(--lv-reading-font\)"/,
     "serialized SVG attributes must not receive unescaped font-family quotes",
   );
+  const mermaidContrastRuns = markdownViewer.match(
+    /adaptMermaidLabelContrast\(divs\);/g,
+  ) ?? [];
+  if (mermaidContrastRuns.length !== 2) {
+    throw new Error(
+      "initial and theme-toggle Mermaid renders must both repair low-contrast node labels",
+    );
+  }
   assertPresent(
     shell,
     /display: activeSlug === null \? "flex" : "none"/,
