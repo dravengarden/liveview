@@ -240,6 +240,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /!searchEditing && \([\s\S]{0,180}data-lv-shelf-actions/,
     "filter and settings actions must yield the phone toolbar while search is editing",
   );
+  assertPresent(
+    landing,
+    /title=\{t\("landing\.sortFilter"\)\}[\s\S]{0,220}floatingActions=\{false\}[\s\S]{0,120}actions=/,
+    "the long mobile facet list must reserve a footer instead of hiding chips behind floating actions",
+  );
   assertAbsent(
     landing,
     /\bcontain\s*:/,

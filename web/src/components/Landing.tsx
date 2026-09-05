@@ -1461,6 +1461,9 @@ export function Landing({
         onClose={() => setSfOpen(false)}
         title={t("landing.sortFilter")}
         wide
+        // This catalog can contain thousands of facet chips. Keep its actions
+        // in a real footer so they never obscure the choices being reviewed.
+        floatingActions={false}
         actions={
           <>
             <Button
