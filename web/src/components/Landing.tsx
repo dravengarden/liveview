@@ -61,6 +61,7 @@ import {
   buildBookSearchIndex,
   buildLibraryTaxonomy,
   countTagFacetMatches,
+  facetStartsFolded,
   matchesTagFacets,
   type ReadingFilter,
   readingState,
@@ -834,6 +835,8 @@ export function Landing({
   // The combined Sort & Filter sheet (one toolbar control for both the shelf order
   // and the kind narrowing — the two list-organizing concerns in one place).
   const [sfOpen, setSfOpen] = useState(false);
+  // Explicit fold choices per facet; absent facets use `facetStartsFolded`.
+  const [facetOpen, setFacetOpen] = useState<Record<string, boolean>>({});
   // Bulk folding must not animate dozens of card grids at once: doing so creates
   // a large layout/paint burst in WKWebView. Individual sections still use a
   // short transition; expand/collapse-all applies in one frame.
@@ -1499,33 +1502,89 @@ export function Landing({
               </Stack>
             </Stack>
           )}
-          {libraryTaxonomy.facets.map((facet) => (
-            <Stack key={facet.id} spacing={1}>
-              <Typography variant="overline" color="text.secondary">
-                {facet.id === "tags" ? t("landing.tags") : facet.label}
-              </Typography>
-              <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
-                {libraryTaxonomy.tags.filter((tag) =>
-                  tag.facet === facet.id
-                )
-                  .map((tag) => {
-                    const selected = selectedTags.has(tag.id);
-                    const count = tagCounts.get(tag.id) ?? 0;
-                    return (
-                      <Chip
-                        key={tag.id}
-                        label={`${tag.label} · ${count}`}
-                        color={selected ? "primary" : "default"}
-                        variant={selected ? "filled" : "outlined"}
-                        disabled={!selected && count === 0}
-                        onClick={() => toggleTag(tag.id)}
-                        sx={{ minHeight: 40 }}
-                      />
-                    );
-                  })}
+          {libraryTaxonomy.facets.map((facet) => {
+            const facetTags = libraryTaxonomy.tags.filter((tag) =>
+              tag.facet === facet.id
+            );
+            const selectedInFacet = facetTags.filter((tag) =>
+              selectedTags.has(tag.id)
+            ).length;
+            const open = facetOpen[facet.id] ??
+              !facetStartsFolded(facetTags.length);
+            return (
+              <Stack key={facet.id} spacing={1}>
+                <Box
+                  component="button"
+                  type="button"
+                  aria-expanded={open}
+                  onClick={() =>
+                    setFacetOpen((current) => ({
+                      ...current,
+                      [facet.id]: !open,
+                    }))}
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 1,
+                    width: "100%",
+                    minHeight: 40,
+                    p: 0,
+                    border: 0,
+                    bgcolor: "transparent",
+                    color: "text.secondary",
+                    font: "inherit",
+                    textAlign: "left",
+                    cursor: "pointer",
+                  }}
+                >
+                  <Typography variant="overline" sx={{ flex: 1, minWidth: 0 }}>
+                    {facet.id === "tags" ? t("landing.tags") : facet.label}
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    sx={{ fontVariantNumeric: "tabular-nums" }}
+                  >
+                    {selectedInFacet > 0
+                      ? t("landing.facetSelected", {
+                        n: selectedInFacet,
+                        total: facetTags.length,
+                      })
+                      : facetTags.length}
+                  </Typography>
+                  <ExpandMoreIcon
+                    fontSize="small"
+                    sx={{
+                      transition: "transform .2s",
+                      transform: open ? "rotate(180deg)" : "none",
+                    }}
+                  />
+                </Box>
+                {
+                  /* Folded facets don't mount their chips: a catalog-wide
+                    facet can hold hundreds of them. */
+                }
+                <Collapse in={open} timeout={180} unmountOnExit>
+                  <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
+                    {facetTags.map((tag) => {
+                      const selected = selectedTags.has(tag.id);
+                      const count = tagCounts.get(tag.id) ?? 0;
+                      return (
+                        <Chip
+                          key={tag.id}
+                          label={`${tag.label} · ${count}`}
+                          color={selected ? "primary" : "default"}
+                          variant={selected ? "filled" : "outlined"}
+                          disabled={!selected && count === 0}
+                          onClick={() => toggleTag(tag.id)}
+                          sx={{ minHeight: 40 }}
+                        />
+                      );
+                    })}
+                  </Stack>
+                </Collapse>
               </Stack>
-            </Stack>
-          ))}
+            );
+          })}
           <Stack spacing={1}>
             <Typography variant="overline" color="text.secondary">
               {t("landing.readingState")}

@@ -73,6 +73,15 @@ export function buildLibraryTaxonomy(
   };
 }
 
+/** Facets with more values than this start folded in the filter sheet. A
+ * catalog-wide tag facet can hold hundreds of chips that bury the reading-state
+ * and sort controls; small facets stay open because folding them only adds a tap. */
+export const FACET_FOLD_THRESHOLD = 12;
+
+export function facetStartsFolded(valueCount: number): boolean {
+  return valueCount > FACET_FOLD_THRESHOLD;
+}
+
 /** Exact tag IDs carried by a book. Collections remain an independent
  * editorial grouping and never implicitly classify content. */
 export function discoveryTagIds(book: Book): Set<string> {

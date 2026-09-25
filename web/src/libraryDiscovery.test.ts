@@ -3,6 +3,8 @@ import {
   buildLibraryTaxonomy,
   countTagFacetMatches,
   discoveryTagIds,
+  FACET_FOLD_THRESHOLD,
+  facetStartsFolded,
   matchesTagFacets,
   readingState,
   scoreBookSearchIndex,
@@ -192,4 +194,10 @@ Deno.test("reading state uses the furthest rendition", () => {
     }),
     "finished",
   );
+});
+
+Deno.test("only large facets start folded in the filter sheet", () => {
+  assertEquals(facetStartsFolded(0), false);
+  assertEquals(facetStartsFolded(FACET_FOLD_THRESHOLD), false);
+  assertEquals(facetStartsFolded(FACET_FOLD_THRESHOLD + 1), true);
 });
