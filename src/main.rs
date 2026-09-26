@@ -14,7 +14,7 @@ use axum::{
     Extension, Router,
     body::Body,
     extract::{DefaultBodyLimit, Query, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
 };
@@ -1307,6 +1307,26 @@ async fn api_sizes(State(state): State<SharedState>, headers: HeaderMap) -> Resp
 const APM_MAX_EVENTS: usize = 1_000;
 const APM_MAX_BODY_BYTES: usize = 256 * 1024;
 
+/// Dedicated APM credential header. `Authorization` is owned by the optional
+/// LIVEVIEW_ACCESS_TOKEN proxy policy (the trusted proxy overwrites it on every
+/// upstream request), so a client behind that proxy cannot also carry the APM
+/// bearer there. This header carries the APM token independently.
+const APM_TOKEN_HEADER: &str = "x-liveview-apm-token";
+
+/// The APM token may arrive in [`APM_TOKEN_HEADER`] or, for existing clients,
+/// as `Authorization: Bearer <token>`.
+fn apm_token_matches(headers: &HeaderMap, want: &str) -> bool {
+    let dedicated = headers
+        .get(APM_TOKEN_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim);
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    dedicated == Some(want) || bearer == Some(want)
+}
+
 async fn api_ingest(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1316,17 +1336,12 @@ async fn api_ingest(
         // No VL configured (preview) — accept + drop so a dev client doesn't spin.
         return StatusCode::OK;
     };
-    // Bearer auth when a token is configured; an open sink requires explicit
+    // Token auth when a token is configured; an open sink requires explicit
     // LIVEVIEW_APM_ALLOW_UNAUTHENTICATED configuration at startup.
-    if let Some(want) = apm.token.as_deref() {
-        let got = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .unwrap_or("");
-        if got != want {
-            return StatusCode::UNAUTHORIZED;
-        }
+    if let Some(want) = apm.token.as_deref()
+        && !apm_token_matches(&headers, want)
+    {
+        return StatusCode::UNAUTHORIZED;
     }
     if events.is_empty() {
         return StatusCode::OK;
@@ -1603,7 +1618,12 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
                 header::AUTHORIZATION,
                 header::CONTENT_TYPE,
                 header::IF_NONE_MATCH,
-            ]),
+                HeaderName::from_static(APM_TOKEN_HEADER),
+            ])
+            // Cache preflights: every conditional DAG/manifest fetch from the
+            // native shell is otherwise preceded by an OPTIONS round trip.
+            // Browsers clamp this to their own maximum.
+            .max_age(std::time::Duration::from_secs(3600)),
     )
 }
 

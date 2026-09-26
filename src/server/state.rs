@@ -20,7 +20,8 @@ pub struct ApmSink {
     /// Full VictoriaLogs `/insert/jsonline` URL, incl. `_msg`/`_time`/`_stream`
     /// query params.
     pub vl_url: String,
-    /// Shared secret the client must present as `Authorization: Bearer <token>`.
+    /// Shared secret the client must present in `X-LiveView-APM-Token` or, for
+    /// clients not behind the access-token proxy, `Authorization: Bearer <token>`.
     /// `None` = auth disabled (dev/local): the endpoint accepts unauthenticated.
     pub token: Option<String>,
 }
