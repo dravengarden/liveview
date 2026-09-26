@@ -28,6 +28,7 @@ import {
 import type { ReactNode } from "react";
 
 import { DetentSheet } from "./detent-sheet.tsx";
+import { useShellLabels } from "./shell-labels.tsx";
 
 export interface BottomSheetProps {
   readonly open: boolean;
@@ -123,9 +124,14 @@ export function FloatingActionIsland(
           ? "rgba(255, 255, 255, 0.14)"
           : (t) => alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.18 : 0.62),
         borderRadius: 999,
+        // Static alpha surfaces only. The adaptive island floats over a sheet's
+        // SCROLLING body, where a live backdrop blur (or a filtered highlight)
+        // makes WebKit re-rasterize the moving content under it every frame.
+        // The adaptive tint is therefore opaque enough to stay legible without
+        // any blur, and the glass read comes from the painted sheen below.
         bgcolor: darkTone
           ? "rgba(24, 24, 28, 0.9)"
-          : (t) => alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.48 : 0.42),
+          : (t) => alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.9 : 0.92),
         backgroundImage: darkTone
           ? (t) =>
             `linear-gradient(180deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.012) 48%, ${
@@ -155,8 +161,6 @@ export function FloatingActionIsland(
               `inset 0 -1px 0 ${alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.18 : 0.12)}`,
             ].join(", ");
           },
-        backdropFilter: darkTone ? "none" : "blur(34px) saturate(190%) contrast(108%)",
-        WebkitBackdropFilter: darkTone ? "none" : "blur(34px) saturate(190%) contrast(108%)",
         color: darkTone ? "rgba(255, 255, 255, 0.88)" : undefined,
         userSelect: "none",
         WebkitUserSelect: "none",
@@ -186,13 +190,15 @@ export function FloatingActionIsland(
           top: 1,
           height: "42%",
           borderRadius: "999px 999px 50% 50%",
+          // A soft-edged radial highlight painted directly, instead of a hard
+          // gradient softened with a blur filter (a filtered layer re-rasterizes
+          // with the scrolling content beneath it).
           background: darkTone
-            ? "linear-gradient(180deg, rgba(255, 255, 255, 0.09), transparent)"
+            ? "radial-gradient(90% 100% at 50% 0%, rgba(255, 255, 255, 0.09), transparent 72%)"
             : (t) =>
-              `linear-gradient(180deg, ${
+              `radial-gradient(90% 100% at 50% 0%, ${
                 alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.16 : 0.58)
-              }, transparent)`,
-          filter: darkTone ? "blur(6px)" : "blur(7px)",
+              }, transparent 72%)`,
           opacity: darkTone ? 0.45 : 0.72,
         },
         "& > *": { position: "relative", zIndex: 1 },
@@ -323,13 +329,14 @@ export function MobileSheetActionGroup(
 }
 
 export function MobileSheetDismiss(
-  { onClose, label = "Close" }: { readonly onClose: () => void; readonly label?: string },
+  { onClose, label }: { readonly onClose: () => void; readonly label?: string },
 ): ReactNode {
+  const labels = useShellLabels();
   return (
     <MobileSheetActionGroup
       actions={[{
         key: "close",
-        label,
+        label: label ?? labels.close,
         onPress: onClose,
         icon: (
           <CloseIcon
@@ -362,6 +369,7 @@ export function BottomSheet(
   }: BottomSheetProps,
 ): ReactNode {
   const theme = useTheme();
+  const labels = useShellLabels();
   // useMediaQuery must run unconditionally (rules of hooks); OR with forceSheet
   // after.
   const widthIsMobile = useMediaQuery(theme.breakpoints.down("sm"));
@@ -430,7 +438,7 @@ export function BottomSheet(
           </Typography>
           {mobileDismiss === "header" && (
             <IconButton
-              aria-label="close"
+              aria-label={labels.close}
               size="small"
               onClick={onClose}
               onPointerDown={(e) => e.stopPropagation()}

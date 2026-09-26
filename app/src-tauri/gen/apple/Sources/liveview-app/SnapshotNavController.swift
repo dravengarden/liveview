@@ -53,6 +53,9 @@ import WebKit
   /// removed on `ready`.
   private var pendingListSnap: UIView?
   private var pendingPop = false
+  /// Bumped per pop so a stale `readyTimeout` from an earlier pop cannot finish a
+  /// later one before its own `ready` arrives.
+  private var popGeneration = 0
 
   /// A clear, full-screen container above the webview that hosts transition layers.
   private let overlay = UIView()
@@ -128,6 +131,10 @@ import WebKit
     ensureOverlay()
     let w = overlay.bounds.width
     guard w > 0, let detailCover = snapshotOfWeb() else { return }
+    // A new pop supersedes one still waiting for `ready`: drop its held list
+    // snapshot now, or it would stay stranded above the live webview.
+    pendingListSnap?.removeFromSuperview()
+    pendingListSnap = nil
     overlay.isUserInteractionEnabled = true
 
     // Destination shown immediately: the list snapshot from the stack, full screen,
@@ -143,6 +150,8 @@ import WebKit
     detailCover.frame = overlay.bounds
     overlay.addSubview(detailCover)
     pendingPop = true
+    popGeneration &+= 1
+    let generation = popGeneration
 
     // Slide the detail cover off → reveals the list snapshot beneath (or the live
     // webview if no snapshot). The live list re-renders underneath the overlay.
@@ -153,7 +162,7 @@ import WebKit
     a.startAnimation()
 
     DispatchQueue.main.asyncAfter(deadline: .now() + Self.readyTimeout) { [weak self] in
-      guard let self, self.pendingPop else { return }
+      guard let self, self.pendingPop, self.popGeneration == generation else { return }
       self.finishPop()
     }
   }

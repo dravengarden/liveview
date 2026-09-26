@@ -18,8 +18,8 @@ use crate::server::tree::build_virtual_tree;
 use crate::shared::FileType;
 use crate::store::content::{BlobStore, ContentStore};
 use crate::store::model::{
-    AssetRecord, AudioTaskRollup, BookRecord, ChapterRecord, DagArtwork, DagChapter, EditionRecord,
-    ManifestChapter, ProgressEntry, RenditionRecord,
+    AssetRecord, AudioBake, AudioTaskRollup, BookRecord, ChapterRecord, DagArtwork, DagChapter,
+    EditionRecord, ManifestChapter, ProgressEntry, RenditionRecord,
 };
 
 pub struct FsStore {
@@ -219,6 +219,7 @@ impl ContentStore for FsStore {
             marks_hash: None,
             content_hash: String::new(),
             render_version: 0,
+            audio_voice: None,
         };
         if matches!(ft, FileType::Image | FileType::Pdf) {
             // Binary: cache the bytes content-addressed; api_raw fetches them via
@@ -274,18 +275,10 @@ impl ContentStore for FsStore {
         Ok(self.trees.get(rendition).cloned())
     }
 
-    async fn set_chapter_audio(
-        &self,
-        _book_slug: &str,
-        _rendition: &str,
-        _lang: &str,
-        _rel_path: &str,
-        _audio_hash: &str,
-        _marks_hash: &str,
-    ) -> Result<(), String> {
+    async fn set_chapter_audio(&self, _bake: &AudioBake<'_>) -> Result<bool, String> {
         // Ephemeral preview: on-demand audio re-synthesizes each run, so there's
-        // nothing to persist.
-        Ok(())
+        // nothing to persist; the caller's own result is the one to serve.
+        Ok(true)
     }
 
     async fn progress_for_book(&self, _slug: &str) -> Result<Vec<ProgressEntry>, String> {

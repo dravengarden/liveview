@@ -10,4 +10,19 @@ host="${IOS_SIM_MAC_HOST:-macbook-air}"
 helper="$1"
 shift
 
-exec ssh -o BatchMode=yes "$host" "$helper" "$@"
+# ssh joins its arguments with spaces and the remote login shell re-parses the
+# result, so quote each word for that shell; otherwise arguments containing
+# spaces, quotes, or metacharacters (selectors, JS snippets) are split or
+# expanded remotely.
+# A leading `~/` on the helper stays unquoted so the remote shell still expands
+# it to the remote home directory.
+if [[ "$helper" == "~/"* ]]; then
+    remote_helper="~/$(printf '%q' "${helper#\~/}")"
+else
+    remote_helper="$(printf '%q' "$helper")"
+fi
+remote_args=""
+if (($# > 0)); then
+    remote_args=" $(printf '%q ' "$@")"
+fi
+exec ssh -o BatchMode=yes -- "$host" "${remote_helper}${remote_args}"

@@ -30,9 +30,30 @@ import {
   setReplicaOfflineProbe,
   setReplicaRemote,
 } from "./mod.ts";
-import { loadPolicy, setPersistFullSizeArtwork } from "./policy.ts";
+import {
+  disableReplica,
+  loadPolicy,
+  onPersistFullSizeArtworkChange,
+  resetReplicaUsable,
+  setPersistFullSizeArtwork,
+} from "./policy.ts";
 import { REPLICA_FLAG_KEY } from "./schema.ts";
-import { missingTextArt } from "./sync.ts";
+import {
+  missingTextArt,
+  pullMissingTextArt,
+  replayWorklist,
+} from "./sync.ts";
+import { setNativeAudioCacheProbe } from "./media-bridge.ts";
+import {
+  flushBlobTouches,
+  noteBlobAccess,
+  TOUCH_MIN_AGE_MS,
+} from "./blobs.ts";
+import { evictUnpinnedAudioToFit } from "./gc.ts";
+import {
+  fetchServerRoot,
+  replicaAppliedRoot,
+} from "./resolve.ts";
 import { enqueueFetch, getWorklist, setWorklist } from "./worklist.ts";
 
 function buf(text: string): ArrayBuffer {
@@ -69,6 +90,8 @@ async function setup(quotaBytes?: number): Promise<MemoryIdbHandle> {
   installLocalStorage();
   storage.clear();
   setPersistFullSizeArtwork(true);
+  resetReplicaUsable();
+  setNativeAudioCacheProbe(() => false);
   setReplicaOfflineProbe(() => false);
   setReplicaRemote("https://example.test");
   const handle = installMemoryIndexedDB();
@@ -305,6 +328,8 @@ test("worklist mutations serialize overlapping enqueueFetch", async () => {
 
 test("applyDag records dropped audio on worklist.evict in the same apply", async () => {
   await setup();
+  // A native store exists but the cacheDelete post fails, so it stays queued.
+  setNativeAudioCacheProbe(() => true);
   await applyDag({
     protocol_version: 1,
     root: "r1",
@@ -823,4 +848,446 @@ test("enqueueMissingAudio bounds the worklist to remaining cap in one mutation",
   assert.equal(wl.fetch[0]?.hash, "a1");
   await enqueueMissingAudio();
   assert.equal((await getWorklist()).fetch.length, 1);
+});
+
+function installFetchWithInit(
+  handler: (url: string, init?: RequestInit) => Promise<Response> | Response,
+): { calls: { url: string; init?: RequestInit }[]; restore: () => void } {
+  const calls: { url: string; init?: RequestInit }[] = [];
+  const orig = globalThis.fetch;
+  globalThis.fetch = (async (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.href
+      : input.url;
+    calls.push(init === undefined ? { url } : { url, init });
+    return await handler(url, init);
+  }) as typeof fetch;
+  return {
+    calls,
+    restore: () => {
+      globalThis.fetch = orig;
+    },
+  };
+}
+
+function textResource(hash: string, path = `book/text/en/${hash}.md`) {
+  return { path, hash, kind: "text", bytes: 2, url: `/api/blob/${hash}` };
+}
+
+test("replicaAppliedRoot reports the applied root and fetchServerRoot bypasses the cache", async () => {
+  await setup();
+  assert.equal(await replicaAppliedRoot(), null);
+  await applyDag({ protocol_version: 1, root: "r1", resources: [] });
+  assert.equal(await replicaAppliedRoot(), "r1");
+  const ok = installFetch(() =>
+    new Response(JSON.stringify({ protocol_version: 1, root: "r9" }), {
+      status: 200,
+    })
+  );
+  try {
+    // Populate the url-keyed cache the old poll used to read through.
+    await replicaContentFetch("/api/root");
+    assert.equal(await fetchServerRoot(), "r9");
+  } finally {
+    ok.restore();
+  }
+  const down = installFetch(() => {
+    throw new Error("network down");
+  });
+  try {
+    // A cached "r9" must not be reported as the live server root.
+    assert.equal(await fetchServerRoot(), null);
+  } finally {
+    down.restore();
+  }
+  disableReplica();
+  assert.equal(await replicaAppliedRoot(), null);
+});
+
+test("refreshReplicaManifest is single-flight and conditional on the applied root", async () => {
+  await setup();
+  let serverRoot = "r1";
+  const fetchMock = installFetchWithInit((url, init) => {
+    if (url.endsWith("/api/root")) {
+      return new Response(
+        JSON.stringify({ protocol_version: 1, root: serverRoot }),
+        { status: 200 },
+      );
+    }
+    if (url.endsWith("/api/dag")) {
+      const inm = new Headers(init?.headers).get("If-None-Match");
+      if (inm === `"r1"`) return new Response(null, { status: 304 });
+      return new Response(JSON.stringify({
+        protocol_version: 1,
+        root: "r1",
+        resources: [textResource("h1")],
+      }), { status: 200 });
+    }
+    return new Response(null, { status: 404 });
+  });
+  try {
+    const [a, b] = await Promise.all([
+      refreshReplicaManifest(),
+      refreshReplicaManifest(),
+    ]);
+    assert.equal(a, "r1");
+    assert.equal(b, "r1");
+    const urls = fetchMock.calls.map((c) => c.url);
+    assert.equal(urls.filter((u) => u.endsWith("/api/root")).length, 1);
+    assert.equal(urls.filter((u) => u.endsWith("/api/dag")).length, 1);
+
+    fetchMock.calls.length = 0;
+    serverRoot = "r2";
+    // 304 on the conditional DAG keeps the applied root.
+    assert.equal(await refreshReplicaManifest(), "r1");
+    const dag = fetchMock.calls.find((c) => c.url.endsWith("/api/dag"));
+    assert.equal(new Headers(dag?.init?.headers).get("If-None-Match"), `"r1"`);
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("audio cap eviction skips placeholders, enforces the cap, and keeps the row", async () => {
+  await setup();
+  const audio = (hash: string, present: 0 | 1, mtime: number) => ({
+    hash,
+    kind: "audio",
+    bytes: 6,
+    pinned: 0 as const,
+    mtime,
+    present,
+  });
+  await putBlob(audio("a-placeholder", 0, 1));
+  await putBlob(audio("a1", 1, 2));
+  await putBlob(audio("a2", 1, 3));
+  assert.equal((await replicaStats()).audioBytes, 12);
+  const evicted = await evictUnpinnedAudioToFit(6);
+  assert.equal(evicted, 1);
+  assert.equal((await replicaStats()).audioBytes, 6);
+  assert.equal((await getBlobRecord("a-placeholder"))?.present, 0);
+  assert.equal((await getBlobRecord("a1"))?.present, 0);
+  assert.equal((await getBlobRecord("a2"))?.present, 1);
+  // A later re-download still finds the row and counts toward the cap.
+  await setPresent("a1", 1);
+  assert.equal((await getBlobRecord("a1"))?.present, 1);
+  assert.equal((await replicaStats()).audioBytes, 12);
+});
+
+test("quota LRU eviction skips present=0 placeholder rows", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [textResource("ph"), textResource("real")],
+  });
+  await putBlob({
+    hash: "real",
+    kind: "text",
+    bytes: 2,
+    pinned: 0,
+    mtime: Date.now() + 1000,
+    present: 1,
+    data: buf("ab"),
+  });
+  const n = await evictUnpinnedLru({ limit: 1 });
+  assert.equal(n, 1);
+  assert.ok(await getBlobRecord("ph"));
+  assert.equal(await getBlobRecord("real"), undefined);
+});
+
+test("QuotaExceededError is recognized when WebKit leaves txn.error null", async () => {
+  const handle = await setup(30);
+  handle.setWebkitErrorQuirk(true);
+  try {
+    await putBlob({
+      hash: "old",
+      kind: "text",
+      bytes: 20,
+      pinned: 0,
+      mtime: 1,
+      present: 1,
+      data: buf("12345678901234567890"),
+    });
+    await putBlob({
+      hash: "new",
+      kind: "text",
+      bytes: 20,
+      pinned: 0,
+      mtime: 2,
+      present: 1,
+      data: buf("12345678901234567890"),
+    });
+    assert.ok(await getBlob("new"));
+    assert.equal(await getBlobRecord("old"), undefined);
+  } finally {
+    handle.setWebkitErrorQuirk(false);
+  }
+});
+
+test("putBlob throws when eviction rounds run out before the write fits", async () => {
+  await setup(200);
+  for (let i = 0; i < 200; i++) {
+    await putBlob({
+      hash: `small-${String(i).padStart(3, "0")}`,
+      kind: "text",
+      bytes: 1,
+      pinned: 0,
+      mtime: i + 1,
+      present: 1,
+      data: buf("x"),
+    });
+  }
+  await assert.rejects(
+    putBlob({
+      hash: "big",
+      kind: "text",
+      bytes: 150,
+      pinned: 0,
+      mtime: 1000,
+      present: 1,
+      data: buf("y".repeat(150)),
+    }),
+    (error: unknown) => (error as { name?: string }).name === "QuotaExceededError",
+  );
+  assert.equal(await getBlobRecord("big"), undefined);
+});
+
+test("applyDag only rewrites blob rows whose metadata changed", async () => {
+  const handle = await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r1",
+    resources: [textResource("t1"), textResource("t2")],
+  });
+  for (const hash of ["t1", "t2"]) {
+    await putBlob({
+      hash,
+      kind: "text",
+      bytes: 2,
+      pinned: 0,
+      mtime: 1,
+      present: 1,
+      data: buf("ok"),
+    });
+  }
+  const before = handle.factory.putCounts.get("blobs") ?? 0;
+  await applyDag({
+    protocol_version: 1,
+    root: "r2",
+    resources: [textResource("t1"), textResource("t2"), textResource("t3")],
+  });
+  assert.equal((handle.factory.putCounts.get("blobs") ?? 0) - before, 1);
+  assert.ok(await getBlob("t1"));
+});
+
+test("DAG totals count each blob once even when several paths share it", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [
+      textResource("shared", "a/text/en/01.md"),
+      textResource("shared", "b/text/en/01.md"),
+      textResource("solo"),
+    ],
+  });
+  for (const hash of ["shared", "solo"]) {
+    await putBlob({
+      hash,
+      kind: "text",
+      bytes: 2,
+      pinned: 0,
+      mtime: 1,
+      present: 1,
+      data: buf("ok"),
+    });
+  }
+  const stats = await replicaStats();
+  assert.equal(stats.total, 2);
+  assert.equal(stats.cached, stats.total);
+  assert.equal(stats.totalBytes, 4);
+});
+
+test("concurrent artwork materialization shares one URL and never revokes it", async () => {
+  await setup();
+  const png = buf("PNG");
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [{
+      path: "book/@cover",
+      hash: "cov",
+      kind: "cover",
+      bytes: png.byteLength,
+      url: "/api/cover?book=book",
+    }],
+  });
+  await putBlob({
+    hash: "cov",
+    kind: "cover",
+    bytes: png.byteLength,
+    pinned: 0,
+    mtime: 1,
+    present: 1,
+    data: png,
+  });
+  const origRevoke = URL.revokeObjectURL;
+  let revoked = 0;
+  URL.revokeObjectURL = (url: string): void => {
+    revoked += 1;
+    origRevoke(url);
+  };
+  try {
+    const urls = await Promise.all([
+      materializeArtworkSrc("cover", "book"),
+      materializeArtworkSrc("cover", "book"),
+      materializeArtworkSrc("cover", "book"),
+    ]);
+    assert.ok(urls[0]);
+    assert.equal(new Set(urls).size, 1);
+    // A store-hit read of the same bytes must not replace the live URL.
+    const res = await replicaContentFetch("/api/cover?book=book");
+    assert.equal(res.status, 200);
+    assert.equal(artworkBlobSrc("cover", "book"), urls[0]);
+    assert.equal(revoked, 0);
+  } finally {
+    URL.revokeObjectURL = origRevoke;
+    await flushBlobTouches();
+  }
+});
+
+test("eager text fill is single-flight and backs off failing hashes", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [textResource("bad"), textResource("good")],
+  });
+  const fetchMock = installFetch((url) => {
+    if (url.endsWith("/api/blob/bad")) return new Response(null, { status: 500 });
+    return new Response("ok", { status: 200 });
+  });
+  try {
+    await Promise.all([pullMissingTextArt(), pullMissingTextArt()]);
+    assert.equal(fetchMock.calls.length, 2);
+    assert.ok(await getBlob("good"));
+    fetchMock.calls.length = 0;
+    // "bad" is in backoff and "good" is known local: nothing to re-post.
+    await pullMissingTextArt();
+    assert.equal(fetchMock.calls.length, 0);
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("reads degrade to the network when the replica is disabled or IDB breaks", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [textResource("h1")],
+  });
+  await putBlob({
+    hash: "h1",
+    kind: "text",
+    bytes: 5,
+    pinned: 0,
+    mtime: Date.now(),
+    present: 1,
+    data: buf("LOCAL"),
+  });
+  disableReplica();
+  const net = installFetch(() => new Response("NET", { status: 200 }));
+  try {
+    const res = await replicaContentFetch("/api/blob/h1");
+    assert.equal(await res.text(), "NET");
+  } finally {
+    net.restore();
+  }
+  resetReplicaUsable();
+
+  // IndexedDB itself unavailable: init rejects (main.tsx catches it) and reads
+  // still settle instead of rejecting.
+  await closeReplicaDb();
+  const g = globalThis as { indexedDB?: unknown };
+  const saved = g.indexedDB;
+  g.indexedDB = undefined;
+  const down = installFetch(() => {
+    throw new Error("network down");
+  });
+  try {
+    storage.set(REPLICA_FLAG_KEY, "idb");
+    await assert.rejects(initReplica("lazy"));
+    const res = await replicaContentFetch("/api/books");
+    assert.equal(res.status, 504);
+    assert.equal(await materializeArtworkSrc("cover", "none"), undefined);
+  } finally {
+    down.restore();
+    g.indexedDB = saved;
+    await closeReplicaDb();
+  }
+});
+
+test("store hits refresh LRU recency through a debounced touch", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [textResource("old")],
+  });
+  await putBlob({
+    hash: "old",
+    kind: "text",
+    bytes: 2,
+    pinned: 0,
+    mtime: 1,
+    present: 1,
+    data: buf("ok"),
+  });
+  const res = await replicaContentFetch("/api/blob/old");
+  assert.equal(res.status, 200);
+  await flushBlobTouches();
+  const touched = await getBlobRecord("old");
+  assert.ok((touched?.mtime ?? 0) > 1);
+  assert.ok(await getBlob("old"));
+  // A recently touched row is not rewritten again.
+  noteBlobAccess({ hash: "old", mtime: Date.now() - TOUCH_MIN_AGE_MS / 2 });
+  await flushBlobTouches();
+  assert.equal((await getBlobRecord("old"))?.mtime, touched?.mtime);
+});
+
+test("full-size artwork policy flips notify listeners once per change", async () => {
+  await setup();
+  const seen: boolean[] = [];
+  const off = onPersistFullSizeArtworkChange((on) => seen.push(on));
+  try {
+    setPersistFullSizeArtwork(false);
+    setPersistFullSizeArtwork(false);
+    setPersistFullSizeArtwork(true);
+    assert.deepEqual(seen, [false, true]);
+  } finally {
+    off();
+  }
+});
+
+test("without a native audio store, evictions are never queued (PWA)", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r1",
+    resources: [
+      { path: "a", hash: "aud", kind: "audio", bytes: 8, url: "/aud" },
+    ],
+  });
+  await applyDag({ protocol_version: 1, root: "r2", resources: [] });
+  assert.deepEqual((await getWorklist()).evict, []);
+  // Leftovers from an older build are drained rather than kept forever.
+  await setWorklist({ fetch: [], evict: ["stale-audio"] });
+  await replayWorklist();
+  assert.deepEqual((await getWorklist()).evict, []);
 });

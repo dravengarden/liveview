@@ -1,6 +1,6 @@
 import { ingestDag } from "../audioMediaIndex.ts";
 import { contentReplicaStats } from "./agg.ts";
-import { getBlob, putBlob } from "./blobs.ts";
+import { getBlob, getBlobRecord, noteBlobAccess, putBlob } from "./blobs.ts";
 import { idbRequest, withTxn } from "./idb.ts";
 import {
   allPathRecords,
@@ -13,8 +13,9 @@ import {
   pathRecordForHash,
   readRoot,
 } from "./manifest.ts";
-import { persistBodyForKind } from "./policy.ts";
+import { persistBodyForKind, replicaUsable } from "./policy.ts";
 import {
+  type BlobRecord,
   isArtworkKind,
   isAudioKind,
   META_URL_PREFIX,
@@ -71,17 +72,24 @@ function urlCacheKey(norm: string): string {
 }
 
 async function getUrlCache(norm: string): Promise<ArrayBuffer | undefined> {
-  return withTxn([STORE_META], "readonly", async (txn) => {
-    const rec = await idbRequest(
-      txn.objectStore(STORE_META).get(urlCacheKey(norm)) as IDBRequest<
-        MetaRecord | undefined
-      >,
-    );
-    return rec?.value instanceof ArrayBuffer ? rec.value : undefined;
-  });
+  if (!replicaUsable()) return undefined;
+  try {
+    return await withTxn([STORE_META], "readonly", async (txn) => {
+      const rec = await idbRequest(
+        txn.objectStore(STORE_META).get(urlCacheKey(norm)) as IDBRequest<
+          MetaRecord | undefined
+        >,
+      );
+      return rec?.value instanceof ArrayBuffer ? rec.value : undefined;
+    });
+  } catch {
+    // IDB failure is a cache miss, never a rejected read.
+    return undefined;
+  }
 }
 
 async function putUrlCache(norm: string, data: ArrayBuffer): Promise<void> {
+  if (!replicaUsable()) return;
   const rec: MetaRecord = { key: urlCacheKey(norm), value: data };
   await withTxn([STORE_META], "readwrite", async (txn) => {
     await idbRequest(txn.objectStore(STORE_META).put(rec));
@@ -92,11 +100,23 @@ async function fetchAbsolute(
   url: string,
   budgetMs: number,
 ): Promise<Response> {
+  return fetchAbsoluteWith(url, budgetMs);
+}
+
+async function fetchAbsoluteWith(
+  url: string,
+  budgetMs: number,
+  headers?: Record<string, string>,
+): Promise<Response> {
   if (budgetMs <= 0) throw new Error("offline");
   const controller = new AbortController();
   const timer = globalThis.setTimeout(() => controller.abort(), budgetMs);
   try {
-    return await fetch(url, { cache: "no-store", signal: controller.signal });
+    return await fetch(url, {
+      cache: "no-store",
+      signal: controller.signal,
+      ...(headers ? { headers } : {}),
+    });
   } finally {
     globalThis.clearTimeout(timer);
   }
@@ -152,6 +172,9 @@ function rememberArtworkUrl(
   const key = artworkCacheKey(kind, slug);
   const prev = artworkObjectUrls.get(key);
   if (prev) {
+    // Same bytes: an <img> may already be showing this URL; revoking it would
+    // blank that image. Only a changed hash replaces (and revokes) the URL.
+    if (prev.hash === hash) return prev.url;
     artworkObjectUrls.delete(key);
     revokeObjectUrl(prev.url);
   }
@@ -197,31 +220,60 @@ export function resetArtworkObjectUrls(): void {
     revokeObjectUrl(entry.url);
   }
   artworkObjectUrls.clear();
+  artworkLoads.clear();
 }
 
+/** One IDB read per (kind, slug, hash) at a time; concurrent callers share it. */
+const artworkLoads = new Map<string, Promise<string | undefined>>();
+
 /** IDB-backed blob: URL when the artwork body is local. */
-export async function materializeArtworkSrc(
+export function materializeArtworkSrc(
   kind: string,
   slug: string,
 ): Promise<string | undefined> {
   const rec = artworkRecord(kind, slug);
   if (!rec) {
     forgetArtworkUrl(artworkCacheKey(kind, slug));
-    return undefined;
+    return Promise.resolve(undefined);
   }
   const cached = artworkBlobSrc(kind, slug);
-  if (cached) return cached;
-  const data = await getBlob(rec.hash);
-  if (!data) return undefined;
-  return rememberArtworkUrl(kind, slug, rec.hash, data);
+  if (cached) return Promise.resolve(cached);
+  if (!replicaUsable()) return Promise.resolve(undefined);
+  const loadKey = `${artworkCacheKey(kind, slug)}\0${rec.hash}`;
+  const inFlight = artworkLoads.get(loadKey);
+  if (inFlight) return inFlight;
+  const load = (async (): Promise<string | undefined> => {
+    try {
+      const data = await getBlob(rec.hash);
+      if (!data) return undefined;
+      return rememberArtworkUrl(kind, slug, rec.hash, data);
+    } catch {
+      return undefined;
+    } finally {
+      artworkLoads.delete(loadKey);
+    }
+  })();
+  artworkLoads.set(loadKey, load);
+  return load;
+}
+
+async function localRecord(hash: string): Promise<BlobRecord | undefined> {
+  try {
+    return await getBlobRecord(hash);
+  } catch {
+    // IDB failure degrades to the network path instead of rejecting a read.
+    return undefined;
+  }
 }
 
 async function resolveManifest(
   rec: PathRecord,
   opts?: ReplicaContentFetchOpts,
 ): Promise<Response> {
-  const local = await getBlob(rec.hash);
-  if (local) {
+  const row = await localRecord(rec.hash);
+  const local = row?.data;
+  if (row && local) {
+    noteBlobAccess(row);
     noteArtwork(rec, local);
     return new Response(local, { status: 200 });
   }
@@ -305,7 +357,11 @@ export async function replicaContentFetch(
   opts?: ReplicaContentFetchOpts,
 ): Promise<Response> {
   const norm = normalizeReplicaUrl(url);
-  const rec = pathRecordByUrl(norm) ?? blobRecord(norm);
+  // Replica disabled (IndexedDB failed at boot): the path index is empty and
+  // url-keyed cache reads are skipped, so this degrades to plain network reads.
+  const rec = replicaUsable()
+    ? pathRecordByUrl(norm) ?? blobRecord(norm)
+    : undefined;
   if (rec) return resolveManifest(rec, opts);
   return resolveKeyed(norm, opts);
 }
@@ -340,30 +396,60 @@ export async function replicaCacheStats(): Promise<{
   return contentReplicaStats();
 }
 
-/** `/api/dag` only when `/api/root` changed. Ingests audioMediaIndex on apply. */
-export async function refreshReplicaManifest(): Promise<string> {
-  const current = (await readRoot()) ?? "";
-  if (replicaIsOffline()) return current;
-  let nextRoot = current;
+/** The deploy root the replica last applied, or null when none (or when the
+ *  replica is unavailable). Never throws. */
+export async function replicaAppliedRoot(): Promise<string | null> {
+  if (!replicaUsable()) return null;
   try {
-    const rootResp = await fetchAbsolute(
-      absoluteUrl("/api/root"),
-      replicaFetchBudgetMs(),
-    );
-    if (rootResp.ok) {
-      nextRoot = parseRoot(await rootResp.text()).root;
-    }
+    return await readRoot();
   } catch {
-    // Fall through to DAG on first boot so a missing /api/root still heals.
-    if (current) return current;
+    return null;
   }
-  if (current && nextRoot === current) return current;
+}
+
+/** The server's current deploy root via a plain no-store fetch (never the
+ *  url-keyed replica cache: a stale cached root would mask a deploy). Null when
+ *  offline or on any failure. */
+export async function fetchServerRoot(): Promise<string | null> {
+  const budget = replicaFetchBudgetMs();
+  if (budget <= 0) return null;
   try {
-    const dagResp = await fetchAbsolute(
+    const response = await fetchAbsolute(absoluteUrl("/api/root"), budget);
+    if (!response.ok) return null;
+    return parseRoot(await response.text()).root;
+  } catch {
+    return null;
+  }
+}
+
+let manifestRefresh: Promise<string> | null = null;
+
+/** `/api/dag` only when `/api/root` changed. Ingests audioMediaIndex on apply.
+ *  Single-flight: startup, foreground, the root poll, and WS updates may all
+ *  ask at once; they share one root probe and at most one DAG download. */
+export function refreshReplicaManifest(): Promise<string> {
+  manifestRefresh ??= runManifestRefresh().finally(() => {
+    manifestRefresh = null;
+  });
+  return manifestRefresh;
+}
+
+async function runManifestRefresh(): Promise<string> {
+  if (!replicaUsable()) return "";
+  const current = (await replicaAppliedRoot()) ?? "";
+  if (replicaIsOffline()) return current;
+  const serverRoot = await fetchServerRoot();
+  // Fall through to the DAG on first boot so a missing /api/root still heals.
+  if (serverRoot === null && current) return current;
+  if (current && serverRoot === current) return current;
+  try {
+    const dagResp = await fetchAbsoluteWith(
       absoluteUrl("/api/dag"),
       REPLICA_DAG_MS,
+      // The server's DAG ETag is the quoted deploy root.
+      current ? { "If-None-Match": `"${current}"` } : undefined,
     );
-    if (!dagResp.ok) return current;
+    if (dagResp.status === 304 || !dagResp.ok) return current;
     const manifest = parseManifest(await dagResp.text());
     await applyDag(manifest);
     ingestDag(manifest.resources);

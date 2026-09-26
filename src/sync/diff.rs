@@ -13,7 +13,7 @@
 //! No IO: the actual bytes/HTML for a `put` leaf are fetched by the sync layer
 //! afterwards, only for the leaves named here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::merkle::{Dag, Leaf, Node};
 
@@ -50,6 +50,20 @@ pub fn plan(new: &Dag, stored: &Dag) -> Plan {
         Some(stored.root.as_str())
     };
     diff_node(new_root, stored_root, new, stored, &mut p);
+    // Deletes are a PATH-set difference: a leaf path the new corpus still
+    // carries (e.g. under a reshaped subtree) is re-put, never deleted, and a
+    // path is deleted at most once.
+    let live: HashSet<&str> = new
+        .nodes
+        .values()
+        .filter_map(|node| match node {
+            Node::Leaf(l) => Some(l.path.as_str()),
+            Node::Tree(_) => None,
+        })
+        .collect();
+    let mut seen = HashSet::new();
+    p.delete
+        .retain(|l| !live.contains(l.path.as_str()) && seen.insert(l.path.clone()));
     p
 }
 
@@ -191,6 +205,23 @@ mod tests {
         assert!(p.put.is_empty());
         assert_eq!(p.delete.len(), 1);
         assert_eq!(p.delete[0].path, "b1/01");
+    }
+
+    #[test]
+    fn a_path_still_in_the_new_corpus_is_never_deleted() {
+        // Same leaf path under a renamed tree child: the stored child is gone
+        // by name, but its leaf path lives on in `new` — put, not delete.
+        let stored = Dag::build(Build::Tree(vec![(
+            "b1".into(),
+            Build::Tree(vec![("old".into(), leaf("b1/00", "h0"))]),
+        )]));
+        let new = Dag::build(Build::Tree(vec![(
+            "b1".into(),
+            Build::Tree(vec![("new".into(), leaf("b1/00", "h1"))]),
+        )]));
+        let p = plan(&new, &stored);
+        assert_eq!(p.put.len(), 1);
+        assert!(p.delete.is_empty(), "live path must not be deleted: {p:?}");
     }
 
     #[test]

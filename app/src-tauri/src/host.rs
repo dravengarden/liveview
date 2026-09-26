@@ -311,11 +311,76 @@ fn overlay_put_plan(p: &str, v: Option<&str>) -> Result<PutPlan, &'static str> {
     })
 }
 
+/// Write `bytes` to a sibling temp file and rename it over `path`, so a crash or
+/// kill mid-write never leaves a truncated file under the final name. Existence
+/// is the "already downloaded" signal for hashed overlay files, so a partial
+/// file would otherwise be skipped and served forever. A leftover temp file is
+/// not listed by any root manifest and is removed by the next overlay GC.
 fn write_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
+    use std::io::Write as _;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| "write: no parent".to_string())?;
+    std::fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| "write: no file name".to_string())?
+        .to_string_lossy();
+    let tmp = parent.join(format!(
+        ".{name}.tmp-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let result = std::fs::File::create(&tmp)
+        .and_then(|mut file| {
+            file.write_all(bytes)?;
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("write: {error}"));
     }
-    std::fs::write(path, bytes).map_err(|e| format!("write: {e}"))
+    Ok(())
+}
+
+/// True when an overlay path carries a bundler content hash (`name-XXXXXXXX.ext`,
+/// the flat Vite/Rolldown output form), so its bytes can never change under the
+/// same name. Stable names such as `mermaid.min.js` or `icon-192.png` must stay
+/// revalidatable.
+fn is_content_hashed(rel: &str) -> bool {
+    const HASH_LEN: usize = 8;
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    let Some((stem, _ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    let bytes = stem.as_bytes();
+    if bytes.len() <= HASH_LEN {
+        return false;
+    }
+    let (head, hash) = bytes.split_at(bytes.len() - HASH_LEN);
+    head.last() == Some(&b'-')
+        && head.len() > 1
+        && hash
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+}
+
+/// `Cache-Control` for an `/app/*` response. Only a successful content-hashed
+/// asset may be immutable; a 404 or a stable-named file must be refetched so a
+/// later overlay or shell update is observed.
+fn app_cache_control(rel: &str, status: u16) -> &'static str {
+    if status != 200 || rel == "index.html" {
+        "no-store"
+    } else if is_content_hashed(rel) {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    }
 }
 
 fn http_client(connect_ms: u64, timeout_s: u64) -> reqwest::Client {
@@ -327,19 +392,49 @@ fn http_client(connect_ms: u64, timeout_s: u64) -> reqwest::Client {
 }
 
 async fn dl(client: &reqwest::Client, path: &str) -> Result<Vec<u8>, String> {
-    match send_remote(client, &format!("/app-dist/{path}"), |request| request).await {
-        Ok(r) => r
-            .bytes()
-            .await
-            .map(|b| b.to_vec())
-            .map_err(|e| format!("dl-body {path}: {e}")),
-        Err(e) => Err(format!("dl {path}: {e}")),
+    let response = send_remote(client, &format!("/app-dist/{path}"), |request| request)
+        .await
+        .map_err(|e| format!("dl {path}: {e}"))?;
+    let expected = response.content_length();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| format!("dl-body {path}: {e}"))?;
+    check_body_length(path, expected, bytes.len())?;
+    Ok(bytes.to_vec())
+}
+
+fn check_body_length(path: &str, expected: Option<u64>, actual: usize) -> Result<(), String> {
+    match expected {
+        Some(expected) if u64::try_from(actual).ok() != Some(expected) => {
+            Err(format!("dl-body {path}: got {actual} of {expected} bytes"))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The downloaded entry document must boot exactly the version being staged.
+/// A server deploy between the manifest probe and this download would otherwise
+/// pair version A's root with version B's index, whose entry chunk was never
+/// fetched — a permanent white screen once activated.
+fn check_index_version(bytes: &[u8], version: &str) -> Result<(), String> {
+    let found = std::str::from_utf8(bytes).ok().and_then(entry_bundle);
+    if found.as_deref() == Some(version) {
+        Ok(())
+    } else {
+        Err(format!(
+            "index-version-mismatch: want {version}, got {}",
+            found.as_deref().unwrap_or("none")
+        ))
     }
 }
 
 pub struct HostState {
     web_root: PathBuf,
     native_version: String,
+    /// One pooled client for every overlay download: an OTA fetches dozens of
+    /// files and must not rebuild TLS configuration and connections per file.
+    client: reqwest::Client,
 }
 
 impl HostState {
@@ -349,6 +444,7 @@ impl HostState {
         Self {
             web_root,
             native_version,
+            client: http_client(8_000, 120),
         }
     }
 
@@ -381,14 +477,13 @@ impl HostState {
 
     async fn put_from_url(&self, p: &str, v: Option<&str>) -> Result<&'static str, String> {
         let plan = overlay_put_plan(p, v).map_err(str::to_string)?;
-        let client = http_client(8_000, 120);
         match plan {
             PutPlan::Hashed { rel } => {
                 let dest = self.web_root.join("files").join(&rel);
                 if dest.is_file() {
                     return Ok("skipped");
                 }
-                let bytes = dl(&client, &rel).await?;
+                let bytes = dl(&self.client, &rel).await?;
                 write_file(&dest, &bytes)?;
                 Ok("ok")
             }
@@ -398,7 +493,8 @@ impl HostState {
                     .join("roots")
                     .join(ver_dir(&ver))
                     .join("index.html");
-                let bytes = dl(&client, "index.html").await?;
+                let bytes = dl(&self.client, "index.html").await?;
+                check_index_version(&bytes, &ver)?;
                 write_file(&dest, &bytes)?;
                 Ok("ok")
             }
@@ -669,15 +765,15 @@ pub fn handle<R: Runtime>(
                 Some(b) => (200u16, b),
                 None => (404u16, b"not found".to_vec()),
             };
-            let cache = if rel == "index.html" {
-                "no-store"
+            let content_type = if status == 200 {
+                content_type_for(rel, &bytes)
             } else {
-                "public, max-age=31536000, immutable"
+                "text/plain"
             };
             responder.respond(respond(
                 status,
-                content_type_for(rel, &bytes),
-                Some(cache),
+                content_type,
+                Some(app_cache_control(rel, status)),
                 bytes,
             ));
             return;
@@ -994,6 +1090,79 @@ mod tests {
                 .as_deref(),
             Some("assets/index-legacy.js")
         );
+    }
+
+    #[test]
+    fn index_put_rejects_an_index_from_another_deploy() {
+        let index = br#"<script type="module" src="./index-new.js"></script>"#;
+        assert!(check_index_version(index, "index-new.js").is_ok());
+        let err = check_index_version(index, "index-old.js").unwrap_err();
+        assert!(err.contains("index-version-mismatch"), "{err}");
+        assert!(err.contains("index-new.js"), "{err}");
+        // Legacy PWA-style versions keep their `assets/` prefix on both sides.
+        let legacy = br#"<script type="module" src="/assets/index-leg.js"></script>"#;
+        assert!(check_index_version(legacy, "assets/index-leg.js").is_ok());
+        assert!(check_index_version(legacy, "index-leg.js").is_err());
+        // No entry chunk at all (error page, truncated body) never stages.
+        assert!(check_index_version(b"<html>502</html>", "index-new.js").is_err());
+        assert!(check_index_version(&[0xff, 0xfe], "index-new.js").is_err());
+    }
+
+    #[test]
+    fn body_length_must_match_content_length() {
+        assert!(check_body_length("a.js", None, 3).is_ok());
+        assert!(check_body_length("a.js", Some(3), 3).is_ok());
+        assert!(check_body_length("a.js", Some(4), 3).is_err());
+    }
+
+    #[test]
+    fn write_file_replaces_atomically_without_leftovers() {
+        let (root, state) = temp_state("atomic");
+        let dest = state.web_root.join("files").join("index-abc.js");
+        write_file(&dest, b"first").unwrap();
+        write_file(&dest, b"second").unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"second");
+        let names: Vec<String> = std::fs::read_dir(dest.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["index-abc.js".to_string()]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn only_content_hashed_app_assets_are_immutable() {
+        for hashed in [
+            "index-D4f8aB2c.js",
+            "mui-Bx_3-kLq.js",
+            "index-CkS0d9Q1.css",
+            "mermaid.min-0123abcd.js",
+            "assets/index-legacy12.js",
+        ] {
+            assert!(is_content_hashed(hashed), "{hashed}");
+            assert_eq!(
+                app_cache_control(hashed, 200),
+                "public, max-age=31536000, immutable"
+            );
+        }
+        for stable in [
+            "mermaid.min.js",
+            "highlight.min.js",
+            "manifest.webmanifest",
+            "icon-192.png",
+            "maskable-512.png",
+            "apple-touch-icon.png",
+            "brand-mark.svg",
+            "favicon.svg",
+            "katex/fonts/KaTeX_AMS-Regular.woff2",
+            "noext",
+        ] {
+            assert!(!is_content_hashed(stable), "{stable}");
+            assert_eq!(app_cache_control(stable, 200), "no-cache");
+        }
+        assert_eq!(app_cache_control("index-D4f8aB2c.js", 404), "no-store");
+        assert_eq!(app_cache_control("index.html", 200), "no-store");
     }
 
     #[test]

@@ -22,7 +22,21 @@ const styles = new Map<string, Promise<void>>();
  *  "./" in the shell) keeps it under `/app/`. Routing is hash-based, so
  *  document.baseURI stays the index URL and "./" resolves predictably. */
 export function publicAsset(path: string): string {
-  return `${import.meta.env.BASE_URL}${path.replace(/^\//, "")}`;
+  const rel = path.replace(/^\//, "");
+  return `${import.meta.env.BASE_URL}${hashedPublicAssets()[rel] ?? rel}`;
+}
+
+/** App build only (vite.config.ts `hashedPublicScripts`): stable public name →
+ *  content-hashed file name, so native OTA overlays pick up new vendored bytes.
+ *  Undefined in the PWA build, which revalidates stable names itself. */
+declare const __LV_PUBLIC_ASSETS__:
+  | Readonly<Record<string, string>>
+  | undefined;
+
+function hashedPublicAssets(): Readonly<Record<string, string>> {
+  return typeof __LV_PUBLIC_ASSETS__ !== "undefined" && __LV_PUBLIC_ASSETS__
+    ? __LV_PUBLIC_ASSETS__
+    : {};
 }
 
 /** Inject a <script src> once; resolves when it has executed. */

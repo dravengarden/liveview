@@ -9,7 +9,7 @@ import { startOfflineFlagSync } from "./native-sync";
 import { startSyncQueue } from "./syncQueue";
 import { startApm } from "./apm";
 import { startOtaUpdater } from "./otaUpdater";
-import { initReplica, replicaFlag } from "./replica/mod.ts";
+import { disableReplica, initReplica, replicaFlag } from "./replica/mod.ts";
 import "./styles/index.css";
 
 // Choose a reachable native endpoint before any subsystem captures/uses REMOTE.
@@ -40,9 +40,16 @@ startApm();
 startOtaUpdater();
 
 // IDB replica is the content store. Await so the first contentFetch can hit
-// the hydrated path index instead of a cold miss.
+// the hydrated path index instead of a cold miss. An IndexedDB failure (private
+// mode, quota, a corrupt store) must not blank the app: log it and continue
+// with the replica disabled, so reads fall back to the network.
 if (replicaFlag() === "idb") {
-  await initReplica(undefined, { remoteBase: REMOTE, origins: [REMOTE] });
+  try {
+    await initReplica(undefined, { remoteBase: REMOTE, origins: [REMOTE] });
+  } catch (error) {
+    console.error("Replica init failed; continuing network-only:", error);
+    disableReplica();
+  }
 }
 
 // Global haptic delegation: ONE listener set buzzes every MUI control (button /

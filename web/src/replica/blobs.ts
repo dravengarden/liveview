@@ -18,6 +18,30 @@ import {
   type PinnedFlag,
 } from "./schema.ts";
 
+/**
+ * Session-local hint of non-audio hashes whose body is known to be stored, so
+ * the eager-fill scan does not re-read every body on each pass. It is only a
+ * skip hint: a stale entry (e.g. a body evicted by another context) delays an
+ * eager refetch until the next launch, while reads still fall back to network.
+ */
+const knownBodies = new Set<string>();
+
+export function bodyKnownPresent(hash: string): boolean {
+  return knownBodies.has(hash);
+}
+
+export function noteBodyPresent(hash: string): void {
+  knownBodies.add(hash);
+}
+
+export function forgetKnownBodies(hashes: Iterable<string>): void {
+  for (const hash of hashes) knownBodies.delete(hash);
+}
+
+export function resetKnownBodies(): void {
+  knownBodies.clear();
+}
+
 async function putOnce(record: BlobRecord): Promise<void> {
   await withTxn([STORE_BLOBS, STORE_AGG], "readwrite", async (txn) => {
     const store = txn.objectStore(STORE_BLOBS);
@@ -27,6 +51,11 @@ async function putOnce(record: BlobRecord): Promise<void> {
     await idbRequest(store.put(record));
     await applyCachedDelta(txn, old, record);
   });
+  if (record.present === 1 && record.data !== undefined) {
+    knownBodies.add(record.hash);
+  } else {
+    knownBodies.delete(record.hash);
+  }
 }
 
 function stripBody(record: BlobRecord): BlobRecord {
@@ -57,14 +86,18 @@ export function prepareBlobRecord(
   return record;
 }
 
+const PUT_ATTEMPTS = 4;
+
 export async function putBlob(incoming: BlobRecord): Promise<void> {
   const record = prepareBlobRecord(incoming);
-  for (let attempt = 0; attempt < 4; attempt++) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < PUT_ATTEMPTS; attempt++) {
     try {
       await putOnce(record);
       return;
     } catch (error) {
       if (!isQuotaExceeded(error)) throw error;
+      lastError = error;
       const evicted = await evictUnpinnedLru({ limit: GC_BATCH });
       if (evicted === 0) {
         setPersistFullSizeArtwork(false);
@@ -76,6 +109,9 @@ export async function putBlob(incoming: BlobRecord): Promise<void> {
       }
     }
   }
+  // Every round evicted something yet the put still did not fit. Surface the
+  // quota failure instead of reporting a write that never happened.
+  throw lastError ?? new Error("putBlob: quota exceeded after eviction");
 }
 
 export async function getBlobRecord(
@@ -106,6 +142,7 @@ export async function hasBlobRow(hash: string): Promise<boolean> {
 }
 
 export async function deleteBlob(hash: string): Promise<boolean> {
+  knownBodies.delete(hash);
   return withTxn([STORE_BLOBS, STORE_AGG], "readwrite", async (txn) => {
     const store = txn.objectStore(STORE_BLOBS);
     const old = await idbRequest(
@@ -151,14 +188,57 @@ export async function setPinned(
 }
 
 export async function touchBlob(hash: string): Promise<void> {
+  await touchBlobs([hash]);
+}
+
+/** Refresh LRU recency for several rows in one transaction. */
+export async function touchBlobs(hashes: readonly string[]): Promise<void> {
+  if (hashes.length === 0) return;
+  const now = Date.now();
   await withTxn([STORE_BLOBS], "readwrite", async (txn) => {
     const store = txn.objectStore(STORE_BLOBS);
-    const old = await idbRequest(
-      store.get(hash) as IDBRequest<BlobRecord | undefined>,
-    );
-    if (!old) return;
-    await idbRequest(store.put({ ...old, mtime: Date.now() }));
+    for (const hash of hashes) {
+      const old = await idbRequest(
+        store.get(hash) as IDBRequest<BlobRecord | undefined>,
+      );
+      if (!old || old.mtime >= now) continue;
+      await idbRequest(store.put({ ...old, mtime: now }));
+    }
   });
+}
+
+/** A store hit refreshes recency at most once per window: the touch rewrites
+ *  the row, so rereading a chapter must not turn every read into a write. */
+export const TOUCH_MIN_AGE_MS = 10 * 60_000;
+const TOUCH_FLUSH_MS = 2_000;
+const pendingTouches = new Set<string>();
+let touchTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+
+/** Debounced LRU touch for a local read hit; off the read path. */
+export function noteBlobAccess(
+  rec: Pick<BlobRecord, "hash" | "mtime">,
+  now = Date.now(),
+): void {
+  if (now - rec.mtime < TOUCH_MIN_AGE_MS) return;
+  pendingTouches.add(rec.hash);
+  if (touchTimer !== undefined) return;
+  touchTimer = globalThis.setTimeout(() => {
+    touchTimer = undefined;
+    void flushBlobTouches().catch(() => {
+      // Recency is advisory; a failed touch only affects eviction order.
+    });
+  }, TOUCH_FLUSH_MS);
+}
+
+export async function flushBlobTouches(): Promise<void> {
+  if (touchTimer !== undefined) {
+    globalThis.clearTimeout(touchTimer);
+    touchTimer = undefined;
+  }
+  if (pendingTouches.size === 0) return;
+  const hashes = [...pendingTouches];
+  pendingTouches.clear();
+  await touchBlobs(hashes);
 }
 
 export function unpinnedLruRange(): IDBKeyRange {

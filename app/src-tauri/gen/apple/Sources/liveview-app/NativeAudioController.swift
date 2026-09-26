@@ -80,6 +80,9 @@ import WidgetKit
   private var currentExpectedBytes: Int64 = 0
   private var playingFromCache = false
   private var wantsToPlay = false
+  // Set at interruption .began iff the user was playing; consumed at .ended.
+  // Any explicit transport command clears it.
+  private var resumeAfterInterruption = false
 
   // A waiting AVPlayer is not proof that bytes will ever arrive. A truncated
   // local CAF can expose the full header duration, play to the missing body, and
@@ -154,6 +157,11 @@ import WidgetKit
 
   private var dlSessions: [URLSession] = []
   private var dlRR = 0
+  // Pool generation, stamped into each session's `sessionDescription`. A
+  // cellular toggle resets the in-flight accounting and cancels the old pool;
+  // those cancelled tasks still complete later and must not decrement the NEW
+  // pool's counters or clear a key that is in flight again. Main-thread only.
+  private var dlPoolGeneration = 0
 
   /// Build the foreground `.default` pool. Called once eagerly at init and again
   /// after a cellular-policy toggle. Assumes `dlSessions` is empty. Delegate-based
@@ -161,6 +169,7 @@ import WidgetKit
   /// URLSessionDownloadDelegate methods below.
   private func setupDownloadSessions() {
     guard dlSessions.isEmpty else { return }
+    let generation = String(dlPoolGeneration)
     dlSessions = (0..<Self.dlSessionCount).map { index in
       let cfg = URLSessionConfiguration.default
       cfg.httpMaximumConnectionsPerHost = 6
@@ -175,7 +184,9 @@ import WidgetKit
       delegateQueue.name = "lv.audio.download.\(index)"
       delegateQueue.qualityOfService = .utility
       delegateQueue.maxConcurrentOperationCount = 1
-      return URLSession(configuration: cfg, delegate: self, delegateQueue: delegateQueue)
+      let session = URLSession(configuration: cfg, delegate: self, delegateQueue: delegateQueue)
+      session.sessionDescription = generation
+      return session
     }
   }
 
@@ -206,6 +217,7 @@ import WidgetKit
     UserDefaults.standard.set(on, forKey: Self.allowsCellularKey)
     let old = dlSessions
     dlSessions = []
+    dlPoolGeneration &+= 1
     dlInflight = 0
     inFlight.removeAll()
     for s in old { s.invalidateAndCancel() }
@@ -348,12 +360,14 @@ import WidgetKit
         self?.handleTimeControlStatus(player.timeControlStatus)
       }
     }
+    // NWPathMonitor delivers on its own queue; `netPath` is read on main
+    // (netType from load/play/recovery), so publish it there.
     netMonitor.pathUpdateHandler = { [weak self] p in
-      guard let self else { return }
-      self.netPath = p
-      self.emit("{type:'network',net:'\(self.netType())'}")
-      if p.status == .satisfied {
-        DispatchQueue.main.async { [weak self] in self?.startScheduler() }
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.netPath = p
+        self.emit("{type:'network',net:'\(self.netType())'}")
+        if p.status == .satisfied { self.startScheduler() }
       }
     }
     netMonitor.start(queue: DispatchQueue(label: "lv.net"))
@@ -618,8 +632,12 @@ import WidgetKit
     let url = task.originalRequest?.url
     let urlErr = error as? URLError
     let cancelled = urlErr?.code == .cancelled
+    let poolGeneration = session.sessionDescription
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
+      // A retired pool's task: its accounting was already reset by
+      // applyAllowsCellular, and TS re-enqueues anything it still wants.
+      guard poolGeneration == String(self.dlPoolGeneration) else { return }
       self.dlInflight = max(0, self.dlInflight - 1)
       self.inFlight.remove(key)
       if self.dlDrop.contains(key) {
@@ -671,6 +689,7 @@ import WidgetKit
     guard let d, let urlStr = d["url"] as? String, let url = URL(string: urlStr) else { return }
     let position = d["position"] as? Double ?? 0
     wantsToPlay = false
+    resumeAfterInterruption = false
     player.pause()
     rate = d["rate"] as? Double ?? 1
     duration = 0
@@ -695,6 +714,15 @@ import WidgetKit
       // OFFLINE + not downloaded: streaming would just stall forever (the web shows
       // a spinner that never resolves). Fail FAST + proactively so the UI can show a
       // disabled / "not downloaded" state instead of an endless loading icon.
+      // Drop the PREVIOUS chapter's item and Now Playing entry too: otherwise a
+      // lock-screen play would resume the old chapter under the new selection.
+      player.replaceCurrentItem(with: nil)
+      playingFromCache = false
+      nowPlayingInfo = [:]
+      artworkURL = nil
+      let center = MPNowPlayingInfoCenter.default()
+      center.nowPlayingInfo = nil
+      center.playbackState = .stopped
       emit("{type:'error',message:'offline-uncached'}")
       return
     } else {
@@ -719,6 +747,7 @@ import WidgetKit
 
   private func play() {
     wantsToPlay = true
+    resumeAfterInterruption = false
     activateSession()
     if player.currentItem == nil {
       guard let origin = currentOriginURL, netType() != "none" else {
@@ -726,7 +755,8 @@ import WidgetKit
         emit("{type:'error',message:'offline-uncached'}")
         return
       }
-      replaceWithOrigin(origin, position: currentPosition(), refreshCache: true)
+      // No item → currentTime() is 0; keep the resume offset `load` deferred.
+      replaceWithOrigin(origin, position: max(pendingSeek, currentPosition()), refreshCache: true)
       return
     }
     // Setting rate (not playImmediately) so automaticallyWaitsToMinimizeStalling
@@ -738,6 +768,7 @@ import WidgetKit
 
   private func pause() {
     wantsToPlay = false
+    resumeAfterInterruption = false
     cancelStallRecovery()
     player.pause()
     pushNowPlaying(playing: false, position: currentPosition())
@@ -764,6 +795,23 @@ import WidgetKit
   }
 
   private func seek(_ p: Double) {
+    // Before the item is ready (or with no item at all), a direct seek would be
+    // overwritten by the deferred resume seek applied at readyToPlay. Replace
+    // that deferred target instead so the user's latest position wins.
+    guard let item = player.currentItem else {
+      // Offline-uncached load: `play` resumes from pendingSeek once online.
+      if currentOriginURL != nil {
+        pendingSeek = max(0, p)
+        emit("{type:'time',position:\(pendingSeek),duration:\(duration)}")
+      }
+      return
+    }
+    if item.status != .readyToPlay {
+      pendingSeek = max(0, p)
+      pushNowPlaying(playing: false, position: pendingSeek)
+      emit("{type:'time',position:\(pendingSeek),duration:\(duration)}")
+      return
+    }
     let t = CMTime(seconds: max(0, p), preferredTimescale: 1000)
     player.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
       guard let self else { return }
@@ -780,6 +828,7 @@ import WidgetKit
 
   private func stop() {
     wantsToPlay = false
+    resumeAfterInterruption = false
     cancelStallRecovery()
     player.pause()
     teardownItem()
@@ -981,6 +1030,7 @@ import WidgetKit
 
   private func failPlayback(_ message: String) {
     wantsToPlay = false
+    resumeAfterInterruption = false
     cancelStallRecovery()
     player.pause()
     pushNowPlaying(playing: false, position: currentPosition())
@@ -1077,25 +1127,41 @@ import WidgetKit
     lastBgEmitSec = -1
   }
 
+  // AVAudioSession posts route-change and interruption notifications on an
+  // arbitrary (often secondary) thread. All player/session/scheduler state here
+  // is main-thread-only, so hop before touching it.
   @objc private func routeChanged(_ note: Notification) {
     guard let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
           let reason = AVAudioSession.RouteChangeReason(rawValue: raw) else { return }
-    if reason == .oldDeviceUnavailable { pause(); emit("{type:'paused'}") }
+    guard reason == .oldDeviceUnavailable else { return }
+    DispatchQueue.main.async { [weak self] in self?.pause() }
   }
 
   @objc private func interrupted(_ note: Notification) {
     guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
           let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
-    switch type {
-    case .began:
-      pause(); emit("{type:'paused'}")
-    case .ended:
-      let opts = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt).map {
-        AVAudioSession.InterruptionOptions(rawValue: $0)
+    let shouldResume = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt).map {
+      AVAudioSession.InterruptionOptions(rawValue: $0).contains(.shouldResume)
+    } ?? false
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      switch type {
+      case .began:
+        // Remember whether the USER was playing; a pause before (or during) the
+        // interruption must not be undone by the system's shouldResume hint.
+        let wasPlaying = self.wantsToPlay
+        self.pause()
+        // The system has already deactivated our session; the next play() must
+        // call setActive(true) again rather than trusting a stale flag.
+        self.sessionActive = false
+        self.resumeAfterInterruption = wasPlaying
+      case .ended:
+        let resume = self.resumeAfterInterruption && shouldResume
+        self.resumeAfterInterruption = false
+        if resume { self.play() }
+      @unknown default:
+        break
       }
-      if opts?.contains(.shouldResume) == true { play() }
-    @unknown default:
-      break
     }
   }
 

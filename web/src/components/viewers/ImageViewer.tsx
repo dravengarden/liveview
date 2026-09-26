@@ -1,11 +1,14 @@
 import { Box } from "@mui/material";
+import { remoteUrl } from "@/apiBase";
 
 interface ImageViewerProps {
   path: string;
 }
 
 export function ImageViewer({ path }: ImageViewerProps): React.JSX.Element {
-  const imageUrl = `/api/raw?path=${encodeURIComponent(path)}`;
+  // Absolute in the bundled native shell: a relative URL would resolve against
+  // the lvsync:// document origin, which does not serve /api/raw.
+  const imageUrl = remoteUrl(`/api/raw?path=${encodeURIComponent(path)}`);
 
   return (
     <Box

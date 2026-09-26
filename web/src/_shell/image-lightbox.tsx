@@ -37,6 +37,7 @@ import { Box, IconButton, SvgIcon, useTheme } from "@mui/material";
 import { FloatingActionIsland } from "./bottom-sheet.tsx";
 import { useLightboxGestures } from "./image-lightbox-gestures.ts";
 import { haptic as fireHaptic } from "./haptics.ts";
+import { useShellLabels } from "./shell-labels.tsx";
 
 export interface GalleryImage {
   src: string;
@@ -94,6 +95,7 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
   // (plate=false) are never touched. (useTheme runs unconditionally — never gate
   // a hook behind `&&`.)
   const isDarkMode = useTheme().palette.mode === "dark";
+  const labels = useShellLabels();
   const overlayRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
 
@@ -184,7 +186,7 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
       ref={overlayRef}
       role="dialog"
       aria-modal="true"
-      aria-label="Image preview"
+      aria-label={labels.imagePreview}
       data-mobile-pager-modal="true"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -284,25 +286,25 @@ export function ImageLightbox(props: ImageLightboxProps): React.JSX.Element | nu
               {images.length > 1
                 ? (
                   <>
-                    <IconButton aria-label="Previous image" onClick={goPrev} disabled={!canPrev} sx={ctrlBtnSx}>
+                    <IconButton aria-label={labels.previousImage} onClick={goPrev} disabled={!canPrev} sx={ctrlBtnSx}>
                       {previousIcon}
                     </IconButton>
                     <Box component="span" sx={counterSx}>
                       {index + 1} / {images.length}
                     </Box>
-                    <IconButton aria-label="Next image" onClick={goNext} disabled={!canNext} sx={ctrlBtnSx}>
+                    <IconButton aria-label={labels.nextImage} onClick={goNext} disabled={!canNext} sx={ctrlBtnSx}>
                       {nextIcon}
                     </IconButton>
                   </>
                 )
                 : null}
-              <IconButton aria-label="Zoom out" onClick={() => zoomBy(1 / 1.5)} sx={ctrlBtnSx}>
+              <IconButton aria-label={labels.zoomOut} onClick={() => zoomBy(1 / 1.5)} sx={ctrlBtnSx}>
                 {zoomOutIcon}
               </IconButton>
-              <IconButton aria-label="Zoom in" onClick={() => zoomBy(1.5)} sx={ctrlBtnSx}>
+              <IconButton aria-label={labels.zoomIn} onClick={() => zoomBy(1.5)} sx={ctrlBtnSx}>
                 {zoomInIcon}
               </IconButton>
-              <IconButton aria-label="Close" onClick={onClose} sx={ctrlBtnSx}>
+              <IconButton aria-label={labels.close} onClick={onClose} sx={ctrlBtnSx}>
                 {closeIcon}
               </IconButton>
             </Box>

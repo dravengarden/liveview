@@ -1,6 +1,6 @@
 import { useEffect, useRef, useMemo } from "react";
 import { Box, Typography } from "@mui/material";
-import type { Theme } from "@/types";
+import { isDarkTheme, type Theme } from "@/types";
 
 declare global {
   interface Window {
@@ -35,10 +35,6 @@ interface ExcalidrawData {
   appState?: {
     viewBackgroundColor?: string;
   };
-}
-
-function isDarkTheme(theme: Theme): boolean {
-  return !theme.includes("light");
 }
 
 export function ExcalidrawViewer({

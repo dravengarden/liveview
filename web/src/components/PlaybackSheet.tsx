@@ -12,7 +12,12 @@ import { Pause, PlayArrow, SkipNext, SkipPrevious } from "@mui/icons-material";
 import { Forward15Icon, Replay15Icon } from "./Skip15Icons";
 import { CoverTile } from "./CoverTile";
 import { BottomSheet } from "../_shell";
-import { fmtTime, SleepChip, SpeedChip } from "@/audio/playback-ui";
+import {
+  fmtTime,
+  SleepChip,
+  SpeedChip,
+  useScrubber,
+} from "@/audio/playback-ui";
 import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
 
@@ -52,10 +57,18 @@ export function PlaybackSheet({
     nextChapter,
     stop,
   } = useAudioPlayer();
-  const { currentTime, duration } = useAudioTime();
+  // The closed sheet renders nothing that moves, so it stays off the ~4 Hz clock.
+  const { currentTime, duration } = useAudioTime(open);
+  const scrub = useScrubber(currentTime, seek);
   // Stop drops the now-playing + resume position, so it asks first (a stray tap
-  // mid-listen shouldn't wipe progress). Inline two-step, no nested sheet.
+  // mid-listen shouldn't wipe progress). Inline two-step, no nested sheet. The
+  // pending confirmation belongs to one presentation: reopening starts clean.
   const [confirmStop, setConfirmStop] = useState(false);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (!open) setConfirmStop(false);
+  }
 
   // Keep the sheet mounted but inert when nothing plays (it can't open then).
   if (!nowPlaying) return null;
@@ -120,15 +133,15 @@ export function PlaybackSheet({
             color="text.secondary"
             sx={{ fontVariantNumeric: "tabular-nums", minWidth: 36 }}
           >
-            {fmtTime(currentTime)}
+            {fmtTime(scrub.value)}
           </Typography>
           <Slider
             size="small"
             min={0}
             max={duration || 0}
-            value={Math.min(currentTime, duration || 0)}
-            onChange={(_e, v) =>
-              seek(Number(v))}
+            value={Math.min(scrub.value, duration || 0)}
+            onChange={scrub.onChange}
+            onChangeCommitted={scrub.onChangeCommitted}
             aria-label={t("audiobook.seek")}
             sx={{ flex: 1 }}
           />

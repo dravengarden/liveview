@@ -60,9 +60,41 @@ export function currentReplicaPolicy(): ReplicaPolicy {
   return currentPolicy ?? loadPolicy();
 }
 
+const persistArtworkListeners = new Set<(on: boolean) => void>();
+
 export function setPersistFullSizeArtwork(on: boolean): void {
+  const changed = persistFullSizeArtwork !== on;
   persistFullSizeArtwork = on;
   if (currentPolicy) currentPolicy.persistFullSizeArtwork = on;
+  if (!changed) return;
+  for (const fn of persistArtworkListeners) fn(on);
+}
+
+/** Observe quota-driven flips so the worker and main thread stay aligned. */
+export function onPersistFullSizeArtworkChange(
+  fn: (on: boolean) => void,
+): () => void {
+  persistArtworkListeners.add(fn);
+  return () => {
+    persistArtworkListeners.delete(fn);
+  };
+}
+
+let replicaDisabled = false;
+
+/** Mark the IDB replica unusable (e.g. IndexedDB failed to open at boot).
+ *  Reads then degrade to plain network fetches instead of rejecting. */
+export function disableReplica(): void {
+  replicaDisabled = true;
+}
+
+export function replicaUsable(): boolean {
+  return !replicaDisabled;
+}
+
+/** Test seam: re-enable after {@link disableReplica}. */
+export function resetReplicaUsable(): void {
+  replicaDisabled = false;
 }
 
 export function persistBodyForKind(

@@ -53,6 +53,20 @@ if (nested.length > 0) {
       nested.map((rel) => `  ${rel}`).join("\n"),
   );
 }
+// OTA hosts treat an existing overlay file as complete and never re-download
+// it, so a script or stylesheet under a stable name would stay stale on every
+// device after its first OTA. Code must ship content-hashed (`name-XXXXXXXX.js`;
+// vendored public scripts are renamed by vite.config.ts hashedPublicScripts).
+const contentHashed = /-[A-Za-z0-9_-]{8}\.[A-Za-z0-9]+$/;
+const stableCode = manifest.filter((rel) =>
+  /\.(?:js|mjs|css)$/.test(rel) && !contentHashed.test(rel)
+);
+if (stableCode.length > 0) {
+  throw new Error(
+    "stage-app-bundle: native OTA code must be content-hashed:\n" +
+      stableCode.map((rel) => `  ${rel}`).join("\n"),
+  );
+}
 let copied = 0;
 let shared = 0;
 for (const rel of manifest) {

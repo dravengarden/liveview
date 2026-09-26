@@ -2,6 +2,7 @@ import { Drawer } from "@mui/material";
 import type { ReactNode } from "react";
 
 import { DetentSheet } from "./detent-sheet.tsx";
+import { useShellLabels } from "./shell-labels.tsx";
 
 export function MobileNavigation({
   presentation,
@@ -16,12 +17,13 @@ export function MobileNavigation({
   readonly onClose: () => void;
   readonly children: ReactNode;
 }): ReactNode {
+  const labels = useShellLabels();
   if (presentation === "sidebar") {
     return null;
   }
   if (bottom) {
     return (
-      <DetentSheet open={open} onClose={onClose} ariaLabel="Navigation" peekDetent={false}>
+      <DetentSheet open={open} onClose={onClose} ariaLabel={labels.navigation} peekDetent={false}>
         {children}
       </DetentSheet>
     );

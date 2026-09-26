@@ -19,19 +19,37 @@
 //!   unary   := (`-`|`!`) unary | postfix
 //!   postfix := primary (`.`ident | `[`expr`]`)*
 //!   primary := number | string | `true` | `false` | ident (`(`args`)`)? | `(`expr`)`
+//!
+//! Lexical rules match the renderer's lexer (`web/.../interactive-view/expr.ts`)
+//! exactly: whitespace is ASCII space/tab/CR/LF only, and a numeric literal must
+//! be finite (`1e999` is rejected on both sides). Both parsers bound expression
+//! nesting at [`MAX_EXPR_DEPTH`], so an accepted expression can never exhaust
+//! the evaluator's stack.
+//!
+//! Columns are vectorized over one row set. A column remembers the dataset
+//! (row set) it came from, and combining columns from two different row sets is
+//! rejected outside an aggregate: the renderer lifts element-wise by row index,
+//! so mixing `a.x + b.y` would silently pair unrelated rows.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::model::{ColumnType, SignalType};
 
+/// The deepest expression nesting (parenthesised groups, unary chains, and
+/// operator chains all count) the checker and the renderer accept.
+pub const MAX_EXPR_DEPTH: usize = 64;
+
+type Schema = BTreeMap<String, ColumnType>;
+
 /// A type in the expression language. `Scalar` is a single value; `Column` is a
-/// vectorized scalar bound to a dataset row; `Dataset` is a table; `Interval` is
-/// an index-only pair from an interval signal.
+/// vectorized scalar bound to a dataset row set (identified by its origin key);
+/// `Dataset` is a table with its schema and row-set origin; `Interval` is an
+/// index-only pair from an interval signal.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ty {
     Scalar(S),
-    Column(S),
-    Dataset(BTreeMap<String, ColumnType>),
+    Column(S, String),
+    Dataset(Schema, String),
     Interval(S),
 }
 
@@ -78,21 +96,163 @@ impl Ty {
     fn describe(&self) -> String {
         match self {
             Ty::Scalar(s) => s.label().to_string(),
-            Ty::Column(s) => format!("column<{}>", s.label()),
-            Ty::Dataset(_) => "dataset".to_string(),
+            Ty::Column(s, _) => format!("column<{}>", s.label()),
+            Ty::Dataset(..) => "dataset".to_string(),
             Ty::Interval(s) => format!("interval<{}>", s.label()),
         }
     }
     /// The scalar element, if this reads as a scalar or a column of one.
     fn elem(&self) -> Option<S> {
         match self {
-            Ty::Scalar(s) | Ty::Column(s) => Some(*s),
+            Ty::Scalar(s) | Ty::Column(s, _) => Some(*s),
             _ => None,
         }
     }
-    fn is_column(&self) -> bool {
-        matches!(self, Ty::Column(_))
+    /// The row-set origin of a column, `None` for anything else.
+    fn column_origin(&self) -> Option<&str> {
+        match self {
+            Ty::Column(_, origin) => Some(origin),
+            _ => None,
+        }
     }
+}
+
+/// The single row set shared by every column among `tys`, or `None` when all
+/// of them are scalars. Columns from different row sets cannot be combined.
+fn shared_origin(tys: &[&Ty]) -> Result<Option<String>, ExprError> {
+    let mut origin: Option<&str> = None;
+    for t in tys {
+        if let Some(o) = t.column_origin() {
+            match origin {
+                None => origin = Some(o),
+                Some(prev) if prev == o => {}
+                Some(prev) => {
+                    return Err(ExprError::new(format!(
+                        "cannot combine columns from different datasets or row sets (`{}` and `{}`); \
+                         aggregate one side first (e.g. `mean(…)`)",
+                        origin_label(prev),
+                        origin_label(o)
+                    )));
+                }
+            }
+        }
+    }
+    Ok(origin.map(str::to_string))
+}
+
+/// A readable name for a row-set origin key (a dataset name, or the base of a
+/// `filter(…)` chain).
+fn origin_label(origin: &str) -> String {
+    match origin.strip_prefix("filter(") {
+        Some(rest) => {
+            let base: String = rest.chars().take_while(|c| *c != '|').collect();
+            format!("filter({base}, …)")
+        }
+        None => origin.to_string(),
+    }
+}
+
+fn wrap(s: S, origin: Option<String>) -> Ty {
+    match origin {
+        Some(o) => Ty::Column(s, o),
+        None => Ty::Scalar(s),
+    }
+}
+
+/// Parse a strict ISO-8601 temporal value to UTC milliseconds since the epoch:
+/// `YYYY-MM-DD`, optionally followed by `T` (or a space) `HH:MM[:SS[.fff…]]`
+/// and an optional `Z` / `±HH:MM` / `±HHMM` offset. A value without an offset
+/// reads as UTC. Calendar-invalid dates (`2024-02-30`) are rejected.
+///
+/// This is the temporal grammar the renderer's `isoInstant` (expr.ts) shares:
+/// two temporal values order chronologically through it, and anything else
+/// orders as a plain string.
+pub fn iso_instant(s: &str) -> Option<f64> {
+    let b = s.as_bytes();
+    let digits = |from: usize, n: usize| -> Option<i64> {
+        let part = b.get(from..from + n)?;
+        if !part.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        Some(part.iter().fold(0, |acc, d| acc * 10 + i64::from(d - b'0')))
+    };
+    let at = |i: usize, c: u8| b.get(i) == Some(&c);
+    let (y, m, d) = (digits(0, 4)?, digits(5, 2)?, digits(8, 2)?);
+    if !at(4, b'-') || !at(7, b'-') || !(1..=12).contains(&m) || d < 1 || d > days_in_month(y, m) {
+        return None;
+    }
+    let mut ms = days_from_civil(y, m, d) as f64 * 86_400_000.0;
+    let mut pos = 10;
+    if pos < b.len() {
+        if !(at(10, b'T') || at(10, b' ')) || !at(13, b':') {
+            return None;
+        }
+        let (h, mi) = (digits(11, 2)?, digits(14, 2)?);
+        if h > 23 || mi > 59 {
+            return None;
+        }
+        ms += (h * 3_600_000 + mi * 60_000) as f64;
+        pos = 16;
+        if at(pos, b':') {
+            let sec = digits(17, 2)?;
+            if sec > 59 {
+                return None;
+            }
+            ms += (sec * 1000) as f64;
+            pos = 19;
+            if at(pos, b'.') {
+                let start = pos + 1;
+                let end = b[start..]
+                    .iter()
+                    .position(|c| !c.is_ascii_digit())
+                    .map_or(b.len(), |off| start + off);
+                if end == start {
+                    return None;
+                }
+                let frac: f64 = format!("0.{}", &s[start..end]).parse().ok()?;
+                ms += frac * 1000.0;
+                pos = end;
+            }
+        }
+        if at(pos, b'Z') {
+            pos += 1;
+        } else if at(pos, b'+') || at(pos, b'-') {
+            let sign = if at(pos, b'+') { 1 } else { -1 };
+            let oh = digits(pos + 1, 2)?;
+            let colon = usize::from(at(pos + 3, b':'));
+            let om = digits(pos + 3 + colon, 2)?;
+            if oh > 23 || om > 59 {
+                return None;
+            }
+            ms -= (sign * (oh * 3_600_000 + om * 60_000)) as f64;
+            pos += 5 + colon;
+        }
+    }
+    (pos == b.len()).then_some(ms)
+}
+
+fn is_leap(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+fn days_in_month(y: i64, m: i64) -> i64 {
+    match m {
+        2 if is_leap(y) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+/// Days since 1970-01-01 of a proleptic-Gregorian civil date (Hinnant).
+fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
 }
 
 /// What a caller needs to type-check an expression: the declared signal types
@@ -129,11 +289,21 @@ impl ExprError {
     }
 }
 
+fn too_deep() -> ExprError {
+    ExprError::new(format!(
+        "expression nests deeper than {MAX_EXPR_DEPTH} levels; split it into derived signals"
+    ))
+}
+
 /// Parse + type-check `src` against `env`. The single public entry point.
 pub fn check(src: &str, env: &ExprEnv) -> Result<ExprResult, ExprError> {
     let tokens = lex(src)?;
-    let mut p = Parser { tokens, pos: 0 };
-    let ast = p.parse_expr()?;
+    let mut p = Parser {
+        tokens,
+        pos: 0,
+        nesting: 0,
+    };
+    let (ast, _) = p.parse_expr()?;
     if p.peek() != &Tok::Eof {
         return Err(ExprError::new(format!(
             "unexpected trailing input near {:?}",
@@ -147,8 +317,8 @@ pub fn check(src: &str, env: &ExprEnv) -> Result<ExprResult, ExprError> {
     };
     let ty = tc.check(&ast, None)?;
     refs.ty_desc = ty.describe();
-    if let Ty::Dataset(cols) = &ty {
-        refs.dataset_columns = Some(cols.clone());
+    if let Ty::Dataset(cols, _) = ty {
+        refs.dataset_columns = Some(cols);
     }
     Ok(refs)
 }
@@ -191,7 +361,8 @@ fn lex(src: &str) -> Result<Vec<Tok>, ExprError> {
     let mut out = Vec::new();
     while i < b.len() {
         let c = b[i] as char;
-        if c.is_whitespace() {
+        // Exactly the renderer's whitespace set — no Unicode spaces.
+        if matches!(c, ' ' | '\t' | '\n' | '\r') {
             i += 1;
             continue;
         }
@@ -299,9 +470,12 @@ fn lex(src: &str) -> Result<Vec<Tok>, ExprError> {
                 {
                     i += 1;
                 }
-                let n: f64 = src[start..i]
+                let text = &src[start..i];
+                let n: f64 = text
                     .parse()
-                    .map_err(|_| ExprError::new(format!("bad number `{}`", &src[start..i])))?;
+                    .ok()
+                    .filter(|n: &f64| n.is_finite())
+                    .ok_or_else(|| ExprError::new(format!("bad number `{text}`")))?;
                 out.push(Tok::Num(n));
             }
             c if c.is_ascii_alphabetic() || c == '_' => {
@@ -315,7 +489,11 @@ fn lex(src: &str) -> Result<Vec<Tok>, ExprError> {
                     id => Tok::Ident(id.to_string()),
                 });
             }
-            other => return Err(ExprError::new(format!("unexpected character `{other}`"))),
+            _ => {
+                // Report the whole (possibly multi-byte) character.
+                let ch = src[i..].chars().next().unwrap_or(c);
+                return Err(ExprError::new(format!("unexpected character `{ch}`")));
+            }
         }
     }
     out.push(Tok::Eof);
@@ -360,9 +538,27 @@ enum BinOp {
     Ge,
 }
 
+/// A parsed node plus its AST depth (a leaf is 1).
+type Parsed = (Ast, usize);
+
+/// The depth of a node over children of depth `child`, bounded by
+/// [`MAX_EXPR_DEPTH`] so a long operator chain can't build an AST whose
+/// traversal (or drop) would exhaust the stack.
+fn node_depth(child: usize) -> Result<usize, ExprError> {
+    let d = child + 1;
+    if d > MAX_EXPR_DEPTH {
+        Err(too_deep())
+    } else {
+        Ok(d)
+    }
+}
+
 struct Parser {
     tokens: Vec<Tok>,
     pos: usize,
+    /// Current recursion depth (parenthesised groups and unary chains nest the
+    /// parser without necessarily adding AST depth).
+    nesting: usize,
 }
 
 impl Parser {
@@ -371,12 +567,15 @@ impl Parser {
     }
     fn next(&mut self) -> Tok {
         let t = self.tokens[self.pos].clone();
-        self.pos += 1;
+        // `Eof` is sticky: never step past the terminator.
+        if self.pos + 1 < self.tokens.len() {
+            self.pos += 1;
+        }
         t
     }
     fn eat(&mut self, t: &Tok) -> Result<(), ExprError> {
         if self.peek() == t {
-            self.pos += 1;
+            self.next();
             Ok(())
         } else {
             Err(ExprError::new(format!(
@@ -386,29 +585,49 @@ impl Parser {
             )))
         }
     }
-
-    fn parse_expr(&mut self) -> Result<Ast, ExprError> {
-        self.parse_or()
+    fn enter(&mut self) -> Result<(), ExprError> {
+        self.nesting += 1;
+        if self.nesting > MAX_EXPR_DEPTH {
+            Err(too_deep())
+        } else {
+            Ok(())
+        }
     }
-    fn parse_or(&mut self) -> Result<Ast, ExprError> {
+    fn leave(&mut self) {
+        self.nesting -= 1;
+    }
+
+    fn parse_expr(&mut self) -> Result<Parsed, ExprError> {
+        self.enter()?;
+        let r = self.parse_or();
+        self.leave();
+        r
+    }
+    fn bin(op: BinOp, (a, da): Parsed, (b, db): Parsed) -> Result<Parsed, ExprError> {
+        Ok((
+            Ast::Bin(op, Box::new(a), Box::new(b)),
+            node_depth(da.max(db))?,
+        ))
+    }
+    fn parse_or(&mut self) -> Result<Parsed, ExprError> {
         let mut lhs = self.parse_and()?;
         while self.peek() == &Tok::OrOr {
             self.next();
             let rhs = self.parse_and()?;
-            lhs = Ast::Bin(BinOp::Or, Box::new(lhs), Box::new(rhs));
+            lhs = Self::bin(BinOp::Or, lhs, rhs)?;
         }
         Ok(lhs)
     }
-    fn parse_and(&mut self) -> Result<Ast, ExprError> {
+    fn parse_and(&mut self) -> Result<Parsed, ExprError> {
         let mut lhs = self.parse_cmp()?;
         while self.peek() == &Tok::AndAnd {
             self.next();
             let rhs = self.parse_cmp()?;
-            lhs = Ast::Bin(BinOp::And, Box::new(lhs), Box::new(rhs));
+            lhs = Self::bin(BinOp::And, lhs, rhs)?;
         }
         Ok(lhs)
     }
-    fn parse_cmp(&mut self) -> Result<Ast, ExprError> {
+    fn parse_cmp(&mut self) -> Result<Parsed, ExprError> {
         let mut lhs = self.parse_add()?;
         loop {
             let op = match self.peek() {
@@ -422,11 +641,11 @@ impl Parser {
             };
             self.next();
             let rhs = self.parse_add()?;
-            lhs = Ast::Bin(op, Box::new(lhs), Box::new(rhs));
+            lhs = Self::bin(op, lhs, rhs)?;
         }
         Ok(lhs)
     }
-    fn parse_add(&mut self) -> Result<Ast, ExprError> {
+    fn parse_add(&mut self) -> Result<Parsed, ExprError> {
         let mut lhs = self.parse_mul()?;
         loop {
             let op = match self.peek() {
@@ -436,11 +655,11 @@ impl Parser {
             };
             self.next();
             let rhs = self.parse_mul()?;
-            lhs = Ast::Bin(op, Box::new(lhs), Box::new(rhs));
+            lhs = Self::bin(op, lhs, rhs)?;
         }
         Ok(lhs)
     }
-    fn parse_mul(&mut self) -> Result<Ast, ExprError> {
+    fn parse_mul(&mut self) -> Result<Parsed, ExprError> {
         let mut lhs = self.parse_unary()?;
         loop {
             let op = match self.peek() {
@@ -451,25 +670,25 @@ impl Parser {
             };
             self.next();
             let rhs = self.parse_unary()?;
-            lhs = Ast::Bin(op, Box::new(lhs), Box::new(rhs));
+            lhs = Self::bin(op, lhs, rhs)?;
         }
         Ok(lhs)
     }
-    fn parse_unary(&mut self) -> Result<Ast, ExprError> {
-        match self.peek() {
-            Tok::Minus => {
-                self.next();
-                Ok(Ast::Unary(UnOp::Neg, Box::new(self.parse_unary()?)))
-            }
-            Tok::Bang => {
-                self.next();
-                Ok(Ast::Unary(UnOp::Not, Box::new(self.parse_unary()?)))
-            }
-            _ => self.parse_postfix(),
-        }
+    fn parse_unary(&mut self) -> Result<Parsed, ExprError> {
+        let op = match self.peek() {
+            Tok::Minus => UnOp::Neg,
+            Tok::Bang => UnOp::Not,
+            _ => return self.parse_postfix(),
+        };
+        self.next();
+        self.enter()?;
+        let inner = self.parse_unary();
+        self.leave();
+        let (x, d) = inner?;
+        Ok((Ast::Unary(op, Box::new(x)), node_depth(d)?))
     }
-    fn parse_postfix(&mut self) -> Result<Ast, ExprError> {
-        let mut e = self.parse_primary()?;
+    fn parse_postfix(&mut self) -> Result<Parsed, ExprError> {
+        let (mut e, mut depth) = self.parse_primary()?;
         loop {
             match self.peek() {
                 Tok::Dot => {
@@ -482,25 +701,27 @@ impl Parser {
                             )));
                         }
                     };
+                    depth = node_depth(depth)?;
                     e = Ast::Field(Box::new(e), name);
                 }
                 Tok::LBracket => {
                     self.next();
-                    let idx = self.parse_expr()?;
+                    let (idx, di) = self.parse_expr()?;
                     self.eat(&Tok::RBracket)?;
+                    depth = node_depth(depth.max(di))?;
                     e = Ast::Index(Box::new(e), Box::new(idx));
                 }
                 _ => break,
             }
         }
-        Ok(e)
+        Ok((e, depth))
     }
-    fn parse_primary(&mut self) -> Result<Ast, ExprError> {
+    fn parse_primary(&mut self) -> Result<Parsed, ExprError> {
         match self.next() {
-            Tok::Num(n) => Ok(Ast::Num(n)),
-            Tok::Str(s) => Ok(Ast::Str(s)),
-            Tok::True => Ok(Ast::Bool(true)),
-            Tok::False => Ok(Ast::Bool(false)),
+            Tok::Num(n) => Ok((Ast::Num(n), 1)),
+            Tok::Str(s) => Ok((Ast::Str(s), 1)),
+            Tok::True => Ok((Ast::Bool(true), 1)),
+            Tok::False => Ok((Ast::Bool(false), 1)),
             Tok::LParen => {
                 let e = self.parse_expr()?;
                 self.eat(&Tok::RParen)?;
@@ -510,9 +731,12 @@ impl Parser {
                 if self.peek() == &Tok::LParen {
                     self.next();
                     let mut args = Vec::new();
+                    let mut deepest = 0;
                     if self.peek() != &Tok::RParen {
                         loop {
-                            args.push(self.parse_expr()?);
+                            let (a, d) = self.parse_expr()?;
+                            deepest = deepest.max(d);
+                            args.push(a);
                             if self.peek() == &Tok::Comma {
                                 self.next();
                             } else {
@@ -521,9 +745,9 @@ impl Parser {
                         }
                     }
                     self.eat(&Tok::RParen)?;
-                    Ok(Ast::Call(name, args))
+                    Ok((Ast::Call(name, args), node_depth(deepest)?))
                 } else {
-                    Ok(Ast::Ident(name))
+                    Ok((Ast::Ident(name), 1))
                 }
             }
             other => Err(ExprError::new(format!("unexpected token {other:?}"))),
@@ -533,26 +757,30 @@ impl Parser {
 
 // ── type checker ─────────────────────────────────────────────────────────────
 
+/// The column scope inside a `filter` predicate / `with` column: unqualified
+/// names bind to `cols`, and every column they yield belongs to `origin`.
+struct Scope<'s> {
+    cols: &'s Schema,
+    origin: &'s str,
+}
+
 struct TypeChecker<'a> {
     env: &'a ExprEnv<'a>,
     refs: &'a mut ExprResult,
 }
 
 impl<'a> TypeChecker<'a> {
-    /// `local_cols` is the column scope introduced inside a `filter` predicate
-    /// (unqualified column names bind to the dataset's columns, SQL-`WHERE`-style).
-    fn check(
-        &mut self,
-        e: &Ast,
-        local_cols: Option<&BTreeMap<String, ColumnType>>,
-    ) -> Result<Ty, ExprError> {
+    /// `scope` is the column scope introduced inside a `filter` predicate or a
+    /// `with` column (unqualified column names bind to the dataset's columns,
+    /// SQL-`WHERE`-style).
+    fn check(&mut self, e: &Ast, scope: Option<&Scope>) -> Result<Ty, ExprError> {
         match e {
             Ast::Num(_) => Ok(Ty::Scalar(S::Num)),
             Ast::Str(_) => Ok(Ty::Scalar(S::Str)),
             Ast::Bool(_) => Ok(Ty::Scalar(S::Bool)),
-            Ast::Ident(name) => self.check_ident(name, local_cols),
+            Ast::Ident(name) => self.check_ident(name, scope),
             Ast::Unary(op, x) => {
-                let t = self.check(x, local_cols)?;
+                let t = self.check(x, scope)?;
                 match op {
                     UnOp::Neg => self.require_numlike(&t).map(|_| t),
                     UnOp::Not => match t.elem() {
@@ -564,12 +792,27 @@ impl<'a> TypeChecker<'a> {
                     },
                 }
             }
-            Ast::Bin(op, a, b) => self.check_bin(*op, a, b, local_cols),
+            Ast::Bin(op, a, b) => self.check_bin(*op, a, b, scope),
             Ast::Field(base, field) => {
-                let t = self.check(base, local_cols)?;
+                // `dataset.column` on a named dataset: look the column up in
+                // place instead of cloning the whole schema into a `Ty`.
+                if let Ast::Ident(name) = base.as_ref()
+                    && !scope.is_some_and(|s| s.cols.contains_key(name))
+                    && !self.env.signals.contains_key(name)
+                    && let Some(cols) = self.env.datasets.get(name)
+                {
+                    self.refs.dataset_refs.insert(name.clone());
+                    return match cols.get(field) {
+                        Some(ct) => Ok(Ty::Column(S::of_column(*ct), name.clone())),
+                        None => Err(ExprError::new(format!(
+                            "dataset `{name}` has no column `{field}`"
+                        ))),
+                    };
+                }
+                let t = self.check(base, scope)?;
                 match t {
-                    Ty::Dataset(cols) => match cols.get(field) {
-                        Some(ct) => Ok(Ty::Column(S::of_column(*ct))),
+                    Ty::Dataset(cols, origin) => match cols.get(field) {
+                        Some(ct) => Ok(Ty::Column(S::of_column(*ct), origin)),
                         None => Err(ExprError::new(format!("dataset has no column `{field}`"))),
                     },
                     other => Err(ExprError::new(format!(
@@ -579,7 +822,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Ast::Index(base, idx) => {
-                let t = self.check(base, local_cols)?;
+                let t = self.check(base, scope)?;
                 match t {
                     Ty::Interval(s) => {
                         // Only literal 0 / 1 index an interval pair.
@@ -594,19 +837,15 @@ impl<'a> TypeChecker<'a> {
                     ))),
                 }
             }
-            Ast::Call(name, args) => self.check_call(name, args, local_cols),
+            Ast::Call(name, args) => self.check_call(name, args, scope),
         }
     }
 
-    fn check_ident(
-        &mut self,
-        name: &str,
-        local_cols: Option<&BTreeMap<String, ColumnType>>,
-    ) -> Result<Ty, ExprError> {
-        if let Some(cols) = local_cols
-            && let Some(ct) = cols.get(name)
+    fn check_ident(&mut self, name: &str, scope: Option<&Scope>) -> Result<Ty, ExprError> {
+        if let Some(scope) = scope
+            && let Some(ct) = scope.cols.get(name)
         {
-            return Ok(Ty::Column(S::of_column(*ct)));
+            return Ok(Ty::Column(S::of_column(*ct), scope.origin.to_string()));
         }
         if let Some(st) = self.env.signals.get(name) {
             self.refs.signal_refs.insert(name.to_string());
@@ -624,7 +863,7 @@ impl<'a> TypeChecker<'a> {
         }
         if let Some(cols) = self.env.datasets.get(name) {
             self.refs.dataset_refs.insert(name.to_string());
-            return Ok(Ty::Dataset(cols.clone()));
+            return Ok(Ty::Dataset(cols.clone(), name.to_string()));
         }
         Err(ExprError::new(format!("unknown identifier `{name}`")))
     }
@@ -634,30 +873,26 @@ impl<'a> TypeChecker<'a> {
         op: BinOp,
         a: &Ast,
         b: &Ast,
-        local_cols: Option<&BTreeMap<String, ColumnType>>,
+        scope: Option<&Scope>,
     ) -> Result<Ty, ExprError> {
-        let ta = self.check(a, local_cols)?;
-        let tb = self.check(b, local_cols)?;
-        let vectorized = ta.is_column() || tb.is_column();
-        let wrap = |s: S| {
-            if vectorized {
-                Ty::Column(s)
-            } else {
-                Ty::Scalar(s)
-            }
-        };
+        let ta = self.check(a, scope)?;
+        let tb = self.check(b, scope)?;
+        let origin = shared_origin(&[&ta, &tb])?;
         match op {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                 self.require_numlike(&ta)?;
                 self.require_numlike(&tb)?;
-                Ok(wrap(S::Num))
+                Ok(wrap(S::Num, origin))
             }
             BinOp::And | BinOp::Or => {
                 self.require_bool(&ta)?;
                 self.require_bool(&tb)?;
-                Ok(wrap(S::Bool))
+                Ok(wrap(S::Bool, origin))
             }
             BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                // Numbers order numerically, temporals chronologically (the
+                // renderer compares strict ISO-8601 values by instant), and
+                // strings lexicographically. Mixed kinds never order.
                 let sa = self.require_elem(&ta)?;
                 let sb = self.require_elem(&tb)?;
                 if sa != sb || sa == S::Bool {
@@ -667,7 +902,7 @@ impl<'a> TypeChecker<'a> {
                         tb.describe()
                     )));
                 }
-                Ok(wrap(S::Bool))
+                Ok(wrap(S::Bool, origin))
             }
             BinOp::Eq | BinOp::Ne => {
                 let sa = self.require_elem(&ta)?;
@@ -679,7 +914,7 @@ impl<'a> TypeChecker<'a> {
                         tb.describe()
                     )));
                 }
-                Ok(wrap(S::Bool))
+                Ok(wrap(S::Bool, origin))
             }
         }
     }
@@ -688,7 +923,7 @@ impl<'a> TypeChecker<'a> {
         &mut self,
         name: &str,
         args: &[Ast],
-        local_cols: Option<&BTreeMap<String, ColumnType>>,
+        scope: Option<&Scope>,
     ) -> Result<Ty, ExprError> {
         let arity = |n: usize| -> Result<(), ExprError> {
             if args.len() == n {
@@ -703,9 +938,9 @@ impl<'a> TypeChecker<'a> {
         match name {
             "filter" => {
                 arity(2)?;
-                let ds = self.check(&args[0], local_cols)?;
-                let cols = match ds {
-                    Ty::Dataset(c) => c,
+                let ds = self.check(&args[0], scope)?;
+                let (cols, base) = match ds {
+                    Ty::Dataset(c, o) => (c, o),
                     other => {
                         return Err(ExprError::new(format!(
                             "`filter`'s first argument must be a dataset, got {}",
@@ -714,14 +949,24 @@ impl<'a> TypeChecker<'a> {
                     }
                 };
                 // The predicate is checked with the dataset's columns in scope.
-                let pred = self.check(&args[1], Some(&cols))?;
+                let pred = {
+                    let inner = Scope {
+                        cols: &cols,
+                        origin: &base,
+                    };
+                    self.check(&args[1], Some(&inner))?
+                };
                 if pred.elem() != Some(S::Bool) {
                     return Err(ExprError::new(format!(
                         "`filter`'s predicate must be boolean, got {}",
                         pred.describe()
                     )));
                 }
-                Ok(Ty::Dataset(cols))
+                shared_origin(&[&Ty::Column(S::Bool, base.clone()), &pred])?;
+                // A filter selects a new row set: its columns must not combine
+                // with the unfiltered base's (or another filter's) columns.
+                let origin = format!("filter({base}|{:?})", args[1]);
+                Ok(Ty::Dataset(cols, origin))
             }
             "with" => {
                 // with(ds, 'name', expr, 'name', expr, …) — append COMPUTED columns
@@ -731,15 +976,16 @@ impl<'a> TypeChecker<'a> {
                 // recomputes `upper` per row whenever the `k` signal changes. This
                 // is what lets a widget RESHAPE a series (Bollinger bands widening
                 // with k), not just filter it. Columns added earlier are in scope
-                // for later ones, so a chain can build on itself.
+                // for later ones, so a chain can build on itself. `with` keeps
+                // the row set, so its columns share the base dataset's origin.
                 if args.len() < 3 || args.len().is_multiple_of(2) {
                     return Err(ExprError::new(
                         "`with` takes a dataset then (name, expression) pairs: with(ds, 'col', expr, …)",
                     ));
                 }
-                let ds = self.check(&args[0], local_cols)?;
-                let mut cols = match ds {
-                    Ty::Dataset(c) => c,
+                let ds = self.check(&args[0], scope)?;
+                let (mut cols, base) = match ds {
+                    Ty::Dataset(c, o) => (c, o),
                     other => {
                         return Err(ExprError::new(format!(
                             "`with`'s first argument must be a dataset, got {}",
@@ -757,23 +1003,30 @@ impl<'a> TypeChecker<'a> {
                             ));
                         }
                     };
-                    let t = self.check(&args[i + 1], Some(&cols))?;
+                    let t = {
+                        let inner = Scope {
+                            cols: &cols,
+                            origin: &base,
+                        };
+                        self.check(&args[i + 1], Some(&inner))?
+                    };
                     let s = t.elem().ok_or_else(|| {
                         ExprError::new(format!(
                             "`with` column `{name}` must be a scalar or column, got {}",
                             t.describe()
                         ))
                     })?;
+                    shared_origin(&[&Ty::Column(s, base.clone()), &t])?;
                     cols.insert(name, column_type_of(s));
                     i += 2;
                 }
-                Ok(Ty::Dataset(cols))
+                Ok(Ty::Dataset(cols, base))
             }
             "mean" | "sum" | "std" | "min" | "max" | "median" => {
                 arity(1)?;
-                let t = self.check(&args[0], local_cols)?;
+                let t = self.check(&args[0], scope)?;
                 match t {
-                    Ty::Column(S::Num) => Ok(Ty::Scalar(S::Num)),
+                    Ty::Column(S::Num, _) => Ok(Ty::Scalar(S::Num)),
                     other => Err(ExprError::new(format!(
                         "`{name}` aggregates a numeric column, got {}",
                         other.describe()
@@ -782,9 +1035,9 @@ impl<'a> TypeChecker<'a> {
             }
             "count" => {
                 arity(1)?;
-                let t = self.check(&args[0], local_cols)?;
+                let t = self.check(&args[0], scope)?;
                 match t {
-                    Ty::Column(_) | Ty::Dataset(_) => Ok(Ty::Scalar(S::Num)),
+                    Ty::Column(..) | Ty::Dataset(..) => Ok(Ty::Scalar(S::Num)),
                     other => Err(ExprError::new(format!(
                         "`count` needs a column or dataset, got {}",
                         other.describe()
@@ -793,7 +1046,7 @@ impl<'a> TypeChecker<'a> {
             }
             "sqrt" | "abs" | "floor" | "ceil" => {
                 arity(1)?;
-                let t = self.check(&args[0], local_cols)?;
+                let t = self.check(&args[0], scope)?;
                 self.require_numlike(&t)?;
                 Ok(t)
             }
@@ -801,10 +1054,10 @@ impl<'a> TypeChecker<'a> {
                 if args.len() != 1 && args.len() != 2 {
                     return Err(ExprError::new("`round` takes 1 or 2 arguments"));
                 }
-                let t = self.check(&args[0], local_cols)?;
+                let t = self.check(&args[0], scope)?;
                 self.require_numlike(&t)?;
                 if args.len() == 2 {
-                    let d = self.check(&args[1], local_cols)?;
+                    let d = self.check(&args[1], scope)?;
                     if d != Ty::Scalar(S::Num) {
                         return Err(ExprError::new(
                             "`round`'s digit count must be a scalar number",
@@ -815,20 +1068,22 @@ impl<'a> TypeChecker<'a> {
             }
             "clamp" => {
                 arity(3)?;
-                let x = self.check(&args[0], local_cols)?;
-                let lo = self.check(&args[1], local_cols)?;
-                let hi = self.check(&args[2], local_cols)?;
+                let x = self.check(&args[0], scope)?;
+                let lo = self.check(&args[1], scope)?;
+                let hi = self.check(&args[2], scope)?;
                 self.require_numlike(&x)?;
-                self.require_numlike(&lo)?;
-                self.require_numlike(&hi)?;
+                // The renderer broadcasts only `x`; the bounds are scalars.
+                if lo != Ty::Scalar(S::Num) || hi != Ty::Scalar(S::Num) {
+                    return Err(ExprError::new("`clamp`'s bounds must be scalar numbers"));
+                }
                 Ok(x)
             }
             "if" => {
                 arity(3)?;
-                let c = self.check(&args[0], local_cols)?;
+                let c = self.check(&args[0], scope)?;
                 self.require_bool(&c)?;
-                let t = self.check(&args[1], local_cols)?;
-                let f = self.check(&args[2], local_cols)?;
+                let t = self.check(&args[1], scope)?;
+                let f = self.check(&args[2], scope)?;
                 let (se, sf) = (self.require_elem(&t)?, self.require_elem(&f)?);
                 if se != sf {
                     return Err(ExprError::new(format!(
@@ -837,12 +1092,8 @@ impl<'a> TypeChecker<'a> {
                         f.describe()
                     )));
                 }
-                let vectorized = c.is_column() || t.is_column() || f.is_column();
-                Ok(if vectorized {
-                    Ty::Column(se)
-                } else {
-                    Ty::Scalar(se)
-                })
+                let origin = shared_origin(&[&c, &t, &f])?;
+                Ok(wrap(se, origin))
             }
             other => Err(ExprError::new(format!("unknown function `{other}`"))),
         }
@@ -969,5 +1220,112 @@ mod tests {
     fn with_bad_name_rejected() {
         // the column name must be a string literal, not an expression.
         assert!(chk("with(returns, ret, ret + 1)").is_err());
+    }
+
+    #[test]
+    fn lexer_rejects_non_finite_numbers() {
+        // `1e999` overflows to infinity; the renderer's lexer rejects it too.
+        let e = chk("1e999 + 1").unwrap_err();
+        assert!(e.message.contains("bad number"), "{}", e.message);
+        assert!(chk("1e308 + 1").is_ok());
+    }
+
+    #[test]
+    fn lexer_accepts_only_ascii_whitespace() {
+        assert!(chk("rf +\t1\r\n").is_ok());
+        // NBSP, ideographic space, and form feed are not whitespace here (nor
+        // in the renderer's lexer).
+        assert!(chk("rf\u{a0}+ 1").is_err());
+        assert!(chk("rf\u{3000}+ 1").is_err());
+        assert!(chk("rf\u{c}+ 1").is_err());
+    }
+
+    #[test]
+    fn nesting_depth_is_bounded() {
+        let ok = format!("{}1{}", "(".repeat(60), ")".repeat(60));
+        assert!(chk(&ok).is_ok());
+        let parens = format!("{}1{}", "(".repeat(70), ")".repeat(70));
+        assert!(chk(&parens).unwrap_err().message.contains("nests deeper"));
+        let unary = format!("{}1", "-".repeat(70));
+        assert!(chk(&unary).unwrap_err().message.contains("nests deeper"));
+        // A long left-associative chain builds a deep AST without recursing
+        // the parser; it is bounded too.
+        let chain = format!("1{}", " + 1".repeat(100_000));
+        assert!(chk(&chain).unwrap_err().message.contains("nests deeper"));
+        let short_chain = format!("1{}", " + 1".repeat(60));
+        assert!(chk(&short_chain).is_ok());
+    }
+
+    #[test]
+    fn columns_from_different_datasets_do_not_mix() {
+        let e = chk("returns.ret + sample.ret").unwrap_err();
+        assert!(e.message.contains("different datasets"), "{}", e.message);
+        assert!(chk("returns.ret > sample.ret").is_err());
+        assert!(chk("if(returns.ret > 0, sample.ret, 0)").is_err());
+        // A filter is a new row set, even over the same base.
+        assert!(chk("filter(returns, ret > 0).ret - returns.ret").is_err());
+        // A filter predicate may not read another dataset's column.
+        assert!(chk("filter(returns, sample.ret > 0)").is_err());
+        assert!(chk("with(returns, 'x', sample.ret)").is_err());
+        // Aggregating one side first is fine, and so is the same row set.
+        assert!(chk("mean(returns.ret) - mean(sample.ret)").is_ok());
+        assert!(chk("mean(returns.ret - returns.day)").is_ok());
+        assert!(chk("mean(returns.ret - mean(sample.ret))").is_ok());
+        assert!(chk("filter(returns, ret > mean(sample.ret))").is_ok());
+        // `with` keeps its base's rows, so the new column combines with it.
+        assert!(chk("mean(with(returns, 'x', ret * 2).x - returns.ret)").is_ok());
+        // Identical filters select the same rows.
+        assert!(chk("mean(filter(returns, ret > 0).ret - filter(returns, ret > 0).day)").is_ok());
+    }
+
+    /// Shared with `isoInstant` in the renderer's expr.test.ts — keep aligned.
+    #[test]
+    fn iso_instant_accepts_only_strict_iso_8601() {
+        assert_eq!(iso_instant("1970-01-01"), Some(0.0));
+        assert_eq!(iso_instant("2024-03-01"), Some(1_709_251_200_000.0));
+        assert_eq!(iso_instant("2024-03-01T12:30"), Some(1_709_296_200_000.0));
+        assert_eq!(
+            iso_instant("2024-03-01 12:30:15"),
+            Some(1_709_296_215_000.0)
+        );
+        assert_eq!(
+            iso_instant("2024-03-01T12:30:15.5Z"),
+            Some(1_709_296_215_500.0)
+        );
+        assert_eq!(
+            iso_instant("2024-03-01T12:30+02:00"),
+            Some(1_709_289_000_000.0)
+        );
+        assert_eq!(
+            iso_instant("2024-03-01T12:30-0130"),
+            Some(1_709_301_600_000.0)
+        );
+        assert_eq!(iso_instant("2024-02-29"), Some(1_709_164_800_000.0));
+        assert_eq!(iso_instant("0099-01-01"), Some(-59_042_995_200_000.0));
+        for bad in [
+            "",
+            "2024",
+            "2024-1-01",
+            "2024-13-01",
+            "2023-02-29",
+            "2024-04-31",
+            "2024-03-01T",
+            "2024-03-01T24:00",
+            "2024-03-01T12:60",
+            "2024-03-01Z",
+            "2024-03-01T12:30:15.",
+            "2024-03-01T12:30 ",
+            "March 1, 2024",
+            "Q1",
+            "apple",
+        ] {
+            assert_eq!(iso_instant(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn clamp_bounds_must_be_scalar() {
+        assert!(chk("mean(clamp(returns.ret, -1, 1))").is_ok());
+        assert!(chk("mean(clamp(returns.ret, returns.ret, 1))").is_err());
     }
 }

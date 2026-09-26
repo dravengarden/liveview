@@ -80,14 +80,22 @@ export interface NowPlaying {
   rendition: string;
 }
 
-export interface AudioPlayer {
-  nowPlaying: NowPlaying | null;
+/** Read-along state of the playing chapter. Split OUT of `AudioPlayer` because
+ *  `currentIdx` advances at every spoken sentence: folding it into the main
+ *  context re-rendered the whole app shell (every `useAudioPlayer()` consumer)
+ *  several times per minute. Only the read-along surfaces read it, through
+ *  `useAudioReadAlong()`. */
+export interface AudioReadAlong {
   /** Read-along sentences of the playing chapter, in spoken order. */
   sentences: string[];
   /** Transcript fetch finished without usable sentences; audio may still play. */
   transcriptUnavailable: boolean;
   /** Index of the sentence being spoken, or -1. */
   currentIdx: number;
+}
+
+export interface AudioPlayer {
+  nowPlaying: NowPlaying | null;
   playing: boolean;
   /** Native AVPlayer has play intent but is waiting for data/decoder readiness. */
   buffering: boolean;
@@ -97,13 +105,7 @@ export interface AudioPlayer {
   rate: number;
   canPrev: boolean;
   canNext: boolean;
-  /** Whether the full read-along popup is in focus (expanded) vs collapsed to the
-   *  bottom bar. The popup floats above every view, so this is pure listen-plane
-   *  UI state — it never touches what the browse plane shows. */
-  expanded: boolean;
-  setExpanded: (open: boolean) => void;
-  /** The playing book's ordered chapter queue (with labels) — also the popup's
-   *  table of contents. */
+  /** The playing book's ordered chapter queue (with labels). */
   queue: Track[];
   queueIndex: number;
   /** Start (or replace) playback at a chapter, seeding the book's chapter queue.
@@ -119,7 +121,7 @@ export interface AudioPlayer {
   /** Jump by a delta (negative = back) in seconds, clamped to the chapter. */
   skip: (deltaSec: number) => void;
   seekToSentence: (idx: number) => void;
-  /** Jump to a chapter by queue index and play it (the popup TOC). */
+  /** Jump to a chapter by queue index and play it. */
   goToChapter: (qi: number) => void;
   /** Sleep timer: the chosen option in minutes (0 = off). Drives the menu's
    *  selected highlight; the visible chip uses `sleepRemainingMin` instead. */
@@ -268,6 +270,7 @@ function playAudio(
 }
 
 const Ctx = createContext<AudioPlayer | null>(null);
+const ReadAlongCtx = createContext<AudioReadAlong | null>(null);
 interface AudioTimeStore {
   getSnapshot: () => AudioTime;
   subscribe: (listener: () => void) => () => void;
@@ -317,9 +320,6 @@ export function AudioPlayerProvider(
   const [syncNotice, setSyncNotice] = useState<
     { message: string; seq: number } | null
   >(null);
-  // Listen-plane UI: is the full read-along popup in focus? Default collapsed so
-  // a resumed session (rehydrated below) shows only the bar, never auto-expands.
-  const [expanded, setExpanded] = useState(false);
   // Sleep timer (WeChat-Reading style): the chosen option (for the menu
   // highlight) plus a remaining-minutes display that counts down ONLY while
   // playing. The live seconds-remaining + last-tick timestamp live in refs so
@@ -337,6 +337,12 @@ export function AudioPlayerProvider(
   const queueIndexRef = useRef(-1);
   // Monotonic load token: a newer load() invalidates an in-flight older fetch.
   const loadSeq = useRef(0);
+  // True from the start of `loadTrack` until the new chapter's source has been
+  // handed to the engine. The previous chapter keeps emitting time / pause /
+  // ended events while the new chapter's media is resolved asynchronously; they
+  // must never be credited to (persisted as, or auto-advanced from) the chapter
+  // that `nowPlayingRef` already names.
+  const sourcePendingRef = useRef(false);
   // Chapter path we've already warmed the *next* synth for, so we prefetch once.
   const prefetchedFrom = useRef<string | null>(null);
   // Throttle the SYNCHRONOUS localStorage resume-seed write (see handlePosition):
@@ -451,6 +457,12 @@ export function AudioPlayerProvider(
       const seq = ++loadSeq.current;
       prefetchedFrom.current = null;
       resetNativePlaybackProof();
+      // Silence the previous chapter before `nowPlayingRef` names the new one.
+      // The web element is paused synchronously; the native engine replaces its
+      // item on `nativeAudioLoad` (an explicit pause would race the new play
+      // intent across the bridge), so its stale events are dropped by the gate.
+      sourcePendingRef.current = true;
+      if (!native) audio?.pause();
 
       setNowPlaying(np);
       nowPlayingRef.current = np;
@@ -526,6 +538,7 @@ export function AudioPlayerProvider(
                 encodeURIComponent(np.bookSlug)
               }`,
             });
+            sourcePendingRef.current = false;
             if (autoplay) {
               expectNativePlayback(true);
               nativeAudioPlay();
@@ -544,6 +557,7 @@ export function AudioPlayerProvider(
             audio.playbackRate = rateRef.current;
             audio.load();
             if (position > 0) audio.currentTime = position;
+            sourcePendingRef.current = false;
             if (autoplay) {
               playAudio(
                 audio,
@@ -553,6 +567,7 @@ export function AudioPlayerProvider(
           }
         } catch (e) {
           if (loadSeq.current === seq) {
+            sourcePendingRef.current = false;
             resetNativePlaybackProof();
             playingRef.current = false;
             bufferingRef.current = false;
@@ -664,7 +679,7 @@ export function AudioPlayerProvider(
   const prevChapter = useCallback(() => {
     if (queueIndexRef.current > 0) goTo(queueIndexRef.current - 1, true);
   }, [goTo]);
-  // Jump to an arbitrary chapter (the popup's table of contents). Clamped to the
+  // Jump to an arbitrary chapter by queue index. Clamped to the
   // queue; a no-op for an out-of-range index.
   const goToChapter = useCallback(
     (qi: number) => {
@@ -699,6 +714,8 @@ export function AudioPlayerProvider(
   // synth prewarm, sleep-timer countdown). `updatePositionState` stays in the
   // <audio> path only — native owns MPNowPlayingInfoCenter itself.
   const handlePosition = useCallback((pos: number, dur: number) => {
+    // A tick from the chapter being replaced: never credit it to the new one.
+    if (sourcePendingRef.current) return;
     // Keep the imperative mirrors fresh even when hidden (cheap, no re-render) so
     // a lock-screen pause persists the TRUE position and seek math is right the
     // instant we return to the foreground.
@@ -798,6 +815,9 @@ export function AudioPlayerProvider(
   // stop at the book's end). Shared by the <audio> `ended` event + the native
   // engine's `ended` event.
   const handleEnded = useCallback(() => {
+    // The replaced chapter finishing must not clear the new chapter's resume
+    // point or auto-advance past it.
+    if (sourcePendingRef.current) return;
     const np = nowPlayingRef.current;
     if (np) {
       logEvent("audio_ended", { book: np.bookSlug, chapter: np.chapterPath });
@@ -840,8 +860,10 @@ export function AudioPlayerProvider(
       setPlaying(false);
       // Flush the current position server-side so a pause is immediately
       // resumable on another device (force the write past the store's throttle).
+      // Skip while a new chapter is resolving: `nowPlayingRef` already names it,
+      // but `audio.currentTime` still belongs to the chapter being replaced.
       const np = nowPlayingRef.current;
-      if (np && audio.currentTime > 0) {
+      if (np && !sourcePendingRef.current && audio.currentTime > 0) {
         persistPos(np.chapterPath, audio.currentTime);
         void posStore.flush();
       }
@@ -919,6 +941,9 @@ export function AudioPlayerProvider(
           if (!playingRef.current) expectNativePlayback(true);
           break;
         case "paused": {
+          // The replaced item's pause must not clear the new chapter's play
+          // intent or persist its position under the new chapter.
+          if (sourcePendingRef.current) break;
           resetNativePlaybackProof();
           playingRef.current = false;
           bufferingRef.current = false;
@@ -938,6 +963,7 @@ export function AudioPlayerProvider(
           break;
         }
         case "ended":
+          if (sourcePendingRef.current) break;
           resetNativePlaybackProof();
           playingRef.current = false;
           bufferingRef.current = false;
@@ -1042,6 +1068,10 @@ export function AudioPlayerProvider(
   // calling code), not inside any store's `reconcile` — reconcile must stay pure.
   useEffect(() => {
     let cancelled = false;
+    // Any load (or stop) the USER performs while these async startup reads are
+    // in flight advances `loadSeq`. Startup restoration is only a resume hint, so
+    // it must never replace a chapter the user has already chosen.
+    const mountSeq = loadSeq.current;
     void (async () => {
       // 1) Hydrate every store from its local mirror. Only `sessionStore` has one
       //    (IDB), so this restores THIS device's last session for an instant
@@ -1049,7 +1079,7 @@ export function AudioPlayerProvider(
       await Promise.all(audioStores.map((s) => s.hydrate()));
       if (cancelled) return;
       const localSession = sessionStore.get();
-      if (localSession) {
+      if (localSession && loadSeq.current === mountSeq) {
         loadTrack(
           localSession.nowPlaying,
           localSession.queue,
@@ -1057,6 +1087,7 @@ export function AudioPlayerProvider(
           false,
         );
       }
+      const hydratedSeq = loadSeq.current;
 
       // 2) Read the server copies (the bulk GET is memoized, so this shares the
       //    same fetch the `connect()` calls below use — no extra round-trip).
@@ -1129,7 +1160,9 @@ export function AudioPlayerProvider(
         }
       }
       let audioSynced = false;
-      if (serverSession) {
+      // Skip adoption when the user loaded or stopped a chapter after the local
+      // hydrate: the server pointer predates that explicit choice.
+      if (serverSession && loadSeq.current === hydratedSeq) {
         const cur = nowPlayingRef.current;
         const chapterDiffers = !cur ||
           cur.chapterPath !== serverSession.nowPlaying.chapterPath ||
@@ -1545,7 +1578,6 @@ export function AudioPlayerProvider(
     queueRef.current = [];
     setQueueIndex(-1);
     queueIndexRef.current = -1;
-    setExpanded(false);
     sleepRemainingRef.current = 0;
     lastSleepTickRef.current = 0;
     setSleepRemainingMin(0);
@@ -1575,9 +1607,6 @@ export function AudioPlayerProvider(
   const value = useMemo<AudioPlayer>(
     () => ({
       nowPlaying,
-      sentences,
-      transcriptUnavailable,
-      currentIdx,
       playing,
       buffering,
       loading,
@@ -1585,8 +1614,6 @@ export function AudioPlayerProvider(
       rate,
       canPrev: queueIndex > 0,
       canNext: queueIndex >= 0 && queueIndex < queue.length - 1,
-      expanded,
-      setExpanded,
       queue,
       queueIndex,
       playChapter,
@@ -1606,15 +1633,11 @@ export function AudioPlayerProvider(
     }),
     [
       nowPlaying,
-      sentences,
-      transcriptUnavailable,
-      currentIdx,
       playing,
       buffering,
       loading,
       error,
       rate,
-      expanded,
       queue,
       queueIndex,
       sleepMinutes,
@@ -1634,6 +1657,11 @@ export function AudioPlayerProvider(
     ],
   );
 
+  const readAlong = useMemo<AudioReadAlong>(
+    () => ({ sentences, transcriptUnavailable, currentIdx }),
+    [sentences, transcriptUnavailable, currentIdx],
+  );
+
   const previousTime = timeSnapshotRef.current;
   if (
     previousTime.currentTime !== currentTime ||
@@ -1648,14 +1676,16 @@ export function AudioPlayerProvider(
 
   return (
     <Ctx.Provider value={value}>
-      <TimeCtx.Provider value={timeStore}>
-        {children}
-        {
-          /* The single, always-mounted narration element — never unmounts, so
-            playback survives every in-app navigation. */
-        }
-        <audio ref={audioRef} preload="metadata" hidden />
-      </TimeCtx.Provider>
+      <ReadAlongCtx.Provider value={readAlong}>
+        <TimeCtx.Provider value={timeStore}>
+          {children}
+          {
+            /* The single, always-mounted narration element — never unmounts, so
+              playback survives every in-app navigation. */
+          }
+          <audio ref={audioRef} preload="metadata" hidden />
+        </TimeCtx.Provider>
+      </ReadAlongCtx.Provider>
     </Ctx.Provider>
   );
 }
@@ -1665,6 +1695,18 @@ export function useAudioPlayer(): AudioPlayer {
   if (!ctx) {
     throw new Error(
       "useAudioPlayer must be used within an AudioPlayerProvider",
+    );
+  }
+  return ctx;
+}
+
+/** Read-along state (sentences + the spoken index). Changes once per sentence,
+ *  so only the surfaces that render the highlight should subscribe. */
+export function useAudioReadAlong(): AudioReadAlong {
+  const ctx = useContext(ReadAlongCtx);
+  if (!ctx) {
+    throw new Error(
+      "useAudioReadAlong must be used within an AudioPlayerProvider",
     );
   }
   return ctx;

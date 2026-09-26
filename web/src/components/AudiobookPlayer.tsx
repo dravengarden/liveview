@@ -1,11 +1,194 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  memo,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { Alert, Box, Skeleton } from "@mui/material";
-import { alpha } from "@mui/material/styles";
+import { alpha, type Theme } from "@mui/material/styles";
 import { PlaybackBar } from "./PlaybackBar";
 import { ScrollToTopButton } from "./ScrollToTopButton";
-import { useAudioPlayer, useAudioTime } from "@/audio/player";
+import {
+  useAudioPlayer,
+  useAudioReadAlong,
+  useAudioTime,
+} from "@/audio/player";
 import { READING_COLUMN_MAX } from "@/types";
 import { useI18n } from "@/i18n";
+
+/** Minimum spacing between shelf-progress writes during continuous playback.
+ *  The progress store debounces its server push (800 ms after writes settle), so
+ *  writing on every ~4 Hz clock tick kept resetting that debounce and nothing
+ *  was ever saved while audio kept playing. */
+const PROGRESS_SAVE_INTERVAL_MS = 5000;
+
+/** Mirrors playback position into the shared progress store (the same store as
+ *  text reading, so the shelf card shows an audio %). The only subscriber to the
+ *  fast clock on this page besides the transport: it renders nothing. Writes are
+ *  throttled, and the latest fraction is flushed on pause, chapter change, and
+ *  unmount so a stopped session still lands its final position. */
+function PlaybackProgressMirror(
+  { path, playing, onSaveScroll }: {
+    path: string;
+    playing: boolean;
+    onSaveScroll: (path: string, ratio: number) => void;
+  },
+): null {
+  const { currentTime, duration } = useAudioTime();
+  const latestRef = useRef<{ path: string; ratio: number } | null>(null);
+  const savedAtRef = useRef<{ path: string; at: number } | null>(null);
+
+  useEffect(() => {
+    if (duration <= 0) return;
+    const ratio = Math.min(1, currentTime / duration);
+    latestRef.current = { path, ratio };
+    const now = Date.now();
+    const saved = savedAtRef.current;
+    if (
+      saved && saved.path === path && now - saved.at < PROGRESS_SAVE_INTERVAL_MS
+    ) {
+      return;
+    }
+    savedAtRef.current = { path, at: now };
+    onSaveScroll(path, ratio);
+  }, [currentTime, duration, path, onSaveScroll]);
+
+  const flush = useCallback(() => {
+    const latest = latestRef.current;
+    if (!latest) return;
+    savedAtRef.current = { path: latest.path, at: Date.now() };
+    onSaveScroll(latest.path, latest.ratio);
+  }, [onSaveScroll]);
+
+  useEffect(() => {
+    if (!playing) flush();
+  }, [playing, flush]);
+  // Cleanup runs on chapter change (before the new chapter's first write) and
+  // on unmount, so the previous chapter's last fraction is never dropped.
+  useEffect(() => flush, [path, flush]);
+  return null;
+}
+
+/** Drives the karaoke read-so-far wipe of the ACTIVE sentence through a CSS
+ *  custom property on that one span. The sentence list itself never re-renders
+ *  for the ~4 Hz clock; only this null-rendering component does. */
+function ReadAlongWipe(
+  { containerRef, currentIdx, sentences }: {
+    containerRef: RefObject<HTMLElement | null>;
+    currentIdx: number;
+    /** Re-resolve the active span when the transcript (re)loads. */
+    sentences: string[];
+  },
+): null {
+  const { currentProgress } = useAudioTime(currentIdx >= 0);
+  const activeRef = useRef<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    const previous = activeRef.current;
+    activeRef.current = currentIdx < 0
+      ? null
+      : containerRef.current?.querySelector<HTMLElement>(
+        `[data-sent="${currentIdx}"]`,
+      ) ?? null;
+    if (previous && previous !== activeRef.current) {
+      previous.style.removeProperty("--lv-wipe");
+    }
+  }, [containerRef, currentIdx, sentences]);
+  useLayoutEffect(() => {
+    const el = activeRef.current;
+    if (!el?.isConnected) return;
+    el.style.setProperty(
+      "--lv-wipe",
+      `${Math.round(currentProgress * 1000) / 10}%`,
+    );
+  }, [currentProgress, currentIdx, sentences]);
+  return null;
+}
+
+const Sentence = memo(function Sentence(
+  { index, text, active, onSelect }: {
+    index: number;
+    text: string;
+    active: boolean;
+    onSelect: (event: React.MouseEvent<HTMLElement>) => void;
+  },
+): React.JSX.Element {
+  return (
+    <span
+      data-sent={index}
+      data-active={active ? "" : undefined}
+      onClick={onSelect}
+    >
+      {text}{" "}
+    </span>
+  );
+});
+
+/** Read-along highlight, in THIS theme's accent (blue / brown / amber / violet
+ *  per theme). Three things make it read well on every surface:
+ *   • per-theme accent (not a fixed colour) so it never clashes;
+ *   • stronger on DARK themes — a low-alpha accent over near-black just
+ *     muddies, so dark surfaces get more of the accent;
+ *   • non-current sentences DIMMED so the current line pops even before the
+ *     band (the Apple-Books focus pattern); and
+ *   • a karaoke read-so-far WIPE within the current sentence: a hard edge at the
+ *     playhead's within-sentence fraction (`--lv-wipe`, written by
+ *     <ReadAlongWipe>), the read part stronger than the not-yet part.
+ *  Declared once on the column instead of per sentence, so a sentence change
+ *  only toggles `data-active` on two spans. */
+function sentenceSx(theme: Theme): Record<string, unknown> {
+  const dark = theme.palette.mode === "dark";
+  const accent = theme.palette.primary.main;
+  const weak = alpha(accent, dark ? 0.16 : 0.1);
+  const strong = alpha(accent, dark ? 0.42 : 0.26);
+  const wipe =
+    `linear-gradient(to right, ${strong} var(--lv-wipe, 0%), ${weak} calc(var(--lv-wipe, 0%) + 1.5%))`;
+  return {
+    "& [data-sent]": {
+      cursor: "pointer",
+      borderRadius: `${Number(theme.shape.borderRadius) * 0.5}px`,
+      transition: "opacity 0.15s ease",
+      background: "transparent",
+      opacity: 0.5,
+      color: "inherit",
+      "&:hover": {
+        background: theme.palette.action.hover,
+        opacity: 0.78,
+      },
+    },
+    "& [data-sent][data-active]": {
+      background: wipe,
+      opacity: 1,
+      paddingInline: theme.spacing(0.25),
+      "&:hover": { background: wipe, opacity: 1 },
+    },
+  };
+}
+
+const SentenceList = memo(function SentenceList(
+  { sentences, currentIdx, onSelect }: {
+    sentences: string[];
+    currentIdx: number;
+    onSelect: (event: React.MouseEvent<HTMLElement>) => void;
+  },
+): React.JSX.Element {
+  return (
+    <>
+      {sentences.map((s, i) => (
+        // Index key is safe: sentence order is stable for a chapter.
+        <Sentence
+          key={i}
+          index={i}
+          text={s}
+          active={i === currentIdx}
+          onSelect={onSelect}
+        />
+      ))}
+    </>
+  );
+});
 
 interface AudiobookPlayerProps {
   contentMaxWidth: number;
@@ -31,24 +214,8 @@ export function AudiobookPlayer(
     AudiobookPlayerProps,
 ): React.JSX.Element {
   const { t } = useI18n();
-  const {
-    nowPlaying,
-    sentences,
-    transcriptUnavailable,
-    currentIdx,
-    error,
-    seekToSentence,
-  } = useAudioPlayer();
-  const { currentProgress, currentTime, duration } = useAudioTime();
-
-  // Mirror playback position into the shared progress store (debounced upstream
-  // per path), so the shelf card shows an audio % like the text reader does. The
-  // engine keeps its own second-accurate resume separately; this is just the
-  // 0..1 fraction for display.
-  useEffect(() => {
-    if (!nowPlaying || !onSaveScroll || duration <= 0) return;
-    onSaveScroll(nowPlaying.chapterPath, Math.min(1, currentTime / duration));
-  }, [currentTime, duration, nowPlaying, onSaveScroll]);
+  const { nowPlaying, playing, error, seekToSentence } = useAudioPlayer();
+  const { sentences, transcriptUnavailable, currentIdx } = useAudioReadAlong();
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -107,8 +274,12 @@ export function AudiobookPlayer(
     scrollCurrentIntoView();
   }, [scrollCurrentIntoView]);
 
+  // One stable handler for every sentence (reads the index from the span), so
+  // the memoized sentences never re-render for a new callback identity.
   const handleSentenceClick = useCallback(
-    (idx: number) => {
+    (event: React.MouseEvent<HTMLElement>) => {
+      const idx = Number(event.currentTarget.dataset["sent"]);
+      if (!Number.isInteger(idx)) return;
       setFollowing(true);
       seekToSentence(idx);
     },
@@ -164,14 +335,17 @@ export function AudiobookPlayer(
         }}
       >
         <Box
-          sx={{
-            maxWidth: READING_COLUMN_MAX,
-            mx: "auto",
-            fontFamily: "var(--lv-reading-font)",
-            lineHeight,
-            // rem so it tracks the app-wide font-size (root font-size) setting.
-            fontSize: "1.05rem",
-          }}
+          sx={[
+            {
+              maxWidth: READING_COLUMN_MAX,
+              mx: "auto",
+              fontFamily: "var(--lv-reading-font)",
+              lineHeight,
+              // rem so it tracks the app-wide font-size (root font-size) setting.
+              fontSize: "1.05rem",
+            },
+            sentenceSx,
+          ]}
         >
           {transcriptUnavailable
             ? (
@@ -199,56 +373,11 @@ export function AudiobookPlayer(
               </Box>
             )
             : (
-              sentences.map((s, i) => (
-                <Box
-                  component="span"
-                  // Index key is safe: sentence order is stable for a chapter.
-                  key={i}
-                  data-sent={i}
-                  onClick={() => {
-                    handleSentenceClick(i);
-                  }}
-                  sx={(theme) => {
-                    const active = i === currentIdx;
-                    // Read-along highlight in THIS theme's accent (blue / brown /
-                    // amber / violet per theme). Three things make it read well on
-                    // every surface:
-                    //  • per-theme accent (not a fixed colour) so it never clashes;
-                    //  • stronger on DARK themes — a low-alpha accent over near-black
-                    //    just muddies, so dark surfaces get more of the accent;
-                    //  • non-current sentences DIMMED so the current line pops even
-                    //    before the band (the Apple-Books focus pattern); and
-                    //  • a karaoke read-so-far WIPE within the current sentence: a
-                    //    hard edge at the playhead's within-sentence fraction, the
-                    //    read part stronger than the not-yet part.
-                    const dark = theme.palette.mode === "dark";
-                    const accent = theme.palette.primary.main;
-                    const weak = alpha(accent, dark ? 0.16 : 0.1);
-                    const strong = alpha(accent, dark ? 0.42 : 0.26);
-                    const p = Math.round(currentProgress * 1000) / 10; // 0–100
-                    const wipe =
-                      `linear-gradient(to right, ${strong} ${p}%, ${weak} ${
-                        Math.min(100, p + 1.5)
-                      }%)`;
-                    return {
-                      cursor: "pointer",
-                      borderRadius: 0.5,
-                      transition: "opacity 0.15s ease",
-                      background: active ? wipe : "transparent",
-                      opacity: active ? 1 : 0.5,
-                      color: "inherit",
-                      px: active ? 0.25 : 0,
-                      "&:hover": {
-                        background: active ? wipe : theme.palette.action.hover,
-                        opacity: active ? 1 : 0.78,
-                      },
-                    };
-                  }}
-                >
-                  {s}
-                  {" "}
-                </Box>
-              ))
+              <SentenceList
+                sentences={sentences}
+                currentIdx={currentIdx}
+                onSelect={handleSentenceClick}
+              />
             )}
           {/* Prev/next chapter pager — inside the centred reading column. */}
           {footer}
@@ -265,6 +394,19 @@ export function AudiobookPlayer(
         targetRef={scrollRef}
         bottomLift="calc(var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))"
       />
+
+      <ReadAlongWipe
+        containerRef={scrollRef}
+        currentIdx={currentIdx}
+        sentences={sentences}
+      />
+      {nowPlaying && onSaveScroll && (
+        <PlaybackProgressMirror
+          path={nowPlaying.chapterPath}
+          playing={playing}
+          onSaveScroll={onSaveScroll}
+        />
+      )}
 
       <PlaybackBar
         navbarAtBottom={navbarAtBottom}

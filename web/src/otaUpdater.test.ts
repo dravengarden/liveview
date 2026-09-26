@@ -127,3 +127,87 @@ test("runOtaCheck uses path-only putFromUrl and reloads lvsync://localhost/app",
   );
   assert.ok(replaced[0]?.startsWith("lvsync://localhost/app/"));
 });
+
+test("runOtaCheck does not activate when a deploy lands during the download", async () => {
+  Object.defineProperty(globalThis, "__TAURI_INTERNALS__", {
+    configurable: true,
+    value: { invoke: () => Promise.resolve() },
+  });
+  const replaced: string[] = [];
+  Object.defineProperty(globalThis, "location", {
+    configurable: true,
+    value: {
+      href: "lvsync://localhost/app/",
+      protocol: "lvsync:",
+      replace: (url: string) => {
+        replaced.push(url);
+      },
+    },
+  });
+
+  let indexStored = false;
+  const seen: string[] = [];
+  const orig = globalThis.fetch;
+  globalThis.fetch = (input: RequestInfo | URL): Promise<Response> => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.href
+      : input.url;
+    seen.push(url);
+    if (url === `${HOST_ORIGIN}/host-info`) {
+      return Promise.resolve(
+        new Response(JSON.stringify({ protocol: 1, debugEmbedded: false }), {
+          status: 200,
+        }),
+      );
+    }
+    if (url === `${HOST_ORIGIN}/appshell/current`) {
+      return Promise.resolve(new Response("index-old.js", { status: 200 }));
+    }
+    if (url.includes("/app-dist/manifest.json")) {
+      // The server moves to index-next.js once the index has been downloaded.
+      const version = indexStored ? "index-next.js" : "index-new.js";
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ version, files: ["index.html", "chunk.js"] }),
+          { status: 200 },
+        ),
+      );
+    }
+    if (url.startsWith(`${HOST_ORIGIN}/appshell/has?`)) {
+      return Promise.resolve(new Response("0", { status: 200 }));
+    }
+    if (url.startsWith(`${HOST_ORIGIN}/appshell/putFromUrl?`)) {
+      if (new URL(url).searchParams.get("p") === "index.html") {
+        indexStored = true;
+      }
+      return Promise.resolve(new Response("ok", { status: 200 }));
+    }
+    if (url.startsWith(`${HOST_ORIGIN}/appshell/activate?`)) {
+      return Promise.resolve(new Response("ok", { status: 200 }));
+    }
+    return Promise.reject(new Error(`unexpected ${url}`));
+  };
+
+  try {
+    // A fresh module instance: the earlier test leaves `applying` set, as a
+    // real reload would discard the page.
+    const specifier: string = "./otaUpdater.ts?mixed-deploy";
+    const fresh = (await import(specifier)) as {
+      runOtaCheck: typeof runOtaCheck;
+    };
+    await fresh.runOtaCheck();
+  } finally {
+    globalThis.fetch = orig;
+    Reflect.deleteProperty(globalThis, "__TAURI_INTERNALS__");
+  }
+
+  assert.ok(indexStored);
+  assert.equal(
+    seen.some((url) => url.includes("/appshell/activate")),
+    false,
+    "a mixed-deploy index must never be activated",
+  );
+  assert.equal(replaced.length, 0);
+});

@@ -1,11 +1,13 @@
 import { Box } from "@mui/material";
+import { remoteUrl } from "@/apiBase";
 
 interface PdfViewerProps {
   path: string;
 }
 
 export function PdfViewer({ path }: PdfViewerProps): React.JSX.Element {
-  const pdfUrl = `/api/raw?path=${encodeURIComponent(path)}`;
+  // Absolute in the bundled native shell (see ImageViewer).
+  const pdfUrl = remoteUrl(`/api/raw?path=${encodeURIComponent(path)}`);
 
   return (
     <Box

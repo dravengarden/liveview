@@ -3,6 +3,7 @@ import { nativeNavPop, nativeNavPush, nativeNavReady } from "@/native-nav";
 import { remoteUrl } from "@/apiBase";
 import { nativeWidgetPublish } from "@/native-audio";
 import { contentFetch, ensureAutoSync, isLikelyOffline, nativeRefreshManifest } from "@/native-sync";
+import { fetchServerRoot, replicaAppliedRoot } from "@/replica/mod.ts";
 import { fetchChapterResponse } from "@/contentLoad";
 import {
   useCallback,
@@ -65,6 +66,7 @@ import { useAutoUpdate } from "@/hooks/useAutoUpdate";
 import { useAudioPreloadDriver } from "@/hooks/useAudioPreloadDriver";
 import { applyUpdate, useConnectionBanner } from "@/connectionStore";
 import { NativeReleaseUpdatePrompt, NavShell } from "./_shell";
+import { rootRefreshDue } from "./rootRefresh";
 import type {
   Book,
   BookProgress,
@@ -444,18 +446,16 @@ export function App(): React.JSX.Element {
     }%`;
   }, [menuBarSettings.fontScale]);
   const { fontId, setFont } = useFont();
-  // The root audio engine: playback + the popup live above every view, so
-  // navigating never stops the audio nor closes the popup. We only need to seed
-  // playback (`playChapter`) and raise the popup into focus (`setExpanded`).
+  // The root audio engine: playback lives above every view, so navigating never
+  // stops the audio. The shell only seeds playback (`playChapter`) and reads the
+  // session identity; the per-sentence read-along state lives in a separate
+  // context so it never re-renders this whole tree.
   const {
     playChapter: audioPlayChapter,
     syncNotice,
     nowPlaying,
     stop: stopPlayback,
   } = useAudioPlayer();
-  // Desktop keyboard shortcuts (Space/←/→/⌘±arrows/</>) + the `?` cheat-sheet.
-  // Desktop-only (gated inside the hook); a no-op on touch.
-  const { helpOpen, closeHelp } = useKeyboardShortcuts();
   // Mirror of `nowPlaying` for the view→engine effect's guard. That effect must
   // react ONLY to view-led navigation (currentPath), never to engine-led chapter
   // changes — reading nowPlaying through a ref keeps it out of the dep array so
@@ -511,6 +511,10 @@ export function App(): React.JSX.Element {
   // else (text page, another book, the shelf) it shows as the now-playing handle.
   const onPlayingPage = nowPlaying != null &&
     activeSlug === nowPlaying.bookSlug && rendition === "audio";
+  // Desktop keyboard shortcuts (Space/←/→/⌘±arrows/</>) + the `?` cheat-sheet.
+  // Desktop-only (gated inside the hook); a no-op on touch. Playback keys apply
+  // only while audio plays or its read-along page is open.
+  const { helpOpen, closeHelp } = useKeyboardShortcuts(onPlayingPage);
 
   // Tap the BOTTOM nav bar's title to jump the reader to the BOTTOM (the bar sits
   // at the bottom, so down-to-the-end is the spatially natural direction; the
@@ -722,8 +726,8 @@ export function App(): React.JSX.Element {
   // content manifest (`by_url`) is served STORE-FIRST and only refreshed on
   // cold-launch/foreground, so `/api/books` resolves to the STALE deploy until we
   // refresh the manifest FIRST — that's the "deploy 了新书得关掉 liveview 再打开"
-  // bug. `nativeRefreshManifest()` re-pulls the manifest to the new root (no-op
-  // off the native shell — the browser/PWA always hits the network). Only THEN do
+  // bug. `nativeRefreshManifest()` re-pulls the replica manifest to the new root
+  // on every platform (the PWA also serves chapters from the IDB replica). Only THEN do
   // the FRESH re-fetches resolve to the new content. Then re-warm BOTH spines +
   // re-seed the shelf tree so the new/changed book opens and meters correctly.
   const refreshShelf = useCallback(async (): Promise<void> => {
@@ -765,32 +769,36 @@ export function App(): React.JSX.Element {
   }, []);
 
   // Live shelf refresh (fallback path): a newly-deployed book changes the Merkle
-  // deploy root, so poll /api/root (tiny, network-first) on an interval + on
-  // foreground; when it changes, refresh the shelf. The PRIMARY path is the
-  // server's WS `TreeUpdate` broadcast (handleTreeUpdate below), which fires the
-  // instant a sync lands — this poll just catches a missed WS message.
+  // deploy root, so poll /api/root (tiny, plain no-store fetch) at startup, on an
+  // interval, and on foreground. The baseline is the root the replica last
+  // APPLIED, not the server's first answer: a deploy that landed while the app
+  // was closed must still refresh the replica manifest (chapters are served
+  // store-first by hash) and the shelf. Runs on every platform. The PRIMARY live
+  // path is the server's WS `TreeUpdate` broadcast (handleTreeUpdate below).
   useEffect(() => {
+    // Fallback baseline when the replica has no applied root (disabled/empty).
     let lastRoot: string | null = null;
+    let lastRefreshAt = 0;
     let cancelled = false;
+    let checking = false;
     const check = async (): Promise<void> => {
+      if (checking) return;
+      checking = true;
       try {
-        const r = (await (await contentFetch("/api/root", { fresh: true })).json()) as {
-          root?: string;
-        };
-        const root = r.root ?? null;
+        const root = await fetchServerRoot();
         if (cancelled || !root) return;
-        if (lastRoot === null) {
-          lastRoot = root; // baseline; the initial fetch above already has the latest
-          return;
-        }
-        if (root !== lastRoot) {
-          lastRoot = root;
-          if (!cancelled) await refreshShelf();
-        }
+        const applied = (await replicaAppliedRoot()) ?? lastRoot;
+        if (!rootRefreshDue(root, applied, lastRefreshAt, Date.now())) return;
+        await refreshShelf();
+        lastRefreshAt = Date.now();
+        lastRoot = root;
       } catch {
         // offline / transient — retry on the next tick or foreground.
+      } finally {
+        checking = false;
       }
     };
+    void check();
     const id = window.setInterval(() => void check(), 20_000);
     const onVis = (): void => {
       if (document.visibilityState === "visible") void check();
@@ -1449,9 +1457,13 @@ export function App(): React.JSX.Element {
   const restoreFromHash = useCallback(
     async (replaceHash: boolean): Promise<void> => {
       const { path, lang: hashLang, rendition: hashRendition } = getHashState();
+      // Claim the navigation token. Any later navigation (another back/forward,
+      // opening a chapter, returning to the shelf) bumps it; this restore then
+      // stops after its awaits instead of applying a stale tree or chapter over
+      // the newer view.
+      const seq = ++fileLoadSeq.current;
       if (!path) {
         // empty hash → the landing bookshelf
-        fileLoadSeq.current += 1;
         setCurrentPath(null);
         currentPathRef.current = null;
         setCurrentContent(null);
@@ -1482,13 +1494,17 @@ export function App(): React.JSX.Element {
         const res = await contentFetch(
           `/api/tree?rendition=${encodeURIComponent(kind)}`,
         );
-        setTree((await res.json()) as TreeNode[]);
+        const nextTree = (await res.json()) as TreeNode[];
+        if (seq !== fileLoadSeq.current) return;
+        setTree(nextTree);
       } catch (e) {
         console.error("Failed to fetch rendition tree:", e);
       }
+      if (seq !== fileLoadSeq.current) return;
       // Load the book's progress first so the doc restores its scroll.
       const slug = path.split("/")[0];
       if (slug) await loadBook(slug);
+      if (seq !== fileLoadSeq.current) return;
       if (kind === "audio") {
         // Audio renders off the engine (seeded by the view→engine effect).
         setCurrentPath(path);

@@ -10,13 +10,46 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::store::model::{
-    AssetRecord, AudioTask, AudioTaskRollup, AudioTaskUpsert, BookRecord, BookUpsert,
-    ChapterRecord, DagArtwork, DagChapter, EditionRecord, LegacyAudioAsset, ManifestChapter,
-    MerkleNode, ProgressEntry, RenditionRecord,
+    AssetRecord, AudioBake, AudioTask, AudioTaskRollup, AudioTaskUpsert, BookRecord, BookUpsert,
+    ChapterRecord, ChapterState, DagArtwork, DagChapter, EditionRecord, LegacyAudioAsset,
+    ManifestChapter, MerkleNode, ProgressEntry, RenditionRecord,
 };
 
 /// The schema, embedded so migration needs no file at runtime.
 const SCHEMA: &str = include_str!("schema.sql");
+
+/// Advance the served-content epoch (see `manifest_root`). Callers append
+/// further `AND` conditions.
+const BUMP_EPOCH: &str = "UPDATE deploy_root SET content_epoch = content_epoch + 1 WHERE id = 1";
+
+/// The manifest root clients compare: the Merkle deploy root qualified by the
+/// served-content epoch, so a change that does not move the Merkle root (audio
+/// baked after a sync) still changes `/api/root`, `/api/dag`, their ETags and
+/// the server's dag cache. Clients treat the value as an opaque token; epoch 0
+/// (a deploy predating the epoch) keeps the bare root.
+pub(crate) fn manifest_root(root: &str, epoch: i64) -> String {
+    if epoch == 0 {
+        root.to_string()
+    } else {
+        format!("{root}.{epoch}")
+    }
+}
+
+/// `assets a` row predicate: referenced by no chapter or book artwork, and not
+/// registered since `$1` (the GC grace cutoff, unix ms).
+const ORPHAN_ASSET: &str = "a.touched_at < $1
+     AND NOT EXISTS (
+         SELECT 1 FROM chapters c
+         WHERE c.asset_hash = a.content_hash
+            OR c.audio_hash = a.content_hash
+            OR c.marks_hash = a.content_hash
+     )
+     AND NOT EXISTS (
+         SELECT 1 FROM books b
+         WHERE b.cover_hash = a.content_hash
+            OR b.backdrop_hash = a.content_hash
+            OR b.card_backdrop_hash = a.content_hash
+     )";
 
 #[derive(Clone)]
 pub struct PgStore {
@@ -39,12 +72,33 @@ impl PgStore {
     /// Guarded by a session advisory lock: `CREATE TABLE IF NOT EXISTS` is NOT
     /// race-free under concurrent DDL (two callers collide on `pg_catalog` with
     /// a 23505), and the server + `liveview sync` may both migrate at startup.
-    /// The whole batch runs on one pooled connection, so lock/unlock pair up.
+    /// Lock, schema, and unlock run on one dedicated connection so they pair up,
+    /// and the unlock runs even when the schema batch fails: a session lock left
+    /// held on a pooled connection would block every later migration (another
+    /// process's startup) until that connection happened to close.
     pub async fn migrate(&self) -> Result<(), sqlx::Error> {
+        use sqlx::Connection;
         // Arbitrary fixed key — namespaces this lock to liveview migration.
-        let sql =
-            format!("SELECT pg_advisory_lock(8147);\n{SCHEMA}\nSELECT pg_advisory_unlock(8147);");
-        self.pool.execute_many_str(&sql).await
+        const LOCK_KEY: i64 = 8147;
+        let mut conn = self.pool.acquire().await?;
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(LOCK_KEY)
+            .execute(&mut *conn)
+            .await?;
+        // `raw_sql` uses the simple-query protocol, which accepts the whole
+        // multi-statement script.
+        let applied = sqlx::raw_sql(SCHEMA).execute(&mut *conn).await.map(|_| ());
+        let unlocked = sqlx::query("SELECT pg_advisory_unlock($1)")
+            .bind(LOCK_KEY)
+            .execute(&mut *conn)
+            .await
+            .map(|_| ());
+        if unlocked.is_err() {
+            // Could not release: never return this session to the pool. Closing
+            // it ends the session, which releases the lock server-side.
+            let _ = conn.detach().close().await;
+        }
+        applied.and(unlocked)
     }
 
     // ── Books / renditions / editions ───────────────────────────────────────
@@ -101,14 +155,21 @@ impl PgStore {
         .map(|_| ())
     }
 
-    /// Delete a book and (via ON DELETE CASCADE) its renditions/editions. Its
-    /// chapters are removed separately by `delete_chapters_for_book`.
+    /// Delete a book with everything keyed by it: renditions/editions (via ON
+    /// DELETE CASCADE) plus its chapters and audio tasks, which carry no foreign
+    /// key and would otherwise outlive the book forever.
     pub async fn delete_book(&self, slug: &str) -> Result<(), sqlx::Error> {
-        sqlx::query("DELETE FROM books WHERE slug = $1")
-            .bind(slug)
-            .execute(&self.pool)
-            .await
-            .map(|_| ())
+        let mut tx = self.pool.begin().await?;
+        // Lock order books → chapters → audio_tasks matches the schema script,
+        // so this transaction cannot deadlock with a concurrent migration.
+        for sql in [
+            "DELETE FROM books WHERE slug = $1",
+            "DELETE FROM chapters WHERE book_slug = $1",
+            "DELETE FROM audio_tasks WHERE book_slug = $1",
+        ] {
+            sqlx::query(sql).bind(slug).execute(&mut *tx).await?;
+        }
+        tx.commit().await
     }
 
     // Flat columns map 1:1 to the renditions table; a wrapper struct for one
@@ -333,6 +394,12 @@ impl PgStore {
                      THEN EXCLUDED.marks_hash
                      ELSE COALESCE(EXCLUDED.marks_hash, chapters.marks_hash)
                  END,
+                 -- The voice travels with the audio it describes.
+                 audio_voice = CASE
+                     WHEN chapters.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                     THEN NULL
+                     ELSE chapters.audio_voice
+                 END,
                  content_hash = EXCLUDED.content_hash,
                  render_version = EXCLUDED.render_version",
         )
@@ -363,7 +430,7 @@ impl PgStore {
         sqlx::query_as::<_, ChapterRecord>(
             "SELECT book_slug, rendition, lang, rel_path, file_type,
                     html, markdown, asset_hash, audio_hash, marks_hash,
-                    content_hash, render_version
+                    content_hash, render_version, audio_voice
              FROM chapters
              WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4",
         )
@@ -375,27 +442,63 @@ impl PgStore {
         .await
     }
 
-    /// Record lazily-generated audio blobs onto an existing chapter (the
-    /// on-demand fallback when the backfill hasn't reached it yet).
-    pub async fn set_chapter_audio(
+    /// Record synthesized audio blobs onto a chapter — only if the chapter still
+    /// holds the content they were synthesized from (`content_hash`) and does not
+    /// already carry audio for this `voice`. Returns `false` when nothing was
+    /// written: the chapter was deleted or re-synced meanwhile (the result is
+    /// stale and must be discarded), or a concurrent synth recorded its own pair
+    /// first (the caller should serve that pair, so audio and marks stay
+    /// consistent across requests).
+    pub async fn set_chapter_audio(&self, bake: &AudioBake<'_>) -> Result<bool, sqlx::Error> {
+        // A recorded bake changes what /api/dag serves without moving the
+        // Merkle root, so it bumps the content epoch in the same statement.
+        sqlx::query_scalar::<_, i64>(&format!(
+            "WITH baked AS (
+                 UPDATE chapters SET audio_hash = $7, marks_hash = $8, audio_voice = $6
+                 WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4
+                   AND content_hash = $5
+                   AND (audio_hash IS NULL OR marks_hash IS NULL
+                        OR audio_voice IS DISTINCT FROM $6)
+                 RETURNING 1
+             ),
+             bump AS ({BUMP_EPOCH} AND EXISTS (SELECT 1 FROM baked))
+             SELECT count(*) FROM baked"
+        ))
+        .bind(bake.book_slug)
+        .bind(bake.rendition)
+        .bind(bake.lang)
+        .bind(bake.rel_path)
+        .bind(bake.content_hash)
+        .bind(bake.voice)
+        .bind(bake.audio_hash)
+        .bind(bake.marks_hash)
+        .fetch_one(&self.pool)
+        .await
+        .map(|n| n > 0)
+    }
+
+    /// Record the voice a legacy bake (audio present, voice unknown) was made
+    /// with, as last known from its audio task. A later voice change then shows
+    /// up as a mismatch and re-bakes, while the old audio keeps serving until
+    /// the new bake replaces it. Never overwrites a recorded voice.
+    pub async fn backfill_audio_voice(
         &self,
         book_slug: &str,
         rendition: &str,
         lang: &str,
         rel_path: &str,
-        audio_hash: &str,
-        marks_hash: &str,
+        voice: &str,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE chapters SET audio_hash = $5, marks_hash = $6
-             WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4",
+            "UPDATE chapters SET audio_voice = $5
+             WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4
+               AND audio_voice IS NULL AND audio_hash IS NOT NULL",
         )
         .bind(book_slug)
         .bind(rendition)
         .bind(lang)
         .bind(rel_path)
-        .bind(audio_hash)
-        .bind(marks_hash)
+        .bind(voice)
         .execute(&self.pool)
         .await
         .map(|_| ())
@@ -412,10 +515,14 @@ impl PgStore {
         lang: &str,
         rel_path: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE chapters SET audio_hash = NULL, marks_hash = NULL
-             WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4",
-        )
+        sqlx::query(&format!(
+            "WITH cleared AS (
+                 UPDATE chapters SET audio_hash = NULL, marks_hash = NULL, audio_voice = NULL
+                 WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4
+                 RETURNING 1
+             )
+             {BUMP_EPOCH} AND EXISTS (SELECT 1 FROM cleared)"
+        ))
         .bind(book_slug)
         .bind(rendition)
         .bind(lang)
@@ -425,6 +532,19 @@ impl PgStore {
         .map(|_| ())
     }
 
+    /// Reconcile state for every chapter row (no HTML/markdown), one query.
+    pub async fn chapter_states(&self) -> Result<Vec<ChapterState>, sqlx::Error> {
+        sqlx::query_as::<_, ChapterState>(
+            "SELECT book_slug, rendition, lang, rel_path, content_hash, render_version,
+                    audio_hash, marks_hash, audio_voice
+             FROM chapters",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Delete a chapter row together with its audio task (a task whose chapter
+    /// is gone can never complete and would linger in the readiness rollup).
     pub async fn delete_chapter(
         &self,
         book_slug: &str,
@@ -432,8 +552,13 @@ impl PgStore {
         lang: &str,
         rel_path: &str,
     ) -> Result<(), sqlx::Error> {
+        // chapters before audio_tasks: the same lock order as the schema script.
         sqlx::query(
-            "DELETE FROM chapters
+            "WITH chapter AS (
+                 DELETE FROM chapters
+                 WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4
+             )
+             DELETE FROM audio_tasks
              WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4",
         )
         .bind(book_slug)
@@ -453,15 +578,20 @@ impl PgStore {
         mime: &str,
         size: i64,
     ) -> Result<(), sqlx::Error> {
+        // Every registration refreshes `touched_at`, which defers the orphan GC
+        // for this blob; writers therefore register BEFORE uploading (see
+        // `gc_orphan_asset`). Blocks while a GC holds this row's lock.
         sqlx::query(
-            "INSERT INTO assets (content_hash, mime, size)
-             VALUES ($1, $2, $3)
+            "INSERT INTO assets (content_hash, mime, size, touched_at)
+             VALUES ($1, $2, $3, $4)
              ON CONFLICT (content_hash) DO UPDATE SET
-                 mime = EXCLUDED.mime, size = EXCLUDED.size",
+                 mime = EXCLUDED.mime, size = EXCLUDED.size,
+                 touched_at = EXCLUDED.touched_at",
         )
         .bind(content_hash)
         .bind(mime)
         .bind(size)
+        .bind(now_millis())
         .execute(&self.pool)
         .await
         .map(|_| ())
@@ -537,12 +667,18 @@ impl PgStore {
         old_hash: &str,
         new_hash: &str,
     ) -> Result<u64, sqlx::Error> {
-        let result = sqlx::query("UPDATE chapters SET audio_hash = $2 WHERE audio_hash = $1")
-            .bind(old_hash)
-            .bind(new_hash)
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected())
+        sqlx::query_scalar::<_, i64>(&format!(
+            "WITH replaced AS (
+                 UPDATE chapters SET audio_hash = $2 WHERE audio_hash = $1 RETURNING 1
+             ),
+             bump AS ({BUMP_EPOCH} AND EXISTS (SELECT 1 FROM replaced))
+             SELECT count(*) FROM replaced"
+        ))
+        .bind(old_hash)
+        .bind(new_hash)
+        .fetch_one(&self.pool)
+        .await
+        .map(|n| u64::try_from(n).unwrap_or(0))
     }
 
     pub async fn delete_asset(&self, content_hash: &str) -> Result<(), sqlx::Error> {
@@ -595,6 +731,17 @@ impl PgStore {
             .await
     }
 
+    /// Drop every Merkle node not in `keep` (the nodes of the just-deployed
+    /// DAG). Nodes of superseded deploys are otherwise never removed, so the
+    /// table grows with every edit. Returns the number of nodes removed.
+    pub async fn prune_merkle_nodes(&self, keep: &[String]) -> Result<u64, sqlx::Error> {
+        sqlx::query("DELETE FROM merkle_nodes WHERE NOT (node_hash = ANY($1))")
+            .bind(keep)
+            .execute(&self.pool)
+            .await
+            .map(|r| r.rows_affected())
+    }
+
     /// All book slugs currently in pg — to prune books dropped from the corpus.
     pub async fn book_slugs(&self) -> Result<Vec<String>, sqlx::Error> {
         sqlx::query_scalar::<_, String>("SELECT slug FROM books")
@@ -602,26 +749,58 @@ impl PgStore {
             .await
     }
 
-    /// Asset hashes referenced by no chapter (any of asset/audio/marks). These
-    /// are orphaned blobs to delete from pg + rustfs after a reconcile.
-    pub async fn orphan_asset_hashes(&self) -> Result<Vec<String>, sqlx::Error> {
-        sqlx::query_scalar::<_, String>(
-            "SELECT content_hash FROM assets a
-             WHERE NOT EXISTS (
-                 SELECT 1 FROM chapters c
-                 WHERE c.asset_hash = a.content_hash
-                    OR c.audio_hash = a.content_hash
-                    OR c.marks_hash = a.content_hash
-             )
-             AND NOT EXISTS (
-                 SELECT 1 FROM books b
-                 WHERE b.cover_hash = a.content_hash
-                    OR b.backdrop_hash = a.content_hash
-                    OR b.card_backdrop_hash = a.content_hash
-             )",
-        )
+    /// Asset hashes referenced by no chapter (any of asset/audio/marks) or book
+    /// artwork and untouched since `touched_before` (unix ms) — candidates for
+    /// `gc_orphan_asset`.
+    pub async fn orphan_asset_hashes(
+        &self,
+        touched_before: i64,
+    ) -> Result<Vec<String>, sqlx::Error> {
+        sqlx::query_scalar::<_, String>(&format!(
+            "SELECT content_hash FROM assets a WHERE {ORPHAN_ASSET} ORDER BY content_hash"
+        ))
+        .bind(touched_before)
         .fetch_all(&self.pool)
         .await
+    }
+
+    /// Delete one orphaned blob — object and row — if it is STILL orphaned and
+    /// untouched since `touched_before`. The row is locked (`FOR UPDATE`) while
+    /// the object is deleted, so a writer registering the same hash meanwhile
+    /// blocks until the row is gone and then re-creates it and re-uploads the
+    /// object (writers register before uploading). Returns whether it deleted.
+    pub async fn gc_orphan_asset<F, Fut>(
+        &self,
+        content_hash: &str,
+        touched_before: i64,
+        delete_object: F,
+    ) -> Result<bool, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<(), String>>,
+    {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let locked = sqlx::query_scalar::<_, String>(&format!(
+            "SELECT content_hash FROM assets a
+             WHERE a.content_hash = $2 AND {ORPHAN_ASSET}
+             FOR UPDATE"
+        ))
+        .bind(touched_before)
+        .bind(content_hash)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if locked.is_none() {
+            return Ok(false);
+        }
+        delete_object().await?;
+        sqlx::query("DELETE FROM assets WHERE content_hash = $1")
+            .bind(content_hash)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(true)
     }
 
     /// Current deployed Merkle root, or `None` before the first sync.
@@ -634,10 +813,14 @@ impl PgStore {
 
     pub async fn set_deploy_root(&self, root_hash: &str) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO deploy_root (id, root_hash, updated_at)
-             VALUES (1, $1, $2)
+            "INSERT INTO deploy_root (id, root_hash, updated_at, content_epoch)
+             VALUES (1, $1, $2, 1)
              ON CONFLICT (id) DO UPDATE SET
-                 root_hash = EXCLUDED.root_hash, updated_at = EXCLUDED.updated_at",
+                 root_hash = EXCLUDED.root_hash, updated_at = EXCLUDED.updated_at,
+                 -- Every deploy moves the epoch, so a (root, epoch) pair never
+                 -- names two different served states (e.g. an A→B→A revert
+                 -- whose audio differs from the first time A was live).
+                 content_epoch = deploy_root.content_epoch + 1",
         )
         .bind(root_hash)
         .bind(now_millis())
@@ -672,15 +855,19 @@ impl PgStore {
                  leaf_kind   = EXCLUDED.leaf_kind,
                  voice       = EXCLUDED.voice,
                  priority    = GREATEST(audio_tasks.priority, EXCLUDED.priority),
-                 -- New source or transform ⇒ re-queue; identical task ⇒ keep status.
+                 -- New source or transform (or a forced re-bake) ⇒ re-queue;
+                 -- identical task ⇒ keep status.
                  content_hash = EXCLUDED.content_hash,
-                 status      = CASE WHEN audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                 status      = CASE WHEN $10
+                                          OR audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
                                           OR audio_tasks.leaf_kind IS DISTINCT FROM EXCLUDED.leaf_kind
                                     THEN 'queued' ELSE audio_tasks.status END,
-                 attempts    = CASE WHEN audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                 attempts    = CASE WHEN $10
+                                          OR audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
                                           OR audio_tasks.leaf_kind IS DISTINCT FROM EXCLUDED.leaf_kind
                                     THEN 0 ELSE audio_tasks.attempts END,
-                 error       = CASE WHEN audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                 error       = CASE WHEN $10
+                                          OR audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
                                           OR audio_tasks.leaf_kind IS DISTINCT FROM EXCLUDED.leaf_kind
                                     THEN NULL ELSE audio_tasks.error END",
         )
@@ -693,9 +880,39 @@ impl PgStore {
         .bind(task.voice)
         .bind(task.priority)
         .bind(now_millis())
+        .bind(task.force)
         .execute(&self.pool)
         .await
         .map(|_| ())
+    }
+
+    /// Every audio task (one per audio chapter) — lets `liveview sync` skip an
+    /// already-queued/finished identical task without a per-leaf round trip.
+    pub async fn all_audio_tasks(&self) -> Result<Vec<AudioTask>, sqlx::Error> {
+        sqlx::query_as::<_, AudioTask>(
+            "SELECT book_slug, rendition, lang, rel_path, content_hash,
+                    leaf_kind, voice, status, priority, attempts, error,
+                    enqueued_at, started_at, finished_at
+             FROM audio_tasks",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Delete audio tasks whose chapter row no longer exists (left behind by
+    /// deletes before tasks were removed together with their chapter).
+    pub async fn delete_orphan_audio_tasks(&self) -> Result<u64, sqlx::Error> {
+        sqlx::query(
+            "DELETE FROM audio_tasks t
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM chapters c
+                 WHERE c.book_slug = t.book_slug AND c.rendition = t.rendition
+                   AND c.lang = t.lang AND c.rel_path = t.rel_path
+             )",
+        )
+        .execute(&self.pool)
+        .await
+        .map(|r| r.rows_affected())
     }
 
     /// Atomically claim the next runnable task (highest priority, oldest first),
@@ -721,48 +938,49 @@ impl PgStore {
         .await
     }
 
-    /// Mark a claimed task done.
-    pub async fn finish_audio_task(
-        &self,
-        book_slug: &str,
-        rendition: &str,
-        lang: &str,
-        rel_path: &str,
-    ) -> Result<(), sqlx::Error> {
+    /// Mark a claimed task done — only if it is still the task that was claimed
+    /// (`running`, same source + transform). A sync that re-queued the row for
+    /// new content while this run was in flight must not be overwritten to
+    /// `done`. Returns whether the row was updated.
+    pub async fn finish_audio_task(&self, task: &AudioTask) -> Result<bool, sqlx::Error> {
         sqlx::query(
-            "UPDATE audio_tasks SET status = 'done', finished_at = $5, error = NULL
-             WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4",
+            "UPDATE audio_tasks SET status = 'done', finished_at = $7, error = NULL
+             WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4
+               AND status = 'running' AND content_hash = $5 AND leaf_kind = $6",
         )
-        .bind(book_slug)
-        .bind(rendition)
-        .bind(lang)
-        .bind(rel_path)
+        .bind(&task.book_slug)
+        .bind(&task.rendition)
+        .bind(&task.lang)
+        .bind(&task.rel_path)
+        .bind(&task.content_hash)
+        .bind(&task.leaf_kind)
         .bind(now_millis())
         .execute(&self.pool)
         .await
-        .map(|_| ())
+        .map(|r| r.rows_affected() > 0)
     }
 
-    /// Mark a claimed task failed (or re-queue for another attempt, capped).
+    /// Mark a claimed task failed (or re-queue for another attempt, capped) —
+    /// with the same "still the claimed task" guard as `finish_audio_task`.
     pub async fn fail_audio_task(
         &self,
-        book_slug: &str,
-        rendition: &str,
-        lang: &str,
-        rel_path: &str,
+        task: &AudioTask,
         error: &str,
         max_attempts: i32,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE audio_tasks SET
-                 status = CASE WHEN attempts >= $6 THEN 'failed' ELSE 'queued' END,
-                 error = $5, finished_at = $7
-             WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4",
+                 status = CASE WHEN attempts >= $8 THEN 'failed' ELSE 'queued' END,
+                 error = $7, finished_at = $9
+             WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4
+               AND status = 'running' AND content_hash = $5 AND leaf_kind = $6",
         )
-        .bind(book_slug)
-        .bind(rendition)
-        .bind(lang)
-        .bind(rel_path)
+        .bind(&task.book_slug)
+        .bind(&task.rendition)
+        .bind(&task.lang)
+        .bind(&task.rel_path)
+        .bind(&task.content_hash)
+        .bind(&task.leaf_kind)
         .bind(error)
         .bind(max_attempts)
         .bind(now_millis())
@@ -849,17 +1067,21 @@ impl PgStore {
     pub async fn manifest_books(
         &self,
     ) -> Result<(Option<String>, Vec<(String, String)>), sqlx::Error> {
-        let root = self.deploy_root().await?;
-        let children = match &root {
-            Some(r) => match self.get_merkle_node(r).await? {
-                Some(n) if n.kind == "tree" => {
-                    serde_json::from_str::<Vec<(String, String)>>(&n.payload).unwrap_or_default()
-                }
-                _ => Vec::new(),
-            },
-            None => Vec::new(),
+        let row: Option<(Option<String>, i64)> =
+            sqlx::query_as("SELECT root_hash, content_epoch FROM deploy_root WHERE id = 1")
+                .fetch_optional(&self.pool)
+                .await?;
+        let (root, epoch) = match row {
+            Some((Some(root), epoch)) => (root, epoch),
+            _ => return Ok((None, Vec::new())),
         };
-        Ok((root, children))
+        let children = match self.get_merkle_node(&root).await? {
+            Some(n) if n.kind == "tree" => {
+                serde_json::from_str::<Vec<(String, String)>>(&n.payload).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+        Ok((Some(manifest_root(&root, epoch)), children))
     }
 
     /// One book's content-addressed chapters (audio + assets) with blob sizes and
@@ -1016,20 +1238,6 @@ impl PgStore {
     }
 }
 
-/// Run a multi-statement SQL script over a pool via the simple-query protocol.
-/// sqlx's prepared path is one-statement-at-a-time; the raw connection's
-/// `execute` accepts a whole script, which is what migration needs.
-trait ExecuteManyStr {
-    async fn execute_many_str(&self, sql: &str) -> Result<(), sqlx::Error>;
-}
-
-impl ExecuteManyStr for PgPool {
-    async fn execute_many_str(&self, sql: &str) -> Result<(), sqlx::Error> {
-        use sqlx::Executor;
-        self.execute(sql).await.map(|_| ())
-    }
-}
-
 pub(crate) fn now_millis() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1126,6 +1334,7 @@ mod tests {
             marks_hash: None,
             content_hash: "h0".into(),
             render_version: 1,
+            audio_voice: None,
         };
         s.upsert_chapter(&c).await.unwrap();
         let got = s
@@ -1150,6 +1359,122 @@ mod tests {
         assert!(s.get_asset("habc").await.unwrap().is_none());
     }
 
+    fn chapter(slug: &str, rel: &str, content: &str) -> ChapterRecord {
+        ChapterRecord {
+            book_slug: slug.into(),
+            rendition: "audio".into(),
+            lang: "en".into(),
+            rel_path: rel.into(),
+            file_type: "markdown".into(),
+            html: Some("<p>x</p>".into()),
+            markdown: Some("x".into()),
+            asset_hash: None,
+            audio_hash: None,
+            marks_hash: None,
+            content_hash: content.into(),
+            render_version: 1,
+            audio_voice: None,
+        }
+    }
+
+    async fn enqueue(s: &PgStore, slug: &str, rel: &str, content: &str) {
+        s.enqueue_audio_task(&AudioTaskUpsert {
+            book_slug: slug,
+            rendition: "audio",
+            lang: "en",
+            rel_path: rel,
+            content_hash: content,
+            leaf_kind: "audio:1:v:1",
+            voice: "v",
+            priority: 0,
+            force: false,
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn task_count(s: &PgStore, slug: &str) -> usize {
+        s.all_audio_tasks()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.book_slug == slug)
+            .count()
+    }
+
+    #[tokio::test]
+    async fn deletes_cascade_to_chapters_and_audio_tasks() {
+        let Some(s) = store().await else { return };
+        let slug = "t-cascade";
+        s.delete_book(slug).await.unwrap();
+        s.upsert_book(&BookUpsert {
+            slug,
+            label: "Cascade",
+            description: None,
+            tags: &[],
+            collection: None,
+            author: None,
+            cover_hash: None,
+            backdrop_hash: None,
+            card_backdrop_hash: None,
+            default_rendition: "audio",
+        })
+        .await
+        .unwrap();
+        for rel in ["00.spoken.md", "01.spoken.md"] {
+            s.upsert_chapter(&chapter(slug, rel, "h")).await.unwrap();
+            enqueue(&s, slug, rel, "h").await;
+        }
+        // Deleting one chapter takes its (never-finished) task with it.
+        s.delete_chapter(slug, "audio", "en", "00.spoken.md")
+            .await
+            .unwrap();
+        assert_eq!(task_count(&s, slug).await, 1);
+        // Deleting the book removes the remaining chapter rows and tasks.
+        s.delete_book(slug).await.unwrap();
+        assert_eq!(task_count(&s, slug).await, 0);
+        assert!(
+            s.get_chapter(slug, "audio", "en", "01.spoken.md")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn forced_enqueue_requeues_an_identical_done_task() {
+        let Some(s) = store().await else { return };
+        let slug = "t-force";
+        s.delete_book(slug).await.unwrap();
+        s.upsert_chapter(&chapter(slug, "00.spoken.md", "h"))
+            .await
+            .unwrap();
+        enqueue(&s, slug, "00.spoken.md", "h").await;
+        sqlx::query("UPDATE audio_tasks SET status = 'done' WHERE book_slug = $1")
+            .bind(slug)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        let status = || s.audio_task_status(slug, "audio", "en", "00.spoken.md");
+        enqueue(&s, slug, "00.spoken.md", "h").await;
+        assert_eq!(status().await.unwrap().as_deref(), Some("done"));
+        s.enqueue_audio_task(&AudioTaskUpsert {
+            book_slug: slug,
+            rendition: "audio",
+            lang: "en",
+            rel_path: "00.spoken.md",
+            content_hash: "h",
+            leaf_kind: "audio:1:v:1",
+            voice: "v",
+            priority: 0,
+            force: true,
+        })
+        .await
+        .unwrap();
+        assert_eq!(status().await.unwrap().as_deref(), Some("queued"));
+        s.delete_book(slug).await.unwrap();
+    }
+
     #[tokio::test]
     async fn merkle_and_deploy_root_roundtrip() {
         let Some(s) = store().await else { return };
@@ -1159,6 +1484,182 @@ mod tests {
         assert_eq!(s.get_merkle_node("n1").await.unwrap().unwrap().kind, "tree");
         s.set_deploy_root("root-abc").await.unwrap();
         assert_eq!(s.deploy_root().await.unwrap().as_deref(), Some("root-abc"));
+    }
+
+    fn bake<'a>(slug: &'a str, content: &'a str, voice: &'a str, audio: &'a str) -> AudioBake<'a> {
+        AudioBake {
+            book_slug: slug,
+            rendition: "audio",
+            lang: "en",
+            rel_path: "00.spoken.md",
+            content_hash: content,
+            voice,
+            audio_hash: audio,
+            marks_hash: audio,
+        }
+    }
+
+    #[tokio::test]
+    async fn chapter_audio_writes_are_guarded_by_content_and_voice() {
+        let Some(s) = store().await else { return };
+        let slug = "t-audio-guard";
+        s.delete_book(slug).await.unwrap();
+        s.upsert_chapter(&chapter(slug, "00.spoken.md", "new"))
+            .await
+            .unwrap();
+        let row = || s.get_chapter(slug, "audio", "en", "00.spoken.md");
+        // A synth of superseded content is discarded.
+        assert!(
+            !s.set_chapter_audio(&bake(slug, "old", "v1", "a0"))
+                .await
+                .unwrap()
+        );
+        assert!(row().await.unwrap().unwrap().audio_hash.is_none());
+        // First writer for the current content wins; a concurrent duplicate
+        // for the same voice does not replace its pair.
+        assert!(
+            s.set_chapter_audio(&bake(slug, "new", "v1", "a1"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !s.set_chapter_audio(&bake(slug, "new", "v1", "a2"))
+                .await
+                .unwrap()
+        );
+        let r = row().await.unwrap().unwrap();
+        assert_eq!(r.audio_hash.as_deref(), Some("a1"));
+        assert_eq!(r.audio_voice.as_deref(), Some("v1"));
+        // A voice change re-bakes over the old voice's audio.
+        assert!(
+            s.set_chapter_audio(&bake(slug, "new", "v2", "a3"))
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            row().await.unwrap().unwrap().audio_hash.as_deref(),
+            Some("a3")
+        );
+        // A content change drops audio and its voice together.
+        s.upsert_chapter(&chapter(slug, "00.spoken.md", "newer"))
+            .await
+            .unwrap();
+        let r = row().await.unwrap().unwrap();
+        assert!(r.audio_hash.is_none() && r.audio_voice.is_none());
+        s.delete_book(slug).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn finishing_a_superseded_task_does_not_mark_the_new_one_done() {
+        let Some(s) = store().await else { return };
+        let slug = "t-finish-guard";
+        s.delete_book(slug).await.unwrap();
+        s.upsert_chapter(&chapter(slug, "00.spoken.md", "h1"))
+            .await
+            .unwrap();
+        enqueue(&s, slug, "00.spoken.md", "h1").await;
+        sqlx::query("UPDATE audio_tasks SET status = 'running' WHERE book_slug = $1")
+            .bind(slug)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        let claimed = s
+            .all_audio_tasks()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|t| t.book_slug == slug)
+            .unwrap();
+        // A sync re-queues the row for new content while the synth runs.
+        enqueue(&s, slug, "00.spoken.md", "h2").await;
+        assert!(!s.finish_audio_task(&claimed).await.unwrap());
+        s.fail_audio_task(&claimed, "boom", 1).await.unwrap();
+        let status = s
+            .audio_task_status(slug, "audio", "en", "00.spoken.md")
+            .await
+            .unwrap();
+        assert_eq!(status.as_deref(), Some("queued"), "new task untouched");
+        s.delete_book(slug).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn orphan_gc_spares_recently_registered_blobs() {
+        let Some(s) = store().await else { return };
+        let hash = "t-gc-grace-blob";
+        s.upsert_asset(hash, "audio/x-caf", 1).await.unwrap();
+        let grace_cutoff = now_millis() - 60_000;
+        assert!(
+            !s.orphan_asset_hashes(grace_cutoff)
+                .await
+                .unwrap()
+                .contains(&hash.to_string())
+        );
+        let deleted = s
+            .gc_orphan_asset(hash, grace_cutoff, || async { panic!("must not delete") })
+            .await
+            .unwrap();
+        assert!(
+            !deleted,
+            "an unreferenced blob inside its grace period survives"
+        );
+        // Past the cutoff it is collected, object first, then the row.
+        let deleted_object = std::sync::atomic::AtomicBool::new(false);
+        let deleted = s
+            .gc_orphan_asset(hash, now_millis() + 1, || async {
+                deleted_object.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(deleted && deleted_object.into_inner());
+        assert!(s.get_asset(hash).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn manifest_root_is_the_bare_root_until_the_epoch_moves() {
+        assert_eq!(manifest_root("abc", 0), "abc");
+        assert_eq!(manifest_root("abc", 7), "abc.7");
+        assert_ne!(manifest_root("abc", 7), manifest_root("abc", 8));
+    }
+
+    #[tokio::test]
+    async fn baking_audio_moves_the_manifest_root() {
+        let Some(s) = store().await else { return };
+        let slug = "t-epoch";
+        s.delete_book(slug).await.unwrap();
+        s.set_deploy_root("root-epoch").await.unwrap();
+        s.upsert_chapter(&chapter(slug, "00.spoken.md", "h"))
+            .await
+            .unwrap();
+        let root = || async { s.manifest_books().await.unwrap().0.unwrap() };
+        let before = root().await;
+        assert!(before.contains('.'), "deploys qualify the root: {before}");
+        assert!(
+            s.set_chapter_audio(&bake(slug, "h", "v", "a"))
+                .await
+                .unwrap()
+        );
+        let after_bake = root().await;
+        assert_ne!(before, after_bake, "a bake must invalidate /api/root");
+        s.clear_chapter_audio(slug, "audio", "en", "00.spoken.md")
+            .await
+            .unwrap();
+        assert_ne!(after_bake, root().await, "clearing audio must too");
+        s.delete_book(slug).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn prune_keeps_only_the_live_dag() {
+        let Some(s) = store().await else { return };
+        for n in ["prune-live", "prune-dead"] {
+            s.put_merkle_node(n, "leaf", "{}").await.unwrap();
+        }
+        // `n1` belongs to the concurrently running roundtrip test.
+        s.prune_merkle_nodes(&["prune-live".into(), "n1".into()])
+            .await
+            .unwrap();
+        assert!(s.get_merkle_node("prune-live").await.unwrap().is_some());
+        assert!(s.get_merkle_node("prune-dead").await.unwrap().is_none());
     }
 
     #[tokio::test]
