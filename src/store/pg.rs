@@ -39,12 +39,33 @@ impl PgStore {
     /// Guarded by a session advisory lock: `CREATE TABLE IF NOT EXISTS` is NOT
     /// race-free under concurrent DDL (two callers collide on `pg_catalog` with
     /// a 23505), and the server + `liveview sync` may both migrate at startup.
-    /// The whole batch runs on one pooled connection, so lock/unlock pair up.
+    /// Lock, schema, and unlock run on one dedicated connection so they pair up,
+    /// and the unlock runs even when the schema batch fails: a session lock left
+    /// held on a pooled connection would block every later migration (another
+    /// process's startup) until that connection happened to close.
     pub async fn migrate(&self) -> Result<(), sqlx::Error> {
+        use sqlx::Connection;
         // Arbitrary fixed key — namespaces this lock to liveview migration.
-        let sql =
-            format!("SELECT pg_advisory_lock(8147);\n{SCHEMA}\nSELECT pg_advisory_unlock(8147);");
-        self.pool.execute_many_str(&sql).await
+        const LOCK_KEY: i64 = 8147;
+        let mut conn = self.pool.acquire().await?;
+        sqlx::query("SELECT pg_advisory_lock($1)")
+            .bind(LOCK_KEY)
+            .execute(&mut *conn)
+            .await?;
+        // `raw_sql` uses the simple-query protocol, which accepts the whole
+        // multi-statement script.
+        let applied = sqlx::raw_sql(SCHEMA).execute(&mut *conn).await.map(|_| ());
+        let unlocked = sqlx::query("SELECT pg_advisory_unlock($1)")
+            .bind(LOCK_KEY)
+            .execute(&mut *conn)
+            .await
+            .map(|_| ());
+        if unlocked.is_err() {
+            // Could not release: never return this session to the pool. Closing
+            // it ends the session, which releases the lock server-side.
+            let _ = conn.detach().close().await;
+        }
+        applied.and(unlocked)
     }
 
     // ── Books / renditions / editions ───────────────────────────────────────
@@ -1013,20 +1034,6 @@ impl PgStore {
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected() > 0)
-    }
-}
-
-/// Run a multi-statement SQL script over a pool via the simple-query protocol.
-/// sqlx's prepared path is one-statement-at-a-time; the raw connection's
-/// `execute` accepts a whole script, which is what migration needs.
-trait ExecuteManyStr {
-    async fn execute_many_str(&self, sql: &str) -> Result<(), sqlx::Error>;
-}
-
-impl ExecuteManyStr for PgPool {
-    async fn execute_many_str(&self, sql: &str) -> Result<(), sqlx::Error> {
-        use sqlx::Executor;
-        self.execute(sql).await.map(|_| ())
     }
 }
 
