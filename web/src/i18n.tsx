@@ -12,6 +12,10 @@ import {
   resolveLocale,
   UI_LOCALES,
 } from "@/locales/registry";
+import {
+  type ShellLabels,
+  ShellLabelsProvider,
+} from "@/_shell/shell-labels.tsx";
 
 export { type Language, UI_LOCALES as UI_LANGUAGES };
 
@@ -222,6 +226,20 @@ const STRINGS: Record<Language, Dict> = {
     "settings.about": "About",
     "settings.aboutText":
       "liveview — read and listen to your library, always up to date.",
+    "shell.close": "Close",
+    "shell.back": "Back",
+    "shell.navigation": "Navigation",
+    "shell.openNavigation": "Open navigation",
+    "shell.closeNavigation": "Close navigation",
+    "shell.collapseNavigation": "Collapse navigation",
+    "shell.imagePreview": "Image preview",
+    "shell.previousImage": "Previous image",
+    "shell.nextImage": "Next image",
+    "shell.zoomIn": "Zoom in",
+    "shell.zoomOut": "Zoom out",
+    "shell.connectionLost": "Connection lost — reconnecting…",
+    "shell.reconnected": "Reconnected",
+    "shell.updateReloading": "New version · reloading in {n}s",
   },
   zh: {
     "landing.title": "书架",
@@ -415,6 +433,20 @@ const STRINGS: Record<Language, Dict> = {
     "group.collection": "按系列",
     "settings.about": "关于",
     "settings.aboutText": "liveview —— 阅读与收听你的书库，内容自动更新。",
+    "shell.close": "关闭",
+    "shell.back": "返回",
+    "shell.navigation": "导航",
+    "shell.openNavigation": "打开导航",
+    "shell.closeNavigation": "关闭导航",
+    "shell.collapseNavigation": "收起导航",
+    "shell.imagePreview": "图片预览",
+    "shell.previousImage": "上一张",
+    "shell.nextImage": "下一张",
+    "shell.zoomIn": "放大",
+    "shell.zoomOut": "缩小",
+    "shell.connectionLost": "连接已断开，正在重连…",
+    "shell.reconnected": "已重新连接",
+    "shell.updateReloading": "有新版本 · {n} 秒后刷新",
   },
 };
 
@@ -469,7 +501,30 @@ export function I18nProvider(
     t,
   ]);
 
-  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
+  // The shell primitives (sheets, navigation, lightbox, connection banner) are
+  // app-agnostic and default to English; hand them the active language here.
+  const shellLabels = useMemo<ShellLabels>(() => ({
+    close: t("shell.close"),
+    back: t("shell.back"),
+    navigation: t("shell.navigation"),
+    openNavigation: t("shell.openNavigation"),
+    closeNavigation: t("shell.closeNavigation"),
+    collapseNavigation: t("shell.collapseNavigation"),
+    imagePreview: t("shell.imagePreview"),
+    previousImage: t("shell.previousImage"),
+    nextImage: t("shell.nextImage"),
+    zoomIn: t("shell.zoomIn"),
+    zoomOut: t("shell.zoomOut"),
+    connectionLost: t("shell.connectionLost"),
+    reconnected: t("shell.reconnected"),
+    updateReloading: (n) => t("shell.updateReloading", { n }),
+  }), [t]);
+
+  return (
+    <I18nContext.Provider value={value}>
+      <ShellLabelsProvider labels={shellLabels}>{children}</ShellLabelsProvider>
+    </I18nContext.Provider>
+  );
 }
 
 export function useI18n(): I18nValue {

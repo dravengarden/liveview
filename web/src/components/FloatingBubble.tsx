@@ -320,6 +320,16 @@ export function FloatingBubble({
       ref={elRef}
       role="button"
       aria-label={t("audiobook.nowPlaying")}
+      // Keyboard parity with the tap: focusable while shown, Enter/Space opens
+      // the playback sheet (the pointer path is a custom drag recognizer, so
+      // there is no native click to fall back on).
+      tabIndex={hidden ? -1 : 0}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        onOpenControls();
+        poke();
+      }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

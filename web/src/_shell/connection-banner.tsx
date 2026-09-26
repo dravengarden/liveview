@@ -23,6 +23,7 @@
 import { Box, CircularProgress } from "@mui/material";
 import CheckIcon from "@mui/icons-material/Check";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
+import { type ShellLabels, useShellLabels } from "./shell-labels.tsx";
 
 export type BannerKind = "down" | "reconnected" | "update";
 export interface Banner {
@@ -262,15 +263,16 @@ function bannerPalette(kind: BannerKind): "warning" | "success" | "info" {
   return "info";
 }
 
-// Liveview's exact English labels. The update line shows its live 3→0 countdown.
-function bannerLabel(kind: BannerKind, secs: number): string {
+// Host-translated labels (English by default). The update line shows its live
+// 3→0 countdown.
+function bannerLabel(kind: BannerKind, secs: number, labels: ShellLabels): string {
   if (kind === "down") {
-    return "Connection lost — reconnecting…";
+    return labels.connectionLost;
   }
   if (kind === "reconnected") {
-    return "Reconnected";
+    return labels.reconnected;
   }
-  return `New version · reloading in ${Math.max(0, secs)}s`;
+  return labels.updateReloading(Math.max(0, secs));
 }
 
 export interface ConnectionBannerProps {
@@ -291,6 +293,7 @@ export interface ConnectionBannerProps {
 export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
   const { store, countdownSecs = DEFAULT_UPDATE_COUNTDOWN_SECS } = props;
   const banner = store.useConnectionBanner();
+  const labels = useShellLabels();
   const isUpdate = banner?.kind === "update";
   const [secs, setSecs] = useState(countdownSecs);
 
@@ -316,7 +319,7 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
   }
 
   const palette = bannerPalette(banner.kind);
-  const label = bannerLabel(banner.kind, secs);
+  const label = bannerLabel(banner.kind, secs, labels);
 
   return (
     <Box

@@ -100,7 +100,24 @@ const fontCardSx = (active: boolean): SxProps<MuiTheme> => ({
   gap: 1,
   transition: "border-color 0.15s ease",
   "&:hover": { borderColor: active ? "primary.main" : "text.secondary" },
+  "&:focus-visible": {
+    outline: "2px solid",
+    outlineColor: "primary.main",
+    outlineOffset: 2,
+  },
 });
+
+/** Keyboard activation for the custom (non-<button>) pickers: Enter or Space
+ *  acts like a tap, matching native button/radio semantics. */
+function activateOnKey(
+  action: () => void,
+): (event: React.KeyboardEvent<HTMLElement>) => void {
+  return (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    action();
+  };
+}
 
 interface ThemeColors {
   bg: string;
@@ -212,6 +229,8 @@ export function SettingsButton({
               <Stack spacing={1}>
                 <Typography variant="body2">{t("settings.palette")}</Typography>
                 <Box
+                  role="radiogroup"
+                  aria-label={t("settings.palette")}
                   sx={{
                     display: "grid",
                     gridTemplateColumns: "repeat(3, 1fr)",
@@ -229,9 +248,21 @@ export function SettingsButton({
                     return (
                       <Box
                         key={option.value}
+                        role="radio"
+                        aria-checked={isSelected}
+                        aria-label={t(`theme.${option.value}`)}
+                        tabIndex={0}
                         onClick={() => onVariantChange(option.value)}
+                        onKeyDown={activateOnKey(() =>
+                          onVariantChange(option.value)
+                        )}
                         sx={{
                           cursor: "pointer",
+                          "&:focus-visible": {
+                            outline: "2px solid",
+                            outlineColor: "primary.main",
+                            outlineOffset: 2,
+                          },
                           borderRadius: 1,
                           border: 2,
                           borderColor: isSelected ? "primary.main" : "divider",
@@ -347,7 +378,11 @@ export function SettingsButton({
                 ? (
                   <Stack spacing={0.75}>
                     <Box
+                      role="button"
+                      tabIndex={0}
+                      aria-expanded
                       onClick={() => setFontOpen(false)}
+                      onKeyDown={activateOnKey(() => setFontOpen(false))}
                       sx={{
                         display: "flex",
                         alignItems: "center",
@@ -366,10 +401,17 @@ export function SettingsButton({
                       return (
                         <Box
                           key={preset.id}
+                          role="radio"
+                          aria-checked={isSelected}
+                          tabIndex={0}
                           onClick={() => {
                             onFontChange(preset.id);
                             setFontOpen(false);
                           }}
+                          onKeyDown={activateOnKey(() => {
+                            onFontChange(preset.id);
+                            setFontOpen(false);
+                          })}
                           sx={fontCardSx(isSelected)}
                         >
                           <Box sx={{ minWidth: 0 }}>
@@ -402,7 +444,11 @@ export function SettingsButton({
                 : (
                   // Collapsed summary — the current face, tap to change.
                   <Box
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={false}
                     onClick={() => setFontOpen(true)}
+                    onKeyDown={activateOnKey(() => setFontOpen(true))}
                     aria-label={t("settings.font")}
                     sx={fontCardSx(false)}
                   >

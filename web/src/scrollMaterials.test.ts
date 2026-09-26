@@ -302,18 +302,23 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     temporaryNav,
-    /DrawerActionIsland width=\{54\}[\s\S]{0,220}aria-label=\{backLabel \?\? "Back"\}/,
+    /DrawerActionIsland width=\{54\}[\s\S]{0,220}aria-label=\{backLabel \?\? labels\.back\}/,
     "the spatial navigation back affordance must live in the bottom leading island",
   );
   assertPresent(
     temporaryNav,
-    /DrawerActionIsland width=\{actions \? 108 : 54\}[\s\S]{0,600}aria-label="Close navigation"[\s\S]{0,800}\{actions\}/,
+    /DrawerActionIsland width=\{actions \? 108 : 54\}[\s\S]{0,600}aria-label=\{labels\.closeNavigation\}[\s\S]{0,800}\{actions\}/,
     "the trailing Cowboy-style island must group close with app navigation actions",
   );
   assertAbsent(
     temporaryNav,
     /backdropFilter|WebkitBackdropFilter|\bfilter:/,
     "the fixed drawer actions must keep Cowboy geometry without live-filtering scrolling content",
+  );
+  assertPresent(
+    navShell,
+    /aria-hidden=\{!mobileOpen\}[\s\S]{0,300}inert=\{!mobileOpen\}[\s\S]{0,40}data-spatial-drawer/,
+    "a closed spatial drawer must leave the Tab order, not only the accessibility tree",
   );
   assertPresent(
     navShell,

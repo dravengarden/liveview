@@ -28,6 +28,7 @@ import {
 import type { ReactNode } from "react";
 
 import { DetentSheet } from "./detent-sheet.tsx";
+import { useShellLabels } from "./shell-labels.tsx";
 
 export interface BottomSheetProps {
   readonly open: boolean;
@@ -328,13 +329,14 @@ export function MobileSheetActionGroup(
 }
 
 export function MobileSheetDismiss(
-  { onClose, label = "Close" }: { readonly onClose: () => void; readonly label?: string },
+  { onClose, label }: { readonly onClose: () => void; readonly label?: string },
 ): ReactNode {
+  const labels = useShellLabels();
   return (
     <MobileSheetActionGroup
       actions={[{
         key: "close",
-        label,
+        label: label ?? labels.close,
         onPress: onClose,
         icon: (
           <CloseIcon
@@ -367,6 +369,7 @@ export function BottomSheet(
   }: BottomSheetProps,
 ): ReactNode {
   const theme = useTheme();
+  const labels = useShellLabels();
   // useMediaQuery must run unconditionally (rules of hooks); OR with forceSheet
   // after.
   const widthIsMobile = useMediaQuery(theme.breakpoints.down("sm"));
@@ -435,7 +438,7 @@ export function BottomSheet(
           </Typography>
           {mobileDismiss === "header" && (
             <IconButton
-              aria-label="close"
+              aria-label={labels.close}
               size="small"
               onClick={onClose}
               onPointerDown={(e) => e.stopPropagation()}

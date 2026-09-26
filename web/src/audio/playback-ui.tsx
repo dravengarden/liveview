@@ -113,7 +113,8 @@ export function SpeedChip(
       IconComponent={() => null}
       value={rate}
       onChange={(e) => setRate(Number(e.target.value))}
-      aria-label={t("audiobook.speed")}
+      // The label belongs on the focusable combobox, not the wrapper root.
+      inputProps={{ "aria-label": t("audiobook.speed") }}
       renderValue={(v) => (
         <Typography
           component="span"
@@ -150,7 +151,7 @@ export function SleepChip(
       IconComponent={() => null}
       value={sleepMinutes}
       onChange={(e) => setSleepTimer(Number(e.target.value))}
-      aria-label={t("audiobook.sleepTimer")}
+      inputProps={{ "aria-label": t("audiobook.sleepTimer") }}
       renderValue={() =>
         // Off → just the moon. Armed → only the remaining time (no moon), so the
         // longest label (e.g. "1h30m") fits without the icon crowding it.
