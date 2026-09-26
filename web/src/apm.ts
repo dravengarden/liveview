@@ -36,8 +36,10 @@ import { APM_MAX_ROWS } from "./replica/schema.ts";
 const ENABLED = (import.meta.env["VITE_APM_ENABLED"] as string | undefined)
   ?.toLocaleLowerCase() === "true";
 
-/** Optional bearer token gating /api/ingest. Baked into a deployment via the
- *  Vite environment and expected to match the server configuration. Embedding
+/** Optional token gating /api/ingest. Baked into a deployment via the
+ *  Vite environment and expected to match the server configuration. It is sent
+ *  in `X-LiveView-APM-Token` because an access-token proxy owns
+ *  `Authorization`. Embedding
  *  it in a client is not true secrecy; use a trusted network boundary. */
 const TOKEN = (import.meta.env["VITE_APM_TOKEN"] as string | undefined) ?? "";
 /** Build id, so events can be attributed to a bundle version. */
@@ -181,7 +183,7 @@ export async function flushApm(): Promise<void> {
           method: "POST",
           headers: {
             "content-type": "application/json",
-            ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}),
+            ...(TOKEN ? { "x-liveview-apm-token": TOKEN } : {}),
           },
           body: JSON.stringify(events),
           ...(typeof AbortSignal.timeout === "function"
