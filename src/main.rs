@@ -27,7 +27,7 @@ use shared::{FileContent, FileType, TreeNode, WsMessage};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use store::model::{ChapterRecord, ProgressEntry};
+use store::model::{AudioBake, ChapterRecord, ProgressEntry};
 use store::pg::PgStore;
 use sync::objstore::ObjStore;
 use tokio::sync::{RwLock, broadcast};
@@ -2700,6 +2700,75 @@ async fn api_marks(
     }
 }
 
+/// Per-chapter single-flight lock for on-demand synthesis, keyed by the row's
+/// identity. A double-tap, a second client, or the parallel `/api/audio` +
+/// `/api/marks` pair then waits on the same lock and finds the just-recorded
+/// audio instead of synthesizing (and recording) a second, different pair.
+async fn audio_synth_lock(
+    state: &AppState,
+    row: &ChapterRecord,
+) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    let key = format!(
+        "{}|{}|{}|{}",
+        row.book_slug, row.rendition, row.lang, row.rel_path
+    );
+    let mut map = state.audio_synth_locks.lock().await;
+    std::sync::Arc::clone(
+        map.entry(key)
+            .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(()))),
+    )
+}
+
+/// Re-read a chapter row (after acquiring its synth lock) so the synth works
+/// from — and conditions its write on — the content currently deployed.
+async fn reload_chapter(state: &AppState, row: &ChapterRecord) -> Result<ChapterRecord, String> {
+    state
+        .store
+        .get_chapter(&row.book_slug, &row.rendition, &row.lang, &row.rel_path)
+        .await?
+        .ok_or_else(|| "chapter not found".to_string())
+}
+
+/// Record a synthesized pair on `row`, conditional on the row still holding
+/// the content it was synthesized from. When nothing was written, serve what
+/// the row holds now if it is audio for the same content (a concurrent writer
+/// won — its pair is the consistent one to serve); otherwise the chapter
+/// changed during the synth and this result is discarded.
+async fn record_chapter_audio(
+    state: &AppState,
+    row: &ChapterRecord,
+    voice: &str,
+    audio_hash: String,
+    marks_hash: String,
+) -> Result<(String, String), String> {
+    let recorded = state
+        .store
+        .set_chapter_audio(&AudioBake {
+            book_slug: &row.book_slug,
+            rendition: &row.rendition,
+            lang: &row.lang,
+            rel_path: &row.rel_path,
+            content_hash: &row.content_hash,
+            voice,
+            audio_hash: &audio_hash,
+            marks_hash: &marks_hash,
+        })
+        .await
+        .map_err(|e| format!("record audio: {e}"))?;
+    if recorded {
+        return Ok((audio_hash, marks_hash));
+    }
+    let now = reload_chapter(state, row).await?;
+    match (
+        now.content_hash == row.content_hash,
+        now.audio_hash,
+        now.marks_hash,
+    ) {
+        (true, Some(a), Some(m)) => Ok((a, m)),
+        _ => Err("chapter changed during synthesis; result discarded".to_string()),
+    }
+}
+
 /// On-demand audio fallback (ISR-style): if the backfill hasn't pre-generated
 /// this chapter's audio yet, synthesize it now (edge-tts) from the stored spoken
 /// markdown, store mp3 + marks in rustfs, and record them on the chapter.
@@ -2708,6 +2777,13 @@ async fn ensure_chapter_audio(
     state: &AppState,
     row: &ChapterRecord,
 ) -> Result<(String, String), String> {
+    if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash) {
+        return Ok((a.clone(), m.clone()));
+    }
+    let lock = audio_synth_lock(state, row).await;
+    let _guard = lock.lock().await;
+    // Re-check after acquiring: a prior holder may have just filled the hashes.
+    let row = reload_chapter(state, row).await?;
     if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash) {
         return Ok((a.clone(), m.clone()));
     }
@@ -2730,19 +2806,7 @@ async fn ensure_chapter_audio(
     let caf = transcode_audio(mp3).await?;
     let audio_hash = store_blob(state, caf, AUDIO_VARIANT.mime).await?;
     let marks_hash = store_blob(state, marks_json, "application/json").await?;
-    state
-        .store
-        .set_chapter_audio(
-            &row.book_slug,
-            &row.rendition,
-            &row.lang,
-            &row.rel_path,
-            &audio_hash,
-            &marks_hash,
-        )
-        .await
-        .map_err(|e| format!("record audio: {e}"))?;
-    Ok((audio_hash, marks_hash))
+    record_chapter_audio(state, &row, &voice, audio_hash, marks_hash).await
 }
 
 /// Read-aloud for the TEXT rendition (any document, not a curated audiobook).
@@ -2779,35 +2843,12 @@ async fn ensure_text_audio(
     }
     // Single-flight: serialize synth per chapter so a double-tap / second client
     // waits rather than redoing the expensive edge-tts (+ narration) run.
-    let key = format!(
-        "{}|{}|{}|{}",
-        row.book_slug,
-        ctx.kind.as_str(),
-        row.lang,
-        row.rel_path
-    );
-    let lock = {
-        let mut map = state.audio_synth_locks.lock().await;
-        std::sync::Arc::clone(
-            map.entry(key)
-                .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(()))),
-        )
-    };
+    let lock = audio_synth_lock(state, &row).await;
     let _guard = lock.lock().await;
     // Re-check after acquiring: a prior holder may have just filled the hashes.
-    if let Ok(Some((fresh, _))) = state
-        .store
-        .get_chapter_fallback(
-            &ctx.slug,
-            ctx.kind.as_str(),
-            &ctx.lang,
-            &ctx.default_lang,
-            &ctx.rest,
-        )
-        .await
-        && let (Some(a), Some(m)) = (fresh.audio_hash, fresh.marks_hash)
-    {
-        return Ok((a, m));
+    let row = reload_chapter(state, &row).await?;
+    if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash) {
+        return Ok((a.clone(), m.clone()));
     }
     let md = row.markdown.clone().unwrap_or_default();
     let units = server::spoken::spoken_units(&md);
@@ -2846,19 +2887,7 @@ async fn ensure_text_audio(
     let caf = transcode_audio(mp3).await?;
     let audio_hash = store_blob(state, caf, AUDIO_VARIANT.mime).await?;
     let marks_hash = store_blob(state, marks_json, "application/json").await?;
-    state
-        .store
-        .set_chapter_audio(
-            &row.book_slug,
-            ctx.kind.as_str(),
-            &row.lang,
-            &row.rel_path,
-            &audio_hash,
-            &marks_hash,
-        )
-        .await
-        .map_err(|e| format!("record text audio: {e}"))?;
-    Ok((audio_hash, marks_hash))
+    record_chapter_audio(state, &row, &voice, audio_hash, marks_hash).await
 }
 
 /// Parse operator-defined end-of-book phrases. No language or wording is built

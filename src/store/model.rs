@@ -18,6 +18,9 @@ pub struct ChapterRecord {
     pub marks_hash: Option<String>,
     pub content_hash: String,
     pub render_version: i32,
+    /// Voice `audio_hash`/`marks_hash` were synthesized with; `None` when
+    /// unknown (baked before this was recorded) or when there is no audio.
+    pub audio_voice: Option<String>,
 }
 
 #[derive(Clone, Debug, sqlx::FromRow)]
@@ -117,6 +120,20 @@ pub struct AudioTaskUpsert<'a> {
     /// chapter's stale audio was just cleared, so a `done` task is no longer
     /// true).
     pub force: bool,
+}
+
+/// A synthesized audio + marks pair to record on a chapter, with the source
+/// content and voice it was synthesized from (the write is conditional on both;
+/// see `PgStore::set_chapter_audio`).
+pub struct AudioBake<'a> {
+    pub book_slug: &'a str,
+    pub rendition: &'a str,
+    pub lang: &'a str,
+    pub rel_path: &'a str,
+    pub content_hash: &'a str,
+    pub voice: &'a str,
+    pub audio_hash: &'a str,
+    pub marks_hash: &'a str,
 }
 
 /// The reconcile-relevant state of one chapter row — everything `liveview

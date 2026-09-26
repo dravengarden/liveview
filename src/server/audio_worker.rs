@@ -5,8 +5,8 @@
 //! `audio_tasks` by priority, synthesizes each chapter's audio from the stored
 //! markdown (the same `spoken` + `audio` engines the on-demand fallback uses),
 //! stores the mp3 + marks as content-addressed blobs, records them on the
-//! chapter, commits the Merkle leaf node (so `liveview sync` prunes the chapter
-//! next run — node present ⇔ audio generated), marks the task done, and pushes a
+//! chapter — only if the chapter still holds the content the task was queued
+//! for — commits the Merkle leaf node, marks the task done, and pushes a
 //! `chapter-ready` event to WS clients so the UI flips listenable live.
 //!
 //! Reuses the concrete `PgStore` + `ObjStore` (the queue + Merkle commit are
@@ -16,7 +16,7 @@
 use tokio::sync::broadcast;
 
 use crate::server::{audio, narration, speakable, spoken};
-use crate::store::model::AudioTask;
+use crate::store::model::{AudioBake, AudioTask, ChapterRecord};
 use crate::store::pg::PgStore;
 use crate::sync::merkle;
 use crate::sync::objstore::ObjStore;
@@ -69,6 +69,21 @@ async fn run_loop(
         }
     }
 }
+/// What one generation attempt amounted to.
+#[derive(Debug, PartialEq, Eq)]
+enum Outcome {
+    /// Fresh audio + marks were synthesized and recorded on the chapter.
+    Produced,
+    /// The chapter already carries audio for this content and voice (the
+    /// on-demand fallback or a concurrent run got there first).
+    AlreadyBaked,
+    /// Nothing speakable (e.g. pure code): done, deliberately without audio.
+    Silent,
+    /// The chapter was deleted or re-synced to different content while the
+    /// task was queued or running. Any synthesized result was discarded; the
+    /// leaf is NOT committed (sync re-queues the new content or drops the task).
+    Stale,
+}
 
 async fn process(
     pg: &PgStore,
@@ -78,17 +93,23 @@ async fn process(
     task: AudioTask,
 ) {
     match generate(pg, obj, tts_cmd, &task).await {
-        Ok(produced) => {
-            commit_leaf_node(pg, &task).await;
-            if let Err(e) = pg
-                .finish_audio_task(&task.book_slug, &task.rendition, &task.lang, &task.rel_path)
-                .await
-            {
+        Ok(outcome) => {
+            if outcome == Outcome::Stale {
+                tracing::info!(
+                    book = %task.book_slug, rel = %task.rel_path,
+                    "audio worker: chapter changed or deleted; result discarded"
+                );
+            } else {
+                commit_leaf_node(pg, &task).await;
+            }
+            // Guarded: a no-op when a sync re-queued this row for new content
+            // while the synth ran (that newer task stays queued).
+            if let Err(e) = pg.finish_audio_task(&task).await {
                 tracing::warn!(error = %e, "audio worker: finish failed");
             }
-            // Tell live clients this chapter is now listenable (only when it
-            // actually produced audio — a pure-code chapter is done-but-silent).
-            if produced {
+            // Tell live clients this chapter is now listenable (only when this run
+            // actually recorded audio — a pure-code chapter is done-but-silent).
+            if outcome == Outcome::Produced {
                 let _ = tx.send(
                     serde_json::json!({
                         "type": "chapter-ready",
@@ -106,40 +127,43 @@ async fn process(
                 book = %task.book_slug, rel = %task.rel_path, error = %e,
                 "audio worker: synth failed"
             );
-            let _ = pg
-                .fail_audio_task(
-                    &task.book_slug,
-                    &task.rendition,
-                    &task.lang,
-                    &task.rel_path,
-                    &e,
-                    MAX_ATTEMPTS,
-                )
-                .await;
+            let _ = pg.fail_audio_task(&task, &e, MAX_ATTEMPTS).await;
         }
     }
 }
 
-/// Synthesize + store one chapter's audio. `Ok(true)` produced audio; `Ok(false)`
-/// means the chapter had nothing speakable (e.g. pure code) — still a success,
-/// the task completes silently so it isn't retried forever.
+/// Whether a chapter row already carries audio synthesized for this task's
+/// content and voice. An unknown (pre-tracking) voice is trusted; `liveview
+/// sync` backfills it from the prior task so a real voice change is detected.
+fn baked_for(row: &ChapterRecord, task: &AudioTask) -> bool {
+    row.content_hash == task.content_hash
+        && row.audio_hash.is_some()
+        && row.marks_hash.is_some()
+        && row
+            .audio_voice
+            .as_deref()
+            .is_none_or(|voice| voice == task.voice)
+}
+
+/// Synthesize + store one chapter's audio (see [`Outcome`]).
 async fn generate(
     pg: &PgStore,
     obj: &ObjStore,
     tts_cmd: &str,
     task: &AudioTask,
-) -> Result<bool, String> {
+) -> Result<Outcome, String> {
     let Some(row) = pg
         .get_chapter(&task.book_slug, &task.rendition, &task.lang, &task.rel_path)
         .await
         .map_err(|e| e.to_string())?
     else {
-        // Chapter deleted out from under the task — nothing to do.
-        return Ok(false);
+        return Ok(Outcome::Stale);
     };
-    // Another path (the on-demand fallback) may have just filled it.
-    if row.audio_hash.is_some() && row.marks_hash.is_some() {
-        return Ok(true);
+    if row.content_hash != task.content_hash {
+        return Ok(Outcome::Stale);
+    }
+    if baked_for(&row, task) {
+        return Ok(Outcome::AlreadyBaked);
     }
     let md = row.markdown.unwrap_or_default();
 
@@ -147,7 +171,7 @@ async fn generate(
         // Audiobook: the curated `.spoken.md` script, sentence by sentence.
         let sentences = spoken::spoken_sentences(&md);
         if sentences.is_empty() {
-            return Ok(false);
+            return Ok(Outcome::Silent);
         }
         audio::synthesize(tts_cmd, &task.voice, &sentences).await?
     } else {
@@ -159,7 +183,7 @@ async fn generate(
         // a skill and ingested into pg by `sync`; we just resolve it by key.
         let units = spoken::spoken_units(&md);
         if units.is_empty() {
-            return Ok(false);
+            return Ok(Outcome::Silent);
         }
         let keys = speakable::narration_keys(&units, &task.lang);
         let store = narration::NarrationStore::from_pairs(
@@ -179,23 +203,38 @@ async fn generate(
     let caf = crate::transcode_audio(mp3).await?;
     let audio_hash = put_blob(pg, obj, caf, crate::AUDIO_VARIANT.mime).await?;
     let marks_hash = put_blob(pg, obj, marks_json, "application/json").await?;
-    pg.set_chapter_audio(
-        &task.book_slug,
-        &task.rendition,
-        &task.lang,
-        &task.rel_path,
-        &audio_hash,
-        &marks_hash,
-    )
-    .await
-    .map_err(|e| format!("record audio: {e}"))?;
-    Ok(true)
+    let recorded = pg
+        .set_chapter_audio(&AudioBake {
+            book_slug: &task.book_slug,
+            rendition: &task.rendition,
+            lang: &task.lang,
+            rel_path: &task.rel_path,
+            content_hash: &task.content_hash,
+            voice: &task.voice,
+            audio_hash: &audio_hash,
+            marks_hash: &marks_hash,
+        })
+        .await
+        .map_err(|e| format!("record audio: {e}"))?;
+    if recorded {
+        return Ok(Outcome::Produced);
+    }
+    // Nothing written: either another writer recorded this content's audio
+    // first, or the chapter changed/vanished during the synth. Our blobs stay
+    // unreferenced and fall to the orphan GC after its grace period.
+    let now = pg
+        .get_chapter(&task.book_slug, &task.rendition, &task.lang, &task.rel_path)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(match now {
+        Some(row) if baked_for(&row, task) => Outcome::AlreadyBaked,
+        _ => Outcome::Stale,
+    })
 }
 
-/// Commit the Merkle leaf node for this chapter, so the next `liveview sync`
-/// prunes it (node present ⇔ audio generated). Best-effort: a missing node just
-/// means the next sync re-enqueues an already-done task (a no-op via the
-/// idempotent enqueue).
+/// Commit the Merkle leaf node for this chapter (the leaf is now complete).
+/// Best-effort: `liveview sync` decides applied-ness from chapter rows and
+/// tasks, so a missing node costs nothing.
 async fn commit_leaf_node(pg: &PgStore, task: &AudioTask) {
     let leaf = merkle::Leaf {
         path: crate::sync::run::leaf_path(

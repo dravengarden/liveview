@@ -811,7 +811,7 @@ async fn commit_leaf(store: &PgStore, leaf: &Leaf, node_hash: &str) -> Result<()
 ///
 /// Decided from in-memory state (rows re-read after the apply pass + every
 /// task), not a per-leaf node lookup: a leaf whose row already carries audio
-/// for this content is done; a leaf whose identical task already exists is
+/// for this content and voice is done; a leaf whose identical task already exists is
 /// left alone (queued / running / done-silent / failed-until-retry). Every
 /// other audio leaf is (re)queued — including one whose task was lost.
 async fn enqueue_audio(
@@ -844,9 +844,25 @@ async fn enqueue_audio(
             _ => continue, // not an audio leaf
         };
         let row = rows.get(path);
+        let task = tasks.get(path);
+        // The voice the row's audio was baked with. Rows baked before voices
+        // were recorded inherit the voice their last task was queued with, and
+        // it is persisted so the worker sees a later voice change as a mismatch
+        // (the old audio keeps serving until the re-bake replaces it).
+        let mut baked_voice = row.and_then(|r| r.audio_voice.clone());
+        if let (Some(r), Some(t)) = (row, task)
+            && baked_voice.is_none()
+            && r.audio_hash.is_some()
+        {
+            store
+                .backfill_audio_voice(&a.book_slug, &a.rendition, &a.lang, &a.rel_path, &t.voice)
+                .await
+                .map_err(|e| format!("backfill audio voice {}: {e}", a.rel_path))?;
+            baked_voice = Some(t.voice.clone());
+        }
         let mut baked = row.is_some_and(|r| {
             r.content_hash == a.content_hash && r.audio_hash.is_some() && r.marks_hash.is_some()
-        });
+        }) && baked_voice.as_deref().is_none_or(|v| v == voice);
         let mut force = false;
         // Under --repair, verify the baked marks STILL match the current text: a
         // chapter edited after its bake could keep its old audio/marks (the
@@ -867,9 +883,8 @@ async fn enqueue_audio(
         if baked {
             continue;
         }
-        let same_task = tasks
-            .get(path)
-            .is_some_and(|t| t.content_hash == a.content_hash && t.leaf_kind == leaf.kind);
+        let same_task =
+            task.is_some_and(|t| t.content_hash == a.content_hash && t.leaf_kind == leaf.kind);
         if same_task && !force {
             continue;
         }
@@ -944,6 +959,7 @@ async fn apply_leaf(
         marks_hash: None,
         content_hash: a.content_hash.clone(),
         render_version: cfg.render_version,
+        audio_voice: None,
     };
 
     if a.voice.is_some() {

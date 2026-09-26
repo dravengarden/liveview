@@ -10,7 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::store::model::{
-    AssetRecord, AudioTask, AudioTaskRollup, AudioTaskUpsert, BookRecord, BookUpsert,
+    AssetRecord, AudioBake, AudioTask, AudioTaskRollup, AudioTaskUpsert, BookRecord, BookUpsert,
     ChapterRecord, ChapterState, DagArtwork, DagChapter, EditionRecord, LegacyAudioAsset,
     ManifestChapter, MerkleNode, ProgressEntry, RenditionRecord,
 };
@@ -361,6 +361,12 @@ impl PgStore {
                      THEN EXCLUDED.marks_hash
                      ELSE COALESCE(EXCLUDED.marks_hash, chapters.marks_hash)
                  END,
+                 -- The voice travels with the audio it describes.
+                 audio_voice = CASE
+                     WHEN chapters.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                     THEN NULL
+                     ELSE chapters.audio_voice
+                 END,
                  content_hash = EXCLUDED.content_hash,
                  render_version = EXCLUDED.render_version",
         )
@@ -391,7 +397,7 @@ impl PgStore {
         sqlx::query_as::<_, ChapterRecord>(
             "SELECT book_slug, rendition, lang, rel_path, file_type,
                     html, markdown, asset_hash, audio_hash, marks_hash,
-                    content_hash, render_version
+                    content_hash, render_version, audio_voice
              FROM chapters
              WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4",
         )
@@ -403,27 +409,56 @@ impl PgStore {
         .await
     }
 
-    /// Record lazily-generated audio blobs onto an existing chapter (the
-    /// on-demand fallback when the backfill hasn't reached it yet).
-    pub async fn set_chapter_audio(
+    /// Record synthesized audio blobs onto a chapter — only if the chapter still
+    /// holds the content they were synthesized from (`content_hash`) and does not
+    /// already carry audio for this `voice`. Returns `false` when nothing was
+    /// written: the chapter was deleted or re-synced meanwhile (the result is
+    /// stale and must be discarded), or a concurrent synth recorded its own pair
+    /// first (the caller should serve that pair, so audio and marks stay
+    /// consistent across requests).
+    pub async fn set_chapter_audio(&self, bake: &AudioBake<'_>) -> Result<bool, sqlx::Error> {
+        sqlx::query(
+            "UPDATE chapters SET audio_hash = $7, marks_hash = $8, audio_voice = $6
+             WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4
+               AND content_hash = $5
+               AND (audio_hash IS NULL OR marks_hash IS NULL
+                    OR audio_voice IS DISTINCT FROM $6)",
+        )
+        .bind(bake.book_slug)
+        .bind(bake.rendition)
+        .bind(bake.lang)
+        .bind(bake.rel_path)
+        .bind(bake.content_hash)
+        .bind(bake.voice)
+        .bind(bake.audio_hash)
+        .bind(bake.marks_hash)
+        .execute(&self.pool)
+        .await
+        .map(|r| r.rows_affected() > 0)
+    }
+
+    /// Record the voice a legacy bake (audio present, voice unknown) was made
+    /// with, as last known from its audio task. A later voice change then shows
+    /// up as a mismatch and re-bakes, while the old audio keeps serving until
+    /// the new bake replaces it. Never overwrites a recorded voice.
+    pub async fn backfill_audio_voice(
         &self,
         book_slug: &str,
         rendition: &str,
         lang: &str,
         rel_path: &str,
-        audio_hash: &str,
-        marks_hash: &str,
+        voice: &str,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE chapters SET audio_hash = $5, marks_hash = $6
-             WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4",
+            "UPDATE chapters SET audio_voice = $5
+             WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4
+               AND audio_voice IS NULL AND audio_hash IS NOT NULL",
         )
         .bind(book_slug)
         .bind(rendition)
         .bind(lang)
         .bind(rel_path)
-        .bind(audio_hash)
-        .bind(marks_hash)
+        .bind(voice)
         .execute(&self.pool)
         .await
         .map(|_| ())
@@ -441,7 +476,7 @@ impl PgStore {
         rel_path: &str,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE chapters SET audio_hash = NULL, marks_hash = NULL
+            "UPDATE chapters SET audio_hash = NULL, marks_hash = NULL, audio_voice = NULL
              WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4",
         )
         .bind(book_slug)
@@ -812,48 +847,49 @@ impl PgStore {
         .await
     }
 
-    /// Mark a claimed task done.
-    pub async fn finish_audio_task(
-        &self,
-        book_slug: &str,
-        rendition: &str,
-        lang: &str,
-        rel_path: &str,
-    ) -> Result<(), sqlx::Error> {
+    /// Mark a claimed task done — only if it is still the task that was claimed
+    /// (`running`, same source + transform). A sync that re-queued the row for
+    /// new content while this run was in flight must not be overwritten to
+    /// `done`. Returns whether the row was updated.
+    pub async fn finish_audio_task(&self, task: &AudioTask) -> Result<bool, sqlx::Error> {
         sqlx::query(
-            "UPDATE audio_tasks SET status = 'done', finished_at = $5, error = NULL
-             WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4",
+            "UPDATE audio_tasks SET status = 'done', finished_at = $7, error = NULL
+             WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4
+               AND status = 'running' AND content_hash = $5 AND leaf_kind = $6",
         )
-        .bind(book_slug)
-        .bind(rendition)
-        .bind(lang)
-        .bind(rel_path)
+        .bind(&task.book_slug)
+        .bind(&task.rendition)
+        .bind(&task.lang)
+        .bind(&task.rel_path)
+        .bind(&task.content_hash)
+        .bind(&task.leaf_kind)
         .bind(now_millis())
         .execute(&self.pool)
         .await
-        .map(|_| ())
+        .map(|r| r.rows_affected() > 0)
     }
 
-    /// Mark a claimed task failed (or re-queue for another attempt, capped).
+    /// Mark a claimed task failed (or re-queue for another attempt, capped) —
+    /// with the same "still the claimed task" guard as `finish_audio_task`.
     pub async fn fail_audio_task(
         &self,
-        book_slug: &str,
-        rendition: &str,
-        lang: &str,
-        rel_path: &str,
+        task: &AudioTask,
         error: &str,
         max_attempts: i32,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE audio_tasks SET
-                 status = CASE WHEN attempts >= $6 THEN 'failed' ELSE 'queued' END,
-                 error = $5, finished_at = $7
-             WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4",
+                 status = CASE WHEN attempts >= $8 THEN 'failed' ELSE 'queued' END,
+                 error = $7, finished_at = $9
+             WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4
+               AND status = 'running' AND content_hash = $5 AND leaf_kind = $6",
         )
-        .bind(book_slug)
-        .bind(rendition)
-        .bind(lang)
-        .bind(rel_path)
+        .bind(&task.book_slug)
+        .bind(&task.rendition)
+        .bind(&task.lang)
+        .bind(&task.rel_path)
+        .bind(&task.content_hash)
+        .bind(&task.leaf_kind)
         .bind(error)
         .bind(max_attempts)
         .bind(now_millis())
@@ -1203,6 +1239,7 @@ mod tests {
             marks_hash: None,
             content_hash: "h0".into(),
             render_version: 1,
+            audio_voice: None,
         };
         s.upsert_chapter(&c).await.unwrap();
         let got = s
@@ -1241,6 +1278,7 @@ mod tests {
             marks_hash: None,
             content_hash: content.into(),
             render_version: 1,
+            audio_voice: None,
         }
     }
 
@@ -1351,6 +1389,102 @@ mod tests {
         assert_eq!(s.get_merkle_node("n1").await.unwrap().unwrap().kind, "tree");
         s.set_deploy_root("root-abc").await.unwrap();
         assert_eq!(s.deploy_root().await.unwrap().as_deref(), Some("root-abc"));
+    }
+
+    fn bake<'a>(slug: &'a str, content: &'a str, voice: &'a str, audio: &'a str) -> AudioBake<'a> {
+        AudioBake {
+            book_slug: slug,
+            rendition: "audio",
+            lang: "en",
+            rel_path: "00.spoken.md",
+            content_hash: content,
+            voice,
+            audio_hash: audio,
+            marks_hash: audio,
+        }
+    }
+
+    #[tokio::test]
+    async fn chapter_audio_writes_are_guarded_by_content_and_voice() {
+        let Some(s) = store().await else { return };
+        let slug = "t-audio-guard";
+        s.delete_book(slug).await.unwrap();
+        s.upsert_chapter(&chapter(slug, "00.spoken.md", "new"))
+            .await
+            .unwrap();
+        let row = || s.get_chapter(slug, "audio", "en", "00.spoken.md");
+        // A synth of superseded content is discarded.
+        assert!(
+            !s.set_chapter_audio(&bake(slug, "old", "v1", "a0"))
+                .await
+                .unwrap()
+        );
+        assert!(row().await.unwrap().unwrap().audio_hash.is_none());
+        // First writer for the current content wins; a concurrent duplicate
+        // for the same voice does not replace its pair.
+        assert!(
+            s.set_chapter_audio(&bake(slug, "new", "v1", "a1"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !s.set_chapter_audio(&bake(slug, "new", "v1", "a2"))
+                .await
+                .unwrap()
+        );
+        let r = row().await.unwrap().unwrap();
+        assert_eq!(r.audio_hash.as_deref(), Some("a1"));
+        assert_eq!(r.audio_voice.as_deref(), Some("v1"));
+        // A voice change re-bakes over the old voice's audio.
+        assert!(
+            s.set_chapter_audio(&bake(slug, "new", "v2", "a3"))
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            row().await.unwrap().unwrap().audio_hash.as_deref(),
+            Some("a3")
+        );
+        // A content change drops audio and its voice together.
+        s.upsert_chapter(&chapter(slug, "00.spoken.md", "newer"))
+            .await
+            .unwrap();
+        let r = row().await.unwrap().unwrap();
+        assert!(r.audio_hash.is_none() && r.audio_voice.is_none());
+        s.delete_book(slug).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn finishing_a_superseded_task_does_not_mark_the_new_one_done() {
+        let Some(s) = store().await else { return };
+        let slug = "t-finish-guard";
+        s.delete_book(slug).await.unwrap();
+        s.upsert_chapter(&chapter(slug, "00.spoken.md", "h1"))
+            .await
+            .unwrap();
+        enqueue(&s, slug, "00.spoken.md", "h1").await;
+        sqlx::query("UPDATE audio_tasks SET status = 'running' WHERE book_slug = $1")
+            .bind(slug)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        let claimed = s
+            .all_audio_tasks()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|t| t.book_slug == slug)
+            .unwrap();
+        // A sync re-queues the row for new content while the synth runs.
+        enqueue(&s, slug, "00.spoken.md", "h2").await;
+        assert!(!s.finish_audio_task(&claimed).await.unwrap());
+        s.fail_audio_task(&claimed, "boom", 1).await.unwrap();
+        let status = s
+            .audio_task_status(slug, "audio", "en", "00.spoken.md")
+            .await
+            .unwrap();
+        assert_eq!(status.as_deref(), Some("queued"), "new task untouched");
+        s.delete_book(slug).await.unwrap();
     }
 
     #[tokio::test]

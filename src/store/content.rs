@@ -15,8 +15,8 @@
 use async_trait::async_trait;
 
 use crate::store::model::{
-    AssetRecord, AudioTaskRollup, BookRecord, ChapterRecord, DagArtwork, DagChapter, EditionRecord,
-    ManifestChapter, ProgressEntry, RenditionRecord,
+    AssetRecord, AudioBake, AudioTaskRollup, BookRecord, ChapterRecord, DagArtwork, DagChapter,
+    EditionRecord, ManifestChapter, ProgressEntry, RenditionRecord,
 };
 
 /// Catalog structure + chapter/asset access the reader needs. The deployed
@@ -86,16 +86,11 @@ pub trait ContentStore: Send + Sync {
     async fn get_site_tree(&self, rendition: &str) -> Result<Option<String>, String>;
 
     /// Record lazily-synthesized audio onto a chapter (deployed: persists to pg;
-    /// preview: in-memory, fine for an ephemeral session).
-    async fn set_chapter_audio(
-        &self,
-        book_slug: &str,
-        rendition: &str,
-        lang: &str,
-        rel_path: &str,
-        audio_hash: &str,
-        marks_hash: &str,
-    ) -> Result<(), String>;
+    /// preview: nothing to persist). Conditional on the chapter still holding
+    /// `bake.content_hash` and not already carrying audio for `bake.voice`;
+    /// `false` means nothing was written and the caller must re-read the row
+    /// instead of serving its own (stale or duplicate) result.
+    async fn set_chapter_audio(&self, bake: &AudioBake<'_>) -> Result<bool, String>;
 
     // ── Reading progress + player settings (user state) ──────────────────────
     // Orthogonal to content; the filesystem backend keeps these in memory.
@@ -201,20 +196,10 @@ impl ContentStore for PgStore {
             .await
             .map_err(|e| e.to_string())
     }
-    async fn set_chapter_audio(
-        &self,
-        book_slug: &str,
-        rendition: &str,
-        lang: &str,
-        rel_path: &str,
-        audio_hash: &str,
-        marks_hash: &str,
-    ) -> Result<(), String> {
-        PgStore::set_chapter_audio(
-            self, book_slug, rendition, lang, rel_path, audio_hash, marks_hash,
-        )
-        .await
-        .map_err(|e| e.to_string())
+    async fn set_chapter_audio(&self, bake: &AudioBake<'_>) -> Result<bool, String> {
+        PgStore::set_chapter_audio(self, bake)
+            .await
+            .map_err(|e| e.to_string())
     }
     async fn progress_for_book(&self, slug: &str) -> Result<Vec<ProgressEntry>, String> {
         PgStore::progress_for_book(self, slug)
