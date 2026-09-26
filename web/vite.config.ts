@@ -218,6 +218,51 @@ function stripServiceWorker(): Plugin {
   };
 }
 
+// App build only: give the stable-named vendored scripts in public/ a
+// content-hashed file name. Native OTA hosts treat an existing overlay file as
+// complete and never re-download it, and installed hosts cannot be changed, so
+// new bytes must arrive under a new name. The name map is compiled into the
+// bundle (`__LV_PUBLIC_ASSETS__`, read by publicAsset), which also changes the
+// entry chunk hash and therefore the OTA version whenever a vendored script
+// changes. The stable-named copies are removed from dist-app.
+const HASHED_PUBLIC_SCRIPTS = ["mermaid.min.js", "highlight.min.js"];
+
+function hashedPublicAssetMap(): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const name of HASHED_PUBLIC_SCRIPTS) {
+    const bytes = readFileSync(resolve(import.meta.dirname, "public", name));
+    const hash = createHash("sha256").update(bytes).digest("hex").slice(0, 8);
+    const dot = name.lastIndexOf(".");
+    map[name] = `${name.slice(0, dot)}-${hash}${name.slice(dot)}`;
+  }
+  return map;
+}
+
+function hashedPublicScripts(map: Record<string, string>): Plugin {
+  let outputDir = resolve(import.meta.dirname, "dist-app");
+  return {
+    name: "lv-hashed-public-scripts",
+    apply: "build",
+    configResolved(config) {
+      outputDir = resolve(config.root, config.build.outDir);
+    },
+    generateBundle() {
+      for (const [name, hashed] of Object.entries(map)) {
+        this.emitFile({
+          type: "asset",
+          fileName: hashed,
+          source: readFileSync(resolve(import.meta.dirname, "public", name)),
+        });
+      }
+    },
+    writeBundle() {
+      for (const name of Object.keys(map)) {
+        rmSync(resolve(outputDir, name), { force: true });
+      }
+    },
+  };
+}
+
 // Two build targets share ONE src core (see src/platform):
 //   • `vite build`            → dist/      — PWA + service worker, served by the server.
 //   • `vite build --mode app` → dist-app/  — native iOS/macOS bundle, NO service worker.
@@ -228,6 +273,7 @@ function stripServiceWorker(): Plugin {
 // (app), until A3 switches the shell to dist-app.
 export default defineConfig(({ mode }) => {
   const isApp = mode === "app";
+  const publicAssets = isApp ? hashedPublicAssetMap() : {};
   return {
     // App build uses RELATIVE asset URLs so the same bundle works whether it's
     // served from the embedded origin (tauri://localhost/) OR the OTA origin
@@ -243,10 +289,17 @@ export default defineConfig(({ mode }) => {
       forceSingletons(),
       splashInjector(),
       assertSingletons(),
-      ...(isApp ? [stripServiceWorker()] : [stampServiceWorker()]),
+      ...(isApp
+        ? [stripServiceWorker(), hashedPublicScripts(publicAssets)]
+        : [stampServiceWorker()]),
     ],
     define: {
-      ...(isApp ? { __TARGET__: JSON.stringify("app") } : {}),
+      ...(isApp
+        ? {
+          __TARGET__: JSON.stringify("app"),
+          __LV_PUBLIC_ASSETS__: JSON.stringify(publicAssets),
+        }
+        : {}),
     },
     resolve: {
       // forceSingletons() (a resolveId plugin, above) pins the React-context-bearing

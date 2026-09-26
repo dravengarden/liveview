@@ -78,9 +78,7 @@ export async function openNativeReleaseUrl(url: string): Promise<void> {
       await api.opener.openUrl(parsed.href);
       return;
     } catch {
-      // Tauri's default opener scope intentionally allows only web, mail, and
-      // telephone URLs. Store-specific schemes still belong to the OS, so let
-      // the WebView hand those schemes to iOS below.
+      // Shells released before the scoped opener capability reject every URL.
     }
   }
   if (api?.core?.invoke) {
@@ -88,9 +86,13 @@ export async function openNativeReleaseUrl(url: string): Promise<void> {
       await api.core.invoke("plugin:opener|open_url", { url: parsed.href });
       return;
     } catch {
-      // Fall through to native URL dispatch for store-specific schemes.
+      // Same: an older shell's opener scope is empty.
     }
   }
+  // Never navigate the shell's only WebView to a web page: that would replace
+  // the reader with no way back. Only store-specific schemes, which WebKit hands
+  // to iOS without leaving the current document, may use this fallback.
+  if (parsed.protocol === "https:") throw new Error("Opener unavailable");
   globalThis.location.href = parsed.href;
 }
 
