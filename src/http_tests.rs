@@ -6,7 +6,7 @@ use crate::server::catalog::{BookMeta, EditionMeta, RenditionMeta};
 use crate::store::content::{BlobStore, ContentStore};
 use crate::store::fs::FsStore;
 use crate::store::model::{
-    AssetRecord, AudioTaskRollup, BookRecord, DagArtwork, DagChapter, EditionRecord,
+    AssetRecord, AudioBake, AudioTaskRollup, BookRecord, DagArtwork, DagChapter, EditionRecord,
     ManifestChapter, RenditionRecord,
 };
 use tower::ServiceExt;
@@ -235,15 +235,7 @@ impl ContentStore for FailingStore {
     async fn get_site_tree(&self, _: &str) -> Result<Option<String>, String> {
         down()
     }
-    async fn set_chapter_audio(
-        &self,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &str,
-    ) -> Result<(), String> {
+    async fn set_chapter_audio(&self, _: &AudioBake<'_>) -> Result<bool, String> {
         down()
     }
     async fn progress_for_book(&self, _: &str) -> Result<Vec<ProgressEntry>, String> {
