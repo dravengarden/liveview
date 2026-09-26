@@ -1378,11 +1378,47 @@ impl HttpPolicy {
     }
 }
 
+type CompressPredicateFn =
+    fn(StatusCode, axum::http::Version, &HeaderMap, &axum::http::Extensions) -> bool;
+
+/// Compress only textual API bodies (JSON, text, JS, SVG). Audio, blobs,
+/// images, PDFs and every partial (206 / `Content-Range`) response pass through
+/// untouched so they keep their `Content-Length` and `Accept-Ranges`.
+fn api_response_is_compressible(
+    status: StatusCode,
+    _version: axum::http::Version,
+    headers: &HeaderMap,
+    _extensions: &axum::http::Extensions,
+) -> bool {
+    if status == StatusCode::PARTIAL_CONTENT || headers.contains_key(header::CONTENT_RANGE) {
+        return false;
+    }
+    let Some(content_type) = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let essence = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    essence.starts_with("text/")
+        || essence == "application/json"
+        || essence.ends_with("+json")
+        || essence == "application/javascript"
+        || essence == "application/x-ndjson"
+        || essence == "image/svg+xml"
+}
+
 fn build_app(state: SharedState) -> Result<Router, String> {
     Ok(build_app_with_policy(state, HttpPolicy::from_env()?))
 }
 
 fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
+    use tower_http::compression::Predicate as _;
     let mut api_router = Router::new()
         .route("/api/books", get(api_books))
         .route("/api/cover", get(api_cover))
@@ -1445,7 +1481,15 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
     api_router = api_router
         // Large whole-corpus metadata responses are highly compressible (the
         // current DAG shrinks by roughly an order of magnitude with gzip).
-        .layer(tower_http::compression::CompressionLayer::new());
+        // Media and blob bytes are NOT: compressing them wastes CPU and, worse,
+        // strips `Content-Length` / `Accept-Ranges`, which breaks seeking and
+        // download-size accounting. See `api_response_is_compressible`.
+        .layer(
+            tower_http::compression::CompressionLayer::new().compress_when(
+                tower_http::compression::DefaultPredicate::new()
+                    .and(api_response_is_compressible as CompressPredicateFn),
+            ),
+        );
 
     #[cfg(feature = "embedded")]
     let app = {
