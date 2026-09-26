@@ -8,7 +8,7 @@
 // theme floors coarse-pointer controls; we avoid size="small" on inputs), and
 // nothing relies on hover.
 
-import type { JSX } from "react";
+import { type JSX, useState } from "react";
 import {
   Box,
   Button,
@@ -31,6 +31,7 @@ import {
 import { Add as AddIcon, Remove as RemoveIcon } from "@mui/icons-material";
 import type { Opt, Widget, WidgetType } from "./types";
 import type { Kernel } from "./kernel";
+import { clampNumber, parseNumberDraft } from "./numeric";
 
 function assertNever(x: never): never {
   throw new Error(`unhandled widget: ${JSON.stringify(x)}`);
@@ -103,8 +104,17 @@ function RangeSliderWidget({ w, signal, kernel }: Ctl<"rangeSlider">): JSX.Eleme
   );
 }
 
+// The text being typed is a local draft: an intermediate edit (cleared field, a
+// lone `-`, `1e`) stays on screen instead of snapping to 0, and only a finite
+// number commits — clamped into the widget's bounds — to the signal. The draft
+// is shown only while it still denotes the committed value, so an external
+// change (a reset button) replaces it; blur drops it.
 function NumberInputWidget({ w, signal, kernel }: Ctl<"numberInput">): JSX.Element {
   const value = num(kernel.get(signal), 0);
+  const [draft, setDraft] = useState<string | null>(null);
+  const draftValue = draft === null ? null : parseNumberDraft(draft);
+  const showDraft = draft !== null &&
+    (draftValue === null || clampNumber(draftValue, w.min, w.max) === value);
   const bounds = {
     ...(w.min !== undefined ? { min: w.min } : {}),
     ...(w.max !== undefined ? { max: w.max } : {}),
@@ -114,12 +124,15 @@ function NumberInputWidget({ w, signal, kernel }: Ctl<"numberInput">): JSX.Eleme
     <Field label={w.label}>
       <TextField
         type="number"
-        value={String(value)}
+        value={showDraft ? draft : String(value)}
         fullWidth
         onChange={(e) => {
-          const n = Number(e.target.value);
-          kernel.set(signal, Number.isFinite(n) ? n : 0);
+          const text = e.target.value;
+          setDraft(text);
+          const n = parseNumberDraft(text);
+          if (n !== null) kernel.set(signal, clampNumber(n, w.min, w.max));
         }}
+        onBlur={() => setDraft(null)}
         slotProps={{ htmlInput: bounds }}
       />
     </Field>

@@ -73,11 +73,31 @@ function FallbackTile({ msg }: { msg: string }): JSX.Element {
   );
 }
 
-class BlockBoundary
-  extends Component<{ children: ReactNode }, { failed: boolean }> {
-  override state = { failed: false };
-  static getDerivedStateFromError(): { failed: boolean } {
+interface BoundaryProps {
+  children: ReactNode;
+  /** The kernel the block rendered with. A fresh kernel means the signal or
+   *  dataset inputs changed, so a failed block retries instead of staying
+   *  collapsed for the rest of the session. */
+  resetKey: unknown;
+}
+
+interface BoundaryState {
+  failed: boolean;
+  resetKey: unknown;
+}
+
+class BlockBoundary extends Component<BoundaryProps, BoundaryState> {
+  override state: BoundaryState = { failed: false, resetKey: this.props.resetKey };
+  static getDerivedStateFromError(): Partial<BoundaryState> {
     return { failed: true };
+  }
+  static getDerivedStateFromProps(
+    props: BoundaryProps,
+    state: BoundaryState,
+  ): Partial<BoundaryState> | null {
+    return Object.is(props.resetKey, state.resetKey)
+      ? null
+      : { failed: false, resetKey: props.resetKey };
   }
   override render(): ReactNode {
     return this.state.failed
@@ -94,7 +114,9 @@ function BlockList(
   return (
     <>
       {blocks.map((b, i) => (
-        <BlockBoundary key={i}>{blockBody(b, ctx, depth)}</BlockBoundary>
+        <BlockBoundary key={i} resetKey={ctx.kernel}>
+          {blockBody(b, ctx, depth)}
+        </BlockBoundary>
       ))}
     </>
   );

@@ -58,6 +58,7 @@ import type {
 } from "./types";
 import type { Kernel } from "./kernel";
 import { isUnavailable } from "./expr";
+import { cellNumber, clampBins, numericExtent } from "./numeric";
 
 type ChartBlockT = Extract<Block, { block: "chart" }>;
 
@@ -113,7 +114,7 @@ function labelOf(f: ChartField): string {
 function numColumn(rows: Record<string, unknown>[], col: string): number[] {
   const out: number[] = [];
   for (const r of rows) {
-    const v = Number(r[col]);
+    const v = cellNumber(r[col]);
     if (Number.isFinite(v)) out.push(v);
   }
   return out;
@@ -129,9 +130,9 @@ function numColumn(rows: Record<string, unknown>[], col: string): number[] {
 // still pushes the axis outward to stay visible. Used for line & scatter (bar
 // keeps a zero baseline — a bar's length must be read from zero).
 function fitDomain(values: number[]): [number, number] | ["auto", "auto"] {
-  if (values.length === 0) return ["auto", "auto"];
-  const lo = Math.min(...values);
-  const hi = Math.max(...values);
+  const extent = numericExtent(values);
+  if (extent === null) return ["auto", "auto"];
+  const [lo, hi] = extent;
   if (lo === hi) {
     const p = Math.abs(lo) * 0.05 || 1;
     return [lo - p, hi + p];
@@ -609,11 +610,12 @@ function fmtEdge(n: number): string {
 
 function histogram(
   values: number[],
-  bins: number,
+  requestedBins: number | undefined,
 ): { bin: string; count: number }[] {
-  if (values.length === 0) return [];
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  const extent = numericExtent(values);
+  if (extent === null) return [];
+  const [min, max] = extent;
+  const bins = clampBins(requestedBins);
   if (min === max) return [{ bin: fmtEdge(min), count: values.length }];
   const width = (max - min) / bins;
   const buckets = new Array<number>(bins).fill(0);
@@ -664,10 +666,10 @@ function makeCandle(
       return null;
     }
     const candleOpacity = cfg.dim(payload[cfg.xcol]);
-    const high = Number(payload[cfg.high]);
-    const low = Number(payload[cfg.low]);
-    const open = Number(payload[cfg.open]);
-    const close = Number(payload[cfg.close]);
+    const high = cellNumber(payload[cfg.high]);
+    const low = cellNumber(payload[cfg.low]);
+    const open = cellNumber(payload[cfg.open]);
+    const close = cellNumber(payload[cfg.close]);
     if (![high, low, open, close].every((n) => Number.isFinite(n))) return null;
     const span = high - low;
     const pix = (
@@ -711,17 +713,25 @@ function depthData(
   bidCol: string,
   askCol: string,
 ): Record<string, unknown>[] {
-  const sorted = [...rows].sort((a, b) =>
-    Number(a[priceCol]) - Number(b[priceCol])
-  );
+  // A non-numeric price sorts last (a NaN comparator result would make the
+  // sort order engine-defined).
+  const price = (r: Record<string, unknown>): number => {
+    const p = cellNumber(r[priceCol]);
+    return Number.isFinite(p) ? p : Infinity;
+  };
+  const sorted = [...rows].sort((a, b) => {
+    const pa = price(a);
+    const pb = price(b);
+    return pa < pb ? -1 : pa > pb ? 1 : 0;
+  });
   let ask = 0;
   const out = sorted.map((r) => {
-    ask += Math.max(0, Number(r[askCol]) || 0);
+    ask += Math.max(0, cellNumber(r[askCol]) || 0);
     return { ...r, _ask: ask } as Record<string, unknown>;
   });
   let bid = 0;
   for (let i = out.length - 1; i >= 0; i--) {
-    bid += Math.max(0, Number(out[i]?.[bidCol]) || 0);
+    bid += Math.max(0, cellNumber(out[i]?.[bidCol]) || 0);
     const row = out[i];
     if (row) row["_bid"] = bid;
   }
@@ -1147,7 +1157,7 @@ function ChartPlot({
         const pieData = rows
           .map((r) => ({
             name: String(r[mark.category.column]),
-            value: Number(r[mark.value.column]),
+            value: cellNumber(r[mark.value.column]),
             row: r,
           }))
           .filter((d) => Number.isFinite(d.value));
@@ -1270,7 +1280,7 @@ function ChartPlot({
       case "histogram": {
         const data = histogram(
           numColumn(rows, mark.value.column),
-          mark.bins ?? 10,
+          mark.bins,
         );
         return (
           <ChartFrame title={block.title}>
@@ -1313,10 +1323,8 @@ function ChartPlot({
       }
 
       case "candlestick": {
-        const lows = numColumn(rows, mark.low.column);
-        const highs = numColumn(rows, mark.high.column);
-        const lo = lows.length ? Math.min(...lows) : 0;
-        const hi = highs.length ? Math.max(...highs) : 1;
+        const lo = numericExtent(numColumn(rows, mark.low.column))?.[0] ?? 0;
+        const hi = numericExtent(numColumn(rows, mark.high.column))?.[1] ?? 1;
         const pad = (hi - lo) * 0.05 || 1;
         const Candle = makeCandle({
           open: mark.open.column,
@@ -1330,7 +1338,7 @@ function ChartPlot({
         });
         const candleData = rows.map((r) => ({
           ...r,
-          _hl: [Number(r[mark.low.column]), Number(r[mark.high.column])],
+          _hl: [cellNumber(r[mark.low.column]), cellNumber(r[mark.high.column])],
         }));
         const mas = mark.ma ?? [];
         return (
@@ -1428,7 +1436,7 @@ function ChartPlot({
                 >
                   {rows.map((r, i) => {
                     const fill = directional
-                      ? Number(r[closeCol]) >= Number(r[openCol]) ? up : down
+                      ? cellNumber(r[closeCol]) >= cellNumber(r[openCol]) ? up : down
                       : colorAt(colors, 0);
                     return <Cell key={i} fill={fill} />;
                   })}

@@ -157,9 +157,40 @@ function lex(src: string): Tok[] {
 
 // ── parser (precedence-climbing, mirrors expr.rs) ────────────────────────────
 
+/** The deepest expression nesting (parenthesised groups, unary chains, and
+ *  operator chains all count) — `MAX_EXPR_DEPTH` in expr.rs. Bounding the AST
+ *  depth keeps the recursive evaluator far from the JS stack limit. */
+export const MAX_EXPR_DEPTH = 64;
+
 class Parser {
   private pos = 0;
+  // Parser recursion depth (a parenthesised group nests the parser without
+  // adding AST depth) and each node's AST depth (a leaf is 1).
+  private nesting = 0;
+  private readonly depths = new WeakMap<Ast, number>();
   constructor(private readonly toks: Tok[]) {}
+
+  private enter(): void {
+    this.nesting += 1;
+    if (this.nesting > MAX_EXPR_DEPTH) throw new ParseError("expression nests too deeply");
+  }
+  private leave(): void {
+    this.nesting -= 1;
+  }
+  /** Record `node`'s depth over `children`, rejecting one past the limit. */
+  private node<T extends Ast>(node: T, ...children: Ast[]): T {
+    let deepest = 0;
+    for (const c of children) deepest = Math.max(deepest, this.depths.get(c) ?? 1);
+    if (deepest + 1 > MAX_EXPR_DEPTH) throw new ParseError("expression nests too deeply");
+    this.depths.set(node, deepest + 1);
+    return node;
+  }
+  private group(): Ast {
+    this.enter();
+    const e = this.parseOr();
+    this.leave();
+    return e;
+  }
 
   private peek(): Tok {
     return this.toks[this.pos] ?? { t: "eof" };
@@ -179,15 +210,18 @@ class Parser {
   }
 
   parse(): Ast {
-    const e = this.parseOr();
+    const e = this.group();
     if (this.peek().t !== "eof") throw new ParseError("unexpected trailing input");
     return e;
+  }
+  private bin(op: BinOp, left: Ast, right: Ast): Ast {
+    return this.node({ kind: "bin", op, left, right }, left, right);
   }
   private parseOr(): Ast {
     let lhs = this.parseAnd();
     while (this.isOp("||")) {
       this.next();
-      lhs = { kind: "bin", op: "or", left: lhs, right: this.parseAnd() };
+      lhs = this.bin("or", lhs, this.parseAnd());
     }
     return lhs;
   }
@@ -195,7 +229,7 @@ class Parser {
     let lhs = this.parseCmp();
     while (this.isOp("&&")) {
       this.next();
-      lhs = { kind: "bin", op: "and", left: lhs, right: this.parseCmp() };
+      lhs = this.bin("and", lhs, this.parseCmp());
     }
     return lhs;
   }
@@ -206,7 +240,7 @@ class Parser {
       const op = t.t === "op" ? cmpOp(t.v) : null;
       if (!op) break;
       this.next();
-      lhs = { kind: "bin", op, left: lhs, right: this.parseAdd() };
+      lhs = this.bin(op, lhs, this.parseAdd());
     }
     return lhs;
   }
@@ -216,7 +250,7 @@ class Parser {
       const t = this.peek();
       if (t.t !== "op" || (t.v !== "+" && t.v !== "-")) break;
       this.next();
-      lhs = { kind: "bin", op: t.v === "+" ? "add" : "sub", left: lhs, right: this.parseMul() };
+      lhs = this.bin(t.v === "+" ? "add" : "sub", lhs, this.parseMul());
     }
     return lhs;
   }
@@ -227,20 +261,18 @@ class Parser {
       if (t.t !== "op" || (t.v !== "*" && t.v !== "/" && t.v !== "%")) break;
       this.next();
       const op = t.v === "*" ? "mul" : t.v === "/" ? "div" : "mod";
-      lhs = { kind: "bin", op, left: lhs, right: this.parseUnary() };
+      lhs = this.bin(op, lhs, this.parseUnary());
     }
     return lhs;
   }
   private parseUnary(): Ast {
-    if (this.isOp("-")) {
-      this.next();
-      return { kind: "unary", op: "neg", expr: this.parseUnary() };
-    }
-    if (this.isOp("!")) {
-      this.next();
-      return { kind: "unary", op: "not", expr: this.parseUnary() };
-    }
-    return this.parsePostfix();
+    const op: UnOp | null = this.isOp("-") ? "neg" : this.isOp("!") ? "not" : null;
+    if (op === null) return this.parsePostfix();
+    this.next();
+    this.enter();
+    const expr = this.parseUnary();
+    this.leave();
+    return this.node({ kind: "unary", op, expr }, expr);
   }
   private parsePostfix(): Ast {
     let e = this.parsePrimary();
@@ -249,12 +281,12 @@ class Parser {
         this.next();
         const t = this.next();
         if (t.t !== "ident") throw new ParseError("expected field name after `.`");
-        e = { kind: "field", base: e, name: t.v };
+        e = this.node({ kind: "field", base: e, name: t.v }, e);
       } else if (this.isOp("[")) {
         this.next();
-        const index = this.parseOr();
+        const index = this.group();
         this.eat("]");
-        e = { kind: "index", base: e, index };
+        e = this.node({ kind: "index", base: e, index }, e, index);
       } else {
         break;
       }
@@ -268,7 +300,7 @@ class Parser {
     if (t.t === "true") return { kind: "bool", value: true };
     if (t.t === "false") return { kind: "bool", value: false };
     if (t.t === "op" && t.v === "(") {
-      const e = this.parseOr();
+      const e = this.group();
       this.eat(")");
       return e;
     }
@@ -278,13 +310,13 @@ class Parser {
         const args: Ast[] = [];
         if (!this.isOp(")")) {
           for (;;) {
-            args.push(this.parseOr());
+            args.push(this.group());
             if (this.isOp(",")) this.next();
             else break;
           }
         }
         this.eat(")");
-        return { kind: "call", name: t.v, args };
+        return this.node({ kind: "call", name: t.v, args }, ...args);
       }
       return { kind: "ident", name: t.v };
     }
@@ -375,17 +407,62 @@ function arith(op: BinOp, ea: unknown, eb: unknown): number | Unavailable {
   }
 }
 
-// A total scalar ordering: numbers numerically, temporals by parsed time, else
-// lexicographically. Returns UNAVAILABLE for incomparable/absent operands.
+const ISO_INSTANT =
+  /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:(Z)|([+-])(\d{2}):?(\d{2}))?)?$/;
+
+function daysInMonth(y: number, m: number): number {
+  if (m === 2) return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0 ? 29 : 28;
+  return m === 4 || m === 6 || m === 9 || m === 11 ? 30 : 31;
+}
+
+// Days since 1970-01-01 of a proleptic-Gregorian civil date (Hinnant); avoids
+// `Date.UTC`'s two-digit-year remapping.
+function daysFromCivil(y0: number, m: number, d: number): number {
+  const y = m <= 2 ? y0 - 1 : y0;
+  const era = Math.floor(y / 400);
+  const yoe = y - era * 400;
+  const mp = (m + 9) % 12;
+  const doy = Math.floor((153 * mp + 2) / 5) + d - 1;
+  const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
+  return era * 146097 + doe - 719468;
+}
+
+/** A strict ISO-8601 temporal value as UTC epoch milliseconds, else `null`:
+ *  `YYYY-MM-DD`, optionally `T`/space `HH:MM[:SS[.fff…]]` and a `Z` / `±HH:MM`
+ *  / `±HHMM` offset (no offset reads as UTC). Calendar-invalid dates are
+ *  rejected. The same grammar as `iso_instant` in expr.rs, independent of the
+ *  engine's lenient `Date.parse`. */
+export function isoInstant(s: string): number | null {
+  const m = ISO_INSTANT.exec(s);
+  if (!m) return null;
+  const n = (i: number): number => Number(m[i] ?? "0");
+  const [y, mo, d, h, mi, sec] = [n(1), n(2), n(3), n(4), n(5), n(6)];
+  if (mo < 1 || mo > 12 || d < 1 || d > daysInMonth(y, mo)) return null;
+  if (h > 23 || mi > 59 || sec > 59) return null;
+  let ms = daysFromCivil(y, mo, d) * 86_400_000 + h * 3_600_000 + mi * 60_000 + sec * 1000;
+  if (m[7] !== undefined) ms += Number(`0.${m[7]}`) * 1000;
+  if (m[9] !== undefined) {
+    const oh = n(10);
+    const om = n(11);
+    if (oh > 23 || om > 59) return null;
+    ms -= (m[9] === "+" ? 1 : -1) * (oh * 3_600_000 + om * 60_000);
+  }
+  return ms;
+}
+
+// A total scalar ordering, matching the checker's typing (expr.rs): numbers
+// numerically; two strict ISO-8601 temporals chronologically; any other
+// strings lexicographically (so arbitrary strings order transitively and never
+// through the engine's lenient `Date.parse`). Returns UNAVAILABLE for
+// incomparable/absent operands.
 function order(ea: unknown, eb: unknown): number | Unavailable {
   if (isUnavailable(ea) || isUnavailable(eb)) return UNAVAILABLE;
   if (typeof ea === "number" && typeof eb === "number") return ea < eb ? -1 : ea > eb ? 1 : 0;
-  const ta = Date.parse(String(ea));
-  const tb = Date.parse(String(eb));
-  if (Number.isFinite(ta) && Number.isFinite(tb)) return ta < tb ? -1 : ta > tb ? 1 : 0;
-  const sa = String(ea);
-  const sb = String(eb);
-  return sa < sb ? -1 : sa > sb ? 1 : 0;
+  if (typeof ea !== "string" || typeof eb !== "string") return UNAVAILABLE;
+  const ta = isoInstant(ea);
+  const tb = isoInstant(eb);
+  if (ta !== null && tb !== null) return ta < tb ? -1 : ta > tb ? 1 : 0;
+  return ea < eb ? -1 : ea > eb ? 1 : 0;
 }
 
 function equal(ea: unknown, eb: unknown): boolean | Unavailable {
@@ -523,6 +600,14 @@ function columnNumbers(v: unknown): number[] | null {
   return out;
 }
 
+// A value as a dataset cell: scalars verbatim; UNAVAILABLE, a non-finite
+// number, or any non-scalar (a column/dataset that can't be a cell) → null.
+function cell(v: unknown): unknown {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string" || typeof v === "boolean") return v;
+  return null;
+}
+
 // The `ColumnType` a `with`-computed column reports, inferred from its values —
 // used only for the chart's axis-kind hint (the checker already proved the real
 // type; this is the total runtime echo). A column of numbers → "number", etc.
@@ -563,11 +648,17 @@ function evalCall(name: string, args: Ast[], env: EvalEnv, scope: DsVal | null):
       // combine columns with signals (`upper = mid + k*sigma`) and reference
       // columns added earlier in the same call. A scalar result broadcasts to
       // every row; a column result maps per row.
+      //
+      // Rows hold plain JSON-like cells: an absent result is stored as `null`
+      // (never the UNAVAILABLE symbol, which charts/tables would have to
+      // special-case and `Number(symbol)` throws on). Reading the column back
+      // maps `null` to UNAVAILABLE again. Each row is copied once up front and
+      // the copies (owned by this call) are filled in place per column.
       const dsv = evalNode(arg(0) ?? { kind: "num", value: 0 }, env, scope);
       if (!isDs(dsv)) return UNAVAILABLE;
       if (dsv.rows === null) return dsv;
-      let columns: Record<string, ColumnType> = { ...dsv.columns };
-      let rows: Record<string, unknown>[] = dsv.rows.map((r) => ({ ...r }));
+      const columns: Record<string, ColumnType> = { ...dsv.columns };
+      const rows: Record<string, unknown>[] = dsv.rows.map((r) => ({ ...r }));
       for (let i = 1; i + 1 < args.length; i += 2) {
         const nameAst = args[i];
         const exprAst = args[i + 1];
@@ -576,14 +667,14 @@ function evalCall(name: string, args: Ast[], env: EvalEnv, scope: DsVal | null):
         const val = evalNode(exprAst, env, ds(columns, rows));
         if (isCol(val)) {
           const vv = val.values;
-          rows = rows.map((r, idx) => ({
-            ...r,
-            [name]: vv === null ? UNAVAILABLE : (vv[idx] ?? UNAVAILABLE),
-          }));
+          for (let idx = 0; idx < rows.length; idx++) {
+            (rows[idx] as Record<string, unknown>)[name] = vv === null ? null : cell(vv[idx]);
+          }
         } else {
-          rows = rows.map((r) => ({ ...r, [name]: val }));
+          const c = cell(val);
+          for (const r of rows) r[name] = c;
         }
-        columns = { ...columns, [name]: inferColType(val) };
+        columns[name] = inferColType(val);
       }
       return ds(columns, rows);
     }
@@ -673,10 +764,18 @@ function aggregate(name: string, nums: number[]): number | Unavailable {
       return finite(nums.reduce((a, b) => a + b, 0));
     case "mean":
       return finite(nums.reduce((a, b) => a + b, 0) / nums.length);
-    case "min":
-      return finite(Math.min(...nums));
-    case "max":
-      return finite(Math.max(...nums));
+    // Loops, not `Math.min(...nums)`: spreading a large column overflows the
+    // engine's argument limit.
+    case "min": {
+      let lo = Infinity;
+      for (const n of nums) if (n < lo) lo = n;
+      return finite(lo);
+    }
+    case "max": {
+      let hi = -Infinity;
+      for (const n of nums) if (n > hi) hi = n;
+      return finite(hi);
+    }
     case "median": {
       const s = [...nums].sort((a, b) => a - b);
       const mid = Math.floor(s.length / 2);
