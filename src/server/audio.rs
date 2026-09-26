@@ -193,7 +193,9 @@ const SYNTH_ATTEMPTS: u32 = 3;
 /// - **unspeakable text** (a lone `…` / `」` segmented out as its own sentence)
 ///   makes edge-tts raise `NoAudioReceived` — emit a zero-length clip so the
 ///   chapter still synthesizes and sentence indices stay aligned with the marks;
-/// - **transient network drops** — retry a few times before giving up.
+/// - **transient network drops** — retry a few times, then fail the sentence
+///   (and so the chapter), leaving the task to be retried rather than baking a
+///   silent gap into audio that would then count as done.
 async fn synth_sentence(cmd: &str, voice: &str, text: &str) -> Result<Vec<u8>, String> {
     // A non-prose unit with no narration (or a lone-punctuation segment) has
     // nothing to voice — emit silence directly instead of a wasted edge-tts
@@ -202,25 +204,33 @@ async fn synth_sentence(cmd: &str, voice: &str, text: &str) -> Result<Vec<u8>, S
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
-    let mut last = String::new();
+    let mut last_error = None;
     for _ in 0..SYNTH_ATTEMPTS {
         match try_synth_once(cmd, voice, text).await {
             Ok(bytes) if !bytes.is_empty() => return Ok(bytes),
-            Ok(_) => last = "empty audio".to_owned(),
+            // The adapter succeeded but produced nothing: like NoAudioReceived,
+            // an answer about the text, not a transport failure. Retry in case
+            // it was a truncated write; silence if it persists.
+            Ok(_) => {}
             // No audio for this text → it has nothing speakable; skip it.
             Err(e) if e.contains("NoAudioReceived") => {
                 tracing::warn!(text, "tts: no audio for sentence; emitting silence");
                 return Ok(Vec::new());
             }
-            Err(e) => last = e,
+            Err(e) => last_error = Some(e),
         }
     }
-    // Persistent failure (a stalled/unspeakable sentence, or a flaky network):
-    // emit silence rather than fail the WHOLE chapter on one sentence — the marks
-    // stay aligned and the chapter is still playable, the lost sentence just a
-    // brief silent gap. Infinite hangs are bounded by the per-attempt timeout.
-    tracing::warn!(text, error = %last, "tts: giving up on sentence after retries; emitting silence");
-    Ok(Vec::new())
+    match last_error {
+        // Persistent failure (network outage, timeout, adapter crash): fail the
+        // chapter. Baking silence here would mark the chapter done with a
+        // permanent hole in its audio; failing it lets the task retry path
+        // re-synthesize once the speech service is reachable again.
+        Some(e) => Err(format!("tts failed after {SYNTH_ATTEMPTS} attempts: {e}")),
+        None => {
+            tracing::warn!(text, "tts: empty audio after retries; emitting silence");
+            Ok(Vec::new())
+        }
+    }
 }
 
 /// Synthesize `sentences` into a concatenated MP3 + sentence marks, in memory —
@@ -293,6 +303,74 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// A stand-in speech adapter: a shell script with the edge-tts CLI shape
+    /// (`--voice V --text T --write-media PATH`) running `body`.
+    struct FakeTts(std::path::PathBuf);
+    impl FakeTts {
+        fn new(name: &str, body: &str) -> Self {
+            use std::os::unix::fs::PermissionsExt;
+            let path = std::env::temp_dir().join(format!(
+                "lv-fake-tts-{name}-{}-{}",
+                std::process::id(),
+                SEQ_TEST.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::write(&path, format!("#!/bin/sh\nout=\"$6\"\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            Self(path)
+        }
+        fn cmd(&self) -> &str {
+            self.0.to_str().unwrap()
+        }
+    }
+    impl Drop for FakeTts {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    static SEQ_TEST: AtomicU64 = AtomicU64::new(0);
+
+    #[tokio::test]
+    async fn persistent_tts_failure_fails_the_sentence() {
+        let tts = FakeTts::new("down", "echo 'connection reset' >&2; exit 1");
+        let err = synth_sentence(tts.cmd(), "v", "hello").await.unwrap_err();
+        assert!(err.contains("connection reset"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn unspeakable_text_becomes_silence() {
+        let tts = FakeTts::new(
+            "noaudio",
+            "echo 'edge_tts.exceptions.NoAudioReceived' >&2; exit 1",
+        );
+        assert!(
+            synth_sentence(tts.cmd(), "v", "…")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let empty = FakeTts::new("empty", ": > \"$out\"");
+        assert!(
+            synth_sentence(empty.cmd(), "v", "…")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        // Blank text never reaches the adapter.
+        let down = FakeTts::new("unused", "exit 1");
+        assert!(
+            synth_sentence(down.cmd(), "v", "  ")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_tts_returns_the_clip() {
+        let tts = FakeTts::new("ok", "printf 'mp3' > \"$out\"");
+        assert_eq!(synth_sentence(tts.cmd(), "v", "hi").await.unwrap(), b"mp3");
     }
 
     #[test]
