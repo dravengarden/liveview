@@ -445,18 +445,16 @@ export function App(): React.JSX.Element {
     }%`;
   }, [menuBarSettings.fontScale]);
   const { fontId, setFont } = useFont();
-  // The root audio engine: playback + the popup live above every view, so
-  // navigating never stops the audio nor closes the popup. We only need to seed
-  // playback (`playChapter`) and raise the popup into focus (`setExpanded`).
+  // The root audio engine: playback lives above every view, so navigating never
+  // stops the audio. The shell only seeds playback (`playChapter`) and reads the
+  // session identity; the per-sentence read-along state lives in a separate
+  // context so it never re-renders this whole tree.
   const {
     playChapter: audioPlayChapter,
     syncNotice,
     nowPlaying,
     stop: stopPlayback,
   } = useAudioPlayer();
-  // Desktop keyboard shortcuts (Space/←/→/⌘±arrows/</>) + the `?` cheat-sheet.
-  // Desktop-only (gated inside the hook); a no-op on touch.
-  const { helpOpen, closeHelp } = useKeyboardShortcuts();
   // Mirror of `nowPlaying` for the view→engine effect's guard. That effect must
   // react ONLY to view-led navigation (currentPath), never to engine-led chapter
   // changes — reading nowPlaying through a ref keeps it out of the dep array so
@@ -512,6 +510,10 @@ export function App(): React.JSX.Element {
   // else (text page, another book, the shelf) it shows as the now-playing handle.
   const onPlayingPage = nowPlaying != null &&
     activeSlug === nowPlaying.bookSlug && rendition === "audio";
+  // Desktop keyboard shortcuts (Space/←/→/⌘±arrows/</>) + the `?` cheat-sheet.
+  // Desktop-only (gated inside the hook); a no-op on touch. Playback keys apply
+  // only while audio plays or its read-along page is open.
+  const { helpOpen, closeHelp } = useKeyboardShortcuts(onPlayingPage);
 
   // Tap the BOTTOM nav bar's title to jump the reader to the BOTTOM (the bar sits
   // at the bottom, so down-to-the-end is the spatially natural direction; the
@@ -1452,9 +1454,13 @@ export function App(): React.JSX.Element {
   const restoreFromHash = useCallback(
     async (replaceHash: boolean): Promise<void> => {
       const { path, lang: hashLang, rendition: hashRendition } = getHashState();
+      // Claim the navigation token. Any later navigation (another back/forward,
+      // opening a chapter, returning to the shelf) bumps it; this restore then
+      // stops after its awaits instead of applying a stale tree or chapter over
+      // the newer view.
+      const seq = ++fileLoadSeq.current;
       if (!path) {
         // empty hash → the landing bookshelf
-        fileLoadSeq.current += 1;
         setCurrentPath(null);
         currentPathRef.current = null;
         setCurrentContent(null);
@@ -1485,13 +1491,17 @@ export function App(): React.JSX.Element {
         const res = await contentFetch(
           `/api/tree?rendition=${encodeURIComponent(kind)}`,
         );
-        setTree((await res.json()) as TreeNode[]);
+        const nextTree = (await res.json()) as TreeNode[];
+        if (seq !== fileLoadSeq.current) return;
+        setTree(nextTree);
       } catch (e) {
         console.error("Failed to fetch rendition tree:", e);
       }
+      if (seq !== fileLoadSeq.current) return;
       // Load the book's progress first so the doc restores its scroll.
       const slug = path.split("/")[0];
       if (slug) await loadBook(slug);
+      if (seq !== fileLoadSeq.current) return;
       if (kind === "audio") {
         // Audio renders off the engine (seeded by the view→engine effect).
         setCurrentPath(path);

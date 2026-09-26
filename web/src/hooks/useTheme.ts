@@ -7,7 +7,7 @@ import {
 import { persisted, useStore } from "@/_store/mod.ts";
 import { LIVEVIEW_BRAND, LIVEVIEW_RADII } from "@/brand";
 import type { Theme, ThemeMode, ThemeVariant } from "@/types";
-import { THEME_VARIANTS } from "@/types";
+import { isDarkTheme, THEME_VARIANTS } from "@/types";
 
 // Theme is two axes: a colour VARIANT (classic/warm/purple) and a MODE
 // (auto/light/dark). The flat theme value is derived from them. Persisted
@@ -92,14 +92,6 @@ const modeStore = persisted<ThemeMode>(
         : (legacyMigration?.mode ?? "auto"),
   },
 );
-
-// Explicit, not name-based: "sepia" is a light theme yet has no "light" in its
-// name, so a substring test would misclassify it (and would mis-gate the
-// dark-mode image plate in markdown.css). Keep this in sync with the dark
-// `data-color-scheme` the effect sets below.
-function isDarkTheme(theme: Theme): boolean {
-  return theme === "dark" || theme === "night" || theme === "plum";
-}
 
 // Keep the iOS standalone status bar (and Android's) in sync with the active
 // theme. With apple-mobile-web-app-status-bar-style="default", iOS paints the

@@ -302,18 +302,23 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     temporaryNav,
-    /DrawerActionIsland width=\{54\}[\s\S]{0,220}aria-label=\{backLabel \?\? "Back"\}/,
+    /DrawerActionIsland width=\{54\}[\s\S]{0,220}aria-label=\{backLabel \?\? labels\.back\}/,
     "the spatial navigation back affordance must live in the bottom leading island",
   );
   assertPresent(
     temporaryNav,
-    /DrawerActionIsland width=\{actions \? 108 : 54\}[\s\S]{0,600}aria-label="Close navigation"[\s\S]{0,800}\{actions\}/,
+    /DrawerActionIsland width=\{actions \? 108 : 54\}[\s\S]{0,600}aria-label=\{labels\.closeNavigation\}[\s\S]{0,800}\{actions\}/,
     "the trailing Cowboy-style island must group close with app navigation actions",
   );
   assertAbsent(
     temporaryNav,
     /backdropFilter|WebkitBackdropFilter|\bfilter:/,
     "the fixed drawer actions must keep Cowboy geometry without live-filtering scrolling content",
+  );
+  assertPresent(
+    navShell,
+    /aria-hidden=\{!mobileOpen\}[\s\S]{0,300}inert=\{!mobileOpen\}[\s\S]{0,40}data-spatial-drawer/,
+    "a closed spatial drawer must leave the Tab order, not only the accessibility tree",
   );
   assertPresent(
     navShell,
@@ -379,6 +384,21 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     spatialDrawer,
     /!startOpen && touch\.clientX <= reservedLeadingEdge/,
     "a closed spatial drawer must yield its reserved leading edge to host navigation",
+  );
+  assertPresent(
+    spatialDrawer,
+    /closest\(\s*"[^"]*\[role='slider'\],\.MuiSlider-root/,
+    "the playback scrubber must keep horizontal drags instead of opening Contents",
+  );
+  assertPresent(
+    spatialDrawer,
+    /const onTouchStart = \(event: TouchEvent\): void => \{\s*if \(event\.touches\.length > 1\) \{\s*abandonGesture\(\);/,
+    "a second finger must release (and settle) the spatial drawer gesture",
+  );
+  assertPresent(
+    spatialDrawer,
+    /const abandonGesture = [\s\S]{0,300}if \(abandoned\?\.locked\) \{\s*settle\(abandoned\.startOpen/,
+    "an abandoned locked drawer gesture must settle instead of stranding the surface",
   );
   assertPresent(
     nativeTweaks,
@@ -526,6 +546,21 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "an interrupted DetentSheet drag must snap from its actual position without stale velocity projection",
   );
   assertPresent(
+    detentSheet,
+    /new ResizeObserver\([\s\S]{0,400}measureGeometry\(\)/,
+    "the DetentSheet must re-measure content-sized detents while open",
+  );
+  assertPresent(
+    detentSheet,
+    /dismissTimerRef\.current = globalThis\.setTimeout\(/,
+    "the DetentSheet dismiss timer must be tracked so reopen and unmount cancel it",
+  );
+  assertPresent(
+    detentSheet,
+    /e\.key === "Escape" && isTopmostDetentSheet\(levelRef\.current\)/,
+    "Escape must dismiss only the topmost stacked DetentSheet",
+  );
+  assertPresent(
     lightboxGestures,
     /g\.current\.lastX = remaining\.x;[\s\S]{0,80}g\.current\.lastY = remaining\.y;/,
     "ending a lightbox pinch must rebase panning to the surviving finger",
@@ -629,8 +664,24 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     bottomSheet,
-    /const darkTone = tone === "dark";[\s\S]{0,2200}bgcolor: darkTone[\s\S]{0,120}"rgba\(24, 24, 28, 0\.9\)"[\s\S]{0,1800}backdropFilter: darkTone \? "none"/,
-    "the on-scrim island must stay dark and avoid a milky live blur",
+    /const darkTone = tone === "dark";[\s\S]{0,2200}bgcolor: darkTone[\s\S]{0,120}"rgba\(24, 24, 28, 0\.9\)"/,
+    "the on-scrim island must stay dark",
+  );
+  const actionIsland = bottomSheet.match(
+    /export function FloatingActionIsland[\s\S]*?\n}\n/,
+  )?.[0];
+  if (!actionIsland) {
+    throw new Error("FloatingActionIsland must remain discoverable");
+  }
+  assertAbsent(
+    actionIsland,
+    /backdropFilter|WebkitBackdropFilter|\bfilter\s*:|mixBlendMode/,
+    "the sheet action island floating over a scrolling sheet body",
+  );
+  assertAbsent(
+    markdownStyles,
+    /\.lv-svg-figure[^{}]*\{[^}]*\bfilter\s*:/,
+    "standalone SVG figures in the scrolling reader",
   );
   assertPresent(
     imageLightbox,
@@ -699,6 +750,34 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     await source("hooks/useInPlaceHighlight.ts"),
     /useAudioTime\(active\)/,
     "an unrelated audio clock must not re-render the reader while scrolling",
+  );
+  const playbackSheet = await source("components/PlaybackSheet.tsx");
+  for (
+    const [surface, contents] of [
+      ["transport", playbackBar],
+      ["playback sheet", playbackSheet],
+    ] as const
+  ) {
+    assertPresent(
+      contents,
+      /onChange=\{scrub\.onChange\}\s*onChangeCommitted=\{scrub\.onChangeCommitted\}/,
+      `the ${surface} scrubber must seek once on commit, not on every drag frame`,
+    );
+  }
+  assertPresent(
+    playbackSheet,
+    /useAudioTime\(open\)/,
+    "a closed playback sheet must not re-render on the playback clock",
+  );
+  assertPresent(
+    floatingBubble,
+    /useAudioTime\(shown && !sheetOpen\)/,
+    "a hidden floating bubble must not re-render on the playback clock",
+  );
+  assertAbsent(
+    await source("components/AudiobookPlayer.tsx"),
+    /export function AudiobookPlayer[\s\S]*useAudioTime\(\)/,
+    "the read-along page must not re-render its sentence list on the playback clock",
   );
   assertAbsent(
     apm,

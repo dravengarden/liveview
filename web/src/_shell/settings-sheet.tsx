@@ -55,7 +55,7 @@ export function SettingsSheet(
 
   return (
     <>
-      <Tooltip title="Settings">
+      <Tooltip title={title}>
         {
           /* Why the sm tier is bigger (48 vs 40/36): on a tablet (iPad) the gear
             sits near a rounded screen corner and is hard to hit at 40px. sm=600
@@ -63,7 +63,7 @@ export function SettingsSheet(
             stays 40; desktop (≥1200) stays the compact 36. */
         }
         <IconButton
-          aria-label="settings"
+          aria-label={title}
           onClick={() => setOpen(true)}
           size="small"
           sx={{ width: { xs: 40, sm: 48, lg: 36 }, height: { xs: 40, sm: 48, lg: 36 } }}

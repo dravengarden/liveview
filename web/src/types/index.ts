@@ -184,6 +184,15 @@ export type Theme =
   | "night"
   | "plum";
 
+/** Explicit, not name-based: "sepia" and "lavender" are light themes with no
+ *  "light" in their names, so a substring test misclassifies them (and would
+ *  mis-gate the dark-mode figure plate in markdown.css). The single source of
+ *  truth for every dark/light decision, including the dark
+ *  `data-color-scheme` useTheme publishes. */
+export function isDarkTheme(theme: Theme): boolean {
+  return theme === "dark" || theme === "night" || theme === "plum";
+}
+
 /** The two independent theme axes (settings exposes them as two controls):
  *  a colour-palette VARIANT, each a light+dark pair, and a MODE that picks
  *  which half of the pair to use (auto = follow the OS). */

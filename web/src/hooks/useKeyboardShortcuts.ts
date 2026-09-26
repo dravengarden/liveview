@@ -44,8 +44,9 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
 ];
 
 /** Wire up the desktop shortcuts. Returns the cheat-sheet open-state for the
- *  host to render <ShortcutsDialog>. */
-export function useKeyboardShortcuts(): {
+ *  host to render <ShortcutsDialog>. `onPlayerPage` is true while the playing
+ *  chapter's own read-along page is shown. */
+export function useKeyboardShortcuts(onPlayerPage: boolean): {
   helpOpen: boolean;
   closeHelp: () => void;
 } {
@@ -54,10 +55,14 @@ export function useKeyboardShortcuts(): {
   // A precise pointer + hover ⇒ a real keyboard/mouse. Touch never matches.
   const isDesktop = useMediaQuery("(pointer: fine) and (hover: hover)");
 
-  // The listener attaches ONCE; it reads live player state through this ref so it
-  // never goes stale and never re-attaches on a playback tick.
+  // The listener attaches ONCE; it reads live player state through these refs
+  // so it never goes stale and never re-attaches on a playback change.
   const ref = useRef(player);
-  ref.current = player;
+  const onPlayerPageRef = useRef(onPlayerPage);
+  useEffect(() => {
+    ref.current = player;
+    onPlayerPageRef.current = onPlayerPage;
+  }, [player, onPlayerPage]);
 
   const stepRate = useCallback((dir: 1 | -1) => {
     const p = ref.current;
@@ -88,15 +93,23 @@ export function useKeyboardShortcuts(): {
         setHelpOpen((o) => !o);
         return;
       }
-      // Esc closes the cheat-sheet (NowPlayingPopup also handles Esc — both fine).
+      // Esc closes the cheat-sheet.
       if (e.key === "Escape") {
         setHelpOpen(false);
         return;
       }
 
-      // The rest only when a chapter is loaded — so plain reading keeps Space /
-      // arrows for scrolling.
-      if (p.nowPlaying == null) return;
+      // The rest only while playback is the active activity: audio is playing
+      // (or buffering toward it), or the playing chapter's read-along page is
+      // shown. A merely restored, paused session is a resume hint — plain
+      // reading must keep Space / arrows for scrolling and ⌘/Ctrl+arrows for
+      // browser navigation.
+      if (
+        p.nowPlaying == null ||
+        !(p.playing || p.buffering || onPlayerPageRef.current)
+      ) {
+        return;
+      }
 
       // Chapters: Cmd/Ctrl + ←/→ (override browser back/forward).
       if (primary && !secondary && !e.altKey && !e.shiftKey) {

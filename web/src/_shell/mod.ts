@@ -30,6 +30,7 @@ export {
   createConnectionStore,
 } from "./connection-banner.tsx";
 export { type GalleryImage, ImageLightbox, type ImageLightboxProps } from "./image-lightbox.tsx";
+export { DEFAULT_SHELL_LABELS, type ShellLabels, ShellLabelsProvider, useShellLabels } from "./shell-labels.tsx";
 export { createSharedTheme, type SharedThemeOptions } from "./theme.ts";
 export { type ThemeModeState, useThemeMode } from "./theme-mode.ts";
 export type { ThemeChoice, ThemeMode } from "./theme-types.ts";

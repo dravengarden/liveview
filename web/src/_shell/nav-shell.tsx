@@ -48,6 +48,7 @@ import {
 
 import { prepareSelectionHaptic, selectionHaptic } from "./haptics.ts";
 import { MobileNavigation } from "./mobile-navigation.tsx";
+import { useShellLabels } from "./shell-labels.tsx";
 import {
   bindSpatialDrawer,
   type SpatialDrawerSettle,
@@ -167,6 +168,7 @@ export function NavShell(props: NavShellProps): ReactNode {
   );
   const isPhone = useMediaQuery(theme.breakpoints.down("sm"));
   const spatial = isMobile && mobilePresentation === "sidebar";
+  const labels = useShellLabels();
 
   // Frosted overlay: measure the bar's RENDERED height (it varies with the
   // safe-area inset, dynamic title content, and rotation) and publish it as
@@ -198,6 +200,11 @@ export function NavShell(props: NavShellProps): ReactNode {
     ro.observe(barEl);
     return () => {
       ro.disconnect();
+      // Clear BOTH copies. The content region survives a switch back to the
+      // solid bar (e.g. rotating out of the bottom-bar tier), and a stale
+      // region-scoped value there kept every scroller padding for an overlay
+      // bar that no longer exists.
+      contentEl.style.removeProperty("--shell-bar-h");
       document.documentElement.style.removeProperty("--shell-bar-h");
     };
   }, [barFrosted]);
@@ -344,6 +351,12 @@ export function NavShell(props: NavShellProps): ReactNode {
   } else if (isMobile) {
     toggleIcon = <TocIcon />;
   }
+  let toggleLabel = labels.openNavigation;
+  if (sidebarShown) {
+    toggleLabel = labels.collapseNavigation;
+  } else if (isMobile && mobileOpen) {
+    toggleLabel = labels.closeNavigation;
+  }
 
   // A string title gets the default single-line styling; a node title is
   // rendered raw in the slot, so an app can stack two lines (e.g. a chapter over
@@ -389,8 +402,12 @@ export function NavShell(props: NavShellProps): ReactNode {
         <Box
           ref={spatialDrawerRef}
           role="navigation"
-          aria-label={navTitle ?? "Navigation"}
+          aria-label={navTitle ?? labels.navigation}
           aria-hidden={!mobileOpen}
+          // A closed rail sits behind the reader but stays in the DOM: `inert`
+          // keeps its links out of the Tab order and hit testing, not just out
+          // of the accessibility tree.
+          inert={!mobileOpen}
           data-spatial-drawer
           sx={{
             position: "absolute",
@@ -548,7 +565,7 @@ export function NavShell(props: NavShellProps): ReactNode {
               }),
           }}
         >
-          <Tooltip title={sidebarShown ? "Collapse" : "Menu"}>
+          <Tooltip title={toggleLabel}>
             {
               /* Primary mobile nav opener — 40px target on iPhone, compact 36 on
               desktop. On the tablet tier (sm=600+, i.e. iPad) raise it to 48 to
@@ -558,7 +575,7 @@ export function NavShell(props: NavShellProps): ReactNode {
               or the bottom-left corner stays awkward to tap on iPad. */
             }
             <IconButton
-              aria-label="toggle navigation"
+              aria-label={toggleLabel}
               onClick={onToggle}
               size="small"
               sx={{
@@ -663,7 +680,7 @@ export function NavShell(props: NavShellProps): ReactNode {
             role="button"
             data-lv-spatial-backdrop
             tabIndex={mobileOpen ? 0 : -1}
-            aria-label="Close navigation"
+            aria-label={labels.closeNavigation}
             aria-hidden={!mobileOpen}
             onClick={closeMobile}
             onKeyDown={(event) => {

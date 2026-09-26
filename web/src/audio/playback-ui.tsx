@@ -9,6 +9,7 @@
 // stripped of underline + dropdown icon, value shown via renderValue.
 
 import { rem } from "@/px";
+import { useCallback, useState } from "react";
 import { MenuItem, Select, Typography } from "@mui/material";
 import type { SxProps, Theme } from "@mui/material/styles";
 import { Bedtime } from "@mui/icons-material";
@@ -38,6 +39,37 @@ export function fmtTime(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+/** Scrubber drag state shared by every playback slider. While the thumb is held
+ *  the slider (and its elapsed label) follow a LOCAL value; the engine is sought
+ *  once, on commit. Seeking on every `onChange` issued a stream of native/web
+ *  seeks per drag, each re-buffering and snapping the thumb back under the
+ *  finger as late time events arrived. Keyboard steps commit immediately (MUI
+ *  fires `onChangeCommitted` per key press). */
+export function useScrubber(
+  currentTime: number,
+  seek: (sec: number) => void,
+): {
+  value: number;
+  onChange: (event: Event, value: number | number[]) => void;
+  onChangeCommitted: (
+    event: React.SyntheticEvent | Event,
+    value: number | number[],
+  ) => void;
+} {
+  const [dragValue, setDragValue] = useState<number | null>(null);
+  const onChange = useCallback((_e: Event, v: number | number[]) => {
+    setDragValue(Array.isArray(v) ? (v[0] ?? 0) : v);
+  }, []);
+  const onChangeCommitted = useCallback(
+    (_e: React.SyntheticEvent | Event, v: number | number[]) => {
+      setDragValue(null);
+      seek(Array.isArray(v) ? (v[0] ?? 0) : v);
+    },
+    [seek],
+  );
+  return { value: dragValue ?? currentTime, onChange, onChangeCommitted };
 }
 
 /** Compact sleep-timer label: 15m / 60→1h / 90→1h30m. Used for both the menu
@@ -81,7 +113,8 @@ export function SpeedChip(
       IconComponent={() => null}
       value={rate}
       onChange={(e) => setRate(Number(e.target.value))}
-      aria-label={t("audiobook.speed")}
+      // The label belongs on the focusable combobox, not the wrapper root.
+      inputProps={{ "aria-label": t("audiobook.speed") }}
       renderValue={(v) => (
         <Typography
           component="span"
@@ -118,7 +151,7 @@ export function SleepChip(
       IconComponent={() => null}
       value={sleepMinutes}
       onChange={(e) => setSleepTimer(Number(e.target.value))}
-      aria-label={t("audiobook.sleepTimer")}
+      inputProps={{ "aria-label": t("audiobook.sleepTimer") }}
       renderValue={() =>
         // Off → just the moon. Armed → only the remaining time (no moon), so the
         // longest label (e.g. "1h30m") fits without the icon crowding it.

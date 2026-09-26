@@ -2,6 +2,7 @@ import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import CloseIcon from "@mui/icons-material/Close";
 import { alpha, Box, Button, ButtonBase, IconButton, Typography } from "@mui/material";
 import type { ReactNode } from "react";
+import { useShellLabels } from "./shell-labels.tsx";
 
 function DrawerActionIsland(
   { width, children }: { readonly width: number; readonly children: ReactNode },
@@ -61,6 +62,7 @@ export function TemporaryNav(
     readonly children: ReactNode;
   },
 ): ReactNode {
+  const labels = useShellLabels();
   if (spatial) {
     return (
       <Box
@@ -103,7 +105,7 @@ export function TemporaryNav(
               <Box sx={{ pointerEvents: "auto" }}>
                 <DrawerActionIsland width={54}>
                   <ButtonBase
-                    aria-label={backLabel ?? "Back"}
+                    aria-label={backLabel ?? labels.back}
                     onClick={onBack}
                     sx={{
                       width: 46,
@@ -137,7 +139,7 @@ export function TemporaryNav(
                 }}
               >
                 <ButtonBase
-                  aria-label="Close navigation"
+                  aria-label={labels.closeNavigation}
                   onClick={onClose}
                   sx={{
                     width: 46,
@@ -216,7 +218,7 @@ export function TemporaryNav(
           {title}
         </Typography>
         <IconButton
-          aria-label="Close navigation"
+          aria-label={labels.closeNavigation}
           onClick={onClose}
           sx={{
             justifySelf: "end",
