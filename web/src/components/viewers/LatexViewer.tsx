@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from "react";
 import { Box, Typography, CircularProgress } from "@mui/material";
-import type { Theme } from "@/types";
+import { isDarkTheme, type Theme } from "@/types";
 import { ensureScript, ensureStyle, publicAsset } from "@/ensureAsset";
 
 // katex type is declared in MarkdownViewer.tsx
@@ -8,10 +8,6 @@ import { ensureScript, ensureStyle, publicAsset } from "@/ensureAsset";
 interface LatexViewerProps {
   content: string | null;
   theme: Theme;
-}
-
-function isDarkTheme(theme: Theme): boolean {
-  return !theme.includes("light");
 }
 
 export function LatexViewer({ content, theme }: LatexViewerProps): React.JSX.Element {

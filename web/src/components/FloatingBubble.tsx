@@ -93,7 +93,7 @@ function resolve(side: Side, topRatio: number): Pos {
  * The floating now-playing bubble — shown when audio is loaded but the user has
  * navigated AWAY from the playing content (browsing another book or the shelf),
  * where the full bottom bar would just be in the way. It's the unobtrusive,
- * out-of-the-way counterpart to {@link MiniPlayer}: a semi-transparent, draggable
+ * out-of-the-way counterpart to the reader transport: a semi-transparent, draggable
  * artwork puck (WeChat 浮窗 / iOS AssistiveTouch lineage) that
  *
  *  - docks to the nearest left/right edge (magnetic snap on release),
@@ -104,7 +104,7 @@ function resolve(side: Side, topRatio: number): Pos {
  *    control opens. The puck is purely a launcher; it owns no controls itself.
  *
  * Mutually exclusive with the bottom bar: the bar owns the playing book's page,
- * this owns everywhere else. Both hide while the popup / a sheet is open.
+ * this owns everywhere else. The puck recedes while a sheet is open.
  */
 export function FloatingBubble({
   onPlayingPage,
