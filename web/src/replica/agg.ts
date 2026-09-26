@@ -127,10 +127,12 @@ export async function applyCachedDelta(
   }
 }
 
-/** Totals come from the DAG, never from puts. */
+/** Totals come from the DAG, never from puts. Counted once per hash: cached*
+ *  is per blob row, so several paths sharing one blob must not inflate the
+ *  denominator past what can ever be cached. */
 export async function rewriteTotals(
   txn: IDBTransaction,
-  resources: readonly { kind: string; bytes: number }[],
+  resources: readonly { hash: string; kind: string; bytes: number }[],
 ): Promise<void> {
   const next: Record<AggKind, { count: number; bytes: number }> = {
     [AGG_ALL]: { count: 0, bytes: 0 },
@@ -138,7 +140,10 @@ export async function rewriteTotals(
     [AGG_TEXT]: { count: 0, bytes: 0 },
     [AGG_ARTWORK]: { count: 0, bytes: 0 },
   };
+  const seen = new Set<string>();
   for (const resource of resources) {
+    if (seen.has(resource.hash)) continue;
+    seen.add(resource.hash);
     const cat = aggKindOf(resource.kind);
     next[cat].count += 1;
     next[cat].bytes += resource.bytes;
