@@ -2150,11 +2150,34 @@ struct ReqCtx {
     rest: String,
 }
 
+/// Split a wire path `<slug>/<rel_path>` and validate `rel_path` as a strictly
+/// relative, normalized path under the book. `None` for an empty path, an
+/// absolute path, or any empty / `.` / `..` / NUL-bearing segment — the
+/// filesystem preview joins `rel_path` onto the book's source directory, so a
+/// traversal segment would otherwise escape it.
+fn split_request_path(path: &str) -> Option<(&str, &str)> {
+    let (slug, rest) = path.split_once('/')?;
+    if slug.is_empty() || !is_safe_rel_path(rest) {
+        return None;
+    }
+    Some((slug, rest))
+}
+
+fn is_safe_rel_path(rest: &str) -> bool {
+    !rest.is_empty()
+        && rest
+            .split('/')
+            .all(|seg| !seg.is_empty() && seg != "." && seg != ".." && !seg.contains('\0'))
+        && Path::new(rest)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
 /// Resolve `(path, rendition token, lang)` against the catalog: the book picks
 /// the rendition (the token, else its default); the rendition picks the lang
-/// (the query, else its default). `None` ⇒ unknown book.
+/// (the query, else its default). `None` ⇒ unknown book or an unsafe path.
 async fn resolve_req(state: &AppState, q: &FileQuery) -> Option<ReqCtx> {
-    let (slug, rest) = q.path.split_once('/').unwrap_or((q.path.as_str(), ""));
+    let (slug, rest) = split_request_path(&q.path)?;
     let cat = state.catalog.read().await;
     let book = cat.book(slug)?;
     let kind = q
@@ -2176,7 +2199,7 @@ async fn resolve_req(state: &AppState, q: &FileQuery) -> Option<ReqCtx> {
 /// /api/marks), independent of the request's rendition token. `None` ⇒ unknown
 /// book or no audio rendition.
 async fn resolve_audio(state: &AppState, q: &FileQuery) -> Option<ReqCtx> {
-    let (slug, rest) = q.path.split_once('/').unwrap_or((q.path.as_str(), ""));
+    let (slug, rest) = split_request_path(&q.path)?;
     let cat = state.catalog.read().await;
     let book = cat.book(slug)?;
     let rend = book.rendition(RenditionKind::Audio)?;
