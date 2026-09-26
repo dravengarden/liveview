@@ -18,6 +18,22 @@ use crate::store::model::{
 /// The schema, embedded so migration needs no file at runtime.
 const SCHEMA: &str = include_str!("schema.sql");
 
+/// `assets a` row predicate: referenced by no chapter or book artwork, and not
+/// registered since `$1` (the GC grace cutoff, unix ms).
+const ORPHAN_ASSET: &str = "a.touched_at < $1
+     AND NOT EXISTS (
+         SELECT 1 FROM chapters c
+         WHERE c.asset_hash = a.content_hash
+            OR c.audio_hash = a.content_hash
+            OR c.marks_hash = a.content_hash
+     )
+     AND NOT EXISTS (
+         SELECT 1 FROM books b
+         WHERE b.cover_hash = a.content_hash
+            OR b.backdrop_hash = a.content_hash
+            OR b.card_backdrop_hash = a.content_hash
+     )";
+
 #[derive(Clone)]
 pub struct PgStore {
     pool: PgPool,
@@ -534,15 +550,20 @@ impl PgStore {
         mime: &str,
         size: i64,
     ) -> Result<(), sqlx::Error> {
+        // Every registration refreshes `touched_at`, which defers the orphan GC
+        // for this blob; writers therefore register BEFORE uploading (see
+        // `gc_orphan_asset`). Blocks while a GC holds this row's lock.
         sqlx::query(
-            "INSERT INTO assets (content_hash, mime, size)
-             VALUES ($1, $2, $3)
+            "INSERT INTO assets (content_hash, mime, size, touched_at)
+             VALUES ($1, $2, $3, $4)
              ON CONFLICT (content_hash) DO UPDATE SET
-                 mime = EXCLUDED.mime, size = EXCLUDED.size",
+                 mime = EXCLUDED.mime, size = EXCLUDED.size,
+                 touched_at = EXCLUDED.touched_at",
         )
         .bind(content_hash)
         .bind(mime)
         .bind(size)
+        .bind(now_millis())
         .execute(&self.pool)
         .await
         .map(|_| ())
@@ -694,26 +715,58 @@ impl PgStore {
             .await
     }
 
-    /// Asset hashes referenced by no chapter (any of asset/audio/marks). These
-    /// are orphaned blobs to delete from pg + rustfs after a reconcile.
-    pub async fn orphan_asset_hashes(&self) -> Result<Vec<String>, sqlx::Error> {
-        sqlx::query_scalar::<_, String>(
-            "SELECT content_hash FROM assets a
-             WHERE NOT EXISTS (
-                 SELECT 1 FROM chapters c
-                 WHERE c.asset_hash = a.content_hash
-                    OR c.audio_hash = a.content_hash
-                    OR c.marks_hash = a.content_hash
-             )
-             AND NOT EXISTS (
-                 SELECT 1 FROM books b
-                 WHERE b.cover_hash = a.content_hash
-                    OR b.backdrop_hash = a.content_hash
-                    OR b.card_backdrop_hash = a.content_hash
-             )",
-        )
+    /// Asset hashes referenced by no chapter (any of asset/audio/marks) or book
+    /// artwork and untouched since `touched_before` (unix ms) — candidates for
+    /// `gc_orphan_asset`.
+    pub async fn orphan_asset_hashes(
+        &self,
+        touched_before: i64,
+    ) -> Result<Vec<String>, sqlx::Error> {
+        sqlx::query_scalar::<_, String>(&format!(
+            "SELECT content_hash FROM assets a WHERE {ORPHAN_ASSET} ORDER BY content_hash"
+        ))
+        .bind(touched_before)
         .fetch_all(&self.pool)
         .await
+    }
+
+    /// Delete one orphaned blob — object and row — if it is STILL orphaned and
+    /// untouched since `touched_before`. The row is locked (`FOR UPDATE`) while
+    /// the object is deleted, so a writer registering the same hash meanwhile
+    /// blocks until the row is gone and then re-creates it and re-uploads the
+    /// object (writers register before uploading). Returns whether it deleted.
+    pub async fn gc_orphan_asset<F, Fut>(
+        &self,
+        content_hash: &str,
+        touched_before: i64,
+        delete_object: F,
+    ) -> Result<bool, String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<(), String>>,
+    {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let locked = sqlx::query_scalar::<_, String>(&format!(
+            "SELECT content_hash FROM assets a
+             WHERE a.content_hash = $2 AND {ORPHAN_ASSET}
+             FOR UPDATE"
+        ))
+        .bind(touched_before)
+        .bind(content_hash)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if locked.is_none() {
+            return Ok(false);
+        }
+        delete_object().await?;
+        sqlx::query("DELETE FROM assets WHERE content_hash = $1")
+            .bind(content_hash)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(true)
     }
 
     /// Current deployed Merkle root, or `None` before the first sync.
@@ -1485,6 +1538,39 @@ mod tests {
             .unwrap();
         assert_eq!(status.as_deref(), Some("queued"), "new task untouched");
         s.delete_book(slug).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn orphan_gc_spares_recently_registered_blobs() {
+        let Some(s) = store().await else { return };
+        let hash = "t-gc-grace-blob";
+        s.upsert_asset(hash, "audio/x-caf", 1).await.unwrap();
+        let grace_cutoff = now_millis() - 60_000;
+        assert!(
+            !s.orphan_asset_hashes(grace_cutoff)
+                .await
+                .unwrap()
+                .contains(&hash.to_string())
+        );
+        let deleted = s
+            .gc_orphan_asset(hash, grace_cutoff, || async { panic!("must not delete") })
+            .await
+            .unwrap();
+        assert!(
+            !deleted,
+            "an unreferenced blob inside its grace period survives"
+        );
+        // Past the cutoff it is collected, object first, then the row.
+        let deleted_object = std::sync::atomic::AtomicBool::new(false);
+        let deleted = s
+            .gc_orphan_asset(hash, now_millis() + 1, || async {
+                deleted_object.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(deleted && deleted_object.into_inner());
+        assert!(s.get_asset(hash).await.unwrap().is_none());
     }
 
     #[tokio::test]

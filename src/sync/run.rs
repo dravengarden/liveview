@@ -25,6 +25,11 @@ use crate::sync::objstore::ObjStore;
 /// Identity-record separator inside a leaf `path` (round-trips on delete).
 pub(crate) const SEP: char = '\u{1f}';
 
+/// How long an unreferenced blob survives after its last registration before
+/// the orphan GC may delete it. Far longer than the gap between a writer's
+/// upload and its chapter-row update (seconds).
+const BLOB_GC_GRACE_MS: i64 = 30 * 60 * 1000;
+
 /// Connection + knobs for a sync run.
 pub struct SyncCfg {
     pub database_url: String,
@@ -599,15 +604,23 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
         }
     }
 
-    // GC blobs no chapter references anymore (in pg and rustfs).
+    // GC blobs nothing references anymore (in pg and rustfs) — but only once
+    // they have been unreferenced for a grace period: the in-server audio
+    // worker and on-demand synth upload a blob before the chapter row points
+    // at it, and must not lose it to a sync running in between.
+    let cutoff = crate::store::pg::now_millis() - BLOB_GC_GRACE_MS;
     for hash in store
-        .orphan_asset_hashes()
+        .orphan_asset_hashes(cutoff)
         .await
         .map_err(|e| e.to_string())?
     {
-        obj.delete(&hash).await?;
-        store.delete_asset(&hash).await.map_err(|e| e.to_string())?;
-        report.orphans_gc += 1;
+        if store
+            .gc_orphan_asset(&hash, cutoff, || obj.delete(&hash))
+            .await
+            .map_err(|e| format!("gc blob {hash}: {e}"))?
+        {
+            report.orphans_gc += 1;
+        }
     }
 
     // Advance the root LAST — crash before this and the next run re-reconciles.
@@ -1003,11 +1016,12 @@ async fn put_blob(
 ) -> Result<String, String> {
     let hash = blake3::hash(&bytes).to_hex().to_string();
     let size = bytes.len() as i64;
-    obj.put_if_absent(&hash, bytes, mime).await?;
+    // Register first: it refreshes the GC grace window (see `gc_orphan_asset`).
     store
         .upsert_asset(&hash, mime, size)
         .await
         .map_err(|e| format!("upsert asset {hash}: {e}"))?;
+    obj.put_if_absent(&hash, bytes, mime).await?;
     Ok(hash)
 }
 
@@ -1506,6 +1520,17 @@ mod tests {
         fs::remove_file(content.join("pic.png")).unwrap();
         let r = run(&resolved, &cfg).await.unwrap();
         assert_eq!(r.deleted, 1, "the image chapter");
+        assert_eq!(
+            r.orphans_gc, 0,
+            "a freshly registered blob is in its grace period"
+        );
+        assert_eq!(count(&pool, "SELECT count(*) FROM assets").await, 1);
+        // Age it past the grace period: the next run collects it.
+        sqlx::query("UPDATE assets SET touched_at = 0")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let r = run(&resolved, &cfg).await.unwrap();
         assert_eq!(r.orphans_gc, 1, "the now-unreferenced blob");
         assert_eq!(count(&pool, "SELECT count(*) FROM chapters").await, 2);
         assert_eq!(count(&pool, "SELECT count(*) FROM assets").await, 0);

@@ -2971,12 +2971,14 @@ async fn book_end_cue(state: &AppState, row: &ChapterRecord) -> Option<Vec<u8>> 
 async fn store_blob(state: &AppState, bytes: Vec<u8>, mime: &str) -> Result<String, String> {
     let hash = blake3::hash(&bytes).to_hex().to_string();
     let size = bytes.len() as i64;
-    state.obj.put_if_absent(&hash, bytes, mime).await?;
+    // Register first: it refreshes the orphan-GC grace window, so a concurrent
+    // `liveview sync` cannot collect the blob before the chapter references it.
     state
         .store
         .upsert_asset(&hash, mime, size)
         .await
         .map_err(|e| format!("upsert asset: {e}"))?;
+    state.obj.put_if_absent(&hash, bytes, mime).await?;
     Ok(hash)
 }
 

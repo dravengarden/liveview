@@ -265,9 +265,11 @@ async fn put_blob(
 ) -> Result<String, String> {
     let hash = blake3::hash(&bytes).to_hex().to_string();
     let size = bytes.len() as i64;
-    obj.put_if_absent(&hash, bytes, mime).await?;
+    // Register first: it refreshes the GC grace window, so a concurrent
+    // `liveview sync` cannot collect the blob before the chapter references it.
     pg.upsert_asset(&hash, mime, size)
         .await
         .map_err(|e| format!("upsert asset {hash}: {e}"))?;
+    obj.put_if_absent(&hash, bytes, mime).await?;
     Ok(hash)
 }

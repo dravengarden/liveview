@@ -114,6 +114,20 @@ CREATE TABLE IF NOT EXISTS assets (
     mime         TEXT   NOT NULL,
     size         BIGINT NOT NULL
 );
+-- Last time (unix ms) a writer registered this blob. The orphan GC only
+-- collects blobs untouched for a grace period, so a blob the audio worker has
+-- uploaded but not yet referenced from its chapter row is not deleted under it.
+-- Pre-existing rows backfill to 0 (collectable as soon as they are orphaned).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'assets' AND column_name = 'touched_at'
+    ) THEN
+        ALTER TABLE assets ADD COLUMN touched_at BIGINT NOT NULL DEFAULT 0;
+    END IF;
+END $$;
 
 -- ── Merkle deploy state ──────────────────────────────────────────────────────
 
