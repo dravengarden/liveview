@@ -591,29 +591,63 @@ fn build_apm_sink() -> Option<ApmSink> {
 /// Listen for `liveview sync`'s `NOTIFY liveview_reload`; on each, reload the
 /// catalog and broadcast the new sidebar tree so open readers refresh. Survives
 /// connection drops (reconnect loop) so a postgres restart doesn't kill it.
+///
+/// NOTIFY is not durable: a sync that finishes while the listener is
+/// disconnected is never delivered. So the connection loss is observed
+/// explicitly (`try_recv` → `None`) and, once `LISTEN` is re-established, the
+/// catalog is reloaded unconditionally to pick up anything missed meanwhile.
 fn spawn_reload_listener(state: SharedState, database_url: String) {
     tokio::spawn(async move {
+        let mut reconnecting = false;
         loop {
-            match sqlx::postgres::PgListener::connect(&database_url).await {
-                Ok(mut listener) => {
-                    if listener.listen("liveview_reload").await.is_ok() {
-                        while listener.recv().await.is_ok() {
-                            match Catalog::load(state.store.as_ref()).await {
-                                Ok(cat) => {
-                                    *state.catalog.write().await = cat;
-                                    broadcast_tree(&state).await;
-                                    tracing::info!("catalog reloaded after sync");
-                                }
-                                Err(e) => tracing::warn!(error = %e, "catalog reload failed"),
-                            }
-                        }
+            let mut listener = match sqlx::postgres::PgListener::connect(&database_url).await {
+                Ok(listener) => listener,
+                Err(e) => {
+                    tracing::warn!(error = %e, "reload listener connect failed");
+                    reconnecting = true;
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+            if let Err(e) = listener.listen("liveview_reload").await {
+                tracing::warn!(error = %e, "reload listener LISTEN failed");
+                reconnecting = true;
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                continue;
+            }
+            // LISTEN is active again before this reload, so no notification can
+            // fall into the gap between the reload and the subscription.
+            if reconnecting {
+                reload_catalog(&state, "catalog reloaded after listener reconnect").await;
+            }
+            reconnecting = true;
+            loop {
+                match listener.try_recv().await {
+                    Ok(Some(_)) => reload_catalog(&state, "catalog reloaded after sync").await,
+                    Ok(None) => {
+                        tracing::warn!("reload listener connection lost; reconnecting");
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "reload listener receive failed");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        break;
                     }
                 }
-                Err(e) => tracing::warn!(error = %e, "reload listener connect failed"),
             }
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
     });
+}
+
+async fn reload_catalog(state: &AppState, reason: &'static str) {
+    match Catalog::load(state.store.as_ref()).await {
+        Ok(cat) => {
+            *state.catalog.write().await = cat;
+            broadcast_tree(state).await;
+            tracing::info!("{reason}");
+        }
+        Err(e) => tracing::warn!(error = %e, "catalog reload failed"),
+    }
 }
 
 /// Broadcast the current text sidebar tree as a `TreeUpdate` (the same shape
