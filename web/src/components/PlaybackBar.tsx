@@ -16,7 +16,12 @@ import {
   SkipPrevious,
 } from "@mui/icons-material";
 import { Forward15Icon, Replay15Icon } from "./Skip15Icons";
-import { fmtTime, SleepChip, SpeedChip } from "@/audio/playback-ui";
+import {
+  fmtTime,
+  SleepChip,
+  SpeedChip,
+  useScrubber,
+} from "@/audio/playback-ui";
 import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
 
@@ -64,6 +69,7 @@ export function PlaybackBar(
     prevChapter,
   } = useAudioPlayer();
   const { currentTime, duration } = useAudioTime();
+  const scrub = useScrubber(currentTime, seek);
 
   const transportRef = useRef<HTMLDivElement>(null);
   // ONE row (scrubber + controls together) when wide enough, else TWO rows.
@@ -217,15 +223,16 @@ export function PlaybackBar(
         fontVariantNumeric: "tabular-nums",
       }}
     >
-      {fmtTime(currentTime)}
+      {fmtTime(scrub.value)}
     </Typography>
   );
   const scrubber = (
     <Slider
       min={0}
       max={duration || 1}
-      value={Math.min(currentTime, duration || 1)}
-      onChange={(_e, v) => seek(Array.isArray(v) ? (v[0] ?? 0) : v)}
+      value={Math.min(scrub.value, duration || 1)}
+      onChange={scrub.onChange}
+      onChangeCommitted={scrub.onChangeCommitted}
       disabled={loading || duration === 0}
       aria-label={t("audiobook.seek")}
       sx={{

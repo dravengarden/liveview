@@ -122,7 +122,6 @@ export function FloatingBubble({
 }): React.JSX.Element | null {
   const { t } = useI18n();
   const { nowPlaying, playing, buffering } = useAudioPlayer();
-  const { currentTime, duration } = useAudioTime();
 
   // A DetentSheet (settings / TOC / the PlaybackSheet itself) renders inline, so
   // its z-index is trapped below this root-level fixed puck — it would otherwise
@@ -189,6 +188,9 @@ export function FloatingBubble({
   const shown = nowPlaying != null && (playing || buffering) &&
     !onPlayingPage &&
     !suppressed;
+  // The progress ring is the only moving part: while the puck is hidden (or
+  // faded out behind an open sheet) it stays off the ~4 Hz playback clock.
+  const { currentTime, duration } = useAudioTime(shown && !sheetOpen);
   useLayoutEffect(() => {
     if (shown) setPos(resolve(stored.current.side, stored.current.topRatio));
   }, [shown]);

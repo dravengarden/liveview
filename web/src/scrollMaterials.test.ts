@@ -715,6 +715,34 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /useAudioTime\(active\)/,
     "an unrelated audio clock must not re-render the reader while scrolling",
   );
+  const playbackSheet = await source("components/PlaybackSheet.tsx");
+  for (
+    const [surface, contents] of [
+      ["transport", playbackBar],
+      ["playback sheet", playbackSheet],
+    ] as const
+  ) {
+    assertPresent(
+      contents,
+      /onChange=\{scrub\.onChange\}\s*onChangeCommitted=\{scrub\.onChangeCommitted\}/,
+      `the ${surface} scrubber must seek once on commit, not on every drag frame`,
+    );
+  }
+  assertPresent(
+    playbackSheet,
+    /useAudioTime\(open\)/,
+    "a closed playback sheet must not re-render on the playback clock",
+  );
+  assertPresent(
+    floatingBubble,
+    /useAudioTime\(shown && !sheetOpen\)/,
+    "a hidden floating bubble must not re-render on the playback clock",
+  );
+  assertAbsent(
+    await source("components/AudiobookPlayer.tsx"),
+    /export function AudiobookPlayer[\s\S]*useAudioTime\(\)/,
+    "the read-along page must not re-render its sentence list on the playback clock",
+  );
   assertAbsent(
     apm,
     /nativeAudioStats/,
