@@ -1052,10 +1052,13 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
     for c in &chapters {
         let doc = format!("{}/{}/{}/{}", c.book_slug, c.rendition, c.lang, c.rel_path);
         // Wire path /api/file expects `<slug>/<rel_path>` + lang/rendition query.
-        // Slugs/rel_paths/langs are ASCII filenames, so a raw query is safe here.
+        // Values are percent-encoded so `&`, `+`, `#`, `%`, spaces and non-ASCII
+        // in a rel_path survive the handlers' form-urlencoded query decoding.
         let q = format!(
-            "path={}/{}&lang={}&rendition={}",
-            c.book_slug, c.rel_path, c.lang, c.rendition
+            "path={}&lang={}&rendition={}",
+            encode_query_value(&format!("{}/{}", c.book_slug, c.rel_path)),
+            encode_query_value(&c.lang),
+            encode_query_value(&c.rendition)
         );
         if c.file_type == "markdown" || c.file_type == "html" {
             resources.push(serde_json::json!({
@@ -1157,8 +1160,25 @@ fn artwork_resource(slug: &str, kind: &str, hash: &str, bytes: i64) -> serde_jso
         "hash": hash,
         "kind": kind,
         "bytes": bytes.max(0),
-        "url": format!("/api/{kind}?book={slug}"),
+        "url": format!("/api/{kind}?book={}", encode_query_value(slug)),
     })
+}
+
+/// Percent-encode one query-string value for the `/api/*` handlers, whose
+/// `Query` extractor decodes `application/x-www-form-urlencoded`. Unreserved
+/// characters and `/` stay literal so ordinary chapter URLs are byte-identical
+/// to the historical unencoded form; everything else (including `+`, which the
+/// form decoder would read as a space) is encoded as UTF-8 `%XX`.
+fn encode_query_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/') {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 /// `GET /api/sizes` — PRECOMPUTED download totals (per-book + global), keyed by
