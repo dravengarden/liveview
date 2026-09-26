@@ -16,6 +16,9 @@ export interface ReplicaWorkerFillItem {
 export interface ReplicaWorkerFill {
   type: "fill";
   items: ReplicaWorkerFillItem[];
+  /** Main thread's current full-size artwork policy; the worker's module copy
+   *  otherwise diverges after a quota-driven flip on either side. */
+  persistFullSizeArtwork?: boolean;
 }
 
 export type ReplicaWorkerIn = ReplicaWorkerInit | ReplicaWorkerFill;
@@ -109,9 +112,30 @@ async function poolMap<T>(
   await Promise.all(runners);
 }
 
-async function workerFill(items: ReplicaWorkerFillItem[]): Promise<void> {
-  const { putBlob } = await import("./blobs.ts");
+let policyBridged = false;
+
+async function workerFill(
+  items: ReplicaWorkerFillItem[],
+  persistFullSizeArtwork: boolean | undefined,
+): Promise<void> {
+  const { hasBlob, putBlob } = await import("./blobs.ts");
   const { isAudioKind } = await import("./schema.ts");
+  const {
+    onPersistFullSizeArtworkChange,
+    persistBodyForKind,
+    setPersistFullSizeArtwork,
+  } = await import("./policy.ts");
+  if (persistFullSizeArtwork !== undefined) {
+    setPersistFullSizeArtwork(persistFullSizeArtwork);
+  }
+  if (!policyBridged) {
+    policyBridged = true;
+    // Registered after the sync above so echoing the main thread's own value
+    // back is avoided; only a worker-side quota flip is reported.
+    onPersistFullSizeArtworkChange((on) => {
+      self.postMessage({ type: "policy", persistFullSizeArtwork: on });
+    });
+  }
   const textArt: ReplicaWorkerFillItem[] = [];
   for (const item of items) {
     const url = joinRemoteUrl(workerRemoteBase, item.url);
@@ -131,6 +155,15 @@ async function workerFill(items: ReplicaWorkerFillItem[]): Promise<void> {
     if (fallback) return;
     const url = joinRemoteUrl(workerRemoteBase, item.url);
     try {
+      if (!persistBodyForKind(item.kind)) {
+        // Policy flipped (quota) since the main thread built this batch.
+        self.postMessage({ type: "skipped", hash: item.hash });
+        return;
+      }
+      if (await hasBlob(item.hash)) {
+        self.postMessage({ type: "filled", hash: item.hash });
+        return;
+      }
       const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) {
         self.postMessage({
@@ -182,7 +215,7 @@ if (inDedicatedWorker()) {
       return;
     }
     if (msg.type === "fill") {
-      void workerFill(msg.items).catch((error: unknown) => {
+      void workerFill(msg.items, msg.persistFullSizeArtwork).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : "worker fill";
         self.postMessage({
           type: "fallback",
