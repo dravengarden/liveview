@@ -54,6 +54,11 @@ const MAX_OPTION_LABEL_LEN: usize = 40;
 const MAX_TEXT_INPUT_LEN: u32 = 280;
 /// Inline dataset byte budget; larger data must use `source` (a rustfs blob).
 const MAX_INLINE_DATA_BYTES: usize = 32 * 1024;
+/// Histogram bucket cap: more bars than this can't be told apart on a phone,
+/// and the renderer clamps to the same bound.
+const MAX_HISTOGRAM_BINS: u32 = 100;
+/// The interpolation filters the renderer implements (`interpolate.ts`).
+const INTERPOLATION_FILTERS: [&str; 3] = ["round", "join", "date"];
 
 impl Validator for InteractiveViewValidator {
     fn check(&self, file: &CheckFile, _ctx: &CheckCtx) -> Vec<Diagnostic> {
@@ -117,6 +122,7 @@ pub fn check_doc(rel: &str, source: &str, line_offset: u32) -> Vec<Diagnostic> {
         source,
         diags: Vec::new(),
         signals: BTreeMap::new(),
+        widget_signals: BTreeSet::new(),
         datasets: BTreeMap::new(),
         chart_meta: BTreeMap::new(),
     };
@@ -135,6 +141,9 @@ struct Checker<'a> {
     source: &'a str,
     diags: Vec<Diagnostic>,
     signals: BTreeMap<String, SignalType>,
+    /// Signals that declare a `widget` — the only ones an `input` block or a
+    /// docked chart control can render.
+    widget_signals: BTreeSet<String>,
     datasets: BTreeMap<String, BTreeMap<String, crate::interactive_view::model::ColumnType>>,
     /// Chart `id` → its selection metadata (dataset + mark kind), so a signal's
     /// `from` (click-to-select) can be validated against the target chart.
@@ -167,6 +176,9 @@ impl<'a> Checker<'a> {
         //    types; charts/interpolations resolve against it) ──
         for (name, sig) in &doc.signals {
             self.signals.insert(name.clone(), sig.ty);
+            if sig.widget.is_some() {
+                self.widget_signals.insert(name.clone());
+            }
         }
 
         // The unified reactive DAG (S7): a node is a derived signal (`sig:x`) or a
@@ -336,6 +348,7 @@ impl<'a> Checker<'a> {
             if let Some(w) = &sig.widget {
                 self.check_widget(name, w, Some(sig.ty));
             }
+            self.check_init(name, sig);
             if let Some(from) = &sig.from {
                 self.check_selection(name, sig.ty, from);
             }
@@ -819,10 +832,14 @@ impl<'a> Checker<'a> {
             }
             ChartMark::Histogram { value, bins } => {
                 self.check_field(&cols, data, kind, "value", value, col_numeric, "numeric");
-                if matches!(bins, Some(0)) {
+                if let Some(n) = bins
+                    && !(1..=MAX_HISTOGRAM_BINS).contains(n)
+                {
                     self.err(
                         "interactive-view/chart-bins",
-                        format!("{kind} chart `bins` must be > 0"),
+                        format!(
+                            "{kind} chart `bins` must be between 1 and {MAX_HISTOGRAM_BINS} (got {n})"
+                        ),
                         None,
                         self.locate(&value.column),
                     );
@@ -1046,8 +1063,30 @@ impl<'a> Checker<'a> {
     }
 
     fn check_overlay_ref(&mut self, tag: &str, acc: &str, want: AxisKind) {
-        let (name, indexed) = parse_accessor(acc);
-        let Some(&ty) = self.signals.get(&name) else {
+        // The renderer reads `name` or `name[0]` / `name[1]` only; anything
+        // else would silently hide the overlay, so it is an error here.
+        let Some((name, index)) = parse_accessor(acc) else {
+            self.err(
+                "interactive-view/overlay-bad-accessor",
+                format!(
+                    "{tag} overlay ref `{acc}` must be a signal name or an interval endpoint `name[0]` / `name[1]`"
+                ),
+                None,
+                self.locate(acc),
+            );
+            return;
+        };
+        if index.is_some_and(|i| i > 1) {
+            self.err(
+                "interactive-view/overlay-bad-accessor",
+                format!("{tag} overlay ref `{acc}` may only index endpoint 0 or 1"),
+                None,
+                self.locate(acc),
+            );
+            return;
+        }
+        let indexed = index.is_some();
+        let Some(&ty) = self.signals.get(name) else {
             self.err(
                 "interactive-view/unknown-signal",
                 format!("{tag} overlay references unknown signal `{name}`"),
@@ -1183,9 +1222,19 @@ impl<'a> Checker<'a> {
                         None,
                         self.locate(sig),
                     );
+                } else if !self.widget_signals.contains(sig) {
+                    // A derived/selection signal has no control to draw; the
+                    // renderer would show an empty "This input has no widget." tile.
+                    self.err(
+                        "interactive-view/input-no-widget",
+                        format!("input references signal `{sig}`, which declares no widget"),
+                        Some(
+                            "show a derived/selection value with a metric or an interpolation instead"
+                                .into(),
+                        ),
+                        self.locate(sig),
+                    );
                 }
-                // (that the signal actually has a widget is checked at the signal;
-                // an input on a derived/from signal has nothing to render)
             }
             (None, Some(w)) => {
                 self.check_widget("<input>", w, None);
@@ -1332,17 +1381,126 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// S3: every `{{signal｜fmt}}` interpolation resolves to a declared signal.
+    /// S3: every `{{accessor | filter(args) …}}` interpolation parses exactly as
+    /// the renderer (`interpolate.ts`) reads it: the accessor is a declared
+    /// signal (optionally indexed), and every filter is one it implements.
+    /// Anything else would render a silent "—" or pass the value through.
     fn check_interpolations(&mut self, template: &str) {
-        for name in extract_interpolation_signals(template) {
-            if !self.signals.contains_key(&name) {
-                self.err(
-                    "interactive-view/unknown-signal",
-                    format!("interpolation references unknown signal `{name}`"),
-                    None,
-                    self.locate(&format!("{{{{{name}")),
-                );
+        for inner in interpolation_tokens(template) {
+            let at = self.locate(&format!("{{{{{inner}}}}}"));
+            if let Err((rule, msg)) = self.check_interpolation(inner) {
+                self.err(rule, msg, None, at);
             }
+        }
+    }
+
+    fn check_interpolation(&self, inner: &str) -> Result<(), (&'static str, String)> {
+        let parts = split_top(inner, '|');
+        let accessor = parts[0].trim();
+        let Some((name, index)) = parse_accessor(accessor) else {
+            return Err((
+                "interactive-view/interpolation-syntax",
+                format!(
+                    "interpolation `{{{{{inner}}}}}` must start with a signal name (optionally `name[0]`)"
+                ),
+            ));
+        };
+        let Some(&ty) = self.signals.get(name) else {
+            return Err((
+                "interactive-view/unknown-signal",
+                format!("interpolation references unknown signal `{name}`"),
+            ));
+        };
+        if let Some(i) = index {
+            let ok = match ty {
+                SignalType::IntervalNumber | SignalType::IntervalTemporal => i <= 1,
+                SignalType::ArrayEnum => true,
+                _ => false,
+            };
+            if !ok {
+                return Err((
+                    "interactive-view/interpolation-index",
+                    format!(
+                        "interpolation `{accessor}`: a {} signal {}",
+                        ty.label(),
+                        if ty.is_interval() {
+                            "has only endpoints [0] and [1]"
+                        } else {
+                            "cannot be indexed"
+                        }
+                    ),
+                ));
+            }
+        }
+        for raw in &parts[1..] {
+            let spec = raw.trim();
+            let Some((filter, args)) = parse_filter(spec) else {
+                return Err((
+                    "interactive-view/interpolation-syntax",
+                    format!("interpolation filter `{spec}` must be `name` or `name(args)`"),
+                ));
+            };
+            if !INTERPOLATION_FILTERS.contains(&filter) {
+                return Err((
+                    "interactive-view/unknown-filter",
+                    format!(
+                        "unknown interpolation filter `{filter}`; use one of {}",
+                        INTERPOLATION_FILTERS.join(", ")
+                    ),
+                ));
+            }
+            let arg_ok = matches!(
+                (filter, args.as_slice()),
+                (_, []) | ("round", [FilterArg::Num]) | ("join" | "date", [FilterArg::Str])
+            );
+            if !arg_ok {
+                let want = if filter == "round" {
+                    "one number (digits)"
+                } else {
+                    "one string"
+                };
+                return Err((
+                    "interactive-view/interpolation-filter-args",
+                    format!("interpolation filter `{spec}`: `{filter}` takes at most {want}"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// A signal's `init` seeds the renderer's state verbatim (and is what a
+    /// reset button snaps back to), so it must be a value of the signal's type
+    /// and one its widget can display: within slider/stepper bounds, one of the
+    /// declared options, no longer than `maxLength`. A `derived` signal ignores
+    /// `init`, so it is not checked there.
+    fn check_init(&mut self, name: &str, sig: &crate::interactive_view::model::Signal) {
+        let Some(init) = &sig.init else {
+            return;
+        };
+        if sig.derived.is_some() {
+            return;
+        }
+        if let Err(why) = init_matches_type(init, sig.ty) {
+            self.err(
+                "interactive-view/init-type-mismatch",
+                format!(
+                    "signal `{name}` is {} but its init {init} {why}",
+                    sig.ty.label()
+                ),
+                None,
+                self.locate(name),
+            );
+            return;
+        }
+        if let Some(w) = &sig.widget
+            && let Err(why) = init_fits_widget(init, w)
+        {
+            self.err(
+                "interactive-view/init-out-of-range",
+                format!("signal `{name}` init {init} {why}"),
+                Some("the initial value must be one the widget can show and produce".into()),
+                self.locate(name),
+            );
         }
     }
 
@@ -1526,13 +1684,29 @@ impl AxisKind {
     }
 }
 
-/// Split an overlay accessor into `(signal_name, is_indexed)` — `band[0]` →
-/// `("band", true)`, `sharpe` → `("sharpe", false)`.
-fn parse_accessor(acc: &str) -> (String, bool) {
-    match acc.find('[') {
-        Some(i) => (acc[..i].trim().to_string(), true),
-        None => (acc.trim().to_string(), false),
+/// Parse a signal accessor exactly as the renderer's
+/// `^([A-Za-z_]\w*)(?:\[(\d+)\])?$` does (after trimming): `band[0]` →
+/// `("band", Some(0))`, `sharpe` → `("sharpe", None)`. `None` when malformed.
+/// An index too large for `u64` saturates (it is out of range either way).
+fn parse_accessor(acc: &str) -> Option<(&str, Option<u64>)> {
+    let acc = acc.trim();
+    let name_end = acc
+        .char_indices()
+        .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '_'))
+        .map_or(acc.len(), |(i, _)| i);
+    let name = &acc[..name_end];
+    if !name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+        return None;
     }
+    let rest = &acc[name_end..];
+    if rest.is_empty() {
+        return Some((name, None));
+    }
+    let digits = rest.strip_prefix('[')?.strip_suffix(']')?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((name, Some(digits.parse().unwrap_or(u64::MAX))))
 }
 
 /// The scalar axis kind a signal accessor yields, or why it can't be a rule/band
@@ -1574,33 +1748,246 @@ fn widget_label(w: &Widget) -> Option<&str> {
     }
 }
 
-/// Extract the referenced signal name from each `{{ … }}` interpolation: the
-/// leading identifier of the segment before the first `|` filter pipe. E.g.
-/// `{{ sharpe | round(2) }}` → `sharpe`; `{{ band[0] }}` → `band`.
-fn extract_interpolation_signals(template: &str) -> Vec<String> {
+/// The inner text of each `{{ … }}` interpolation, found exactly as the
+/// renderer's global `/\{\{([^}]*)\}\}/` regex finds them: the inner text holds
+/// no `}`, and a `{{` that isn't closed that way is literal text.
+fn interpolation_tokens(template: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let bytes = template.as_bytes();
     let mut i = 0;
     while i + 1 < bytes.len() {
-        if bytes[i] == b'{'
-            && bytes[i + 1] == b'{'
-            && let Some(end) = template[i + 2..].find("}}")
-        {
-            let inner = &template[i + 2..i + 2 + end];
-            let head = inner.split('|').next().unwrap_or("").trim();
-            let name: String = head
-                .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-                .collect();
-            if !name.is_empty() {
-                out.push(name);
+        if bytes[i] == b'{' && bytes[i + 1] == b'{' {
+            let start = i + 2;
+            let end = template[start..]
+                .find('}')
+                .map_or(bytes.len(), |off| start + off);
+            if end + 1 < bytes.len() && bytes[end + 1] == b'}' {
+                out.push(&template[start..end]);
+                i = end + 2;
+                continue;
             }
-            i = i + 2 + end + 2;
-            continue;
         }
         i += 1;
     }
     out
+}
+
+/// Split on top-level `sep`, ignoring separators inside `'…'` / `"…"` — the
+/// renderer's `splitTop`.
+fn split_top(s: &str, sep: char) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut quote: Option<char> = None;
+    let mut start = 0;
+    for (i, ch) in s.char_indices() {
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some(_) => {}
+            None if ch == '\'' || ch == '"' => quote = Some(ch),
+            None if ch == sep => {
+                out.push(&s[start..i]);
+                start = i + ch.len_utf8();
+            }
+            None => {}
+        }
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// One interpolation-filter argument as the renderer's `parseArgs` classifies
+/// it: a quoted literal or a non-numeric bare word is a string; a finite
+/// number is a number.
+#[derive(Debug, PartialEq)]
+enum FilterArg {
+    Num,
+    Str,
+}
+
+/// Parse a filter spec as the renderer's `^([A-Za-z_]\w*)\s*(?:\((.*)\))?$`
+/// (where `.` excludes line terminators) into its name and arguments.
+fn parse_filter(spec: &str) -> Option<(&str, Vec<FilterArg>)> {
+    let name_end = spec
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(spec.len());
+    let name = &spec[..name_end];
+    if !name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+        return None;
+    }
+    let rest = spec[name_end..].trim_start();
+    if rest.is_empty() {
+        return Some((name, Vec::new()));
+    }
+    let inside = rest.strip_prefix('(')?.strip_suffix(')')?;
+    if inside.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
+        return None;
+    }
+    let inside = inside.trim();
+    if inside.is_empty() {
+        return Some((name, Vec::new()));
+    }
+    let args = split_top(inside, ',')
+        .into_iter()
+        .map(|raw| {
+            let a = raw.trim();
+            let quoted = a.len() >= 2
+                && ((a.starts_with('\'') && a.ends_with('\''))
+                    || (a.starts_with('"') && a.ends_with('"')));
+            match a.parse::<f64>() {
+                Ok(n) if !quoted && n.is_finite() => FilterArg::Num,
+                _ => FilterArg::Str,
+            }
+        })
+        .collect();
+    Some((name, args))
+}
+
+/// Whether a JSON `init` is a value of signal type `ty` (the shape the
+/// renderer's widgets and expression evaluator read). The error completes the
+/// sentence "its init X …".
+fn init_matches_type(v: &serde_json::Value, ty: SignalType) -> Result<(), String> {
+    use serde_json::Value;
+    let temporal = |v: &Value| match v.as_str() {
+        // An empty string is the renderer's "no date chosen yet".
+        Some(s) => s.is_empty() || expr::iso_instant(s).is_some(),
+        None => false,
+    };
+    let ok = match ty {
+        SignalType::Number => v.is_number(),
+        SignalType::Integer => v.as_f64().is_some_and(|n| n.fract() == 0.0),
+        SignalType::Boolean => v.is_boolean(),
+        SignalType::String => v.is_string(),
+        SignalType::Temporal => temporal(v),
+        SignalType::Enum => v.is_string() || v.is_number() || v.is_boolean(),
+        SignalType::IntervalNumber => match v.as_array().map(Vec::as_slice) {
+            Some([Value::Number(a), Value::Number(b)]) => {
+                if a.as_f64() > b.as_f64() {
+                    return Err("has its endpoints out of order".into());
+                }
+                true
+            }
+            _ => false,
+        },
+        SignalType::IntervalTemporal => match v.as_array().map(Vec::as_slice) {
+            Some([a, b]) if temporal(a) && temporal(b) => {
+                let (lo, hi) = (
+                    a.as_str().and_then(expr::iso_instant),
+                    b.as_str().and_then(expr::iso_instant),
+                );
+                if let (Some(lo), Some(hi)) = (lo, hi)
+                    && lo > hi
+                {
+                    return Err("has its endpoints out of order".into());
+                }
+                true
+            }
+            _ => false,
+        },
+        SignalType::ArrayEnum => v.as_array().is_some_and(|xs| {
+            xs.iter()
+                .all(|x| x.is_string() || x.is_number() || x.is_boolean())
+        }),
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(match ty {
+            SignalType::Temporal => {
+                "is not an ISO-8601 date (YYYY-MM-DD, optionally with a time)".into()
+            }
+            SignalType::IntervalNumber => "is not a [lo, hi] pair of numbers".into(),
+            SignalType::IntervalTemporal => "is not a [from, to] pair of ISO-8601 dates".into(),
+            SignalType::ArrayEnum => "is not an array of option values".into(),
+            other => format!("is not a {} value", other.label()),
+        })
+    }
+}
+
+/// Option-value equality as the renderer keys options (`JSON.stringify`), so
+/// `1` and `1.0` are the same value.
+fn option_value_eq(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    match (a.as_f64(), b.as_f64()) {
+        (Some(x), Some(y)) => x == y,
+        _ => a == b,
+    }
+}
+
+/// Whether a type-correct `init` is a value widget `w` can show — within its
+/// numeric/date bounds, among its options, within its length limit. The error
+/// completes the sentence "signal `x` init X …".
+fn init_fits_widget(v: &serde_json::Value, w: &Widget) -> Result<(), String> {
+    let within = |n: f64, min: Option<f64>, max: Option<f64>| -> Result<(), String> {
+        if min.is_some_and(|m| n < m) || max.is_some_and(|m| n > m) {
+            let show = |b: Option<f64>| b.map_or_else(|| "…".to_string(), |b| b.to_string());
+            Err(format!(
+                "is outside the widget's range {}..{}",
+                show(min),
+                show(max)
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    let within_dates =
+        |s: &str, min: &Option<String>, max: &Option<String>| -> Result<(), String> {
+            let Some(t) = expr::iso_instant(s) else {
+                return Ok(()); // "" (unset) — nothing to bound
+            };
+            let bound = |b: &Option<String>| b.as_deref().and_then(expr::iso_instant);
+            if bound(min).is_some_and(|m| t < m) || bound(max).is_some_and(|m| t > m) {
+                Err(format!(
+                    "is outside the widget's date range {}..{}",
+                    min.as_deref().unwrap_or("…"),
+                    max.as_deref().unwrap_or("…")
+                ))
+            } else {
+                Ok(())
+            }
+        };
+    let in_options = |x: &serde_json::Value| -> Result<(), String> {
+        if w.options().iter().any(|o| option_value_eq(&o.value, x)) {
+            Ok(())
+        } else {
+            Err(format!("is not one of the widget's option values ({x})"))
+        }
+    };
+    let pair = |v: &serde_json::Value| -> Vec<serde_json::Value> {
+        v.as_array().cloned().unwrap_or_default()
+    };
+    match w {
+        Widget::Slider { min, max, .. } => {
+            within(v.as_f64().unwrap_or(0.0), Some(*min), Some(*max))
+        }
+        Widget::NumberInput { min, max, .. } => within(v.as_f64().unwrap_or(0.0), *min, *max),
+        Widget::Stepper { min, max, .. } => within(
+            v.as_f64().unwrap_or(0.0),
+            min.map(|m| m as f64),
+            max.map(|m| m as f64),
+        ),
+        Widget::RangeSlider { min, max, .. } => pair(v)
+            .iter()
+            .try_for_each(|e| within(e.as_f64().unwrap_or(0.0), Some(*min), Some(*max))),
+        Widget::Segmented { .. } | Widget::RadioGroup { .. } | Widget::Select { .. } => {
+            in_options(v)
+        }
+        Widget::MultiSelect { .. } | Widget::CheckboxGroup { .. } => {
+            pair(v).iter().try_for_each(in_options)
+        }
+        Widget::TextInput { max_length, .. } => {
+            // `maxLength` counts UTF-16 code units in the browser.
+            let len = v.as_str().map_or(0, |s| s.encode_utf16().count());
+            match max_length {
+                Some(max) if len > *max as usize => {
+                    Err(format!("is longer than the widget's maxLength {max}"))
+                }
+                _ => Ok(()),
+            }
+        }
+        Widget::DatePicker { min, max, .. } => within_dates(v.as_str().unwrap_or(""), min, max),
+        Widget::DateRange { min, max, .. } => pair(v)
+            .iter()
+            .try_for_each(|e| within_dates(e.as_str().unwrap_or(""), min, max)),
+        Widget::Toggle { .. } | Widget::Button { .. } => Ok(()),
+    }
 }
 
 /// Find a cycle in the derived-signal dependency graph (S7). Returns the cycle
@@ -2300,6 +2687,268 @@ mod tests {
         assert!(
             rules(&d).contains(&"interactive-view/chart-group-empty"),
             "{d:?}"
+        );
+    }
+
+    #[test]
+    fn input_on_signal_without_widget_rejected() {
+        let d = check(
+            r#"{"interactiveView":1,
+               "data":{"px":{"columns":{"t":"number","v":"number"},"values":[]}},
+               "signals":{"n":{"type":"number","derived":"count(px)"}},
+               "view":[{"block":"input","signal":"n"},
+                 {"block":"chart","data":"px",
+                  "mark":{"chart":"line","x":{"column":"t"},"y":[{"column":"v"}]},
+                  "controls":[{"signal":"n"}]}]}"#,
+        );
+        assert_eq!(
+            rules(&d),
+            vec![
+                "interactive-view/input-no-widget",
+                "interactive-view/input-no-widget"
+            ],
+            "{d:?}"
+        );
+    }
+
+    fn doc_with_signal(signal: &str) -> Vec<Diagnostic> {
+        check(&format!(
+            r#"{{"interactiveView":1,"signals":{{"s":{signal}}},"view":[]}}"#
+        ))
+    }
+
+    #[test]
+    fn init_must_match_signal_type() {
+        for (sig, ok) in [
+            (
+                r#"{"type":"number","init":2,"widget":{"type":"slider","min":0,"max":5}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"number","init":"2","widget":{"type":"slider","min":0,"max":5}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"integer","init":2.5,"widget":{"type":"stepper"}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"integer","init":3,"widget":{"type":"stepper"}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"boolean","init":"yes","widget":{"type":"toggle"}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"temporal","init":"2024-01-05","widget":{"type":"datePicker"}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"temporal","init":"","widget":{"type":"datePicker"}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"temporal","init":"Jan 5","widget":{"type":"datePicker"}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"interval<number>","init":[1,4],"widget":{"type":"rangeSlider","min":0,"max":5}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"interval<number>","init":[4,1],"widget":{"type":"rangeSlider","min":0,"max":5}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"interval<number>","init":3,"widget":{"type":"rangeSlider","min":0,"max":5}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"interval<temporal>","init":["2024-01-01","2024-02-01"],"widget":{"type":"dateRange"}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"array<enum>","init":{"a":1},"widget":{"type":"multiSelect","options":[]}}"#,
+                false,
+            ),
+        ] {
+            let d = doc_with_signal(sig);
+            assert_eq!(d.is_empty(), ok, "{sig}: {d:?}");
+            if !ok {
+                assert!(
+                    rules(&d)
+                        .iter()
+                        .all(|r| *r == "interactive-view/init-type-mismatch"),
+                    "{sig}: {d:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn init_must_fit_widget() {
+        for (sig, ok) in [
+            (
+                r#"{"type":"number","init":9,"widget":{"type":"slider","min":0,"max":5}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"number","init":-1,"widget":{"type":"numberInput","min":0}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"number","init":-1,"widget":{"type":"numberInput"}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"integer","init":11,"widget":{"type":"stepper","min":0,"max":10}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"interval<number>","init":[1,6],"widget":{"type":"rangeSlider","min":0,"max":5}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"enum","init":"c","widget":{"type":"select","options":[{"label":"A","value":"a"}]}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"enum","init":1,"widget":{"type":"segmented","options":[{"label":"One","value":1.0}]}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"array<enum>","init":["a","z"],"widget":{"type":"checkboxGroup","options":[{"label":"A","value":"a"}]}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"array<enum>","init":["a"],"widget":{"type":"checkboxGroup","options":[{"label":"A","value":"a"}]}}"#,
+                true,
+            ),
+            (
+                r#"{"type":"string","init":"hello","widget":{"type":"textInput","maxLength":3}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"temporal","init":"2023-12-31","widget":{"type":"datePicker","min":"2024-01-01"}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"interval<temporal>","init":["2024-01-01","2025-01-01"],"widget":{"type":"dateRange","max":"2024-06-30"}}"#,
+                false,
+            ),
+        ] {
+            let d = doc_with_signal(sig);
+            assert_eq!(d.is_empty(), ok, "{sig}: {d:?}");
+            if !ok {
+                assert_eq!(
+                    rules(&d),
+                    vec!["interactive-view/init-out-of-range"],
+                    "{sig}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn overlay_accessor_must_match_renderer_grammar() {
+        for (acc, rule) in [
+            ("band[0]", None),
+            (" band[1] ", None),
+            ("band[2]", Some("interactive-view/overlay-bad-accessor")),
+            ("band[0]x", Some("interactive-view/overlay-bad-accessor")),
+            ("band [0]", Some("interactive-view/overlay-bad-accessor")),
+            ("band[a]", Some("interactive-view/overlay-bad-accessor")),
+            ("band[0", Some("interactive-view/overlay-bad-accessor")),
+            ("1band", Some("interactive-view/overlay-bad-accessor")),
+            ("band", Some("interactive-view/overlay-type-mismatch")),
+        ] {
+            let d = check(&format!(
+                r#"{{"interactiveView":1,
+                   "data":{{"px":{{"columns":{{"t":"number","v":"number"}},"values":[]}}}},
+                   "signals":{{"band":{{"type":"interval<number>","init":[2,8],
+                     "widget":{{"type":"rangeSlider","min":0,"max":10}}}}}},
+                   "view":[{{"block":"chart","data":"px",
+                     "mark":{{"chart":"line","x":{{"column":"t"}},"y":[{{"column":"v"}}]}},
+                     "overlays":[{{"overlay":"vLine","value":"{acc}"}}]}}]}}"#
+            ));
+            assert_eq!(
+                rules(&d),
+                rule.into_iter().collect::<Vec<_>>(),
+                "{acc}: {d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn interpolation_grammar_matches_renderer() {
+        let doc = |md: &str| {
+            check(&format!(
+                r#"{{"interactiveView":1,
+                   "signals":{{"x":{{"type":"number","init":1,"widget":{{"type":"slider","min":0,"max":2}}}},
+                     "band":{{"type":"interval<number>","init":[0,1],"widget":{{"type":"rangeSlider","min":0,"max":2}}}},
+                     "tags":{{"type":"array<enum>","init":[],"widget":{{"type":"multiSelect","options":[]}}}},
+                     "day":{{"type":"temporal","init":"2024-01-01","widget":{{"type":"datePicker"}}}}}},
+                   "view":[{{"block":"section","md":{md:?}}}]}}"#
+            ))
+        };
+        for (md, rule) in [
+            ("{{x}} and {{ x | round(2) }}", None),
+            ("{{band[1] | round}} {{tags[3] | join(' / ')}}", None),
+            ("{{day | date('YYYY-MM-DD')}} {{day|date}}", None),
+            ("{{ x | round(2) | join }}", None),
+            ("literal {{a}b}} braces", None),
+            ("{{nope}}", Some("interactive-view/unknown-signal")),
+            ("{{}}", Some("interactive-view/interpolation-syntax")),
+            ("{{x + 1}}", Some("interactive-view/interpolation-syntax")),
+            ("{{x.y}}", Some("interactive-view/interpolation-syntax")),
+            ("{{x[0]}}", Some("interactive-view/interpolation-index")),
+            ("{{band[2]}}", Some("interactive-view/interpolation-index")),
+            ("{{x | fmt}}", Some("interactive-view/unknown-filter")),
+            (
+                "{{x | round(2}}",
+                Some("interactive-view/interpolation-syntax"),
+            ),
+            ("{{x | }}", Some("interactive-view/interpolation-syntax")),
+            (
+                "{{x | round('a')}}",
+                Some("interactive-view/interpolation-filter-args"),
+            ),
+            (
+                "{{x | round(1, 2)}}",
+                Some("interactive-view/interpolation-filter-args"),
+            ),
+            (
+                "{{tags | join(2)}}",
+                Some("interactive-view/interpolation-filter-args"),
+            ),
+        ] {
+            let d = doc(md);
+            assert_eq!(
+                rules(&d),
+                rule.into_iter().collect::<Vec<_>>(),
+                "{md}: {d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn histogram_bins_are_bounded() {
+        let doc = |bins: u32| {
+            check(&format!(
+                r#"{{"interactiveView":1,
+                   "data":{{"r":{{"columns":{{"v":"number"}},"values":[]}}}},
+                   "view":[{{"block":"chart","data":"r",
+                     "mark":{{"chart":"histogram","value":{{"column":"v"}},"bins":{bins}}}}}]}}"#
+            ))
+        };
+        assert!(doc(1).is_empty());
+        assert!(doc(100).is_empty());
+        assert_eq!(rules(&doc(0)), vec!["interactive-view/chart-bins"]);
+        assert_eq!(rules(&doc(101)), vec!["interactive-view/chart-bins"]);
+        assert_eq!(
+            rules(&doc(4_000_000_000)),
+            vec!["interactive-view/chart-bins"]
         );
     }
 
