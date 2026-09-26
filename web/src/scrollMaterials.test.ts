@@ -381,6 +381,21 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "a closed spatial drawer must yield its reserved leading edge to host navigation",
   );
   assertPresent(
+    spatialDrawer,
+    /closest\(\s*"[^"]*\[role='slider'\],\.MuiSlider-root/,
+    "the playback scrubber must keep horizontal drags instead of opening Contents",
+  );
+  assertPresent(
+    spatialDrawer,
+    /const onTouchStart = \(event: TouchEvent\): void => \{\s*if \(event\.touches\.length > 1\) \{\s*abandonGesture\(\);/,
+    "a second finger must release (and settle) the spatial drawer gesture",
+  );
+  assertPresent(
+    spatialDrawer,
+    /const abandonGesture = [\s\S]{0,300}if \(abandoned\?\.locked\) \{\s*settle\(abandoned\.startOpen/,
+    "an abandoned locked drawer gesture must settle instead of stranding the surface",
+  );
+  assertPresent(
     nativeTweaks,
     /UISelectionFeedbackGenerator[\s\S]{0,900}prepare-selection[\s\S]{0,300}selectionChanged/,
     "the native shell must retain and prewarm a selection generator for the spatial drawer",

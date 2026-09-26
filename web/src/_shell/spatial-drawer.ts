@@ -192,14 +192,35 @@ export function bindSpatialDrawer({
     }, duration + 20);
   };
 
+  // A second finger (pinch, two-finger scroll) is never a drawer swipe. Drop the
+  // recognizer, and if it had already taken over the surface, settle it back to
+  // where the gesture started instead of leaving it stranded mid-translation
+  // with transitions disabled and the moving marker set.
+  const abandonGesture = (): void => {
+    const abandoned = gesture;
+    gesture = null;
+    commit = false;
+    pendingThresholdHaptic = false;
+    if (abandoned?.locked) {
+      settle(abandoned.startOpen, 0, releaseDirectManipulation, abandoned.width);
+    }
+  };
+
   const onTouchStart = (event: TouchEvent): void => {
+    if (event.touches.length > 1) {
+      abandonGesture();
+      return;
+    }
     const [touch] = event.touches;
     const target = event.target instanceof HTMLElement ? event.target : null;
     const startOpen = getOpen();
     if (
       !touch || hasExpandedSelection() ||
       (!startOpen && touch.clientX <= reservedLeadingEdge) ||
-      target?.closest("input,textarea,[contenteditable='true'],[data-spatial-drawer-ignore]") ||
+      // Sliders (the playback scrubber) own horizontal drags.
+      target?.closest(
+        "input,textarea,[contenteditable='true'],[role='slider'],.MuiSlider-root,[data-spatial-drawer-ignore]",
+      ) ||
       hasHorizontalScroller(event.target, gestureTarget)
     ) {
       gesture = null;
@@ -226,6 +247,10 @@ export function bindSpatialDrawer({
   const onTouchMove = (event: TouchEvent): void => {
     const [touch] = event.touches;
     if (!gesture || !touch) {
+      return;
+    }
+    if (event.touches.length > 1) {
+      abandonGesture();
       return;
     }
     if (hasExpandedSelection()) {
