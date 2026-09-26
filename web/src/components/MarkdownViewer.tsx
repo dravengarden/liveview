@@ -71,8 +71,8 @@ const MERMAID_FONT_FAMILY =
 // color scheme is read from documentElement's `data-color-scheme` (set by
 // useTheme); a live theme toggle re-renders every diagram from its stashed
 // source (see the re-render effect + `data-mermaid-src`). Book SVGs (raster /
-// fixed-colour standalone `.lv-svg-figure`) CAN'T re-render, so they keep the
-// invert-filter dark adaptation in markdown.css — only mermaid goes native.
+// fixed-colour standalone `.lv-svg-figure`) CAN'T re-render, so they sit on a
+// static light plate in dark mode (markdown.css) — only mermaid goes native.
 function isDarkScheme(): boolean {
   return document.documentElement.dataset["colorScheme"] === "dark";
 }

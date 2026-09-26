@@ -659,8 +659,24 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     bottomSheet,
-    /const darkTone = tone === "dark";[\s\S]{0,2200}bgcolor: darkTone[\s\S]{0,120}"rgba\(24, 24, 28, 0\.9\)"[\s\S]{0,1800}backdropFilter: darkTone \? "none"/,
-    "the on-scrim island must stay dark and avoid a milky live blur",
+    /const darkTone = tone === "dark";[\s\S]{0,2200}bgcolor: darkTone[\s\S]{0,120}"rgba\(24, 24, 28, 0\.9\)"/,
+    "the on-scrim island must stay dark",
+  );
+  const actionIsland = bottomSheet.match(
+    /export function FloatingActionIsland[\s\S]*?\n}\n/,
+  )?.[0];
+  if (!actionIsland) {
+    throw new Error("FloatingActionIsland must remain discoverable");
+  }
+  assertAbsent(
+    actionIsland,
+    /backdropFilter|WebkitBackdropFilter|\bfilter\s*:|mixBlendMode/,
+    "the sheet action island floating over a scrolling sheet body",
+  );
+  assertAbsent(
+    markdownStyles,
+    /\.lv-svg-figure[^{}]*\{[^}]*\bfilter\s*:/,
+    "standalone SVG figures in the scrolling reader",
   );
   assertPresent(
     imageLightbox,

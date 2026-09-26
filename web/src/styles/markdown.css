@@ -283,14 +283,17 @@
 /* DARK / NIGHT. Mermaid now renders in its NATIVE dark theme (light-on-
    transparent art — MarkdownViewer re-renders every diagram on a theme toggle),
    so it only needs a subtle dark backing plate, NOT a colour filter. Book SVGs
-   (.lv-svg-figure) have fixed baked-in colours and CANNOT re-render, so they keep
-   the invert(0.9) hue-rotate(180°) adaptation — light line-art on a dark-grey
-   plate, hues kept so coloured nodes stay recognisable. */
+   (.lv-svg-figure) have fixed baked-in colours and CANNOT re-render, so they
+   follow the raster-figure floor above: an opaque, slightly dimmed light plate
+   that keeps their dark-on-light art legible without recolouring it. A CSS
+   `filter` (the old invert + hue-rotate) is not allowed here: it forces WebKit
+   to re-rasterize every figure layer while the reader scrolls (see
+   docs/design-system.md, Motion and performance). */
 [data-color-scheme="dark"] .markdown-body .mermaid {
   background-color: rgba(255, 255, 255, 0.05);
 }
 [data-color-scheme="dark"] .markdown-body .lv-svg-figure {
-  filter: invert(0.9) hue-rotate(180deg);
+  background-color: #e6e6ea;
 }
 
 /* The plate lives on the .mermaid wrapper; its inner svg stays transparent. */
