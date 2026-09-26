@@ -3,6 +3,8 @@ mod audio_optimize;
 mod check;
 mod cli;
 mod config;
+#[cfg(test)]
+mod http_tests;
 mod interactive_view;
 mod server;
 mod shared;
