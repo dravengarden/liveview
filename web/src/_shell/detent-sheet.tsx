@@ -64,7 +64,7 @@ import {
 } from "react";
 import { Box, Paper } from "@mui/material";
 import { alpha } from "@mui/material/styles";
-import { markDetentSheetOpen } from "./detent-sheet-open.ts";
+import { isTopmostDetentSheet, markDetentSheetOpen } from "./detent-sheet-open.ts";
 import { haptic as fireHaptic } from "./haptics.ts";
 
 // The sheet sizes to its content but never taller than this fraction of the
@@ -390,18 +390,34 @@ export function DetentSheet(
     }
   }, []);
 
+  // Pending `onClose` after the dismiss slide-out. Tracked so a programmatic
+  // close, reopen, or unmount cancels it — a stale timer used to close a sheet
+  // that had been reopened in the meantime — and so repeated dismiss requests
+  // (Escape twice, scrim tap during a flick) collapse into one.
+  const dismissTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+  const cancelPendingDismiss = useCallback((): void => {
+    if (dismissTimerRef.current !== null) {
+      globalThis.clearTimeout(dismissTimerRef.current);
+      dismissTimerRef.current = null;
+    }
+  }, []);
+
   useEffect(() => () => {
     if (movingTimerRef.current !== null) {
       globalThis.clearTimeout(movingTimerRef.current);
     }
-  }, []);
+    cancelPendingDismiss();
+  }, [cancelPendingDismiss]);
 
-  // (Re)compute geometry against the rendered content on open, then animate in.
-  useEffect(() => {
-    if (!open) {
-      animatedRef.current = false;
-      return;
-    }
+  // Measure the sheet against its CURRENT rendered content. The sheet sizes to
+  // its content, which can change while open (async rows, an expanding section,
+  // rotation), so this runs on open, on every size change, and again at drag and
+  // dismiss start — never trust the height captured when the sheet opened.
+  const measureGeometry = useCallback((): { detents: number[]; closedPx: number } => {
     const h = globalThis.innerHeight;
     // The sheet's ACTUAL rendered height — content-driven, clamped by the CSS
     // maxHeight (MAX_FRACTION vh). This is both the slide-out distance and the
@@ -418,6 +434,17 @@ export function DetentSheet(
     const peekY = sign * (closedPx - PEEK_FRACTION * h);
     const detents = hasPeek ? [peekY, 0] : [0];
     geomRef.current = { detents, closedPx };
+    return geomRef.current;
+  }, [peekDetent, isCover, sign]);
+
+  // (Re)compute geometry against the rendered content on open, then animate in.
+  useEffect(() => {
+    if (!open) {
+      animatedRef.current = false;
+      cancelPendingDismiss();
+      return;
+    }
+    const { detents, closedPx } = measureGeometry();
     const openY = detents.at(-1) ?? 0; // full
     if (animatedRef.current) {
       // Already open — this is a geometry change (cover ↔ content-height), the
@@ -433,21 +460,60 @@ export function DetentSheet(
     paint(sign * closedPx, false); // seed closed (no transition)…
     const id = globalThis.requestAnimationFrame(() => paint(openY, true)); // …then slide open
     return () => globalThis.cancelAnimationFrame(id);
-  }, [open, paint, sign, isCover, peekDetent, haptic]);
+  }, [open, paint, sign, isCover, peekDetent, haptic, measureGeometry, cancelPendingDismiss]);
+
+  // Keep the detents live while open. A sheet resting on a detent whose offset
+  // changed (or vanished — content shrank below the peek threshold) settles to
+  // the nearest current detent; a sheet in transit (opening, dragging,
+  // dismissing) is left alone, since those paths re-measure themselves.
+  useEffect(() => {
+    const sheet = sheetRef.current;
+    if (!open || !sheet || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      if (dragRef.current || dismissTimerRef.current !== null) {
+        return;
+      }
+      const previous = geomRef.current;
+      const y = yRef.current;
+      const { detents } = measureGeometry();
+      if (!previous.detents.includes(y) || detents.includes(y)) {
+        return;
+      }
+      let best = detents[0] ?? 0;
+      for (const d of detents) {
+        if (Math.abs(d - y) < Math.abs(best - y)) {
+          best = d;
+        }
+      }
+      paint(best, true);
+    });
+    observer.observe(sheet);
+    return () => observer.disconnect();
+  }, [open, measureGeometry, paint]);
 
   const dismiss = useCallback((): void => {
+    if (dismissTimerRef.current !== null) {
+      return; // already sliding out
+    }
     // Light tap on dismiss — the single choke point for every close path (flick
     // down, tap-outside, programmatic), mirroring the tap on open.
     fireHaptic("light");
+    measureGeometry();
     paint(signRef.current * geomRef.current.closedPx, true);
-    globalThis.setTimeout(onClose, SETTLE_MS);
-  }, [paint, onClose]);
+    dismissTimerRef.current = globalThis.setTimeout(() => {
+      dismissTimerRef.current = null;
+      onCloseRef.current();
+    }, SETTLE_MS);
+  }, [paint, measureGeometry]);
 
   const onPointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>): void => {
     e.preventDefault();
     e.currentTarget.setPointerCapture(e.pointerId);
+    measureGeometry();
     dragRef.current = { startPointerY: e.clientY, startY: yRef.current, samples: [{ t: e.timeStamp, y: e.clientY }] };
-  }, []);
+  }, [measureGeometry]);
 
   const onPointerMove = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>): void => {
@@ -549,27 +615,34 @@ export function DetentSheet(
   // scrim/surface z-index below so a later sheet's scrim covers an earlier sheet
   // (otherwise every sheet shares one z-band and the lower one peeks through).
   const [level, setLevel] = useState(0);
+  const levelRef = useRef(-1);
   useEffect(() => {
     if (!open) {
       return;
     }
     const { level: l, close } = markDetentSheetOpen();
+    levelRef.current = l;
     // `level` is only knowable AFTER markDetentSheetOpen() imperatively
     // registers this sheet (mount/unmount side effects), so storing the
     // returned depth via setState here is the correct pattern — not the
     // render-loop anti-pattern the rule guards against.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLevel(l);
-    return close;
+    return () => {
+      levelRef.current = -1;
+      close();
+    };
   }, [open]);
 
-  // Escape closes — keyboard parity with a dialog, without being a Modal.
+  // Escape closes — keyboard parity with a dialog, without being a Modal. Every
+  // open sheet listens on the window, so only the topmost one responds: one
+  // Escape peels one layer off a stack instead of closing all of them.
   useEffect(() => {
     if (!open) {
       return;
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && isTopmostDetentSheet(levelRef.current)) {
         dismiss();
       }
     };

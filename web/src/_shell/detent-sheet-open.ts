@@ -21,6 +21,9 @@ let openCount = 0;
 // z stays bounded across many open/close cycles (never creeps into the modal
 // band). Real stacks are 2-3 deep.
 let nextLevel = 0;
+// Levels of the sheets currently open, so keyboard dismissal can target only the
+// topmost one (every sheet listens on the same window keydown).
+const openLevels = new Set<number>();
 const listeners = new Set<(open: boolean) => void>();
 
 function notify(): void {
@@ -35,10 +38,12 @@ export function markDetentSheetOpen(): { level: number; close: () => void } {
   const level = nextLevel;
   nextLevel += 1;
   openCount += 1;
+  openLevels.add(level);
   notify();
   return {
     level,
     close: (): void => {
+      openLevels.delete(level);
       openCount -= 1;
       if (openCount <= 0) {
         openCount = 0;
@@ -66,6 +71,17 @@ export function subscribeAnyDetentSheetOpen(
  *  background surface may claim a swipe. */
 export function isAnyDetentSheetOpen(): boolean {
   return openCount > 0;
+}
+
+/** True when `level` is the most recently opened sheet still open — the one a
+ *  keyboard Escape should dismiss. */
+export function isTopmostDetentSheet(level: number): boolean {
+  for (const other of openLevels) {
+    if (other > level) {
+      return false;
+    }
+  }
+  return openLevels.has(level);
 }
 
 /** React hook: true while at least one DetentSheet is open anywhere. */

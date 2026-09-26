@@ -541,6 +541,21 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "an interrupted DetentSheet drag must snap from its actual position without stale velocity projection",
   );
   assertPresent(
+    detentSheet,
+    /new ResizeObserver\([\s\S]{0,400}measureGeometry\(\)/,
+    "the DetentSheet must re-measure content-sized detents while open",
+  );
+  assertPresent(
+    detentSheet,
+    /dismissTimerRef\.current = globalThis\.setTimeout\(/,
+    "the DetentSheet dismiss timer must be tracked so reopen and unmount cancel it",
+  );
+  assertPresent(
+    detentSheet,
+    /e\.key === "Escape" && isTopmostDetentSheet\(levelRef\.current\)/,
+    "Escape must dismiss only the topmost stacked DetentSheet",
+  );
+  assertPresent(
     lightboxGestures,
     /g\.current\.lastX = remaining\.x;[\s\S]{0,80}g\.current\.lastY = remaining\.y;/,
     "ending a lightbox pinch must rebase panning to the surviving finger",
