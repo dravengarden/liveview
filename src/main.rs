@@ -784,22 +784,39 @@ async fn api_blob(
     axum::extract::Path(hash): axum::extract::Path<String>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
-    let mime = match state.store.get_asset(&hash).await {
-        Ok(Some(a)) => a.mime,
-        _ => "application/octet-stream".to_string(),
+    // The bytes are content-addressed, but the MIME type comes from the asset
+    // row. A store error is a 503; a missing row (the object is written before
+    // its row) serves generic bytes with a short, revalidating cache so a wrong
+    // content type is never pinned as `immutable`.
+    let (mime, cache_control) = match state.store.get_asset(&hash).await {
+        Ok(Some(a)) => (a.mime, "public, max-age=31536000, immutable"),
+        Ok(None) => ("application/octet-stream".to_string(), "no-cache"),
+        Err(error) => return store_unavailable("get_asset", error),
     };
     let Ok(data) = state.obj.get(&hash).await else {
         return (StatusCode::NOT_FOUND, "blob not found").into_response();
     };
+    ranged_bytes_response(data, &headers, &mime, cache_control)
+}
+
+/// Serve `data` with `Content-Length`, `Accept-Ranges` and single-range
+/// support. A satisfiable `Range` yields a zero-copy 206 slice of the buffer.
+fn ranged_bytes_response(
+    data: Vec<u8>,
+    headers: &HeaderMap,
+    mime: &str,
+    cache_control: &str,
+) -> Response {
+    let data = axum::body::Bytes::from(data);
     let total = data.len() as u64;
     let range = headers
         .get(header::RANGE)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| parse_range(v, total));
     let base = Response::builder()
-        .header(header::CONTENT_TYPE, &mime)
+        .header(header::CONTENT_TYPE, mime)
         .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable");
+        .header(header::CACHE_CONTROL, cache_control);
     match range {
         Some((start, end)) => base
             .status(StatusCode::PARTIAL_CONTENT)
@@ -808,7 +825,7 @@ async fn api_blob(
                 format!("bytes {start}-{end}/{total}"),
             )
             .header(header::CONTENT_LENGTH, end - start + 1)
-            .body(Body::from(data[start as usize..=end as usize].to_vec()))
+            .body(Body::from(data.slice(start as usize..=end as usize)))
             .unwrap()
             .into_response(),
         None => base
@@ -1639,14 +1656,16 @@ async fn api_tree(
         .as_deref()
         .and_then(RenditionKind::parse)
         .unwrap_or(RenditionKind::Text);
-    let json = state
-        .store
-        .get_site_tree(kind.as_str())
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "[]".to_string());
-    ([(header::CONTENT_TYPE, "application/json")], json)
+    // A store error is a 503, not an empty `[]`: an empty spine is a valid,
+    // cacheable answer that the offline replica would keep until the next root.
+    match state.store.get_site_tree(kind.as_str()).await {
+        Ok(json) => (
+            [(header::CONTENT_TYPE, "application/json")],
+            json.unwrap_or_else(|| "[]".to_string()),
+        )
+            .into_response(),
+        Err(error) => store_unavailable("get_site_tree", error),
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -1737,10 +1756,9 @@ async fn api_settings_get(State(state): State<SharedState>) -> impl IntoResponse
             let map: HashMap<String, String> = rows.into_iter().collect();
             Json(map).into_response()
         }
-        Err(e) => {
-            tracing::warn!(error = %e, "settings read failed");
-            Json(HashMap::<String, String>::new()).into_response()
-        }
+        // Never answer `{}` on failure: the client would reconcile its local
+        // settings against an empty server state.
+        Err(error) => store_unavailable("settings_all", error),
     }
 }
 
@@ -1890,14 +1908,16 @@ struct CoverQuery {
 /// Stream a content-addressed blob from rustfs with its stored MIME.
 async fn blob_response(state: &AppState, hash: &str, cache: &str) -> Option<Response> {
     let bytes = state.obj.get(hash).await.ok()?;
-    let mime = state
-        .store
-        .get_asset(hash)
-        .await
-        .ok()
-        .flatten()
-        .map(|a| a.mime)
-        .unwrap_or_else(|| "application/octet-stream".to_string());
+    // Degraded metadata (store error or missing asset row) ⇒ generic bytes that
+    // the client must revalidate, never the caller's long-lived cache policy.
+    let (mime, cache) = match state.store.get_asset(hash).await {
+        Ok(Some(asset)) => (asset.mime, cache),
+        Ok(None) => ("application/octet-stream".to_string(), "no-cache"),
+        Err(error) => {
+            tracing::warn!(%error, hash, "asset metadata read failed");
+            ("application/octet-stream".to_string(), "no-store")
+        }
+    };
     Some(
         Response::builder()
             .status(StatusCode::OK)
@@ -2266,17 +2286,24 @@ async fn api_file(
 /// prefer the distilled `<id>.spoken.md` chapter, else the raw `<id>.md`; for
 /// audio, the `<aid>.spoken.md` chapter IS the script. Returns the chapter +
 /// the served lang (overlay → base).
-async fn resolve_narration(state: &AppState, ctx: &ReqCtx) -> Option<(ChapterRecord, String)> {
+///
+/// A store error is propagated, never treated as "absent": silently falling
+/// back to the raw `.md` would synthesize (and cache under the chapter's
+/// content-addressed key) narration from the wrong source.
+async fn resolve_narration(
+    state: &AppState,
+    ctx: &ReqCtx,
+) -> Result<Option<(ChapterRecord, String)>, String> {
     if ctx.kind == RenditionKind::Text
         && let Some(stem) = ctx.rest.strip_suffix(".md")
     {
         let spoken = format!("{stem}.spoken.md");
-        if let Ok(Some(hit)) = state
+        if let Some(hit) = state
             .store
             .get_chapter_fallback(&ctx.slug, "text", &ctx.lang, &ctx.default_lang, &spoken)
-            .await
+            .await?
         {
-            return Some(hit);
+            return Ok(Some(hit));
         }
     }
     let direct = state
@@ -2288,11 +2315,9 @@ async fn resolve_narration(state: &AppState, ctx: &ReqCtx) -> Option<(ChapterRec
             &ctx.default_lang,
             &ctx.rest,
         )
-        .await
-        .ok()
-        .flatten();
+        .await?;
     if direct.is_some() || ctx.kind != RenditionKind::Audio {
-        return direct;
+        return Ok(direct);
     }
 
     // Some `book.toml` corpora expose an audiobook spine as virtual
@@ -2300,13 +2325,13 @@ async fn resolve_narration(state: &AppState, ctx: &ReqCtx) -> Option<(ChapterRec
     // text chapter (`<id>.md`). Prefer a real curated audio row above, then map
     // that virtual path back to its text source. Audio, marks, and transcript all
     // use this same fallback so their sentence indexes stay aligned.
-    let text_path = audio_text_fallback_path(&ctx.rest)?;
+    let Some(text_path) = audio_text_fallback_path(&ctx.rest) else {
+        return Ok(None);
+    };
     state
         .store
         .get_chapter_fallback(&ctx.slug, "text", &ctx.lang, &ctx.default_lang, &text_path)
         .await
-        .ok()
-        .flatten()
 }
 
 fn audio_text_fallback_path(path: &str) -> Option<String> {
@@ -2339,7 +2364,7 @@ async fn api_spoken(
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     };
     match resolve_narration(&state, &ctx).await {
-        Some((row, served_lang)) => {
+        Ok(Some((row, served_lang))) => {
             let md = row.markdown.unwrap_or_default();
             Json(SpokenContent {
                 lang: served_lang,
@@ -2347,7 +2372,8 @@ async fn api_spoken(
             })
             .into_response()
         }
-        None => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(error) => store_unavailable("resolve_narration", error),
     }
 }
 
@@ -2400,7 +2426,8 @@ async fn api_units(
             })
             .into_response()
         }
-        _ => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(error) => store_unavailable("get_chapter_fallback", error),
     }
 }
 
@@ -2584,33 +2611,7 @@ fn serve_audio_range(
     headers: &axum::http::HeaderMap,
     mime: &'static str,
 ) -> axum::response::Response {
-    let total = data.len() as u64;
-    let range = headers
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| parse_range(v, total));
-    let builder = Response::builder()
-        .header(header::CONTENT_TYPE, mime)
-        .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CACHE_CONTROL, "public, max-age=3600");
-    match range {
-        Some((start, end)) => builder
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(
-                header::CONTENT_RANGE,
-                format!("bytes {start}-{end}/{total}"),
-            )
-            .header(header::CONTENT_LENGTH, end - start + 1)
-            .body(Body::from(data[start as usize..=end as usize].to_vec()))
-            .unwrap()
-            .into_response(),
-        None => builder
-            .status(StatusCode::OK)
-            .header(header::CONTENT_LENGTH, total)
-            .body(Body::from(data))
-            .unwrap()
-            .into_response(),
-    }
+    ranged_bytes_response(data, headers, mime, "public, max-age=3600")
 }
 
 /// Chapter narration audio — the pre-generated MP3 from rustfs, with
@@ -2653,8 +2654,10 @@ async fn api_audio(
     let Some(ctx) = resolve_audio(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "audio not available").into_response();
     };
-    let Some((row, _)) = resolve_narration(&state, &ctx).await else {
-        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    let row = match resolve_narration(&state, &ctx).await {
+        Ok(Some((row, _))) => row,
+        Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(error) => return store_unavailable("resolve_narration", error),
     };
     let hash = match ensure_chapter_audio(&state, &row).await {
         Ok((audio_hash, _)) => audio_hash,
@@ -2751,8 +2754,10 @@ async fn api_marks(
     let Some(ctx) = resolve_audio(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "audio not available").into_response();
     };
-    let Some((row, _)) = resolve_narration(&state, &ctx).await else {
-        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    let row = match resolve_narration(&state, &ctx).await {
+        Ok(Some((row, _))) => row,
+        Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(error) => return store_unavailable("resolve_narration", error),
     };
     let hash = match ensure_chapter_audio(&state, &row).await {
         Ok((_, marks_hash)) => marks_hash,
@@ -3026,7 +3031,7 @@ async fn api_raw(
     let Some(ctx) = resolve_req(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     };
-    let Some((row, _)) = state
+    let row = match state
         .store
         .get_chapter_fallback(
             &ctx.slug,
@@ -3036,10 +3041,10 @@ async fn api_raw(
             &ctx.rest,
         )
         .await
-        .ok()
-        .flatten()
-    else {
-        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    {
+        Ok(Some((row, _))) => row,
+        Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(error) => return store_unavailable("get_chapter_fallback", error),
     };
     let Some(hash) = row.asset_hash else {
         return (StatusCode::NOT_FOUND, "not a binary asset").into_response();
