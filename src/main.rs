@@ -3,6 +3,8 @@ mod audio_optimize;
 mod check;
 mod cli;
 mod config;
+#[cfg(test)]
+mod http_tests;
 mod interactive_view;
 mod server;
 mod shared;
@@ -14,7 +16,7 @@ use axum::{
     Extension, Router,
     body::Body,
     extract::{DefaultBodyLimit, Query, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
 };
@@ -591,29 +593,63 @@ fn build_apm_sink() -> Option<ApmSink> {
 /// Listen for `liveview sync`'s `NOTIFY liveview_reload`; on each, reload the
 /// catalog and broadcast the new sidebar tree so open readers refresh. Survives
 /// connection drops (reconnect loop) so a postgres restart doesn't kill it.
+///
+/// NOTIFY is not durable: a sync that finishes while the listener is
+/// disconnected is never delivered. So the connection loss is observed
+/// explicitly (`try_recv` → `None`) and, once `LISTEN` is re-established, the
+/// catalog is reloaded unconditionally to pick up anything missed meanwhile.
 fn spawn_reload_listener(state: SharedState, database_url: String) {
     tokio::spawn(async move {
+        let mut reconnecting = false;
         loop {
-            match sqlx::postgres::PgListener::connect(&database_url).await {
-                Ok(mut listener) => {
-                    if listener.listen("liveview_reload").await.is_ok() {
-                        while listener.recv().await.is_ok() {
-                            match Catalog::load(state.store.as_ref()).await {
-                                Ok(cat) => {
-                                    *state.catalog.write().await = cat;
-                                    broadcast_tree(&state).await;
-                                    tracing::info!("catalog reloaded after sync");
-                                }
-                                Err(e) => tracing::warn!(error = %e, "catalog reload failed"),
-                            }
-                        }
+            let mut listener = match sqlx::postgres::PgListener::connect(&database_url).await {
+                Ok(listener) => listener,
+                Err(e) => {
+                    tracing::warn!(error = %e, "reload listener connect failed");
+                    reconnecting = true;
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+            if let Err(e) = listener.listen("liveview_reload").await {
+                tracing::warn!(error = %e, "reload listener LISTEN failed");
+                reconnecting = true;
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                continue;
+            }
+            // LISTEN is active again before this reload, so no notification can
+            // fall into the gap between the reload and the subscription.
+            if reconnecting {
+                reload_catalog(&state, "catalog reloaded after listener reconnect").await;
+            }
+            reconnecting = true;
+            loop {
+                match listener.try_recv().await {
+                    Ok(Some(_)) => reload_catalog(&state, "catalog reloaded after sync").await,
+                    Ok(None) => {
+                        tracing::warn!("reload listener connection lost; reconnecting");
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "reload listener receive failed");
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        break;
                     }
                 }
-                Err(e) => tracing::warn!(error = %e, "reload listener connect failed"),
             }
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }
     });
+}
+
+async fn reload_catalog(state: &AppState, reason: &'static str) {
+    match Catalog::load(state.store.as_ref()).await {
+        Ok(cat) => {
+            *state.catalog.write().await = cat;
+            broadcast_tree(state).await;
+            tracing::info!("{reason}");
+        }
+        Err(e) => tracing::warn!(error = %e, "catalog reload failed"),
+    }
 }
 
 /// Broadcast the current text sidebar tree as a `TreeUpdate` (the same shape
@@ -784,22 +820,39 @@ async fn api_blob(
     axum::extract::Path(hash): axum::extract::Path<String>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
-    let mime = match state.store.get_asset(&hash).await {
-        Ok(Some(a)) => a.mime,
-        _ => "application/octet-stream".to_string(),
+    // The bytes are content-addressed, but the MIME type comes from the asset
+    // row. A store error is a 503; a missing row (the object is written before
+    // its row) serves generic bytes with a short, revalidating cache so a wrong
+    // content type is never pinned as `immutable`.
+    let (mime, cache_control) = match state.store.get_asset(&hash).await {
+        Ok(Some(a)) => (a.mime, "public, max-age=31536000, immutable"),
+        Ok(None) => ("application/octet-stream".to_string(), "no-cache"),
+        Err(error) => return store_unavailable("get_asset", error),
     };
     let Ok(data) = state.obj.get(&hash).await else {
         return (StatusCode::NOT_FOUND, "blob not found").into_response();
     };
+    ranged_bytes_response(data, &headers, &mime, cache_control)
+}
+
+/// Serve `data` with `Content-Length`, `Accept-Ranges` and single-range
+/// support. A satisfiable `Range` yields a zero-copy 206 slice of the buffer.
+fn ranged_bytes_response(
+    data: Vec<u8>,
+    headers: &HeaderMap,
+    mime: &str,
+    cache_control: &str,
+) -> Response {
+    let data = axum::body::Bytes::from(data);
     let total = data.len() as u64;
     let range = headers
         .get(header::RANGE)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| parse_range(v, total));
     let base = Response::builder()
-        .header(header::CONTENT_TYPE, &mime)
+        .header(header::CONTENT_TYPE, mime)
         .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable");
+        .header(header::CACHE_CONTROL, cache_control);
     match range {
         Some((start, end)) => base
             .status(StatusCode::PARTIAL_CONTENT)
@@ -808,7 +861,7 @@ async fn api_blob(
                 format!("bytes {start}-{end}/{total}"),
             )
             .header(header::CONTENT_LENGTH, end - start + 1)
-            .body(Body::from(data[start as usize..=end as usize].to_vec()))
+            .body(Body::from(data.slice(start as usize..=end as usize)))
             .unwrap()
             .into_response(),
         None => base
@@ -1035,10 +1088,13 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
     for c in &chapters {
         let doc = format!("{}/{}/{}/{}", c.book_slug, c.rendition, c.lang, c.rel_path);
         // Wire path /api/file expects `<slug>/<rel_path>` + lang/rendition query.
-        // Slugs/rel_paths/langs are ASCII filenames, so a raw query is safe here.
+        // Values are percent-encoded so `&`, `+`, `#`, `%`, spaces and non-ASCII
+        // in a rel_path survive the handlers' form-urlencoded query decoding.
         let q = format!(
-            "path={}/{}&lang={}&rendition={}",
-            c.book_slug, c.rel_path, c.lang, c.rendition
+            "path={}&lang={}&rendition={}",
+            encode_query_value(&format!("{}/{}", c.book_slug, c.rel_path)),
+            encode_query_value(&c.lang),
+            encode_query_value(&c.rendition)
         );
         if c.file_type == "markdown" || c.file_type == "html" {
             resources.push(serde_json::json!({
@@ -1140,8 +1196,25 @@ fn artwork_resource(slug: &str, kind: &str, hash: &str, bytes: i64) -> serde_jso
         "hash": hash,
         "kind": kind,
         "bytes": bytes.max(0),
-        "url": format!("/api/{kind}?book={slug}"),
+        "url": format!("/api/{kind}?book={}", encode_query_value(slug)),
     })
+}
+
+/// Percent-encode one query-string value for the `/api/*` handlers, whose
+/// `Query` extractor decodes `application/x-www-form-urlencoded`. Unreserved
+/// characters and `/` stay literal so ordinary chapter URLs are byte-identical
+/// to the historical unencoded form; everything else (including `+`, which the
+/// form decoder would read as a space) is encoded as UTF-8 `%XX`.
+fn encode_query_value(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~' | b'/') {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
 }
 
 /// `GET /api/sizes` — PRECOMPUTED download totals (per-book + global), keyed by
@@ -1236,6 +1309,26 @@ async fn api_sizes(State(state): State<SharedState>, headers: HeaderMap) -> Resp
 const APM_MAX_EVENTS: usize = 1_000;
 const APM_MAX_BODY_BYTES: usize = 256 * 1024;
 
+/// Dedicated APM credential header. `Authorization` is owned by the optional
+/// LIVEVIEW_ACCESS_TOKEN proxy policy (the trusted proxy overwrites it on every
+/// upstream request), so a client behind that proxy cannot also carry the APM
+/// bearer there. This header carries the APM token independently.
+const APM_TOKEN_HEADER: &str = "x-liveview-apm-token";
+
+/// The APM token may arrive in [`APM_TOKEN_HEADER`] or, for existing clients,
+/// as `Authorization: Bearer <token>`.
+fn apm_token_matches(headers: &HeaderMap, want: &str) -> bool {
+    let dedicated = headers
+        .get(APM_TOKEN_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim);
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    dedicated == Some(want) || bearer == Some(want)
+}
+
 async fn api_ingest(
     State(state): State<SharedState>,
     headers: HeaderMap,
@@ -1245,17 +1338,12 @@ async fn api_ingest(
         // No VL configured (preview) — accept + drop so a dev client doesn't spin.
         return StatusCode::OK;
     };
-    // Bearer auth when a token is configured; an open sink requires explicit
+    // Token auth when a token is configured; an open sink requires explicit
     // LIVEVIEW_APM_ALLOW_UNAUTHENTICATED configuration at startup.
-    if let Some(want) = apm.token.as_deref() {
-        let got = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .unwrap_or("");
-        if got != want {
-            return StatusCode::UNAUTHORIZED;
-        }
+    if let Some(want) = apm.token.as_deref()
+        && !apm_token_matches(&headers, want)
+    {
+        return StatusCode::UNAUTHORIZED;
     }
     if events.is_empty() {
         return StatusCode::OK;
@@ -1378,11 +1466,47 @@ impl HttpPolicy {
     }
 }
 
+type CompressPredicateFn =
+    fn(StatusCode, axum::http::Version, &HeaderMap, &axum::http::Extensions) -> bool;
+
+/// Compress only textual API bodies (JSON, text, JS, SVG). Audio, blobs,
+/// images, PDFs and every partial (206 / `Content-Range`) response pass through
+/// untouched so they keep their `Content-Length` and `Accept-Ranges`.
+fn api_response_is_compressible(
+    status: StatusCode,
+    _version: axum::http::Version,
+    headers: &HeaderMap,
+    _extensions: &axum::http::Extensions,
+) -> bool {
+    if status == StatusCode::PARTIAL_CONTENT || headers.contains_key(header::CONTENT_RANGE) {
+        return false;
+    }
+    let Some(content_type) = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let essence = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    essence.starts_with("text/")
+        || essence == "application/json"
+        || essence.ends_with("+json")
+        || essence == "application/javascript"
+        || essence == "application/x-ndjson"
+        || essence == "image/svg+xml"
+}
+
 fn build_app(state: SharedState) -> Result<Router, String> {
     Ok(build_app_with_policy(state, HttpPolicy::from_env()?))
 }
 
 fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
+    use tower_http::compression::Predicate as _;
     let mut api_router = Router::new()
         .route("/api/books", get(api_books))
         .route("/api/cover", get(api_cover))
@@ -1445,7 +1569,15 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
     api_router = api_router
         // Large whole-corpus metadata responses are highly compressible (the
         // current DAG shrinks by roughly an order of magnitude with gzip).
-        .layer(tower_http::compression::CompressionLayer::new());
+        // Media and blob bytes are NOT: compressing them wastes CPU and, worse,
+        // strips `Content-Length` / `Accept-Ranges`, which breaks seeking and
+        // download-size accounting. See `api_response_is_compressible`.
+        .layer(
+            tower_http::compression::CompressionLayer::new().compress_when(
+                tower_http::compression::DefaultPredicate::new()
+                    .and(api_response_is_compressible as CompressPredicateFn),
+            ),
+        );
 
     #[cfg(feature = "embedded")]
     let app = {
@@ -1488,7 +1620,12 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
                 header::AUTHORIZATION,
                 header::CONTENT_TYPE,
                 header::IF_NONE_MATCH,
-            ]),
+                HeaderName::from_static(APM_TOKEN_HEADER),
+            ])
+            // Cache preflights: every conditional DAG/manifest fetch from the
+            // native shell is otherwise preceded by an OPTIONS round trip.
+            // Browsers clamp this to their own maximum.
+            .max_age(std::time::Duration::from_secs(3600)),
     )
 }
 
@@ -1595,14 +1732,16 @@ async fn api_tree(
         .as_deref()
         .and_then(RenditionKind::parse)
         .unwrap_or(RenditionKind::Text);
-    let json = state
-        .store
-        .get_site_tree(kind.as_str())
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| "[]".to_string());
-    ([(header::CONTENT_TYPE, "application/json")], json)
+    // A store error is a 503, not an empty `[]`: an empty spine is a valid,
+    // cacheable answer that the offline replica would keep until the next root.
+    match state.store.get_site_tree(kind.as_str()).await {
+        Ok(json) => (
+            [(header::CONTENT_TYPE, "application/json")],
+            json.unwrap_or_else(|| "[]".to_string()),
+        )
+            .into_response(),
+        Err(error) => store_unavailable("get_site_tree", error),
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -1693,10 +1832,9 @@ async fn api_settings_get(State(state): State<SharedState>) -> impl IntoResponse
             let map: HashMap<String, String> = rows.into_iter().collect();
             Json(map).into_response()
         }
-        Err(e) => {
-            tracing::warn!(error = %e, "settings read failed");
-            Json(HashMap::<String, String>::new()).into_response()
-        }
+        // Never answer `{}` on failure: the client would reconcile its local
+        // settings against an empty server state.
+        Err(error) => store_unavailable("settings_all", error),
     }
 }
 
@@ -1846,14 +1984,16 @@ struct CoverQuery {
 /// Stream a content-addressed blob from rustfs with its stored MIME.
 async fn blob_response(state: &AppState, hash: &str, cache: &str) -> Option<Response> {
     let bytes = state.obj.get(hash).await.ok()?;
-    let mime = state
-        .store
-        .get_asset(hash)
-        .await
-        .ok()
-        .flatten()
-        .map(|a| a.mime)
-        .unwrap_or_else(|| "application/octet-stream".to_string());
+    // Degraded metadata (store error or missing asset row) ⇒ generic bytes that
+    // the client must revalidate, never the caller's long-lived cache policy.
+    let (mime, cache) = match state.store.get_asset(hash).await {
+        Ok(Some(asset)) => (asset.mime, cache),
+        Ok(None) => ("application/octet-stream".to_string(), "no-cache"),
+        Err(error) => {
+            tracing::warn!(%error, hash, "asset metadata read failed");
+            ("application/octet-stream".to_string(), "no-store")
+        }
+    };
     Some(
         Response::builder()
             .status(StatusCode::OK)
@@ -2106,11 +2246,34 @@ struct ReqCtx {
     rest: String,
 }
 
+/// Split a wire path `<slug>/<rel_path>` and validate `rel_path` as a strictly
+/// relative, normalized path under the book. `None` for an empty path, an
+/// absolute path, or any empty / `.` / `..` / NUL-bearing segment — the
+/// filesystem preview joins `rel_path` onto the book's source directory, so a
+/// traversal segment would otherwise escape it.
+fn split_request_path(path: &str) -> Option<(&str, &str)> {
+    let (slug, rest) = path.split_once('/')?;
+    if slug.is_empty() || !is_safe_rel_path(rest) {
+        return None;
+    }
+    Some((slug, rest))
+}
+
+fn is_safe_rel_path(rest: &str) -> bool {
+    !rest.is_empty()
+        && rest
+            .split('/')
+            .all(|seg| !seg.is_empty() && seg != "." && seg != ".." && !seg.contains('\0'))
+        && Path::new(rest)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
 /// Resolve `(path, rendition token, lang)` against the catalog: the book picks
 /// the rendition (the token, else its default); the rendition picks the lang
-/// (the query, else its default). `None` ⇒ unknown book.
+/// (the query, else its default). `None` ⇒ unknown book or an unsafe path.
 async fn resolve_req(state: &AppState, q: &FileQuery) -> Option<ReqCtx> {
-    let (slug, rest) = q.path.split_once('/').unwrap_or((q.path.as_str(), ""));
+    let (slug, rest) = split_request_path(&q.path)?;
     let cat = state.catalog.read().await;
     let book = cat.book(slug)?;
     let kind = q
@@ -2132,7 +2295,7 @@ async fn resolve_req(state: &AppState, q: &FileQuery) -> Option<ReqCtx> {
 /// /api/marks), independent of the request's rendition token. `None` ⇒ unknown
 /// book or no audio rendition.
 async fn resolve_audio(state: &AppState, q: &FileQuery) -> Option<ReqCtx> {
-    let (slug, rest) = q.path.split_once('/').unwrap_or((q.path.as_str(), ""));
+    let (slug, rest) = split_request_path(&q.path)?;
     let cat = state.catalog.read().await;
     let book = cat.book(slug)?;
     let rend = book.rendition(RenditionKind::Audio)?;
@@ -2199,17 +2362,24 @@ async fn api_file(
 /// prefer the distilled `<id>.spoken.md` chapter, else the raw `<id>.md`; for
 /// audio, the `<aid>.spoken.md` chapter IS the script. Returns the chapter +
 /// the served lang (overlay → base).
-async fn resolve_narration(state: &AppState, ctx: &ReqCtx) -> Option<(ChapterRecord, String)> {
+///
+/// A store error is propagated, never treated as "absent": silently falling
+/// back to the raw `.md` would synthesize (and cache under the chapter's
+/// content-addressed key) narration from the wrong source.
+async fn resolve_narration(
+    state: &AppState,
+    ctx: &ReqCtx,
+) -> Result<Option<(ChapterRecord, String)>, String> {
     if ctx.kind == RenditionKind::Text
         && let Some(stem) = ctx.rest.strip_suffix(".md")
     {
         let spoken = format!("{stem}.spoken.md");
-        if let Ok(Some(hit)) = state
+        if let Some(hit) = state
             .store
             .get_chapter_fallback(&ctx.slug, "text", &ctx.lang, &ctx.default_lang, &spoken)
-            .await
+            .await?
         {
-            return Some(hit);
+            return Ok(Some(hit));
         }
     }
     let direct = state
@@ -2221,11 +2391,9 @@ async fn resolve_narration(state: &AppState, ctx: &ReqCtx) -> Option<(ChapterRec
             &ctx.default_lang,
             &ctx.rest,
         )
-        .await
-        .ok()
-        .flatten();
+        .await?;
     if direct.is_some() || ctx.kind != RenditionKind::Audio {
-        return direct;
+        return Ok(direct);
     }
 
     // Some `book.toml` corpora expose an audiobook spine as virtual
@@ -2233,13 +2401,13 @@ async fn resolve_narration(state: &AppState, ctx: &ReqCtx) -> Option<(ChapterRec
     // text chapter (`<id>.md`). Prefer a real curated audio row above, then map
     // that virtual path back to its text source. Audio, marks, and transcript all
     // use this same fallback so their sentence indexes stay aligned.
-    let text_path = audio_text_fallback_path(&ctx.rest)?;
+    let Some(text_path) = audio_text_fallback_path(&ctx.rest) else {
+        return Ok(None);
+    };
     state
         .store
         .get_chapter_fallback(&ctx.slug, "text", &ctx.lang, &ctx.default_lang, &text_path)
         .await
-        .ok()
-        .flatten()
 }
 
 fn audio_text_fallback_path(path: &str) -> Option<String> {
@@ -2272,7 +2440,7 @@ async fn api_spoken(
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     };
     match resolve_narration(&state, &ctx).await {
-        Some((row, served_lang)) => {
+        Ok(Some((row, served_lang))) => {
             let md = row.markdown.unwrap_or_default();
             Json(SpokenContent {
                 lang: served_lang,
@@ -2280,7 +2448,8 @@ async fn api_spoken(
             })
             .into_response()
         }
-        None => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(error) => store_unavailable("resolve_narration", error),
     }
 }
 
@@ -2333,7 +2502,8 @@ async fn api_units(
             })
             .into_response()
         }
-        _ => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(error) => store_unavailable("get_chapter_fallback", error),
     }
 }
 
@@ -2517,33 +2687,7 @@ fn serve_audio_range(
     headers: &axum::http::HeaderMap,
     mime: &'static str,
 ) -> axum::response::Response {
-    let total = data.len() as u64;
-    let range = headers
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| parse_range(v, total));
-    let builder = Response::builder()
-        .header(header::CONTENT_TYPE, mime)
-        .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CACHE_CONTROL, "public, max-age=3600");
-    match range {
-        Some((start, end)) => builder
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(
-                header::CONTENT_RANGE,
-                format!("bytes {start}-{end}/{total}"),
-            )
-            .header(header::CONTENT_LENGTH, end - start + 1)
-            .body(Body::from(data[start as usize..=end as usize].to_vec()))
-            .unwrap()
-            .into_response(),
-        None => builder
-            .status(StatusCode::OK)
-            .header(header::CONTENT_LENGTH, total)
-            .body(Body::from(data))
-            .unwrap()
-            .into_response(),
-    }
+    ranged_bytes_response(data, headers, mime, "public, max-age=3600")
 }
 
 /// Chapter narration audio — the pre-generated MP3 from rustfs, with
@@ -2586,8 +2730,10 @@ async fn api_audio(
     let Some(ctx) = resolve_audio(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "audio not available").into_response();
     };
-    let Some((row, _)) = resolve_narration(&state, &ctx).await else {
-        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    let row = match resolve_narration(&state, &ctx).await {
+        Ok(Some((row, _))) => row,
+        Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(error) => return store_unavailable("resolve_narration", error),
     };
     let hash = match ensure_chapter_audio(&state, &row).await {
         Ok((audio_hash, _)) => audio_hash,
@@ -2684,8 +2830,10 @@ async fn api_marks(
     let Some(ctx) = resolve_audio(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "audio not available").into_response();
     };
-    let Some((row, _)) = resolve_narration(&state, &ctx).await else {
-        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    let row = match resolve_narration(&state, &ctx).await {
+        Ok(Some((row, _))) => row,
+        Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(error) => return store_unavailable("resolve_narration", error),
     };
     let hash = match ensure_chapter_audio(&state, &row).await {
         Ok((_, marks_hash)) => marks_hash,
@@ -2990,7 +3138,7 @@ async fn api_raw(
     let Some(ctx) = resolve_req(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     };
-    let Some((row, _)) = state
+    let row = match state
         .store
         .get_chapter_fallback(
             &ctx.slug,
@@ -3000,10 +3148,10 @@ async fn api_raw(
             &ctx.rest,
         )
         .await
-        .ok()
-        .flatten()
-    else {
-        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    {
+        Ok(Some((row, _))) => row,
+        Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+        Err(error) => return store_unavailable("get_chapter_fallback", error),
     };
     let Some(hash) = row.asset_hash else {
         return (StatusCode::NOT_FOUND, "not a binary asset").into_response();
