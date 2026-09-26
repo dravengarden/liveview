@@ -66,6 +66,7 @@ import { useAutoUpdate } from "@/hooks/useAutoUpdate";
 import { useAudioPreloadDriver } from "@/hooks/useAudioPreloadDriver";
 import { applyUpdate, useConnectionBanner } from "@/connectionStore";
 import { NativeReleaseUpdatePrompt, NavShell } from "./_shell";
+import { rootRefreshDue } from "./rootRefresh";
 import type {
   Book,
   BookProgress,
@@ -777,6 +778,7 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     // Fallback baseline when the replica has no applied root (disabled/empty).
     let lastRoot: string | null = null;
+    let lastRefreshAt = 0;
     let cancelled = false;
     let checking = false;
     const check = async (): Promise<void> => {
@@ -786,8 +788,9 @@ export function App(): React.JSX.Element {
         const root = await fetchServerRoot();
         if (cancelled || !root) return;
         const applied = (await replicaAppliedRoot()) ?? lastRoot;
-        if (root === applied) return;
+        if (!rootRefreshDue(root, applied, lastRefreshAt, Date.now())) return;
         await refreshShelf();
+        lastRefreshAt = Date.now();
         lastRoot = root;
       } catch {
         // offline / transient — retry on the next tick or foreground.
