@@ -18,6 +18,23 @@ use crate::store::model::{
 /// The schema, embedded so migration needs no file at runtime.
 const SCHEMA: &str = include_str!("schema.sql");
 
+/// Advance the served-content epoch (see `manifest_root`). Callers append
+/// further `AND` conditions.
+const BUMP_EPOCH: &str = "UPDATE deploy_root SET content_epoch = content_epoch + 1 WHERE id = 1";
+
+/// The manifest root clients compare: the Merkle deploy root qualified by the
+/// served-content epoch, so a change that does not move the Merkle root (audio
+/// baked after a sync) still changes `/api/root`, `/api/dag`, their ETags and
+/// the server's dag cache. Clients treat the value as an opaque token; epoch 0
+/// (a deploy predating the epoch) keeps the bare root.
+pub(crate) fn manifest_root(root: &str, epoch: i64) -> String {
+    if epoch == 0 {
+        root.to_string()
+    } else {
+        format!("{root}.{epoch}")
+    }
+}
+
 /// `assets a` row predicate: referenced by no chapter or book artwork, and not
 /// registered since `$1` (the GC grace cutoff, unix ms).
 const ORPHAN_ASSET: &str = "a.touched_at < $1
@@ -433,13 +450,20 @@ impl PgStore {
     /// first (the caller should serve that pair, so audio and marks stay
     /// consistent across requests).
     pub async fn set_chapter_audio(&self, bake: &AudioBake<'_>) -> Result<bool, sqlx::Error> {
-        sqlx::query(
-            "UPDATE chapters SET audio_hash = $7, marks_hash = $8, audio_voice = $6
-             WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4
-               AND content_hash = $5
-               AND (audio_hash IS NULL OR marks_hash IS NULL
-                    OR audio_voice IS DISTINCT FROM $6)",
-        )
+        // A recorded bake changes what /api/dag serves without moving the
+        // Merkle root, so it bumps the content epoch in the same statement.
+        sqlx::query_scalar::<_, i64>(&format!(
+            "WITH baked AS (
+                 UPDATE chapters SET audio_hash = $7, marks_hash = $8, audio_voice = $6
+                 WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4
+                   AND content_hash = $5
+                   AND (audio_hash IS NULL OR marks_hash IS NULL
+                        OR audio_voice IS DISTINCT FROM $6)
+                 RETURNING 1
+             ),
+             bump AS ({BUMP_EPOCH} AND EXISTS (SELECT 1 FROM baked))
+             SELECT count(*) FROM baked"
+        ))
         .bind(bake.book_slug)
         .bind(bake.rendition)
         .bind(bake.lang)
@@ -448,9 +472,9 @@ impl PgStore {
         .bind(bake.voice)
         .bind(bake.audio_hash)
         .bind(bake.marks_hash)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await
-        .map(|r| r.rows_affected() > 0)
+        .map(|n| n > 0)
     }
 
     /// Record the voice a legacy bake (audio present, voice unknown) was made
@@ -491,10 +515,14 @@ impl PgStore {
         lang: &str,
         rel_path: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE chapters SET audio_hash = NULL, marks_hash = NULL, audio_voice = NULL
-             WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4",
-        )
+        sqlx::query(&format!(
+            "WITH cleared AS (
+                 UPDATE chapters SET audio_hash = NULL, marks_hash = NULL, audio_voice = NULL
+                 WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4
+                 RETURNING 1
+             )
+             {BUMP_EPOCH} AND EXISTS (SELECT 1 FROM cleared)"
+        ))
         .bind(book_slug)
         .bind(rendition)
         .bind(lang)
@@ -639,12 +667,18 @@ impl PgStore {
         old_hash: &str,
         new_hash: &str,
     ) -> Result<u64, sqlx::Error> {
-        let result = sqlx::query("UPDATE chapters SET audio_hash = $2 WHERE audio_hash = $1")
-            .bind(old_hash)
-            .bind(new_hash)
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected())
+        sqlx::query_scalar::<_, i64>(&format!(
+            "WITH replaced AS (
+                 UPDATE chapters SET audio_hash = $2 WHERE audio_hash = $1 RETURNING 1
+             ),
+             bump AS ({BUMP_EPOCH} AND EXISTS (SELECT 1 FROM replaced))
+             SELECT count(*) FROM replaced"
+        ))
+        .bind(old_hash)
+        .bind(new_hash)
+        .fetch_one(&self.pool)
+        .await
+        .map(|n| u64::try_from(n).unwrap_or(0))
     }
 
     pub async fn delete_asset(&self, content_hash: &str) -> Result<(), sqlx::Error> {
@@ -779,10 +813,14 @@ impl PgStore {
 
     pub async fn set_deploy_root(&self, root_hash: &str) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO deploy_root (id, root_hash, updated_at)
-             VALUES (1, $1, $2)
+            "INSERT INTO deploy_root (id, root_hash, updated_at, content_epoch)
+             VALUES (1, $1, $2, 1)
              ON CONFLICT (id) DO UPDATE SET
-                 root_hash = EXCLUDED.root_hash, updated_at = EXCLUDED.updated_at",
+                 root_hash = EXCLUDED.root_hash, updated_at = EXCLUDED.updated_at,
+                 -- Every deploy moves the epoch, so a (root, epoch) pair never
+                 -- names two different served states (e.g. an A→B→A revert
+                 -- whose audio differs from the first time A was live).
+                 content_epoch = deploy_root.content_epoch + 1",
         )
         .bind(root_hash)
         .bind(now_millis())
@@ -1029,17 +1067,21 @@ impl PgStore {
     pub async fn manifest_books(
         &self,
     ) -> Result<(Option<String>, Vec<(String, String)>), sqlx::Error> {
-        let root = self.deploy_root().await?;
-        let children = match &root {
-            Some(r) => match self.get_merkle_node(r).await? {
-                Some(n) if n.kind == "tree" => {
-                    serde_json::from_str::<Vec<(String, String)>>(&n.payload).unwrap_or_default()
-                }
-                _ => Vec::new(),
-            },
-            None => Vec::new(),
+        let row: Option<(Option<String>, i64)> =
+            sqlx::query_as("SELECT root_hash, content_epoch FROM deploy_root WHERE id = 1")
+                .fetch_optional(&self.pool)
+                .await?;
+        let (root, epoch) = match row {
+            Some((Some(root), epoch)) => (root, epoch),
+            _ => return Ok((None, Vec::new())),
         };
-        Ok((root, children))
+        let children = match self.get_merkle_node(&root).await? {
+            Some(n) if n.kind == "tree" => {
+                serde_json::from_str::<Vec<(String, String)>>(&n.payload).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+        Ok((Some(manifest_root(&root, epoch)), children))
     }
 
     /// One book's content-addressed chapters (audio + assets) with blob sizes and
@@ -1571,6 +1613,39 @@ mod tests {
             .unwrap();
         assert!(deleted && deleted_object.into_inner());
         assert!(s.get_asset(hash).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn manifest_root_is_the_bare_root_until_the_epoch_moves() {
+        assert_eq!(manifest_root("abc", 0), "abc");
+        assert_eq!(manifest_root("abc", 7), "abc.7");
+        assert_ne!(manifest_root("abc", 7), manifest_root("abc", 8));
+    }
+
+    #[tokio::test]
+    async fn baking_audio_moves_the_manifest_root() {
+        let Some(s) = store().await else { return };
+        let slug = "t-epoch";
+        s.delete_book(slug).await.unwrap();
+        s.set_deploy_root("root-epoch").await.unwrap();
+        s.upsert_chapter(&chapter(slug, "00.spoken.md", "h"))
+            .await
+            .unwrap();
+        let root = || async { s.manifest_books().await.unwrap().0.unwrap() };
+        let before = root().await;
+        assert!(before.contains('.'), "deploys qualify the root: {before}");
+        assert!(
+            s.set_chapter_audio(&bake(slug, "h", "v", "a"))
+                .await
+                .unwrap()
+        );
+        let after_bake = root().await;
+        assert_ne!(before, after_bake, "a bake must invalidate /api/root");
+        s.clear_chapter_audio(slug, "audio", "en", "00.spoken.md")
+            .await
+            .unwrap();
+        assert_ne!(after_bake, root().await, "clearing audio must too");
+        s.delete_book(slug).await.unwrap();
     }
 
     #[tokio::test]

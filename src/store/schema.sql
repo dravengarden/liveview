@@ -146,6 +146,21 @@ CREATE TABLE IF NOT EXISTS deploy_root (
     root_hash  TEXT,
     updated_at BIGINT NOT NULL DEFAULT 0
 );
+-- Bumped on every deploy and on every served-content change that does not
+-- move the Merkle root (audio baked or cleared after a sync). The manifest
+-- root clients compare (`/api/root`, `/api/dag`, their ETags and the dag
+-- cache) is `root_hash` qualified by this epoch, so audio produced after a
+-- sync still reaches clients that only refetch the DAG on a root change.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'deploy_root' AND column_name = 'content_epoch'
+    ) THEN
+        ALTER TABLE deploy_root ADD COLUMN content_epoch BIGINT NOT NULL DEFAULT 0;
+    END IF;
+END $$;
 
 -- ── Async audio generation queue ─────────────────────────────────────────────
 --
