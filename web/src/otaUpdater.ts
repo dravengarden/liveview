@@ -26,6 +26,17 @@ interface WebManifest {
   files?: string[];
 }
 
+async function manifestStillAt(version: string): Promise<boolean> {
+  const response = await fetch(remoteUrl("/app-dist/manifest.json"), {
+    cache: "no-store",
+    headers: { "If-None-Match": version },
+  });
+  if (response.status === 304) return true;
+  if (!response.ok) return false;
+  const manifest = (await response.json()) as WebManifest;
+  return manifest.version?.trim() === version;
+}
+
 /** Probe + (if newer) incrementally download the app bundle, then reload into it.
  *  Called on load, foreground recovery, and every `AppVersion` push. */
 export async function runOtaCheck(): Promise<void> {
@@ -61,6 +72,13 @@ export async function runOtaCheck(): Promise<void> {
     }
     const indexPut = await putFromUrl("index.html", version);
     if (indexPut == null) return;
+    // Installed hosts before the index-version check store whatever index the
+    // server returns. If a deploy landed after the first probe, that index boots
+    // a different entry chunk than the files fetched above; activating it would
+    // white-screen. Re-probe AFTER the index download: an unchanged version
+    // proves the stored index belongs to it. Otherwise skip; the next check
+    // stages the new version (its index put overwrites this root).
+    if (!(await manifestStillAt(version))) return;
     const ok = await appshellActivate(version, hashed);
     if (!ok) return;
 
