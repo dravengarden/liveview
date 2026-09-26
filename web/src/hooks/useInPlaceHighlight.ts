@@ -7,7 +7,11 @@ import {
 } from "react";
 import { haptic } from "../_shell";
 import { contentFetch } from "@/native-sync";
-import { useAudioPlayer, useAudioTime } from "@/audio/player";
+import {
+  useAudioPlayer,
+  useAudioReadAlong,
+  useAudioTime,
+} from "@/audio/player";
 import { resolveReadAlongIndex } from "@/audio/mark-index";
 import type { Mark, SpokenUnits, Unit } from "@/types";
 
@@ -449,12 +453,8 @@ export function useInPlaceHighlight(
   scrollerRef: RefObject<HTMLElement | null>,
   currentPath: string | null,
 ): ReadAlongFollow {
-  const {
-    nowPlaying,
-    currentIdx: engineCurrentIdx,
-    playing,
-    seekToSentence,
-  } = useAudioPlayer();
+  const { nowPlaying, playing, seekToSentence } = useAudioPlayer();
+  const { currentIdx: engineCurrentIdx } = useAudioReadAlong();
   const active = nowPlaying?.rendition === "text" &&
     nowPlaying.chapterPath === currentPath;
   const readAlongKey = active && nowPlaying
