@@ -131,8 +131,14 @@ export async function withTxn<T>(
       txnDone = true;
       finishOk();
     });
-    txn.addEventListener("error", () => {
-      finishErr(txn.error ?? new Error("IndexedDB transaction failed"));
+    txn.addEventListener("error", (ev: Event) => {
+      // A request error bubbles here with `ev.target` set to the failing
+      // IDBRequest. WebKit leaves `txn.error` null until the abort that follows,
+      // so prefer the request's error or a QuotaExceededError goes unrecognized.
+      const source = ev.target as { error?: unknown } | null;
+      finishErr(
+        source?.error ?? txn.error ?? new Error("IndexedDB transaction failed"),
+      );
     });
     txn.addEventListener("abort", () => {
       finishErr(txn.error ?? new Error("IndexedDB transaction aborted"));

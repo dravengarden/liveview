@@ -1,5 +1,11 @@
 import { replicaStats as readReplicaStats } from "./agg.ts";
-import { getBlob, hasBlob, putBlob, setPinned } from "./blobs.ts";
+import {
+  getBlob,
+  hasBlob,
+  putBlob,
+  resetKnownBodies,
+  setPinned,
+} from "./blobs.ts";
 import {
   closeReplicaDb,
   deleteReplicaDb,
@@ -30,7 +36,12 @@ import {
   isAudioKind,
   STORE_APM,
 } from "./schema.ts";
-import { replayWorklist, replicaRemoteBase, setReplicaRemote } from "./sync.ts";
+import {
+  replayWorklist,
+  replicaRemoteBase,
+  resetFillState,
+  setReplicaRemote,
+} from "./sync.ts";
 import { joinRemoteUrl } from "./worker.ts";
 import { installReplicaSpike } from "./spike.ts";
 
@@ -39,9 +50,11 @@ export { parseManifest, parseRoot, rejectNewerProtocol } from "./manifest.ts";
 export { replicaWorkerInitMessage } from "./worker.ts";
 export { runReplicaSpike, SPIKE_EVAL_JS } from "./spike.ts";
 export {
+  disableReplica,
   loadPolicy,
   persistBodyForKind,
   persistPolicy,
+  replicaUsable,
   setPersistFullSizeArtwork,
 } from "./policy.ts";
 export {
@@ -69,8 +82,10 @@ export {
 } from "./sync.ts";
 export {
   artworkBlobSrc,
+  fetchServerRoot,
   materializeArtworkSrc,
   refreshReplicaManifest,
+  replicaAppliedRoot,
   replicaAudioIndex,
   replicaCacheStats,
   replicaContentFetch,
@@ -169,10 +184,12 @@ export async function initReplica(mode?: DataMode, opts?: {
   origins?: readonly string[];
 }): Promise<void> {
   if (replicaFlag() !== "idb") return;
+  // Before any IDB work, so a network-only fallback (open failure) still
+  // resolves absolute URLs against the chosen remote.
+  if (opts?.remoteBase) setReplicaRemote(opts.remoteBase, opts.origins ?? []);
   await openReplicaDb();
   const policy = loadPolicy(mode);
   await persistPolicy(policy);
-  if (opts?.remoteBase) setReplicaRemote(opts.remoteBase, opts.origins ?? []);
   if (!policy.wifiOnly) applyCellularPolicy(true);
   else applyCellularPolicy(false);
   if (!mediaUnsub) {
@@ -185,6 +202,8 @@ export async function initReplica(mode?: DataMode, opts?: {
 export async function resetReplica(): Promise<void> {
   resetArtworkObjectUrls();
   resetPathIndex();
+  resetKnownBodies();
+  resetFillState();
   await deleteReplicaDb();
 }
 

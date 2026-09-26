@@ -5,7 +5,11 @@ import {
   mutateWorklistUnlocked,
   withWorklistLock,
 } from "./worklist.ts";
-import { enqueueCacheDelete } from "./media-bridge.ts";
+import { forgetKnownBodies } from "./blobs.ts";
+import {
+  enqueueCacheDelete,
+  nativeAudioCacheAvailable,
+} from "./media-bridge.ts";
 import {
   type BlobRecord,
   type Manifest,
@@ -165,7 +169,11 @@ function flagMax(old: number, incoming: number): PresentFlag | PinnedFlag {
   return (old > incoming ? old : incoming) as PresentFlag | PinnedFlag;
 }
 
-function mergeBlob(old: BlobRecord, resource: Resource): BlobRecord {
+function mergeBlob(old: BlobRecord, resource: Resource): BlobRecord | null {
+  // Same hash, same metadata: pinned/present are max(old, 0) == old, so the
+  // row is unchanged. Skip the put rather than rewriting every stored body on
+  // each deploy.
+  if (old.kind === resource.kind && old.bytes === resource.bytes) return null;
   const next: BlobRecord = {
     hash: resource.hash,
     kind: resource.kind,
@@ -189,8 +197,12 @@ export async function applyDag(manifest: Manifest): Promise<void> {
     if (!byHash.has(resource.hash)) byHash.set(resource.hash, resource);
   }
   const droppedAudio: string[] = [];
+  const droppedBodies: string[] = [];
   const nextPaths = new Map<string, PathRecord>();
   const nextUrls = new Map<string, string>();
+  // Only a native shell has an audio store to drain; a PWA must not accumulate
+  // evictions nothing will ever consume.
+  const queueNativeEvict = nativeAudioCacheAvailable();
 
   await withWorklistLock(async () => {
     await withTxn(
@@ -206,13 +218,18 @@ export async function applyDag(manifest: Manifest): Promise<void> {
         await forEachCursor<BlobRecord>(blobs, null, async (value, cursor) => {
           const resource = byHash.get(value.hash);
           if (!resource) {
-            if (isAudioKind(value.kind)) droppedAudio.push(value.hash);
+            if (isAudioKind(value.kind)) {
+              if (queueNativeEvict) droppedAudio.push(value.hash);
+            } else {
+              droppedBodies.push(value.hash);
+            }
             await applyCachedDelta(txn, value, undefined);
             cursor.delete();
             return true;
           }
           seen.add(value.hash);
           const next = mergeBlob(value, resource);
+          if (!next) return true;
           await idbRequest(blobs.put(next));
           await applyCachedDelta(txn, value, next);
           return true;
@@ -270,6 +287,7 @@ export async function applyDag(manifest: Manifest): Promise<void> {
       },
     );
 
+    forgetKnownBodies(droppedBodies);
     adoptPathIndex(nextPaths, nextUrls);
 
     const posted: string[] = [];

@@ -3,6 +3,7 @@ import { nativeNavPop, nativeNavPush, nativeNavReady } from "@/native-nav";
 import { remoteUrl } from "@/apiBase";
 import { nativeWidgetPublish } from "@/native-audio";
 import { contentFetch, ensureAutoSync, isLikelyOffline, nativeRefreshManifest } from "@/native-sync";
+import { fetchServerRoot, replicaAppliedRoot } from "@/replica/mod.ts";
 import { fetchChapterResponse } from "@/contentLoad";
 import {
   useCallback,
@@ -722,8 +723,8 @@ export function App(): React.JSX.Element {
   // content manifest (`by_url`) is served STORE-FIRST and only refreshed on
   // cold-launch/foreground, so `/api/books` resolves to the STALE deploy until we
   // refresh the manifest FIRST — that's the "deploy 了新书得关掉 liveview 再打开"
-  // bug. `nativeRefreshManifest()` re-pulls the manifest to the new root (no-op
-  // off the native shell — the browser/PWA always hits the network). Only THEN do
+  // bug. `nativeRefreshManifest()` re-pulls the replica manifest to the new root
+  // on every platform (the PWA also serves chapters from the IDB replica). Only THEN do
   // the FRESH re-fetches resolve to the new content. Then re-warm BOTH spines +
   // re-seed the shelf tree so the new/changed book opens and meters correctly.
   const refreshShelf = useCallback(async (): Promise<void> => {
@@ -765,32 +766,34 @@ export function App(): React.JSX.Element {
   }, []);
 
   // Live shelf refresh (fallback path): a newly-deployed book changes the Merkle
-  // deploy root, so poll /api/root (tiny, network-first) on an interval + on
-  // foreground; when it changes, refresh the shelf. The PRIMARY path is the
-  // server's WS `TreeUpdate` broadcast (handleTreeUpdate below), which fires the
-  // instant a sync lands — this poll just catches a missed WS message.
+  // deploy root, so poll /api/root (tiny, plain no-store fetch) at startup, on an
+  // interval, and on foreground. The baseline is the root the replica last
+  // APPLIED, not the server's first answer: a deploy that landed while the app
+  // was closed must still refresh the replica manifest (chapters are served
+  // store-first by hash) and the shelf. Runs on every platform. The PRIMARY live
+  // path is the server's WS `TreeUpdate` broadcast (handleTreeUpdate below).
   useEffect(() => {
+    // Fallback baseline when the replica has no applied root (disabled/empty).
     let lastRoot: string | null = null;
     let cancelled = false;
+    let checking = false;
     const check = async (): Promise<void> => {
+      if (checking) return;
+      checking = true;
       try {
-        const r = (await (await contentFetch("/api/root", { fresh: true })).json()) as {
-          root?: string;
-        };
-        const root = r.root ?? null;
+        const root = await fetchServerRoot();
         if (cancelled || !root) return;
-        if (lastRoot === null) {
-          lastRoot = root; // baseline; the initial fetch above already has the latest
-          return;
-        }
-        if (root !== lastRoot) {
-          lastRoot = root;
-          if (!cancelled) await refreshShelf();
-        }
+        const applied = (await replicaAppliedRoot()) ?? lastRoot;
+        if (root === applied) return;
+        await refreshShelf();
+        lastRoot = root;
       } catch {
         // offline / transient — retry on the next tick or foreground.
+      } finally {
+        checking = false;
       }
     };
+    void check();
     const id = window.setInterval(() => void check(), 20_000);
     const onVis = (): void => {
       if (document.visibilityState === "visible") void check();

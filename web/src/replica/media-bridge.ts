@@ -4,9 +4,24 @@ import {
   cacheDelete,
   cacheFromUrl,
   type HostCacheProgressEvent,
+  hostAudioAvailable,
   setAllowsCellular,
 } from "../native-host.ts";
 import { setPresent } from "./blobs.ts";
+
+let nativeCacheProbe = hostAudioAvailable;
+
+/** Whether a native audio store exists to receive cacheDelete. Off the shell
+ *  (PWA / browser) nothing native is ever cached, so evictions must not be
+ *  queued for a host that will never drain them. */
+export function nativeAudioCacheAvailable(): boolean {
+  return nativeCacheProbe();
+}
+
+/** Test seam: override the native-host availability probe. */
+export function setNativeAudioCacheProbe(probe: () => boolean): void {
+  nativeCacheProbe = probe;
+}
 
 function isAbsoluteUrl(url: string): boolean {
   try {
@@ -74,9 +89,14 @@ export function installMediaBridge(onCached?: () => void): () => void {
   const listener = (event: Event): void => {
     const { detail } = event as CustomEvent<unknown>;
     if (!isCacheProgress(detail)) return;
-    void noteCacheProgress(detail.hash, detail.ok).then(() => {
-      if (detail.ok) onCached?.();
-    });
+    void noteCacheProgress(detail.hash, detail.ok).then(
+      () => {
+        if (detail.ok) onCached?.();
+      },
+      (error: unknown) => {
+        console.warn("replica: cacheProgress bookkeeping failed", error);
+      },
+    );
   };
   globalThis.addEventListener("lv-native-audio", listener);
   return () => globalThis.removeEventListener("lv-native-audio", listener);

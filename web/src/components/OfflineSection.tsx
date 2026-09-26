@@ -45,6 +45,8 @@ const MAX_KEY = "lv.offline.maxGB";
 // target instantly on open, before the live /api/dag total arrives.
 const TOTAL_KEY = "lv.offline.audioTotalBytes";
 const CAP_PRESETS = [2, 5, 10, 20, 30, 50];
+// Minimum spacing between eager-fill passes triggered from the gauge poll.
+const AUTO_SYNC_MIN_MS = 10_000;
 function maxGB(): number {
   return Number(globalThis.localStorage?.getItem(MAX_KEY) ?? "20") || 20;
 }
@@ -75,6 +77,7 @@ export function OfflineSection(): React.JSX.Element | null {
   const pollRef = useRef<ReturnType<typeof globalThis.setInterval> | undefined>(undefined);
   // Rolling (t, audioUsedBytes) samples over the last ~10s → average download speed.
   const samplesRef = useRef<{ t: number; used: number }[]>([]);
+  const lastAutoSyncRef = useRef(0);
 
   const tick = useCallback(async () => {
     let s: CacheStats | null = null;
@@ -110,7 +113,14 @@ export function OfflineSection(): React.JSX.Element | null {
     } catch {
       /* keep last-known */
     }
-    if (s && s.cached < s.total) void ensureAutoSync();
+    // The gauge polls every 2 s, but a fill pass is not a gauge refresh: the
+    // replica pump is single-flight and skips hashes already in flight, and a
+    // new pass is only worth planning every few ticks.
+    const now = Date.now();
+    if (s && s.cached < s.total && now - lastAutoSyncRef.current >= AUTO_SYNC_MIN_MS) {
+      lastAutoSyncRef.current = now;
+      void ensureAutoSync();
+    }
   }, []);
 
   useEffect(() => {

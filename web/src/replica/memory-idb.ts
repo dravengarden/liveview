@@ -130,8 +130,8 @@ class Emitter {
     this.listeners.get(type)?.delete(fn);
   }
 
-  dispatch(type: string): void {
-    const ev = { type, target: this } as unknown as Event;
+  dispatch(type: string, target: unknown = this): void {
+    const ev = { type, target } as unknown as Event;
     const prop = (this as unknown as Record<string, unknown>)[`on${type}`];
     if (typeof prop === "function") {
       (prop as (e: Event) => void).call(this, ev);
@@ -321,6 +321,10 @@ class MemoryObjectStore {
         const key = keyFromPath(value, this.keyPath);
         const cloned = cloneValue(value);
         this.db.checkQuota(this.name, this.data.get(encodeKey(key)), cloned);
+        this.db.factory.putCounts.set(
+          this.name,
+          (this.db.factory.putCounts.get(this.name) ?? 0) + 1,
+        );
         this.data.set(encodeKey(key), { key, value: cloned });
         req.result = key;
         req.readyState = "done";
@@ -329,7 +333,7 @@ class MemoryObjectStore {
         req.error = error as Error;
         req.readyState = "done";
         req.dispatch("error");
-        this.txn.fail(error);
+        this.txn.fail(error, req);
       }
       this.txn.removePending();
     });
@@ -454,7 +458,18 @@ class MemoryTransaction extends Emitter {
     this.dispatch("abort");
   }
 
-  fail(error: unknown): void {
+  fail(error: unknown, source?: MemoryRequest<unknown>): void {
+    if (source && this.db.factory.webkitErrorQuirk) {
+      // WebKit: the bubbled request error reaches the transaction while
+      // `txn.error` is still null; it is only populated for the abort.
+      if (!this.finished) {
+        this.finished = true;
+        this.dispatch("error", source);
+        this.error = error as Error;
+        this.dispatch("abort");
+      }
+      return;
+    }
     this.error = error as Error;
     if (!this.finished) {
       this.finished = true;
@@ -600,6 +615,10 @@ class MemoryOpenRequest extends MemoryRequest<MemoryDatabase> {
 export class MemoryFactory extends Emitter {
   readonly dbs = new Map<string, MemoryDatabase>();
   quotaBytes: number | null = null;
+  /** Mimic WebKit's null `txn.error` during a bubbled request error. */
+  webkitErrorQuirk = false;
+  /** Successful put() count per object store, for write-amplification tests. */
+  readonly putCounts = new Map<string, number>();
 
   open(name: string, version?: number): MemoryOpenRequest {
     const req = new MemoryOpenRequest();
@@ -654,6 +673,7 @@ export class MemoryFactory extends Emitter {
 export interface MemoryIdbHandle {
   factory: MemoryFactory;
   setQuotaBytes: (n: number | null) => void;
+  setWebkitErrorQuirk: (on: boolean) => void;
 }
 
 let installed: MemoryIdbHandle | null = null;
@@ -672,6 +692,9 @@ export function installMemoryIndexedDB(
     factory,
     setQuotaBytes: (n: number | null): void => {
       factory.quotaBytes = n;
+    },
+    setWebkitErrorQuirk: (on: boolean): void => {
+      factory.webkitErrorQuirk = on;
     },
   };
   installed = handle;
