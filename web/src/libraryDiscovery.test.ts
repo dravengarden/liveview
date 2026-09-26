@@ -161,6 +161,43 @@ Deno.test("catalog tags derive generic facets without aliases or collection infe
   );
 });
 
+// Shared with `tag_fixtures_match_web_facet_derivation` in `src/tags.rs` —
+// keep both lists aligned. The server accepts exactly the tags whose derived
+// facet and label survive intact here.
+Deno.test("server-accepted tags derive an intact facet and label", () => {
+  const derive = (id: string): [string, string] => {
+    const tag = buildLibraryTaxonomy([{ ...book, tags: [id] }]).tags[0]!;
+    return [tag.facet, tag.label];
+  };
+  const accepted: [string, string, string][] = [
+    ["beginner", "tags", "Beginner"],
+    ["subject.history", "subject", "History"],
+    ["format.field-guide", "format", "Field Guide"],
+    ["主题.生态学", "主题", "生态学"],
+    ["a.b.c", "a", "B C"],
+    ["x_y", "tags", "X Y"],
+    ["2024", "tags", "2024"],
+  ];
+  for (const [id, facet, label] of accepted) {
+    assertEquals([id, ...derive(id)], [id, facet, label]);
+  }
+  // Rejected by the server: each would lose its facet, split a facet by case,
+  // or render an empty label if it ever reached the reader.
+  const rejected: [string, string, string][] = [
+    [".", "tags", ""],
+    ["-", "tags", ""],
+    ["a.", "tags", "A"],
+    [".a", "tags", "A"],
+    ["a..b", "a", "B"],
+    ["a.-", "a", ""],
+    ["Subject.history", "Subject", "History"],
+    ["École", "tags", "École"],
+  ];
+  for (const [id, facet, label] of rejected) {
+    assertEquals([id, ...derive(id)], [id, facet, label]);
+  }
+});
+
 Deno.test("collection ordering is locale-aware and has no curated priorities", () => {
   assertEquals(
     sortCollectionNames(["Zoology", "Architecture", "Botany"], "en"),
