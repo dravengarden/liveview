@@ -11,8 +11,8 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::store::model::{
     AssetRecord, AudioTask, AudioTaskRollup, AudioTaskUpsert, BookRecord, BookUpsert,
-    ChapterRecord, DagArtwork, DagChapter, EditionRecord, LegacyAudioAsset, ManifestChapter,
-    MerkleNode, ProgressEntry, RenditionRecord,
+    ChapterRecord, ChapterState, DagArtwork, DagChapter, EditionRecord, LegacyAudioAsset,
+    ManifestChapter, MerkleNode, ProgressEntry, RenditionRecord,
 };
 
 /// The schema, embedded so migration needs no file at runtime.
@@ -122,14 +122,21 @@ impl PgStore {
         .map(|_| ())
     }
 
-    /// Delete a book and (via ON DELETE CASCADE) its renditions/editions. Its
-    /// chapters are removed separately by `delete_chapters_for_book`.
+    /// Delete a book with everything keyed by it: renditions/editions (via ON
+    /// DELETE CASCADE) plus its chapters and audio tasks, which carry no foreign
+    /// key and would otherwise outlive the book forever.
     pub async fn delete_book(&self, slug: &str) -> Result<(), sqlx::Error> {
-        sqlx::query("DELETE FROM books WHERE slug = $1")
-            .bind(slug)
-            .execute(&self.pool)
-            .await
-            .map(|_| ())
+        let mut tx = self.pool.begin().await?;
+        // Lock order books → chapters → audio_tasks matches the schema script,
+        // so this transaction cannot deadlock with a concurrent migration.
+        for sql in [
+            "DELETE FROM books WHERE slug = $1",
+            "DELETE FROM chapters WHERE book_slug = $1",
+            "DELETE FROM audio_tasks WHERE book_slug = $1",
+        ] {
+            sqlx::query(sql).bind(slug).execute(&mut *tx).await?;
+        }
+        tx.commit().await
     }
 
     // Flat columns map 1:1 to the renditions table; a wrapper struct for one
@@ -446,6 +453,19 @@ impl PgStore {
         .map(|_| ())
     }
 
+    /// Reconcile state for every chapter row (no HTML/markdown), one query.
+    pub async fn chapter_states(&self) -> Result<Vec<ChapterState>, sqlx::Error> {
+        sqlx::query_as::<_, ChapterState>(
+            "SELECT book_slug, rendition, lang, rel_path, content_hash, render_version,
+                    audio_hash, marks_hash, audio_voice
+             FROM chapters",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Delete a chapter row together with its audio task (a task whose chapter
+    /// is gone can never complete and would linger in the readiness rollup).
     pub async fn delete_chapter(
         &self,
         book_slug: &str,
@@ -453,8 +473,13 @@ impl PgStore {
         lang: &str,
         rel_path: &str,
     ) -> Result<(), sqlx::Error> {
+        // chapters before audio_tasks: the same lock order as the schema script.
         sqlx::query(
-            "DELETE FROM chapters
+            "WITH chapter AS (
+                 DELETE FROM chapters
+                 WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4
+             )
+             DELETE FROM audio_tasks
              WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4",
         )
         .bind(book_slug)
@@ -616,6 +641,17 @@ impl PgStore {
             .await
     }
 
+    /// Drop every Merkle node not in `keep` (the nodes of the just-deployed
+    /// DAG). Nodes of superseded deploys are otherwise never removed, so the
+    /// table grows with every edit. Returns the number of nodes removed.
+    pub async fn prune_merkle_nodes(&self, keep: &[String]) -> Result<u64, sqlx::Error> {
+        sqlx::query("DELETE FROM merkle_nodes WHERE NOT (node_hash = ANY($1))")
+            .bind(keep)
+            .execute(&self.pool)
+            .await
+            .map(|r| r.rows_affected())
+    }
+
     /// All book slugs currently in pg — to prune books dropped from the corpus.
     pub async fn book_slugs(&self) -> Result<Vec<String>, sqlx::Error> {
         sqlx::query_scalar::<_, String>("SELECT slug FROM books")
@@ -693,15 +729,19 @@ impl PgStore {
                  leaf_kind   = EXCLUDED.leaf_kind,
                  voice       = EXCLUDED.voice,
                  priority    = GREATEST(audio_tasks.priority, EXCLUDED.priority),
-                 -- New source or transform ⇒ re-queue; identical task ⇒ keep status.
+                 -- New source or transform (or a forced re-bake) ⇒ re-queue;
+                 -- identical task ⇒ keep status.
                  content_hash = EXCLUDED.content_hash,
-                 status      = CASE WHEN audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                 status      = CASE WHEN $10
+                                          OR audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
                                           OR audio_tasks.leaf_kind IS DISTINCT FROM EXCLUDED.leaf_kind
                                     THEN 'queued' ELSE audio_tasks.status END,
-                 attempts    = CASE WHEN audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                 attempts    = CASE WHEN $10
+                                          OR audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
                                           OR audio_tasks.leaf_kind IS DISTINCT FROM EXCLUDED.leaf_kind
                                     THEN 0 ELSE audio_tasks.attempts END,
-                 error       = CASE WHEN audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                 error       = CASE WHEN $10
+                                          OR audio_tasks.content_hash IS DISTINCT FROM EXCLUDED.content_hash
                                           OR audio_tasks.leaf_kind IS DISTINCT FROM EXCLUDED.leaf_kind
                                     THEN NULL ELSE audio_tasks.error END",
         )
@@ -714,9 +754,39 @@ impl PgStore {
         .bind(task.voice)
         .bind(task.priority)
         .bind(now_millis())
+        .bind(task.force)
         .execute(&self.pool)
         .await
         .map(|_| ())
+    }
+
+    /// Every audio task (one per audio chapter) — lets `liveview sync` skip an
+    /// already-queued/finished identical task without a per-leaf round trip.
+    pub async fn all_audio_tasks(&self) -> Result<Vec<AudioTask>, sqlx::Error> {
+        sqlx::query_as::<_, AudioTask>(
+            "SELECT book_slug, rendition, lang, rel_path, content_hash,
+                    leaf_kind, voice, status, priority, attempts, error,
+                    enqueued_at, started_at, finished_at
+             FROM audio_tasks",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Delete audio tasks whose chapter row no longer exists (left behind by
+    /// deletes before tasks were removed together with their chapter).
+    pub async fn delete_orphan_audio_tasks(&self) -> Result<u64, sqlx::Error> {
+        sqlx::query(
+            "DELETE FROM audio_tasks t
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM chapters c
+                 WHERE c.book_slug = t.book_slug AND c.rendition = t.rendition
+                   AND c.lang = t.lang AND c.rel_path = t.rel_path
+             )",
+        )
+        .execute(&self.pool)
+        .await
+        .map(|r| r.rows_affected())
     }
 
     /// Atomically claim the next runnable task (highest priority, oldest first),
@@ -1157,6 +1227,121 @@ mod tests {
         assert!(s.get_asset("habc").await.unwrap().is_none());
     }
 
+    fn chapter(slug: &str, rel: &str, content: &str) -> ChapterRecord {
+        ChapterRecord {
+            book_slug: slug.into(),
+            rendition: "audio".into(),
+            lang: "en".into(),
+            rel_path: rel.into(),
+            file_type: "markdown".into(),
+            html: Some("<p>x</p>".into()),
+            markdown: Some("x".into()),
+            asset_hash: None,
+            audio_hash: None,
+            marks_hash: None,
+            content_hash: content.into(),
+            render_version: 1,
+        }
+    }
+
+    async fn enqueue(s: &PgStore, slug: &str, rel: &str, content: &str) {
+        s.enqueue_audio_task(&AudioTaskUpsert {
+            book_slug: slug,
+            rendition: "audio",
+            lang: "en",
+            rel_path: rel,
+            content_hash: content,
+            leaf_kind: "audio:1:v:1",
+            voice: "v",
+            priority: 0,
+            force: false,
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn task_count(s: &PgStore, slug: &str) -> usize {
+        s.all_audio_tasks()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|t| t.book_slug == slug)
+            .count()
+    }
+
+    #[tokio::test]
+    async fn deletes_cascade_to_chapters_and_audio_tasks() {
+        let Some(s) = store().await else { return };
+        let slug = "t-cascade";
+        s.delete_book(slug).await.unwrap();
+        s.upsert_book(&BookUpsert {
+            slug,
+            label: "Cascade",
+            description: None,
+            tags: &[],
+            collection: None,
+            author: None,
+            cover_hash: None,
+            backdrop_hash: None,
+            card_backdrop_hash: None,
+            default_rendition: "audio",
+        })
+        .await
+        .unwrap();
+        for rel in ["00.spoken.md", "01.spoken.md"] {
+            s.upsert_chapter(&chapter(slug, rel, "h")).await.unwrap();
+            enqueue(&s, slug, rel, "h").await;
+        }
+        // Deleting one chapter takes its (never-finished) task with it.
+        s.delete_chapter(slug, "audio", "en", "00.spoken.md")
+            .await
+            .unwrap();
+        assert_eq!(task_count(&s, slug).await, 1);
+        // Deleting the book removes the remaining chapter rows and tasks.
+        s.delete_book(slug).await.unwrap();
+        assert_eq!(task_count(&s, slug).await, 0);
+        assert!(
+            s.get_chapter(slug, "audio", "en", "01.spoken.md")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn forced_enqueue_requeues_an_identical_done_task() {
+        let Some(s) = store().await else { return };
+        let slug = "t-force";
+        s.delete_book(slug).await.unwrap();
+        s.upsert_chapter(&chapter(slug, "00.spoken.md", "h"))
+            .await
+            .unwrap();
+        enqueue(&s, slug, "00.spoken.md", "h").await;
+        sqlx::query("UPDATE audio_tasks SET status = 'done' WHERE book_slug = $1")
+            .bind(slug)
+            .execute(&s.pool)
+            .await
+            .unwrap();
+        let status = || s.audio_task_status(slug, "audio", "en", "00.spoken.md");
+        enqueue(&s, slug, "00.spoken.md", "h").await;
+        assert_eq!(status().await.unwrap().as_deref(), Some("done"));
+        s.enqueue_audio_task(&AudioTaskUpsert {
+            book_slug: slug,
+            rendition: "audio",
+            lang: "en",
+            rel_path: "00.spoken.md",
+            content_hash: "h",
+            leaf_kind: "audio:1:v:1",
+            voice: "v",
+            priority: 0,
+            force: true,
+        })
+        .await
+        .unwrap();
+        assert_eq!(status().await.unwrap().as_deref(), Some("queued"));
+        s.delete_book(slug).await.unwrap();
+    }
+
     #[tokio::test]
     async fn merkle_and_deploy_root_roundtrip() {
         let Some(s) = store().await else { return };
@@ -1166,6 +1351,20 @@ mod tests {
         assert_eq!(s.get_merkle_node("n1").await.unwrap().unwrap().kind, "tree");
         s.set_deploy_root("root-abc").await.unwrap();
         assert_eq!(s.deploy_root().await.unwrap().as_deref(), Some("root-abc"));
+    }
+
+    #[tokio::test]
+    async fn prune_keeps_only_the_live_dag() {
+        let Some(s) = store().await else { return };
+        for n in ["prune-live", "prune-dead"] {
+            s.put_merkle_node(n, "leaf", "{}").await.unwrap();
+        }
+        // `n1` belongs to the concurrently running roundtrip test.
+        s.prune_merkle_nodes(&["prune-live".into(), "n1".into()])
+            .await
+            .unwrap();
+        assert!(s.get_merkle_node("prune-live").await.unwrap().is_some());
+        assert!(s.get_merkle_node("prune-dead").await.unwrap().is_none());
     }
 
     #[tokio::test]

@@ -10,13 +10,13 @@
 //! Crash-safety: the deploy root is written last, so an interrupted run leaves
 //! the old root in place and the next run re-reconciles from it (idempotent).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::config::{BookState, Layout, RenditionKind, Resolved};
 use crate::server::renderer;
 use crate::shared::FileType;
-use crate::store::model::{AudioTaskUpsert, BookUpsert, ChapterRecord};
+use crate::store::model::{AudioTask, AudioTaskUpsert, BookUpsert, ChapterRecord, ChapterState};
 use crate::store::pg::PgStore;
 use crate::sync::diff::{Plan, plan};
 use crate::sync::merkle::{Build, Dag, Leaf, Node};
@@ -38,9 +38,10 @@ pub struct SyncCfg {
     pub text_audio: bool,
     /// Bumped when the renderer changes, to force a full re-render.
     pub render_version: i32,
-    /// Self-heal mode: plan against an empty deployed DAG and re-apply any leaf
-    /// whose content row is missing, even if its Merkle node says "applied".
-    /// Recovers a chapters↔merkle desync a normal sync can't. See `SyncArgs`.
+    /// Full-verify mode: treat every leaf as a candidate (each is still gated on
+    /// its chapter row, so only drifted rows are re-applied) and additionally
+    /// check baked audio marks against the current text. Row drift itself is
+    /// reconciled on every sync. See `SyncArgs`.
     pub repair: bool,
     /// Re-render content (HTML rows) but DON'T (re)generate audio: skip the
     /// audio enqueue and keep each chapter's existing mp3/marks (via upsert
@@ -57,7 +58,8 @@ pub struct SyncReport {
     /// Audio leaves enqueued for the background worker this run (sync no longer
     /// generates audio inline — it queues it for the in-server worker).
     pub enqueued: usize,
-    /// Leaves a prior (interrupted) run already applied — skipped this run.
+    /// Candidate leaves whose chapter row already held their content (applied by
+    /// a prior, possibly interrupted, run) — skipped this run.
     pub skipped: usize,
     /// `--repair` only: chapters whose baked marks no longer matched their text
     /// (count desync) — the stale bake was dropped and the leaf re-enqueued.
@@ -482,47 +484,34 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
             .map_err(|e| format!("set site_tree {}: {e}", kind.as_str()))?;
     }
 
-    // ── Load the last-deployed DAG and diff. ────────────────────────────────
+    // ── Load the last-deployed DAG + the live chapter rows, and plan. ────────
+    //
+    // The Merkle diff names what changed since the last deploy, but the
+    // chapters table is the truth of what is actually served. Stored Merkle
+    // nodes only say "this leaf was applied at some point": an A→B→A revert
+    // finds A's old node, and a lost row keeps its node. So every candidate
+    // leaf is gated on its ROW (see `row_current`), and the plan is widened by
+    // any leaf whose row drifted from the corpus. Deletes are likewise computed
+    // from rows (actual − expected), so rows the stored DAG never recorded (an
+    // audio leaf deleted before its node was committed) are removed too.
     let stored = load_stored(&store).await?;
-    // Repair plans against an EMPTY deployed DAG so every leaf becomes a
-    // candidate (the per-leaf gate in `apply_plan` then re-applies only the ones
-    // whose content row is actually missing). The book-timestamp stamping below
-    // still diffs against the REAL `stored`, so a repair doesn't bump every
-    // book's `updated_at`.
-    let auto_repair = if !cfg.repair && new.root == stored.root {
-        let expected: std::collections::HashSet<&str> = new
-            .nodes
-            .values()
-            .filter_map(|node| match node {
-                Node::Leaf(leaf) => Some(leaf.path.as_str()),
-                _ => None,
-            })
-            .collect();
-        let actual: std::collections::HashSet<String> = store
-            .dag_chapters()
-            .await
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|row| leaf_path(&row.book_slug, &row.rendition, &row.lang, &row.rel_path))
-            .collect();
-        let mismatch =
-            expected.len() != actual.len() || expected.iter().any(|path| !actual.contains(*path));
-        if mismatch {
-            tracing::warn!(
-                expected = expected.len(),
-                actual = actual.len(),
-                "chapter registry differs from unchanged Merkle root; auto-repairing"
-            );
-        }
-        mismatch
-    } else {
-        false
-    };
-    let plan = if cfg.repair || auto_repair {
-        plan(&new, &Dag::default())
-    } else {
-        plan(&new, &stored)
-    };
+    let rows = load_rows(&store).await?;
+    let leaves = leaves_by_path(&new);
+    let diff = plan(&new, &stored);
+    let put = put_candidates(&leaves, &diff, &applies, &rows, cfg)?;
+    let extra: Vec<&ChapterState> = rows
+        .iter()
+        .filter(|(path, _)| !leaves.contains_key(path.as_str()))
+        .map(|(_, row)| row)
+        .collect();
+    let drifted = put.len().saturating_sub(diff.put.len());
+    if !cfg.repair && (drifted > 0 || extra.len() > diff.delete.len()) {
+        tracing::warn!(
+            drifted,
+            extra_rows = extra.len(),
+            "chapter rows differ from the deployed Merkle state; reconciling"
+        );
+    }
 
     // ── Stamp book deploy-times. created_at on a book's first appearance;
     // updated_at on each sync where its subtree hash differs from the last
@@ -561,17 +550,31 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
     }
     // Fast pass: structure + text + binaries + audio chapter ROWS (no mp3 yet),
     // so the reader is fully navigable in seconds.
-    apply_plan(&plan, &applies, &store, &obj, cfg, &mut report).await?;
-    // Audio is no longer generated here — sync only ENQUEUES each changed audio
-    // leaf onto the `audio_tasks` queue. The in-server worker drains it in the
-    // background (so this oneshot returns in seconds and never blocks the deploy;
-    // the on-demand HTTP fallback still covers a chapter requested before its
-    // task runs). `cfg.text_audio` still gates whether text read-aloud is queued.
-    // --no-audio skips this entirely: existing mp3/marks are preserved (upsert
-    // COALESCE) and the leaves were already committed in apply_plan.
+    apply_plan(
+        &put,
+        &extra,
+        &applies,
+        &rows,
+        &store,
+        &obj,
+        cfg,
+        &mut report,
+    )
+    .await?;
+    // Audio is no longer generated here — sync only ENQUEUES each audio leaf
+    // that lacks current audio onto the `audio_tasks` queue. The in-server
+    // worker drains it in the background (so this oneshot returns in seconds and
+    // never blocks the deploy; the on-demand HTTP fallback still covers a
+    // chapter requested before its task runs). `cfg.text_audio` still gates
+    // whether text read-aloud is queued. --no-audio skips this entirely:
+    // existing mp3/marks are preserved (upsert COALESCE).
     if !cfg.no_audio {
-        enqueue_audio(&plan, &applies, &store, &obj, cfg, &mut report).await?;
+        enqueue_audio(&leaves, &applies, &store, &obj, cfg, &mut report).await?;
     }
+    store
+        .delete_orphan_audio_tasks()
+        .await
+        .map_err(|e| format!("delete orphan audio tasks: {e}"))?;
 
     // Persist the TREE Merkle nodes. Leaf nodes are committed per-leaf as their
     // content lands (audio leaves only after their mp3), so an interrupted run
@@ -587,8 +590,9 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
             .map_err(|e| format!("put merkle node: {e}"))?;
     }
 
-    // Prune books dropped from the corpus (cascades renditions/editions; their
-    // chapters were already deleted via the plan).
+    // Prune books dropped from the corpus (cascades renditions/editions,
+    // chapters, and audio tasks; the chapters were normally already deleted as
+    // extra rows above).
     for slug in store.book_slugs().await.map_err(|e| e.to_string())? {
         if !corpus_slugs.contains(&slug) {
             store.delete_book(&slug).await.map_err(|e| e.to_string())?;
@@ -611,6 +615,13 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
         .set_deploy_root(&new.root)
         .await
         .map_err(|e| format!("set deploy root: {e}"))?;
+    // Nodes of superseded deploys are dead weight once the new root is live
+    // (nothing trusts a node as "applied" anymore). Best-effort: a failure only
+    // leaves garbage for the next run.
+    let keep: Vec<String> = new.nodes.keys().cloned().collect();
+    if let Err(e) = store.prune_merkle_nodes(&keep).await {
+        tracing::warn!(error = %e, "prune superseded merkle nodes failed");
+    }
     report.root = new.root;
 
     // The content is committed at this point, but clients must not be told the
@@ -650,75 +661,137 @@ pub(crate) fn walk(
     Ok(())
 }
 
-async fn apply_plan(
-    plan: &Plan,
+/// Chapter rows keyed by their leaf path.
+async fn load_rows(store: &PgStore) -> Result<HashMap<String, ChapterState>, String> {
+    Ok(store
+        .chapter_states()
+        .await
+        .map_err(|e| format!("load chapter rows: {e}"))?
+        .into_iter()
+        .map(|row| {
+            (
+                leaf_path(&row.book_slug, &row.rendition, &row.lang, &row.rel_path),
+                row,
+            )
+        })
+        .collect())
+}
+
+/// Every content leaf of `dag`, keyed (and so ordered) by leaf path.
+fn leaves_by_path(dag: &Dag) -> BTreeMap<String, &Leaf> {
+    dag.nodes
+        .values()
+        .filter_map(|node| match node {
+            Node::Leaf(l) => Some((l.path.clone(), l)),
+            Node::Tree(_) => None,
+        })
+        .collect()
+}
+
+/// Whether a chapter row already holds this leaf's content: same source bytes
+/// and, for rendered (text / audiobook script) rows, the same renderer version.
+/// Binary assets are not rendered, so a renderer bump leaves them current.
+fn row_current(
+    row: Option<&ChapterState>,
+    content_hash: &str,
+    rendered: bool,
+    render_version: i32,
+) -> bool {
+    row.is_some_and(|row| {
+        row.content_hash == content_hash && (!rendered || row.render_version == render_version)
+    })
+}
+
+fn leaf_row_current(
+    a: &LeafApply,
+    rows: &HashMap<String, ChapterState>,
+    path: &str,
+    cfg: &SyncCfg,
+) -> bool {
+    let rendered = a.voice.is_some() || is_text(&a.file_type);
+    row_current(
+        rows.get(path),
+        &a.content_hash,
+        rendered,
+        cfg.render_version,
+    )
+}
+
+/// The leaves to (re)apply: every leaf under `--repair`, otherwise the Merkle
+/// diff's puts plus any leaf whose row drifted from the corpus. Path-ordered.
+fn put_candidates(
+    leaves: &BTreeMap<String, &Leaf>,
+    diff: &Plan,
     applies: &BTreeMap<String, LeafApply>,
+    rows: &HashMap<String, ChapterState>,
+    cfg: &SyncCfg,
+) -> Result<Vec<Leaf>, String> {
+    let mut put: BTreeMap<&str, &Leaf> = diff.put.iter().map(|l| (l.path.as_str(), l)).collect();
+    for (path, leaf) in leaves {
+        let a = applies
+            .get(path)
+            .ok_or_else(|| format!("internal: no apply for {path}"))?;
+        if cfg.repair || !leaf_row_current(a, rows, path, cfg) {
+            put.insert(path.as_str(), leaf);
+        }
+    }
+    Ok(put.into_values().cloned().collect())
+}
+
+// Each argument is a distinct piece of reconcile state; bundling them into a
+// struct for this single call site would only add indirection.
+#[allow(clippy::too_many_arguments)]
+async fn apply_plan(
+    put: &[Leaf],
+    extra: &[&ChapterState],
+    applies: &BTreeMap<String, LeafApply>,
+    rows: &HashMap<String, ChapterState>,
     store: &PgStore,
     obj: &ObjStore,
     cfg: &SyncCfg,
     report: &mut SyncReport,
 ) -> Result<(), String> {
-    for leaf in &plan.put {
-        // Optimistic resume: a leaf whose node is already recorded was applied by
-        // a prior (possibly interrupted) run — skip its expensive re-apply (the
-        // edge-tts audio especially). This makes the sync resumable per-leaf
-        // instead of all-or-nothing.
-        let node_hash = crate::sync::merkle::leaf_hash(leaf);
+    for leaf in put {
         let a = applies
             .get(&leaf.path)
             .ok_or_else(|| format!("internal: no apply for {}", leaf.path))?;
-        if store
-            .get_merkle_node(&node_hash)
-            .await
-            .map_err(|e| e.to_string())?
-            .is_some()
-        {
-            // Node present ⇒ a prior run applied this leaf. Normally that's
-            // enough to skip. In `--repair`, trust the node ONLY if the content
-            // row still exists: a chapters↔merkle desync (row lost, node kept)
-            // would otherwise stay invisible forever (the book renders empty).
-            // Every leaf — text, audio, binary — upserts a chapters row (see
-            // `apply_leaf`), so one existence check covers all kinds.
-            let present = !cfg.repair
-                || store
-                    .get_chapter(&a.book_slug, &a.rendition, &a.lang, &a.rel_path)
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .is_some();
-            if present {
-                report.skipped += 1;
-                continue;
-            }
+        // Resume + revert safety: skip only when the ROW already holds this
+        // leaf's content (a prior, possibly interrupted, run applied it). A
+        // Merkle node alone proves nothing — it survives a later edit, so an
+        // A→B→A revert would otherwise keep serving B.
+        if leaf_row_current(a, rows, &leaf.path, cfg) {
+            report.skipped += 1;
+            continue;
         }
         apply_leaf(a, store, obj, cfg).await?;
         // Audio chapters (audiobook OR text read-aloud pre-gen) land their row
-        // here but commit their Merkle node only after the slow audio pass
-        // generates the mp3 — so an interrupted run re-generates the audio rather
-        // than treating it as done. Leaves with no audio are fully applied →
-        // commit now (content first, node = marker). Under --no-audio we never
-        // run that audio pass (existing mp3/marks are kept via upsert COALESCE),
-        // so an audio leaf IS fully applied here too → commit it now, else it'd
-        // re-render on every subsequent sync.
+        // here; their Merkle node is committed by the worker once the audio is
+        // generated. Leaves with no audio are fully applied → commit now. Under
+        // --no-audio the existing mp3/marks are kept via upsert COALESCE, so an
+        // audio leaf IS fully applied here too.
         if cfg.no_audio || (a.voice.is_none() && a.text_voice.is_none()) {
-            commit_leaf(store, leaf, &node_hash).await?;
+            commit_leaf(store, leaf, &crate::sync::merkle::leaf_hash(leaf)).await?;
             report.put += 1;
         }
     }
-    for leaf in &plan.delete {
-        let parts: Vec<&str> = leaf.path.split(SEP).collect();
-        if let [slug, rendition, lang, rel] = parts.as_slice() {
-            store
-                .delete_chapter(slug, rendition, lang, rel)
-                .await
-                .map_err(|e| format!("delete chapter {}: {e}", leaf.path))?;
-            report.deleted += 1;
-        }
+    // Rows the corpus no longer declares — whether or not the stored DAG ever
+    // recorded their leaf — are deleted together with their audio task.
+    for row in extra {
+        store
+            .delete_chapter(&row.book_slug, &row.rendition, &row.lang, &row.rel_path)
+            .await
+            .map_err(|e| {
+                format!(
+                    "delete chapter {}/{}/{}/{}: {e}",
+                    row.book_slug, row.rendition, row.lang, row.rel_path
+                )
+            })?;
+        report.deleted += 1;
     }
     Ok(())
 }
 
-/// Record a leaf's Merkle node — the "this leaf is fully applied" commit marker
-/// that makes a re-run skip it.
+/// Record a leaf's Merkle node — the "this leaf is fully applied" commit marker.
 async fn commit_leaf(store: &PgStore, leaf: &Leaf, node_hash: &str) -> Result<(), String> {
     let payload = serde_json::json!({
         "path": leaf.path, "kind": leaf.kind, "content_hash": leaf.content_hash
@@ -730,55 +803,75 @@ async fn commit_leaf(store: &PgStore, leaf: &Leaf, node_hash: &str) -> Result<()
         .map_err(|e| format!("commit leaf node: {e}"))
 }
 
-/// Enqueue each changed audio leaf onto the `audio_tasks` queue for the in-server
-/// worker (`server::audio_worker`). Covers BOTH the audiobook rendition (`voice`)
-/// and — when `cfg.text_audio` is on — the text read-aloud (`text_voice`). The
-/// task carries the leaf's `kind` + `content_hash` so the worker can commit the
-/// exact Merkle node when it finishes (node present ⇔ audio generated, so the
-/// next sync prunes it). A leaf whose node already exists (generated by a prior
-/// run) is skipped — the same optimistic-resume gate `apply_plan` uses.
+/// Enqueue each audio leaf without current audio onto the `audio_tasks` queue
+/// for the in-server worker (`server::audio_worker`). Covers BOTH the audiobook
+/// rendition (`voice`) and — when `cfg.text_audio` is on — the text read-aloud
+/// (`text_voice`). The task carries the leaf's `kind` + `content_hash` so the
+/// worker can commit the exact Merkle node when it finishes.
+///
+/// Decided from in-memory state (rows re-read after the apply pass + every
+/// task), not a per-leaf node lookup: a leaf whose row already carries audio
+/// for this content is done; a leaf whose identical task already exists is
+/// left alone (queued / running / done-silent / failed-until-retry). Every
+/// other audio leaf is (re)queued — including one whose task was lost.
 async fn enqueue_audio(
-    plan: &Plan,
+    leaves: &BTreeMap<String, &Leaf>,
     applies: &BTreeMap<String, LeafApply>,
     store: &PgStore,
     obj: &ObjStore,
     cfg: &SyncCfg,
     report: &mut SyncReport,
 ) -> Result<(), String> {
-    for leaf in &plan.put {
+    let rows = load_rows(store).await?;
+    let tasks: HashMap<String, AudioTask> = store
+        .all_audio_tasks()
+        .await
+        .map_err(|e| format!("load audio tasks: {e}"))?
+        .into_iter()
+        .map(|t| {
+            (
+                leaf_path(&t.book_slug, &t.rendition, &t.lang, &t.rel_path),
+                t,
+            )
+        })
+        .collect();
+    for (path, leaf) in leaves {
         let a = applies
-            .get(&leaf.path)
-            .ok_or_else(|| format!("internal: no apply for {}", leaf.path))?;
+            .get(path)
+            .ok_or_else(|| format!("internal: no apply for {path}"))?;
         let voice = match (&a.voice, &a.text_voice) {
             (Some(v), _) | (_, Some(v)) => v.clone(),
             _ => continue, // not an audio leaf
         };
-        let node_hash = crate::sync::merkle::leaf_hash(leaf);
-        if store
-            .get_merkle_node(&node_hash)
-            .await
-            .map_err(|e| e.to_string())?
-            .is_some()
-        {
-            // Node present ⇒ a prior run baked this leaf. Normally that's enough to
-            // skip. But under --repair, verify the baked marks STILL match the
-            // current text: a chapter edited after its bake kept its old
-            // audio_hash/marks_hash (the pre-fix upsert COALESCE), so the marks —
-            // and the audio — describe the PREVIOUS sentence segmentation while
-            // /api/spoken serves the new one → the read-along highlight lands on the
-            // wrong paragraph. Detect that desync, forget the stale bake, and fall
-            // through to re-enqueue so the worker re-synthesizes. (The write-side
-            // CASE in upsert_chapter prevents NEW drift; this heals rows already
-            // drifted before that fix.)
-            if !cfg.repair || !audio_marks_stale(store, obj, a).await? {
-                continue;
-            }
+        let row = rows.get(path);
+        let mut baked = row.is_some_and(|r| {
+            r.content_hash == a.content_hash && r.audio_hash.is_some() && r.marks_hash.is_some()
+        });
+        let mut force = false;
+        // Under --repair, verify the baked marks STILL match the current text: a
+        // chapter edited after its bake could keep its old audio/marks (the
+        // pre-fix upsert COALESCE), so the marks describe the PREVIOUS sentence
+        // segmentation while /api/spoken serves the new one → the read-along
+        // highlight lands on the wrong paragraph. Forget the stale bake and
+        // force a re-queue (an identical `done` task would otherwise stay done).
+        if baked && cfg.repair && audio_marks_stale(store, obj, a).await? {
             store
                 .clear_chapter_audio(&a.book_slug, &a.rendition, &a.lang, &a.rel_path)
                 .await
                 .map_err(|e| e.to_string())?;
             report.stale_audio += 1;
             tracing::warn!(path = %leaf.path, "repair: stale audio marks — re-baking");
+            baked = false;
+            force = true;
+        }
+        if baked {
+            continue;
+        }
+        let same_task = tasks
+            .get(path)
+            .is_some_and(|t| t.content_hash == a.content_hash && t.leaf_kind == leaf.kind);
+        if same_task && !force {
+            continue;
         }
         store
             .enqueue_audio_task(&AudioTaskUpsert {
@@ -790,6 +883,7 @@ async fn enqueue_audio(
                 leaf_kind: &leaf.kind,
                 voice: &voice,
                 priority: 0, // backfill; an on-demand request promotes to 100
+                force,
             })
             .await
             .map_err(|e| format!("enqueue audio {}: {e}", a.rel_path))?;
@@ -1153,6 +1247,116 @@ mod tests {
         );
     }
 
+    fn state(path: &str, content: &str, rv: i32, audio: bool) -> (String, ChapterState) {
+        let key = leaf_path("b", "text", "en", path);
+        (
+            key,
+            ChapterState {
+                book_slug: "b".into(),
+                rendition: "text".into(),
+                lang: "en".into(),
+                rel_path: path.into(),
+                content_hash: content.into(),
+                render_version: rv,
+                audio_hash: audio.then(|| "a".into()),
+                marks_hash: audio.then(|| "m".into()),
+                audio_voice: None,
+            },
+        )
+    }
+
+    fn offline_cfg(repair: bool) -> SyncCfg {
+        SyncCfg {
+            database_url: String::new(),
+            s3_endpoint: String::new(),
+            s3_access_key: String::new(),
+            s3_secret_key: String::new(),
+            s3_bucket: String::new(),
+            tts_voice: None,
+            text_audio: false,
+            render_version: 2,
+            repair,
+            no_audio: false,
+        }
+    }
+
+    /// One-edition corpus of markdown chapters `(rel, content_hash)`.
+    fn corpus(chapters: &[(&str, &str)]) -> (Dag, BTreeMap<String, LeafApply>) {
+        let mut applies = BTreeMap::new();
+        let mut leaves = Vec::new();
+        for (rel, content) in chapters {
+            let path = leaf_path("b", "text", "en", rel);
+            leaves.push((
+                (*rel).to_string(),
+                Build::Leaf {
+                    path: path.clone(),
+                    kind: "text:2".into(),
+                    content_hash: (*content).into(),
+                },
+            ));
+            applies.insert(
+                path,
+                LeafApply {
+                    book_slug: "b".into(),
+                    rendition: "text".into(),
+                    lang: "en".into(),
+                    rel_path: (*rel).into(),
+                    file_type: FileType::Markdown,
+                    source: PathBuf::from(rel),
+                    voice: None,
+                    text_voice: None,
+                    content_hash: (*content).into(),
+                },
+            );
+        }
+        (Dag::build(Build::Tree(leaves)), applies)
+    }
+
+    #[test]
+    fn row_gate_requires_matching_content_and_render_version() {
+        let (_, row) = state("00.md", "A", 2, false);
+        assert!(row_current(Some(&row), "A", true, 2));
+        // A→B→A: the row still holds B, whatever Merkle nodes survive.
+        let (_, stale) = state("00.md", "B", 2, false);
+        assert!(!row_current(Some(&stale), "A", true, 2));
+        // Renderer bump re-renders text, but not unrendered binary assets.
+        let (_, old_render) = state("00.md", "A", 1, false);
+        assert!(!row_current(Some(&old_render), "A", true, 2));
+        assert!(row_current(Some(&old_render), "A", false, 2));
+        assert!(
+            !row_current(None, "A", true, 2),
+            "missing row is not applied"
+        );
+    }
+
+    #[test]
+    fn unchanged_root_still_reapplies_drifted_rows() {
+        // Deployed DAG == corpus (empty diff), but one row reverted to stale
+        // content and one row vanished: both must be re-applied.
+        let (new, applies) = corpus(&[("00.md", "A"), ("01.md", "B"), ("02.md", "C")]);
+        let rows: HashMap<_, _> = [
+            state("00.md", "A", 2, false),
+            state("01.md", "stale", 2, false),
+        ]
+        .into_iter()
+        .collect();
+        let leaves = leaves_by_path(&new);
+        let diff = plan(&new, &new);
+        assert!(diff.is_empty());
+        let put = put_candidates(&leaves, &diff, &applies, &rows, &offline_cfg(false)).unwrap();
+        let paths: Vec<_> = put.iter().map(|l| l.path.clone()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                leaf_path("b", "text", "en", "01.md"),
+                leaf_path("b", "text", "en", "02.md")
+            ]
+        );
+        // Repair considers everything (the row gate then skips current rows).
+        let all = put_candidates(&leaves, &diff, &applies, &rows, &offline_cfg(true)).unwrap();
+        assert_eq!(all.len(), 3);
+    }
+
     /// Build a `SyncCfg` from the gated env, or `None` to skip. Run with:
     ///   DATABASE_URL=postgres://draven@%2Frun%2Fpostgresql/liveview_test \
     ///   LIVEVIEW_TEST_S3=1 S3_ENDPOINT=http://127.0.0.1:9000 \
@@ -1199,7 +1403,7 @@ mod tests {
         let pool = sqlx::PgPool::connect(&cfg.database_url).await.unwrap();
         sqlx::query(
             "TRUNCATE books, renditions, editions, chapters, assets, merkle_nodes, \
-             deploy_root, progress, settings",
+             deploy_root, progress, settings, audio_tasks",
         )
         .execute(&pool)
         .await
@@ -1244,6 +1448,44 @@ mod tests {
         let r = run(&resolved, &cfg).await.unwrap();
         assert_eq!((r.put, r.deleted), (1, 0), "only the edited chapter");
 
+        // 3b) revert the edit (A→B→A): the surviving Merkle node of A must not
+        // mask the re-apply — the row has to hold A again.
+        fs::write(content.join("00.md"), "# One\n\nhello").unwrap();
+        let r = run(&resolved, &cfg).await.unwrap();
+        assert_eq!((r.put, r.deleted), (1, 0), "revert re-applies");
+        let md: String =
+            sqlx::query_scalar("SELECT markdown FROM chapters WHERE rel_path = '00.md'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(md, "# One\n\nhello");
+
+        // 3c) delete then restore a chapter: the restore must re-create the row.
+        fs::remove_file(content.join("01.md")).unwrap();
+        let r = run(&resolved, &cfg).await.unwrap();
+        assert_eq!((r.put, r.deleted), (0, 1), "chapter deleted");
+        fs::write(content.join("01.md"), "# Two\n\nworld").unwrap();
+        let r = run(&resolved, &cfg).await.unwrap();
+        assert_eq!((r.put, r.deleted), (1, 0), "chapter restored");
+        assert_eq!(count(&pool, "SELECT count(*) FROM chapters").await, 3);
+
+        // 3d) row drift under an unchanged root: a lost row is re-applied and a
+        // row the corpus never declared is deleted.
+        sqlx::query("DELETE FROM chapters WHERE rel_path = '01.md'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO chapters (book_slug, rendition, lang, rel_path, file_type, content_hash)
+             VALUES ('it', 'text', 'en', 'ghost.md', 'markdown', 'x')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let r = run(&resolved, &cfg).await.unwrap();
+        assert_eq!((r.put, r.deleted), (1, 1), "drift reconciled");
+        assert_eq!(count(&pool, "SELECT count(*) FROM chapters").await, 3);
+
         // 4) delete the image → chapter gone + its blob GC'd from pg + rustfs.
         fs::remove_file(content.join("pic.png")).unwrap();
         let r = run(&resolved, &cfg).await.unwrap();
@@ -1255,5 +1497,63 @@ mod tests {
         // 5) settle.
         let r = run(&resolved, &cfg).await.unwrap();
         assert_eq!((r.put, r.deleted), (0, 0), "settled");
+    }
+
+    /// Fresh schema + empty tables + a one-book markdown corpus.
+    async fn audio_fixture(cfg: &SyncCfg) -> (sqlx::PgPool, TempDir, Resolved) {
+        PgStore::open(&cfg.database_url)
+            .await
+            .unwrap()
+            .migrate()
+            .await
+            .unwrap();
+        let pool = sqlx::PgPool::connect(&cfg.database_url).await.unwrap();
+        sqlx::query(
+            "TRUNCATE books, renditions, editions, chapters, assets, merkle_nodes, \
+             deploy_root, progress, settings, audio_tasks",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let dir = TempDir::new("liveview-itest-audio");
+        fs::write(
+            dir.path().join("liveview.toml"),
+            "[[book]]\nlabel = \"AU\"\nslug = \"au\"\nsource = \"content\"\n",
+        )
+        .unwrap();
+        let content = dir.path().join("content");
+        fs::create_dir_all(&content).unwrap();
+        fs::write(content.join("00.md"), "# One\n\nhello").unwrap();
+        fs::write(content.join("01.md"), "# Two\n\nworld").unwrap();
+        let resolved = Config::load(&dir.path().join("liveview.toml"))
+            .unwrap()
+            .resolve(dir.path())
+            .unwrap();
+        (pool, dir, resolved)
+    }
+
+    #[tokio::test]
+    #[ignore = "needs live pg + rustfs (LIVEVIEW_TEST_S3=1 + DATABASE_URL + S3_*)"]
+    async fn unbaked_audio_leaf_deletion_removes_row_and_task() {
+        let Some(mut cfg) = cfg() else { return };
+        cfg.text_audio = true;
+        let (pool, dir, resolved) = audio_fixture(&cfg).await;
+
+        // Both chapters become text read-aloud leaves: rows land, tasks queue,
+        // and (no worker runs here) no audio leaf node is ever committed.
+        let r = run(&resolved, &cfg).await.unwrap();
+        assert_eq!(r.enqueued, 2);
+        assert_eq!(count(&pool, "SELECT count(*) FROM audio_tasks").await, 2);
+        // An identical re-run does not re-queue what is already queued.
+        let r = run(&resolved, &cfg).await.unwrap();
+        assert_eq!(r.enqueued, 0);
+
+        // Delete one chapter before its audio was ever baked: its row and task
+        // must go even though the stored DAG never recorded its leaf.
+        fs::remove_file(dir.path().join("content/01.md")).unwrap();
+        let r = run(&resolved, &cfg).await.unwrap();
+        assert_eq!(r.deleted, 1);
+        assert_eq!(count(&pool, "SELECT count(*) FROM chapters").await, 1);
+        assert_eq!(count(&pool, "SELECT count(*) FROM audio_tasks").await, 1);
     }
 }

@@ -89,6 +89,23 @@ CREATE TABLE IF NOT EXISTS chapters (
     render_version INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (book_slug, rendition, lang, rel_path)
 );
+-- The voice `audio_hash`/`marks_hash` were synthesized with (NULL = unknown:
+-- baked before this column existed, or no audio). Lets a voice change re-bake
+-- instead of trusting "audio present" as "audio current".
+--
+-- `ADD COLUMN IF NOT EXISTS` takes an ACCESS EXCLUSIVE lock even when the
+-- column already exists, so on a hot table every startup migration would stall
+-- behind (or deadlock with) live queries. Check the catalog first instead.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'chapters' AND column_name = 'audio_voice'
+    ) THEN
+        ALTER TABLE chapters ADD COLUMN audio_voice TEXT;
+    END IF;
+END $$;
 
 -- Content-addressed binary blobs stored in the private rustfs bucket. Shared
 -- across editions/books by hash (a Merkle-DAG leaf with multiple parents).

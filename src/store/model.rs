@@ -113,6 +113,26 @@ pub struct AudioTaskUpsert<'a> {
     pub leaf_kind: &'a str,
     pub voice: &'a str,
     pub priority: i32,
+    /// Re-queue even when the existing task is for the identical leaf (e.g. the
+    /// chapter's stale audio was just cleared, so a `done` task is no longer
+    /// true).
+    pub force: bool,
+}
+
+/// The reconcile-relevant state of one chapter row — everything `liveview
+/// sync` needs to decide whether a leaf is already applied, without loading
+/// rendered HTML or markdown.
+#[derive(Clone, Debug, sqlx::FromRow)]
+pub struct ChapterState {
+    pub book_slug: String,
+    pub rendition: String,
+    pub lang: String,
+    pub rel_path: String,
+    pub content_hash: String,
+    pub render_version: i32,
+    pub audio_hash: Option<String>,
+    pub marks_hash: Option<String>,
+    pub audio_voice: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, sqlx::FromRow)]
