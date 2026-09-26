@@ -198,6 +198,11 @@ export function NavShell(props: NavShellProps): ReactNode {
     ro.observe(barEl);
     return () => {
       ro.disconnect();
+      // Clear BOTH copies. The content region survives a switch back to the
+      // solid bar (e.g. rotating out of the bottom-bar tier), and a stale
+      // region-scoped value there kept every scroller padding for an overlay
+      // bar that no longer exists.
+      contentEl.style.removeProperty("--shell-bar-h");
       document.documentElement.style.removeProperty("--shell-bar-h");
     };
   }, [barFrosted]);

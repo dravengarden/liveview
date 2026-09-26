@@ -1451,9 +1451,13 @@ export function App(): React.JSX.Element {
   const restoreFromHash = useCallback(
     async (replaceHash: boolean): Promise<void> => {
       const { path, lang: hashLang, rendition: hashRendition } = getHashState();
+      // Claim the navigation token. Any later navigation (another back/forward,
+      // opening a chapter, returning to the shelf) bumps it; this restore then
+      // stops after its awaits instead of applying a stale tree or chapter over
+      // the newer view.
+      const seq = ++fileLoadSeq.current;
       if (!path) {
         // empty hash → the landing bookshelf
-        fileLoadSeq.current += 1;
         setCurrentPath(null);
         currentPathRef.current = null;
         setCurrentContent(null);
@@ -1484,13 +1488,17 @@ export function App(): React.JSX.Element {
         const res = await contentFetch(
           `/api/tree?rendition=${encodeURIComponent(kind)}`,
         );
-        setTree((await res.json()) as TreeNode[]);
+        const nextTree = (await res.json()) as TreeNode[];
+        if (seq !== fileLoadSeq.current) return;
+        setTree(nextTree);
       } catch (e) {
         console.error("Failed to fetch rendition tree:", e);
       }
+      if (seq !== fileLoadSeq.current) return;
       // Load the book's progress first so the doc restores its scroll.
       const slug = path.split("/")[0];
       if (slug) await loadBook(slug);
+      if (seq !== fileLoadSeq.current) return;
       if (kind === "audio") {
         // Audio renders off the engine (seeded by the view→engine effect).
         setCurrentPath(path);
