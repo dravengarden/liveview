@@ -197,7 +197,12 @@ export function SettingsButton({
   const [seg, setSeg] = useState<"settings" | "downloads">("settings");
 
   return (
-    <SettingsSheet title={t("settings.title")} wide cover>
+    <SettingsSheet
+      title={t("settings.title")}
+      wide
+      cover
+      surfaceContainer={document.getElementById("root")}
+    >
       {
         /* A continuous grouped list (iOS-settings rhythm): each section is an
           overline header + its controls, with a single consistent gap between

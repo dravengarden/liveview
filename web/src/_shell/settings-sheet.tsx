@@ -15,6 +15,7 @@ import LightModeIcon from "@mui/icons-material/LightMode";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import { Box, IconButton, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from "@mui/material";
 import { type ReactNode, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { BottomSheet } from "./bottom-sheet.tsx";
 import type { ThemeChoice } from "./theme-types.ts";
@@ -31,6 +32,9 @@ export interface SettingsSheetProps {
    *  material over an opaque backdrop, so the page never bleeds through. No
    *  effect on desktop — that is always a centered dialog. Opt-in. */
   readonly cover?: boolean;
+  /** Mount the surface outside transformed/clipped navigation chrome. The gear
+   *  stays inline; the caller owns a stable, untransformed overlay container. */
+  readonly surfaceContainer?: HTMLElement | null;
 }
 
 /**
@@ -38,7 +42,7 @@ export interface SettingsSheetProps {
  * (or any chrome); it owns its own open/close state.
  */
 export function SettingsSheet(
-  { title = "Settings", children, wide = false, cover = false }: SettingsSheetProps,
+  { title = "Settings", children, wide = false, cover = false, surfaceContainer }: SettingsSheetProps,
 ): ReactNode {
   const [open, setOpen] = useState(false);
   const close = (): void => {
@@ -51,6 +55,11 @@ export function SettingsSheet(
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
       {children}
     </Box>
+  );
+  const surface = (
+    <BottomSheet open={open} onClose={close} title={title} wide={wide} cover={cover}>
+      {body}
+    </BottomSheet>
   );
 
   return (
@@ -87,9 +96,7 @@ export function SettingsSheet(
           centered dialog on desktop, with safe-area padding + status-bar dimming
           handled inside. `cover` only flavours the MOBILE sheet. */
       }
-      <BottomSheet open={open} onClose={close} title={title} wide={wide} cover={cover}>
-        {body}
-      </BottomSheet>
+      {surfaceContainer ? createPortal(surface, surfaceContainer) : surface}
     </>
   );
 }
