@@ -18,6 +18,7 @@ import {
 } from "@/audio/player";
 import { READING_COLUMN_MAX } from "@/types";
 import { useI18n } from "@/i18n";
+import { centerWithin } from "@/scrollWithin";
 
 /** Minimum spacing between shelf-progress writes during continuous playback.
  *  The progress store debounces its server push (800 ms after writes settle), so
@@ -230,7 +231,7 @@ export function AudiobookPlayer(
     const el = container.querySelector<HTMLElement>(
       `[data-sent="${currentIdx}"]`,
     );
-    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (el) centerWithin(container, el);
   }, [currentIdx]);
 
   // Auto-follow the spoken sentence while following is on.
@@ -255,8 +256,8 @@ export function AudiobookPlayer(
         const container = scrollRef.current;
         const idx = currentIdxRef.current;
         if (!container || idx < 0) return;
-        container.querySelector<HTMLElement>(`[data-sent="${idx}"]`)
-          ?.scrollIntoView({ block: "center", behavior: "smooth" });
+        const el = container.querySelector<HTMLElement>(`[data-sent="${idx}"]`);
+        if (el) centerWithin(container, el);
       });
     };
     document.addEventListener("visibilitychange", onVisible);

@@ -28,6 +28,7 @@ import type { LangInfo, TreeNode } from "@/types";
 import { LIVEVIEW_RADII } from "@/brand";
 import { type Language, useI18n } from "@/i18n";
 import { localeDescriptor } from "@/locales/registry";
+import { centerWithin } from "@/scrollWithin";
 
 /** A single-line label that reveals its full text in a tooltip only when it is
  *  actually truncated (ellipsized). Re-measures on container resize, so it
@@ -386,11 +387,12 @@ export function Sidebar({
 
     // Scroll to the element after a short delay to allow expansion animation
     setTimeout(() => {
-      const element = listContainerRef.current?.querySelector(
+      const container = listContainerRef.current;
+      const element = container?.querySelector(
         `[data-path="${CSS.escape(focusPath)}"]`,
       );
-      if (element) {
-        element.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (container && element) {
+        centerWithin(container, element);
       }
     }, 100);
   }, [focusPath, tree]);
