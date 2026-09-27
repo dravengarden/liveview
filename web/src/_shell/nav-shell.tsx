@@ -724,7 +724,8 @@ export function NavShell(props: NavShellProps): ReactNode {
             // tap-to-close backdrop only for this bounded control. Keep it hidden
             // during direct manipulation so the full transport moves continuously
             // with the reader; reveal it only after React commits `mobileOpen`.
-            zIndex: (t) => t.zIndex.modal,
+            // App chrome must remain below root-level settings and other sheets.
+            zIndex: (t) => t.zIndex.appBar,
             left: { xs: SPATIAL_PHONE_WIDTH, sm: SPATIAL_TABLET_WIDTH },
             right: 0,
             bottom: "calc(var(--shell-bar-h, 0px) + 12px)",
