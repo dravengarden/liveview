@@ -69,6 +69,9 @@ pub struct SyncReport {
     /// `--repair` only: chapters whose baked marks no longer matched their text
     /// (count desync) — the stale bake was dropped and the leaf re-enqueued.
     pub stale_audio: usize,
+    /// Chapters whose baked audio/marks blob no longer exists — the dangling
+    /// bake was dropped and the leaf re-enqueued.
+    pub dangling_audio: usize,
     pub deleted: usize,
     pub orphans_gc: usize,
     /// Content-check diagnostics found this run (warn-only — never blocks the
@@ -877,6 +880,19 @@ async fn enqueue_audio(
             r.content_hash == a.content_hash && r.audio_hash.is_some() && r.marks_hash.is_some()
         }) && baked_voice.as_deref().is_none_or(|v| v == voice);
         let mut force = false;
+        // A bake whose blob is gone (lost to an earlier GC race) serves errors
+        // forever and its `done` task never re-runs. Detected on every sync from
+        // the row join, so it self-heals without `--repair`.
+        if baked && row.is_some_and(|r| r.audio_dangling) {
+            store
+                .clear_chapter_audio(&a.book_slug, &a.rendition, &a.lang, &a.rel_path)
+                .await
+                .map_err(|e| e.to_string())?;
+            report.dangling_audio += 1;
+            tracing::warn!(path = %leaf.path, "audio blob missing — re-baking");
+            baked = false;
+            force = true;
+        }
         // Under --repair, verify the baked marks STILL match the current text: a
         // chapter edited after its bake could keep its old audio/marks (the
         // pre-fix upsert COALESCE), so the marks describe the PREVIOUS sentence
@@ -1291,6 +1307,7 @@ mod tests {
                 audio_hash: audio.then(|| "a".into()),
                 marks_hash: audio.then(|| "m".into()),
                 audio_voice: None,
+                audio_dangling: false,
             },
         )
     }
@@ -1596,5 +1613,67 @@ mod tests {
         assert_eq!(r.deleted, 1);
         assert_eq!(count(&pool, "SELECT count(*) FROM chapters").await, 1);
         assert_eq!(count(&pool, "SELECT count(*) FROM audio_tasks").await, 1);
+    }
+
+    #[tokio::test]
+    #[ignore = "needs live pg + rustfs (LIVEVIEW_TEST_S3=1 + DATABASE_URL + S3_*)"]
+    async fn baked_audio_with_a_missing_blob_is_requeued() {
+        let Some(mut cfg) = cfg() else { return };
+        cfg.text_audio = true;
+        let (pool, _dir, resolved) = audio_fixture(&cfg).await;
+        let r = run(&resolved, &cfg).await.unwrap();
+        assert_eq!(r.enqueued, 2);
+
+        // Simulate two finished bakes; only 00.md's blobs are still registered.
+        sqlx::query(
+            "UPDATE chapters SET audio_hash = 'aud-' || rel_path, marks_hash = 'mk-' || rel_path,
+                 audio_voice = $1",
+        )
+        .bind(cfg.tts_voice.as_deref().unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE audio_tasks SET status = 'done'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO assets (content_hash, mime, size, touched_at)
+             VALUES ('aud-00.md', 'audio/mpeg', 1, 0), ('mk-00.md', 'application/json', 1, 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let r = run(&resolved, &cfg).await.unwrap();
+        assert_eq!((r.dangling_audio, r.enqueued), (1, 1));
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT count(*) FROM chapters WHERE rel_path = '01.md' AND audio_hash IS NULL"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT count(*) FROM audio_tasks WHERE rel_path = '01.md' AND status = 'queued'"
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            count(
+                &pool,
+                "SELECT count(*) FROM chapters WHERE audio_hash = 'aud-00.md'"
+            )
+            .await,
+            1,
+            "a bake whose blobs exist is untouched"
+        );
+        // Converged: nothing dangles on the next run.
+        let r = run(&resolved, &cfg).await.unwrap();
+        assert_eq!((r.dangling_audio, r.enqueued), (0, 0));
     }
 }

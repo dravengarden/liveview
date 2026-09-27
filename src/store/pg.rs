@@ -535,9 +535,14 @@ impl PgStore {
     /// Reconcile state for every chapter row (no HTML/markdown), one query.
     pub async fn chapter_states(&self) -> Result<Vec<ChapterState>, sqlx::Error> {
         sqlx::query_as::<_, ChapterState>(
-            "SELECT book_slug, rendition, lang, rel_path, content_hash, render_version,
-                    audio_hash, marks_hash, audio_voice
-             FROM chapters",
+            "SELECT c.book_slug, c.rendition, c.lang, c.rel_path, c.content_hash,
+                    c.render_version, c.audio_hash, c.marks_hash, c.audio_voice,
+                    (c.audio_hash IS NOT NULL
+                        AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.content_hash = c.audio_hash))
+                    OR (c.marks_hash IS NOT NULL
+                        AND NOT EXISTS (SELECT 1 FROM assets a WHERE a.content_hash = c.marks_hash))
+                        AS audio_dangling
+             FROM chapters c",
         )
         .fetch_all(&self.pool)
         .await

@@ -150,6 +150,9 @@ pub struct ChapterState {
     pub audio_hash: Option<String>,
     pub marks_hash: Option<String>,
     pub audio_voice: Option<String>,
+    /// The row references an audio or marks blob with no `assets` entry — the
+    /// blob was lost, so the bake must be dropped and re-queued.
+    pub audio_dangling: bool,
 }
 
 #[derive(Clone, Debug, Serialize, sqlx::FromRow)]
