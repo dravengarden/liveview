@@ -14,11 +14,17 @@ import SettingsBrightnessIcon from "@mui/icons-material/SettingsBrightness";
 import LightModeIcon from "@mui/icons-material/LightMode";
 import DarkModeIcon from "@mui/icons-material/DarkMode";
 import { Box, IconButton, ToggleButton, ToggleButtonGroup, Tooltip, Typography } from "@mui/material";
-import { type ReactNode, useState } from "react";
+import { createContext, type ReactNode, useContext, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { BottomSheet } from "./bottom-sheet.tsx";
 import type { ThemeChoice } from "./theme-types.ts";
+
+const SettingsSurfaceOpen = createContext(true);
+/** Retained settings panels suspend their UI-only work while hidden. */
+export function useSettingsSurfaceOpen(): boolean {
+  return useContext(SettingsSurfaceOpen);
+}
 
 export interface SettingsSheetProps {
   /** Heading at the top of the sheet/dialog. Default "Settings". */
@@ -57,8 +63,8 @@ export function SettingsSheet(
     </Box>
   );
   const surface = (
-    <BottomSheet open={open} onClose={close} title={title} wide={wide} cover={cover}>
-      {body}
+    <BottomSheet open={open} onClose={close} title={title} wide={wide} cover={cover} keepMounted>
+      <SettingsSurfaceOpen.Provider value={open}>{body}</SettingsSurfaceOpen.Provider>
     </BottomSheet>
   );
 

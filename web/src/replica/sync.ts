@@ -1,4 +1,5 @@
 import { readAgg } from "./agg.ts";
+import { pwaDownloadsEnabled, pwaNetworkAvailable, pwaOfflineAvailable } from "../pwa.ts";
 import {
   bodyKnownPresent,
   deleteBlob,
@@ -117,7 +118,20 @@ export function fillInFlightCount(): number {
   return inFlight.size;
 }
 
+function browserDownloadsPaused(): boolean {
+  return pwaOfflineAvailable() && (!pwaDownloadsEnabled() || !pwaNetworkAvailable());
+}
+
+/** Stop the queued background fill without changing stored content or worklist. */
+export function pauseReplicaFill(): void {
+  worker?.terminate();
+  worker = null;
+  inFlight.clear();
+  replayPosted.clear();
+}
+
 async function fillOne(item: ReplicaWorkerFillItem): Promise<void> {
+  if (browserDownloadsPaused()) return;
   const url = joinRemoteUrl(remoteBase, item.url);
   if (isAudioKind(item.kind)) {
     if (await hasBlob(item.hash)) return;
@@ -195,6 +209,7 @@ async function dropFromWorklist(hash: string): Promise<void> {
 }
 
 async function onWorkerMessage(msg: WorkerOut | undefined): Promise<void> {
+  if (browserDownloadsPaused()) return;
   if (msg?.type === "media" && msg.hash && msg.url) {
     enqueueCacheFromUrl(msg.hash, msg.url, msg.bytes);
     await dropFromWorklist(msg.hash);
@@ -307,12 +322,19 @@ export async function enqueueMissingAudio(): Promise<void> {
   const cap = currentReplicaPolicy().capBytes;
   const audio = await readAgg(AGG_AUDIO);
   const present = await presentAudioHashes();
-  const queued = new Set((await getWorklist()).fetch.map((item) => item.hash));
+  const pending = (await getWorklist()).fetch;
+  const queued = new Set(pending.map((item) => item.hash));
+  const retry: { hash: string; url: string; bytes: number }[] = [];
   let reserved = audio.cachedBytes;
   for (const hash of queued) {
     if (present.has(hash)) continue;
     const rec = pathRecordForHash(hash);
-    reserved += rec && rec.bytes > 0 ? rec.bytes : 1;
+    const size = rec && rec.bytes > 0 ? rec.bytes : 1;
+    if (!pwaOfflineAvailable() || isCacheQueued(hash)) reserved += size;
+    else if (rec && isAudioKind(rec.kind) && reserved + size <= cap) {
+      reserved += size;
+      retry.push({ hash, url: joinRemoteUrl(remoteBase, rec.url), bytes: size });
+    }
   }
   let remaining = Math.max(0, cap - reserved);
   const missing: { hash: string; url: string; bytes: number }[] = [];
@@ -334,8 +356,7 @@ export async function enqueueMissingAudio(): Promise<void> {
       bytes: size,
     });
   }
-  if (missing.length === 0) return;
-  await withWorklistLock(async () => {
+  if (missing.length > 0) await withWorklistLock(async () => {
     await mutateWorklistUnlocked((wl) => {
       const have = new Set(wl.fetch.map((item) => item.hash));
       for (const item of missing) {
@@ -345,9 +366,9 @@ export async function enqueueMissingAudio(): Promise<void> {
       }
     });
   });
-  for (const item of missing) {
+  await runWithTimeBudget([...retry, ...missing], async (item) => {
     enqueueCacheFromUrl(item.hash, item.url, item.bytes);
-  }
+  });
 }
 
 /**
@@ -363,14 +384,14 @@ export function pullMissingTextArt(): Promise<void> {
 }
 
 async function runPull(): Promise<void> {
-  if (!replicaUsable()) return;
+  if (!replicaUsable() || browserDownloadsPaused()) return;
   const now = Date.now();
   pruneStaleInFlight(now);
   if (inFlight.size > 0) return;
   const items = (await missingTextArt()).filter((item) =>
     !inBackoff(item.hash, now)
   );
-  if (items.length === 0) return;
+  if (items.length === 0 || browserDownloadsPaused()) return;
   const w = ensureWorker();
   if (w) {
     for (const item of items) inFlight.set(item.hash, now);
@@ -402,7 +423,7 @@ export async function replayWorklist(): Promise<void> {
       next.evict = keepEvict;
       next.fetch = pending;
     });
-    if (pending.length === 0) return;
+    if (pending.length === 0 || browserDownloadsPaused()) return;
     const items: ReplicaWorkerFillItem[] = [];
     for (const item of pending) {
       const rec = pathRecordForHash(item.hash);

@@ -22,10 +22,10 @@ import {
   materializeArtworkSrc,
   persistPolicy,
   pinAudio,
+  refreshReplicaManifest,
   replicaContentFetch,
   replicaFetchBudgetMs,
   replicaFlag,
-  refreshReplicaManifest,
   resetReplica,
   setReplicaOfflineProbe,
   setReplicaRemote,
@@ -38,22 +38,11 @@ import {
   setPersistFullSizeArtwork,
 } from "./policy.ts";
 import { REPLICA_FLAG_KEY } from "./schema.ts";
-import {
-  missingTextArt,
-  pullMissingTextArt,
-  replayWorklist,
-} from "./sync.ts";
+import { missingTextArt, pullMissingTextArt, replayWorklist } from "./sync.ts";
 import { setNativeAudioCacheProbe } from "./media-bridge.ts";
-import {
-  flushBlobTouches,
-  noteBlobAccess,
-  TOUCH_MIN_AGE_MS,
-} from "./blobs.ts";
+import { flushBlobTouches, noteBlobAccess, TOUCH_MIN_AGE_MS } from "./blobs.ts";
 import { evictUnpinnedAudioToFit } from "./gc.ts";
-import {
-  fetchServerRoot,
-  replicaAppliedRoot,
-} from "./resolve.ts";
+import { fetchServerRoot, replicaAppliedRoot } from "./resolve.ts";
 import { enqueueFetch, getWorklist, setWorklist } from "./worklist.ts";
 
 function buf(text: string): ArrayBuffer {
@@ -358,7 +347,13 @@ test("missingTextArt omits kinds that must not persist bodies", async () => {
     root: "r",
     resources: [
       { path: "c", hash: "cover", kind: "cover", bytes: 40, url: "/cover" },
-      { path: "b", hash: "card", kind: "card-backdrop", bytes: 8, url: "/card" },
+      {
+        path: "b",
+        hash: "card",
+        kind: "card-backdrop",
+        bytes: 8,
+        url: "/card",
+      },
       { path: "t", hash: "txt", kind: "text", bytes: 4, url: "/txt" },
     ],
   });
@@ -613,17 +608,20 @@ test("refreshReplicaManifest fetches /api/dag only when /api/root changes", asyn
       });
     }
     if (url.endsWith("/api/dag")) {
-      return new Response(JSON.stringify({
-        protocol_version: 1,
-        root: "r1",
-        resources: [{
-          path: "book/text/en/01.md",
-          hash: "h1",
-          kind: "text",
-          bytes: 1,
-          url: "/api/blob/h1",
-        }],
-      }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          protocol_version: 1,
+          root: "r1",
+          resources: [{
+            path: "book/text/en/01.md",
+            hash: "h1",
+            kind: "text",
+            bytes: 1,
+            url: "/api/blob/h1",
+          }],
+        }),
+        { status: 200 },
+      );
     }
     return new Response(null, { status: 404 });
   });
@@ -821,7 +819,10 @@ test("contentFetch with TAURI + lv.replica=idb never hits lvsync://resolve", asy
 });
 
 test("native-sync facade never uses deleted scheme content routes", async () => {
-  const src = await readFile(new URL("../native-sync.ts", import.meta.url), "utf8");
+  const src = await readFile(
+    new URL("../native-sync.ts", import.meta.url),
+    "utf8",
+  );
   assert.equal(src.includes("/resolve?u="), false);
   assert.equal(src.includes("/sync_all"), false);
   assert.equal(src.includes("/audio-index"), false);
@@ -922,11 +923,14 @@ test("refreshReplicaManifest is single-flight and conditional on the applied roo
     if (url.endsWith("/api/dag")) {
       const inm = new Headers(init?.headers).get("If-None-Match");
       if (inm === `"r1"`) return new Response(null, { status: 304 });
-      return new Response(JSON.stringify({
-        protocol_version: 1,
-        root: "r1",
-        resources: [textResource("h1")],
-      }), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          protocol_version: 1,
+          root: "r1",
+          resources: [textResource("h1")],
+        }),
+        { status: 200 },
+      );
     }
     return new Response(null, { status: 404 });
   });
@@ -1052,7 +1056,8 @@ test("putBlob throws when eviction rounds run out before the write fits", async 
       present: 1,
       data: buf("y".repeat(150)),
     }),
-    (error: unknown) => (error as { name?: string }).name === "QuotaExceededError",
+    (error: unknown) =>
+      (error as { name?: string }).name === "QuotaExceededError",
   );
   assert.equal(await getBlobRecord("big"), undefined);
 });
@@ -1169,7 +1174,9 @@ test("eager text fill is single-flight and backs off failing hashes", async () =
     resources: [textResource("bad"), textResource("good")],
   });
   const fetchMock = installFetch((url) => {
-    if (url.endsWith("/api/blob/bad")) return new Response(null, { status: 500 });
+    if (url.endsWith("/api/blob/bad")) {
+      return new Response(null, { status: 500 });
+    }
     return new Response("ok", { status: 200 });
   });
   try {
@@ -1182,6 +1189,73 @@ test("eager text fill is single-flight and backs off failing hashes", async () =
     assert.equal(fetchMock.calls.length, 0);
   } finally {
     fetchMock.restore();
+  }
+});
+
+test("browser download opt-out preserves queued content until downloads resume", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [textResource("queued")],
+  });
+  await setWorklist({
+    fetch: [{ hash: "queued", url: "/api/blob/queued" }],
+    evict: [],
+  });
+  const names = ["navigator", "caches", "Worker"] as const;
+  const descriptors = names.map((name) =>
+    Object.getOwnPropertyDescriptor(globalThis, name)
+  );
+  const values = [{ serviceWorker: {} }, {}, function Worker() {}];
+  names.forEach((name, index) =>
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      value: values[index],
+    })
+  );
+  const fetchMock = installFetch(() => new Response("ok"));
+  try {
+    await replayWorklist();
+    await pullMissingTextArt();
+    assert.equal(fetchMock.calls.length, 0);
+    assert.equal((await getWorklist()).fetch[0]?.hash, "queued");
+    storage.set("lv.offline.pwaEnabled", "1");
+    await pullMissingTextArt();
+    assert.equal(fetchMock.calls.length, 1);
+    assert.ok(await hasBlob("queued"));
+  } finally {
+    fetchMock.restore();
+    names.forEach((name, index) => {
+      const descriptor = descriptors[index];
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+      else Reflect.deleteProperty(globalThis, name);
+    });
+  }
+});
+
+test("a false browser online hint does not suppress reachable reader content", async () => {
+  await setup();
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { onLine: false },
+  });
+  const fetchMock = installFetch(() => Response.json([{ slug: "reachable" }]));
+  try {
+    const response = await contentFetch("/api/books");
+    assert.deepEqual(await response.json(), [{ slug: "reachable" }]);
+    assert.equal(fetchMock.calls.length, 1);
+    setReplicaOfflineProbe(() => true);
+    assert.deepEqual(await (await contentFetch("/api/books")).json(), [{
+      slug: "reachable",
+    }]);
+    assert.equal(fetchMock.calls.length, 1);
+  } finally {
+    fetchMock.restore();
+    setReplicaOfflineProbe(() => false);
+    if (descriptor) Object.defineProperty(globalThis, "navigator", descriptor);
+    else Reflect.deleteProperty(globalThis, "navigator");
   }
 });
 

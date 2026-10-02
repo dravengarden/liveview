@@ -2,7 +2,7 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { splashHtml } from "./src/_shell/splash.ts";
 
 const ReactCompilerConfig = {
@@ -160,7 +160,15 @@ function stampServiceWorker(): Plugin {
       const html = readFileSync(resolve(outputDir, "index.html"), "utf8");
       const assets = [
         ...new Set(
-          [...html.matchAll(/\/assets\/[^"']+\.(?:js|css)/g)].map((m) => m[0]),
+          [
+            ...[...html.matchAll(/\/assets\/[^"']+\.(?:js|css)/g)].map((m) => m[0]),
+            ...readdirSync(resolve(outputDir, "assets"), { recursive: true })
+              .map((path) => `/assets/${String(path)}`)
+              .filter((path) => /\.(js|css|woff2?)$/.test(path)),
+            "/highlight.min.js", "/mermaid.min.js", "/katex/katex.min.js", "/katex/katex.min.css",
+            ...readdirSync(resolve(outputDir, "katex/fonts"))
+              .map((path) => `/katex/fonts/${path}`),
+          ],
         ),
       ].sort();
       if (assets.length === 0) {
@@ -170,13 +178,19 @@ function stampServiceWorker(): Plugin {
       }
       // VERSION = content hash of the shell asset set → changes iff the shell
       // changes (each filename already embeds Vite's per-file content hash).
+      const swPath = resolve(outputDir, "sw.js");
+      const swSource = readFileSync(swPath, "utf8");
+      const hash = createHash("sha256").update(html).update(swSource);
+      for (const asset of assets) hash.update(asset).update(readFileSync(resolve(outputDir, `.${asset}`)));
+      for (const asset of ["manifest.webmanifest", "favicon.svg", "icon-192.png", "icon-512.png", "maskable-512.png", "apple-touch-icon.png"]) {
+        hash.update(asset).update(readFileSync(resolve(outputDir, asset)));
+      }
       const version = "lv-" +
-        createHash("sha256").update(assets.join(",")).digest("hex").slice(
+        hash.digest("hex").slice(
           0,
           12,
         );
-      const swPath = resolve(outputDir, "sw.js");
-      const out = readFileSync(swPath, "utf8")
+      const out = swSource
         .replace(
           'const VERSION = "lv-dev";',
           `const VERSION = ${JSON.stringify(version)};`,

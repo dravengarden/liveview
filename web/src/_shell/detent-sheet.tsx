@@ -224,6 +224,8 @@ function scrimOpacityAt(y: number, closedPx: number, max: number): number {
 }
 
 export interface DetentSheetProps {
+  /** Retain expensive controls while closed; hidden sheets remain inert. */
+  readonly keepMounted?: boolean | undefined;
   readonly open: boolean;
   readonly onClose: () => void;
   // `| undefined` (not just `?`) so a caller compiling with
@@ -284,6 +286,7 @@ function sheetHaptic(): void {
 export function DetentSheet(
   {
     open,
+    keepMounted = false,
     onClose,
     ariaLabel,
     anchor = "bottom",
@@ -663,9 +666,9 @@ export function DetentSheet(
     };
   }, [open, surfaceColor, scrimMax]);
 
-  // Unmounted when closed; the dismiss runs the settle (open still true) and
-  // only then calls onClose, so the slide-out is seen.
-  if (!open) {
+  // Dismiss settles before onClose. Retained settings controls stay hidden and
+  // inert afterwards, avoiding another React mount on every reopening.
+  if (!open && !keepMounted) {
     return null;
   }
 
@@ -752,7 +755,7 @@ export function DetentSheet(
   // above it.
   const z = Z + Math.min(level, 24) * 2;
 
-  return (
+  const surface = (
     <>
       {
         /* Scrim: dims the app, taps dismiss. Painted imperatively. Self-contained
@@ -817,9 +820,7 @@ export function DetentSheet(
             pointerEvents: "none",
             // Skirt is cover-only → use the near-opaque cover tint so it matches
             // the cover surface as one continuous slab (isCover is true here).
-            bgcolor: (t) => alpha(t.palette.background.default, frostTint(t.palette.mode, true)),
-            backdropFilter: "blur(30px) saturate(200%)",
-            WebkitBackdropFilter: "blur(30px) saturate(200%)",
+            bgcolor: "background.default",
           }}
         />
       )}
@@ -893,7 +894,7 @@ export function DetentSheet(
               // `cover` is a primary surface that must NEVER show the page: its own
               // pixels are FULLY opaque (background.default, alpha 1) so it can't
               // bleed regardless of the backdrop layer or whether iOS blurs — the
-              // glass FEEL comes from the sheen + blur+saturate on top, not from
+              // glass FEEL comes from the floating chrome, not from
               // any translucency (which on iOS = sharp page text over composited
               // content, the long-standing bug).
               bgcolor: (t) =>
@@ -906,8 +907,10 @@ export function DetentSheet(
               // region look like a mismatched grey header. Cover identity comes
               // from its opaque tint; keep its background flat and continuous.
               backgroundImage: (t) => isCover ? "none" : frostSheen(t.palette.mode, isTop),
-              backdropFilter: "blur(30px) saturate(200%)",
-              WebkitBackdropFilter: "blur(30px) saturate(200%)",
+              // Blurring behind fully opaque pixels changes no visible colour
+              // but creates an expensive full-screen offscreen render pass.
+              backdropFilter: isCover ? "none" : "blur(30px) saturate(200%)",
+              WebkitBackdropFilter: isCover ? "none" : "blur(30px) saturate(200%)",
             }
             : { bgcolor: "background.paper", backgroundImage: "none" }),
           // Round the inner (revealed) edge only — but a full-screen cover bleeds
@@ -968,4 +971,17 @@ export function DetentSheet(
       </Paper>
     </>
   );
+  return keepMounted
+    ? (
+      // Keep geometry while closed as well as React state: display:none still
+      // makes WebKit lay out the entire settings surface on the opening frame.
+      <Box
+        inert={!open}
+        aria-hidden={!open || undefined}
+        sx={{ display: "contents", visibility: open ? "visible" : "hidden", pointerEvents: open ? "auto" : "none" }}
+      >
+        {surface}
+      </Box>
+    )
+    : surface;
 }

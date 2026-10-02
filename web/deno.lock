@@ -13,6 +13,7 @@
     "npm:@fontsource/noto-serif-sc@^5.2.9": "5.2.9",
     "npm:@mui/icons-material@^7.3.8": "7.3.11_@mui+material@7.3.11__@emotion+react@11.14.0___react@19.2.6__@emotion+styled@11.14.1___@emotion+react@11.14.0____react@19.2.6___react@19.2.6__@types+react@19.2.15__react@19.2.6__react-dom@19.2.6___react@19.2.6_@types+react@19.2.15_react@19.2.6_@emotion+react@11.14.0__react@19.2.6_@emotion+styled@11.14.1__@emotion+react@11.14.0___react@19.2.6__react@19.2.6_react-dom@19.2.6__react@19.2.6",
     "npm:@mui/material@^7.3.8": "7.3.11_@emotion+react@11.14.0__react@19.2.6_@emotion+styled@11.14.1__@emotion+react@11.14.0___react@19.2.6__react@19.2.6_@types+react@19.2.15_react@19.2.6_react-dom@19.2.6__react@19.2.6",
+    "npm:@noble/hashes@2.0.1": "2.0.1",
     "npm:@types/node@^25.9.1": "25.9.1",
     "npm:@types/react-dom@^19.2.3": "19.2.3_@types+react@19.2.15",
     "npm:@types/react@^19.2.14": "19.2.15",
@@ -434,6 +435,9 @@
       "optionalPeers": [
         "@types/react"
       ]
+    },
+    "@noble/hashes@2.0.1": {
+      "integrity": "sha512-XlOlEbQcE9fmuXxrVTXCTlG2nlRXa9Rj3rr5Ue/+tX+nmkgbX720YHh0VR3hBF9xDvwnb8D2shVGOwNx+ulArw=="
     },
     "@oxc-project/types@0.144.0": {
       "integrity": "sha512-nuhZIOLuI6TFQ32I/WnUx+SCPY7SdSKwgnFHydAuoS1+Z4BRcaP+RRJmGzl9lw+0OFF7UmaESf7KQRXaNLHypg=="
@@ -1383,6 +1387,7 @@
         "npm:@fontsource/noto-serif-sc@^5.2.9",
         "npm:@mui/icons-material@^7.3.8",
         "npm:@mui/material@^7.3.8",
+        "npm:@noble/hashes@2.0.1",
         "npm:@types/node@^25.9.1",
         "npm:@types/react-dom@^19.2.3",
         "npm:@types/react@^19.2.14",

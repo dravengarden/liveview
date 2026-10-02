@@ -10,6 +10,7 @@ import { startSyncQueue } from "./syncQueue";
 import { startApm } from "./apm";
 import { startOtaUpdater } from "./otaUpdater";
 import { disableReplica, initReplica, replicaFlag } from "./replica/mod.ts";
+import { connectionStore } from "./connectionStore.ts";
 import "./styles/index.css";
 
 // Choose a reachable native endpoint before any subsystem captures/uses REMOTE.
@@ -45,7 +46,10 @@ startOtaUpdater();
 // with the replica disabled, so reads fall back to the network.
 if (replicaFlag() === "idb") {
   try {
-    await initReplica(undefined, { remoteBase: REMOTE, origins: [REMOTE] });
+    // Browser replicas must use their own origin, not a native compile-time
+    // endpoint (whose default is loopback on the user's device).
+    const replicaOrigin = BUNDLED ? REMOTE : globalThis.location.origin;
+    await initReplica(undefined, { remoteBase: replicaOrigin, origins: [replicaOrigin] });
   } catch (error) {
     console.error("Replica init failed; continuing network-only:", error);
     disableReplica();
@@ -80,54 +84,39 @@ createRoot(rootElement).render(
 // recovery script in index.html) so a future stale-cache failure can self-heal
 // again rather than being suppressed for the rest of the session.
 try {
+  (globalThis as typeof globalThis & { __LV_BOOTED__?: boolean }).__LV_BOOTED__ = true;
   sessionStorage.removeItem("lv-boot-heal");
 } catch {
   // sessionStorage may be unavailable (private mode / sandbox) — non-fatal.
 }
 
-// Register the service worker — IN THE NATIVE SHELL TOO (not only PWA/browser).
-//
-// The shell loads the REMOTE origin in a WKWebView with NO bundled SPA, so the
-// app's index.html + JS/CSS chunks can only load OFFLINE if something serves them
-// from cache — and that something is THIS service worker (navigate = cache-first
-// shell, assets = stale-while-revalidate). It's also exactly what the bundled
-// native shell probes for on a cold offline launch: it loads
-// REMOTE/favicon.svg as an <img>, which the SW serves from cache with zero
-// network, then hands off to the SW-served SPA. We previously UNREGISTERED the SW
-// on the shell to always load fresh — but that left the shell with no offline
-// copy of itself, so a cold offline launch dead-ended on the connection screen (this
-// bug). Freshness is preserved without sacrificing offline: the SW is VERSION-
-// stamped (a UI change invalidates its caches), the navigate handler revalidates
-// in the background, and the controllerchange listener below auto-reloads once a
-// newer SW activates. (Reader CONTENT still also resolves through the native
-// lvSync bridge; native AUDIO still plays from the native AVPlayer store. The SW
-// owns the APP SHELL — the piece that was missing offline.)
+// Browser/remote shells use a versioned SW. The bundled native shell owns its
+// overlay and never registers one. Installation and foreground checks announce
+// updates without interrupting reading or playback; activation needs a tap.
 if (import.meta.env.PROD && !BUNDLED && "serviceWorker" in navigator) {
-  // Auto-reload once when a freshly-deployed SW takes control. The SW already
-  // calls skipWaiting()+clients.claim() on a VERSION bump, which fires
-  // `controllerchange` — without this listener the page keeps running the old
-  // in-memory bundle until the user manually relaunches (twice, on iOS PWAs).
-  // Guarded two ways: only when a controller already existed (so the very
-  // first install on a fresh visit doesn't reload), and reload at most once.
+  // Another tab closing can allow natural activation. The reader still decides
+  // when to replace this in-memory UI.
   if (navigator.serviceWorker.controller) {
-    let reloading = false;
     navigator.serviceWorker.addEventListener("controllerchange", () => {
-      if (reloading) return;
-      reloading = true;
-      globalThis.location.reload();
+      connectionStore.updateAvailable();
     });
   }
-  window.addEventListener("load", () => {
+  const registerWorker = (): void => {
     void navigator.serviceWorker
       .register("/sw.js")
       .then((reg) => {
+        const announce = (): void => {
+          if (reg.waiting && navigator.serviceWorker.controller) connectionStore.updateAvailable();
+        };
+        announce();
+        reg.addEventListener("updatefound", () => {
+          reg.installing?.addEventListener("statechange", announce);
+        });
         // iOS standalone PWAs RESUME the old in-memory page when reopened (even
         // after a swipe-kill) and skip the SW update check — so a deployed fix
         // can sit on the server forever while the device keeps running the old
         // bundle. Force an update check every time the app returns to the
-        // foreground; if a newer SW is found it installs (skipWaiting) →
-        // activates → controllerchange → the reload above. This is what makes a
-        // deploy actually reach an installed PWA without a manual cache wipe.
+        // foreground. An installed update waits for the banner action.
         const checkForUpdate = (): void => {
           if (globalThis.document.visibilityState === "visible") {
             void reg.update().catch(() => {
@@ -143,5 +132,8 @@ if (import.meta.env.PROD && !BUNDLED && "serviceWorker" in navigator) {
       .catch(() => {
         // Non-fatal: the app still works without offline support.
       });
-  });
+  };
+  // Replica boot awaits IDB. The document may already have fired load by then.
+  if (document.readyState === "complete") registerWorker();
+  else window.addEventListener("load", registerWorker, { once: true });
 }

@@ -20,7 +20,7 @@
 // socket itself stays in the app, which just reports open/close here and reads
 // back the backoff delay.
 
-import { Box, CircularProgress } from "@mui/material";
+import { Box, Button, CircularProgress } from "@mui/material";
 import CheckIcon from "@mui/icons-material/Check";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { type ShellLabels, useShellLabels } from "./shell-labels.tsx";
@@ -43,6 +43,8 @@ export interface ConnectionStoreOptions {
   /** How long the green "reconnected" flash lingers before auto-dismissing.
    *  Default 4000ms. */
   readonly reconnectedDismissMs?: number;
+  /** Host-owned update transaction; preserves durable content stores. */
+  readonly applyUpdate?: () => Promise<void>;
 }
 
 export interface ConnectionStore {
@@ -240,7 +242,7 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
     connectionReady,
     connectionLost,
     updateAvailable,
-    applyUpdate,
+    applyUpdate: opts.applyUpdate ?? applyUpdate,
     watchForegroundVersion,
     useConnectionBanner,
     version,
@@ -279,6 +281,9 @@ export interface ConnectionBannerProps {
   readonly store: ConnectionStore;
   /** Seconds the update bar counts down before reloading. Default 3. */
   readonly countdownSecs?: number;
+  /** A reader can defer updates until an explicit tap. */
+  readonly updateLabel?: string;
+  readonly updateFailedLabel?: string;
 }
 
 // Full-width overlay bar tracking the app's socket + build version. All three
@@ -296,11 +301,13 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
   const labels = useShellLabels();
   const isUpdate = banner?.kind === "update";
   const [secs, setSecs] = useState(countdownSecs);
+  const [updating, setUpdating] = useState(false);
+  const [updateFailed, setUpdateFailed] = useState(false);
 
   // Drive the update countdown (and only it). Resets whenever we're not on the
   // update state so a later redeploy starts a fresh 3→0.
   useEffect(() => {
-    if (!isUpdate) {
+    if (!isUpdate || props.updateLabel) {
       setSecs(countdownSecs);
       return;
     }
@@ -312,7 +319,7 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
     }
     const t = setTimeout(() => setSecs((s) => s - 1), 1000);
     return () => clearTimeout(t);
-  }, [isUpdate, secs, countdownSecs, store]);
+  }, [isUpdate, secs, countdownSecs, store, props.updateLabel]);
 
   if (!banner) {
     return null;
@@ -349,7 +356,16 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
     >
       {banner.kind === "down" && <CircularProgress size={14} color="inherit" thickness={5} />}
       {banner.kind === "reconnected" && <CheckIcon sx={{ fontSize: "1.125rem" }} />}
-      <span>{label}</span>
+      {!(isUpdate && props.updateLabel) && <span>{label}</span>}
+      {isUpdate && props.updateLabel && <Button color="inherit" size="small" disabled={updating} sx={{ pointerEvents: "auto" }} onClick={() => {
+        setUpdating(true);
+        setUpdateFailed(false);
+        void store.applyUpdate().catch(() => {
+          setUpdateFailed(true);
+          setUpdating(false);
+        });
+      }}>{props.updateLabel}</Button>}
+      {updateFailed && <span role="alert">{props.updateFailedLabel ?? "Update failed. Try again."}</span>}
     </Box>
   );
 }

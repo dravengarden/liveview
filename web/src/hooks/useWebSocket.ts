@@ -6,6 +6,7 @@ import { emitServerSettingPush } from "@/syncBackends";
 import { dispatchChapterReady } from "@/syncStore";
 import { runOtaCheck } from "@/otaUpdater";
 import { webSocketUrl } from "@/webSocketUrl";
+import { setPwaBackendConnected } from "@/pwa";
 
 interface UseWebSocketOptions {
   onContentUpdate: (
@@ -119,10 +120,16 @@ export function useWebSocket(
       };
     };
 
+    // A new offline event invalidates evidence from an older socket, even if
+    // WebKit has not delivered its eventual close notification yet.
+    const onOffline = (): void => setPwaBackendConnected(false);
+    window.addEventListener("offline", onOffline);
     connect();
 
     return () => {
       stopped = true;
+      window.removeEventListener("offline", onOffline);
+      setPwaBackendConnected(false);
       if (reconnectTimeout !== null) {
         clearTimeout(reconnectTimeout);
         reconnectTimeout = null;

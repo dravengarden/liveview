@@ -4,16 +4,18 @@ import {
   nativeAudioIndex,
   nativeCacheStats,
   nativeRefreshManifest,
-  nativeSyncAvailable,
+  offlineDownloadsAvailable,
   offlineWifiOnly,
 } from "@/native-sync";
 import { setAllowsCellular } from "@/native-audio";
 import { contentFetch } from "@/native-sync";
+import { pwaAudioSupported, pwaDownloadsEnabled, pwaNetworkAvailable, pwaOfflineAvailable } from "@/pwa";
 import { ingestDag } from "@/audioMediaIndex";
 import {
   enqueueMissingAudio,
   evictUnpinnedAudioToFit,
   loadPolicy,
+  pauseReplicaFill,
   persistPolicy,
 } from "@/replica/mod.ts";
 
@@ -38,7 +40,7 @@ function maxBytes(): number {
  */
 export function useAudioPreloadDriver(): void {
   useEffect(() => {
-    if (!nativeSyncAvailable()) return undefined;
+    if (!offlineDownloadsAvailable()) return undefined;
     let cancelled = false;
     const warmedManifests = new Set<string>();
     let refreshing = false;
@@ -55,14 +57,20 @@ export function useAudioPreloadDriver(): void {
         policy.wifiOnly = offlineWifiOnly();
         await persistPolicy(policy);
         setAllowsCellular({ on: !policy.wifiOnly });
-        await enqueueMissingAudio();
-        await evictUnpinnedAudioToFit(policy.capBytes);
+        const downloadsOn = !pwaOfflineAvailable() || pwaDownloadsEnabled();
+        if (downloadsOn && (!pwaOfflineAvailable() || pwaAudioSupported())) {
+          await enqueueMissingAudio();
+          await evictUnpinnedAudioToFit(policy.capBytes);
+        }
         // Re-ingest the hydrated DAG index on every foreground. Older installs
         // already have hashes in localStorage but not the newer byte lengths;
         // waiting for a Merkle-root change would leave those entries unmigrated.
         const resources = await nativeAudioIndex();
         if (cancelled) return;
         ingestDag(resources);
+        // Lazy browser reads still need current hash metadata. They do not need
+        // a corpus-wide pass over every book manifest until downloads are on.
+        if (!downloadsOn) return;
         if (
           !root ||
           globalThis.localStorage?.getItem(AUDIO_INDEX_ROOT_KEY) === root
@@ -108,9 +116,17 @@ export function useAudioPreloadDriver(): void {
       }
     };
     globalThis.document?.addEventListener("visibilitychange", onVisible);
+    const onPolicy = (): void => {
+      if (pwaOfflineAvailable() && (!pwaDownloadsEnabled() || !pwaNetworkAvailable())) pauseReplicaFill();
+      void refreshWorkingSet().then(() => { if (!cancelled) void ensureTextSync(); });
+    };
+    globalThis.addEventListener("lv-download-policy", onPolicy);
+    globalThis.addEventListener("online", onPolicy);
     return () => {
       cancelled = true;
       globalThis.document?.removeEventListener("visibilitychange", onVisible);
+      globalThis.removeEventListener("lv-download-policy", onPolicy);
+      globalThis.removeEventListener("online", onPolicy);
     };
   }, []);
 }

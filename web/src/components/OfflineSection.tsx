@@ -20,7 +20,7 @@ import {
   ensureAutoSync,
   nativeCacheStats,
   nativeNetworkClass,
-  nativeSyncAvailable,
+  offlineDownloadsAvailable,
   offlineWifiOnly,
   onNativeNetworkClass,
   setOfflineWifiOnly,
@@ -32,6 +32,9 @@ import {
   replicaStats,
 } from "@/replica/mod.ts";
 import { useI18n } from "@/i18n";
+import { pwaAudioSupported, pwaDownloadsEnabled, pwaOfflineAvailable } from "@/pwa";
+import { PwaOfflineControls } from "./PwaOfflineControls";
+import { useSettingsSurfaceOpen } from "../_shell/settings-sheet.tsx";
 
 function gb(bytes: number): string {
   const g = bytes / 1_073_741_824;
@@ -57,13 +60,16 @@ function maxGB(): number {
  * so there's nothing to micro-manage per book — just a storage gauge + one audio
  * progress line. Lowering the budget below current usage confirms before evicting.
  */
-export function OfflineSection(): React.JSX.Element | null {
+export function OfflineSection({ visible = true }: { visible?: boolean }): React.JSX.Element | null {
   const { t } = useI18n();
+  const surfaceOpen = useSettingsSurfaceOpen();
+  const activePanel = surfaceOpen && visible;
+  const hasAudio = !pwaOfflineAvailable() || pwaAudioSupported();
   const [stats, setStats] = useState<CacheStats | null>(null);
   const [audio, setAudio] = useState<{
     usedBytes: number;
     cachedCount: number;
-    net: "wifi" | "cell" | "none";
+    net: "wifi" | "cell" | "none" | "unknown";
   } | null>(null);
   // Download TOTALS from the cheap server index (/api/sizes), keyed by deploy root
   // — replaces fetching + parsing the ~4 MB /api/dag here just to sum sizes.
@@ -90,8 +96,7 @@ export function OfflineSection(): React.JSX.Element | null {
     try {
       const replica = await replicaStats();
       const netRaw = nativeNetworkClass();
-      const net: "wifi" | "cell" | "none" =
-        netRaw === "cell" || netRaw === "none" ? netRaw : "wifi";
+      const net = netRaw;
       const a = {
         usedBytes: replica.audioBytes,
         cachedCount: replica.audioCached,
@@ -124,7 +129,11 @@ export function OfflineSection(): React.JSX.Element | null {
   }, []);
 
   useEffect(() => {
-    if (!nativeSyncAvailable()) return undefined;
+    if (!activePanel || !offlineDownloadsAvailable()) return undefined;
+    // Another retained settings surface may have changed these preferences.
+    setWifiOnly(offlineWifiOnly());
+    setCap(maxGB());
+    samplesRef.current = [];
     const unsubNet = onNativeNetworkClass(() => {
       void tick();
     });
@@ -153,7 +162,7 @@ export function OfflineSection(): React.JSX.Element | null {
       unsubNet();
       if (pollRef.current !== undefined) clearInterval(pollRef.current);
     };
-  }, [tick]);
+  }, [tick, activePanel]);
 
   // Audio corpus total (compressed estimate) from the server index, + a cached
   // fallback so the gauge isn't 0/0 before /api/sizes loads (offline).
@@ -183,7 +192,7 @@ export function OfflineSection(): React.JSX.Element | null {
   // only while this panel is mounted. This component is display-only for the fill;
   // it just reflects native stats + the manifest.
 
-  if (!nativeSyncAvailable()) return null;
+  if (!offlineDownloadsAvailable()) return null;
 
   const audioUsed = audio?.usedBytes ?? 0;
   const textUsed = sizes?.textBytes
@@ -209,11 +218,12 @@ export function OfflineSection(): React.JSX.Element | null {
   const audioPct = haveTotals
     ? Math.round((audioDoneCount / audioTotalCount) * 100)
     : (cachedTotal > 0 ? Math.min(99, Math.round((audioUsed / cachedTotal) * 100)) : 0);
-  const downloadComplete = haveTotals && audioDoneCount >= audioTotalCount
+  const downloadComplete = (!hasAudio || (haveTotals && audioDoneCount >= audioTotalCount))
     && (stats == null || stats.cached >= stats.total);
   // net lives with the AUDIO layer now (the WiFi-gated big download); the content
   // store (Rust) isn't net-aware.
-  const waitingWifi = wifiOnly && audio != null && audio.net !== "wifi";
+  const waitingWifi = hasAudio && wifiOnly && audio != null && audio.net !== "wifi" &&
+    (!pwaOfflineAvailable() || pwaDownloadsEnabled());
   // ACTIVELY transferring = real byte growth in the rolling window. `downloading`
   // used to mean merely "not 100% complete", so the panel said "Downloading · 0
   // KB/s" while idle — and when /api/sizes hadn't loaded, downloadComplete was
@@ -231,20 +241,24 @@ export function OfflineSection(): React.JSX.Element | null {
     globalThis.localStorage?.setItem(MAX_KEY, String(newGB));
     const policy = loadPolicy();
     policy.capBytes = newGB * 1_073_741_824;
-    void persistPolicy(policy).then(() => evictUnpinnedAudioToFit(policy.capBytes));
+    void persistPolicy(policy).then(() => evictUnpinnedAudioToFit(policy.capBytes)).then(() => {
+      globalThis.dispatchEvent(new Event("lv-download-policy"));
+    });
   };
 
   return (
     <Stack spacing={1.75}>
+      {pwaOfflineAvailable() && <PwaOfflineControls />}
       <Typography variant="body2" color="text.secondary">
-        {t("offline.description")}
+        {t(pwaOfflineAvailable() ? "pwa.description" : "offline.description")}
       </Typography>
 
       <Stack>
         <ToggleRow
           label={t("offline.wifiOnly")}
-          hint={t("offline.wifiOnlyHint")}
+          hint={t(pwaOfflineAvailable() && nativeNetworkClass() === "unknown" ? "pwa.networkHint" : "offline.wifiOnlyHint")}
           checked={wifiOnly}
+          disabled={!hasAudio}
           onChange={(v) => {
             setWifiOnly(v);
             setOfflineWifiOnly(v);
@@ -363,7 +377,7 @@ export function OfflineSection(): React.JSX.Element | null {
               policy.capBytes = g * 1_073_741_824;
               void persistPolicy(policy).then(() =>
                 evictUnpinnedAudioToFit(policy.capBytes)
-              );
+              ).then(() => globalThis.dispatchEvent(new Event("lv-download-policy")));
             }}
           >
             {t("offline.confirmDelete")}
@@ -379,11 +393,13 @@ function ToggleRow({
   hint,
   checked,
   onChange,
+  disabled = false,
 }: {
   label: string;
   hint: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }): React.JSX.Element {
   return (
     <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ py: 0.25 }}>
@@ -391,7 +407,7 @@ function ToggleRow({
         <Typography variant="body2">{label}</Typography>
         <Typography variant="caption" color="text.secondary">{hint}</Typography>
       </Box>
-      <Switch checked={checked} onChange={(e) => onChange(e.target.checked)} size="small" />
+      <Switch checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} size="small" />
     </Stack>
   );
 }

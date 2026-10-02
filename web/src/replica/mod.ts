@@ -77,6 +77,7 @@ export {
 export { runWithTimeBudget, spawnReplicaWorker } from "./worker.ts";
 export {
   enqueueMissingAudio,
+  pauseReplicaFill,
   pullMissingTextArt,
   setReplicaRemote,
 } from "./sync.ts";

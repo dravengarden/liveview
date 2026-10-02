@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <title>LiveView</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
@@ -45,11 +45,12 @@
       (function () {
         var KEY = "lv-boot-heal";
         function isBootFailure(msg) {
-          return /useSyncExternalStore|dynamically imported module|Importing a module script failed|Failed to fetch|ChunkLoadError|error loading dynamically/i.test(
+          return /useSyncExternalStore|dynamically imported module|Importing a module script failed|ChunkLoadError|error loading dynamically/i.test(
             msg || "",
           );
         }
         function heal(msg) {
+          if (self.__LV_BOOTED__ || navigator.onLine === false) return;
           if (!isBootFailure(msg)) return;
           try {
             if (sessionStorage.getItem(KEY)) return;
@@ -67,7 +68,7 @@
                     return Promise.all(
                       keys
                         .filter(function (k) {
-                          return k !== "lv-blobs";
+                          return /^lv-[a-f0-9]+-(shell|runtime|api|audio)$/.test(k);
                         })
                         .map(function (k) {
                           return caches.delete(k);
@@ -82,7 +83,10 @@
                     .getRegistrations()
                     .then(function (regs) {
                       return Promise.all(
-                        regs.map(function (r) {
+                        regs.filter(function (r) {
+                          var worker = r.active || r.waiting || r.installing;
+                          return worker && new URL(worker.scriptURL).pathname === "/sw.js";
+                        }).map(function (r) {
                           return r.unregister();
                         }),
                       );

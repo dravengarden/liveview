@@ -544,12 +544,10 @@ export function AudioPlayerProvider(
               nativeAudioPlay();
             }
           } else if (audio) {
-            // Web <audio>: prefer the immutable content-addressed blob (served from
-            // the persistent cache, offline-stable across deploys). The bookend +
-            // not-yet-baked + text read-aloud cases have no stable blob → /api/audio.
-            const ah = np.rendition === "audio" && !isBookEnd
-              ? media.audioHash
-              : undefined;
+            // Use the canonical hash for every rendition, including the last
+            // chapter. The optional server-generated bookend cue must not make
+            // an otherwise downloaded final chapter depend on the network.
+            const ah = media.audioHash;
             audio.src = ah
               ? `/api/blob/${ah}`
               : `/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`;

@@ -22,7 +22,7 @@ import { FONT_PRESETS } from "@/fonts";
 import { UI_LANGUAGES, useI18n } from "@/i18n";
 import { OfflineSection } from "./OfflineSection";
 import { SegmentedPill } from "./SegmentedPill";
-import { nativeSyncAvailable } from "@/native-sync";
+import { offlineDownloadsAvailable } from "@/native-sync";
 
 interface SettingsButtonProps {
   variant: ThemeVariant;
@@ -191,9 +191,8 @@ export function SettingsButton({
     FONT_PRESETS[0];
 
   // Two segments (cowboy SegmentedPill): all the Settings in one scroll + a
-  // Downloads segment for the offline cache. The Downloads segment only exists on
-  // the native shell (the PWA caches via the SW, nothing to manage here).
-  const hasDownloads = nativeSyncAvailable();
+  // Both hosts share the replica's download accounting and storage policy.
+  const hasDownloads = offlineDownloadsAvailable();
   const [seg, setSeg] = useState<"settings" | "downloads">("settings");
 
   return (
@@ -222,8 +221,7 @@ export function SettingsButton({
           />
         )}
 
-        {seg === "settings" && (
-          <Stack spacing={2.25}>
+          <Stack spacing={2.25} sx={{ display: seg === "settings" ? "flex" : "none" }}>
             {/* ── Theme: palette pair + light/dark mode ──────────────────────── */}
             <Stack spacing={1.5}>
               <Typography variant="overline" color="text.secondary">
@@ -591,9 +589,11 @@ export function SettingsButton({
               </Typography>
             </Stack>
           </Stack>
+        {hasDownloads && (
+          <Box sx={{ display: seg === "downloads" ? "block" : "none" }}>
+            <OfflineSection visible={seg === "downloads"} />
+          </Box>
         )}
-
-        {seg === "downloads" && <OfflineSection />}
       </Stack>
     </SettingsSheet>
   );

@@ -268,6 +268,9 @@ inline SVG, Typst, JSON, Excalidraw, and read-aloud resource coverage.
 
 ## Persistent deployment
 
+For installation, offline downloads, updates, and the differences from the native
+app, see the [PWA guide](docs/pwa.md).
+
 Use persistent mode when the library should be served independently from its
 source checkout.
 

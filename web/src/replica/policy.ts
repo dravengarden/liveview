@@ -10,6 +10,7 @@ import {
   type ReplicaPolicy,
 } from "./schema.ts";
 import { idbRequest, withTxn } from "./idb.ts";
+import { pwaDownloadsEnabled } from "../pwa.ts";
 
 let persistFullSizeArtwork = true;
 let currentPolicy: ReplicaPolicy | null = null;
@@ -33,7 +34,7 @@ export function isAppShell(): boolean {
 }
 
 export function defaultMode(): DataMode {
-  return isAppShell() ? "eager" : "lazy";
+  return isAppShell() || pwaDownloadsEnabled() ? "eager" : "lazy";
 }
 
 export function wifiOnlyPref(): boolean {

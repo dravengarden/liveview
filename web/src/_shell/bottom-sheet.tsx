@@ -47,6 +47,8 @@ export interface BottomSheetProps {
    * still shrinking to fit a narrow tablet. No effect on the mobile sheet.
    */
   readonly wide?: boolean;
+  /** Retain expensive controls between openings. */
+  readonly keepMounted?: boolean;
   /**
    * Force the bottom-sheet surface regardless of viewport width. Default is
    * width-driven (sheet `< sm`, centered dialog otherwise). Set this when the
@@ -361,6 +363,7 @@ export function BottomSheet(
     children,
     actions,
     wide = false,
+    keepMounted = false,
     forceSheet = false,
     frosted = false,
     cover = false,
@@ -382,6 +385,7 @@ export function BottomSheet(
   if (!isMobile) {
     return (
       <Dialog
+        keepMounted={keepMounted}
         open={open}
         onClose={onClose}
         maxWidth={false}
@@ -402,6 +406,7 @@ export function BottomSheet(
   return (
     <DetentSheet
       open={open}
+      keepMounted={keepMounted}
       onClose={onClose}
       frosted={frosted}
       cover={cover}

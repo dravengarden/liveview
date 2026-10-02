@@ -1,7 +1,8 @@
 {
   "name": "LiveView",
   "short_name": "LiveView",
-  "description": "Live-reloading previewer for Markdown, images, PDFs and more.",
+  "id": "/",
+  "description": "Read and listen to your library, online and offline.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

@@ -9,11 +9,14 @@
 // via useConnectionBanner); the WebSocket stays in the single useWebSocket hook.
 
 import { type Banner, type BannerKind, createConnectionStore } from "@/_shell";
+import { applyReaderUpdate } from "./pwa-update.ts";
+import { setPwaBackendConnected } from "./pwa.ts";
 
 export type { Banner, BannerKind };
 
 export const connectionStore = createConnectionStore({
   versionUrl: "/api/version",
+  applyUpdate: applyReaderUpdate,
   // Offline-first reconnect policy (design §6): be CONSERVATIVE about surfacing
   // an outage — a few dropped frames recover silently — and never hammer the
   // server on a long outage. Show the offline state only after ~4 consecutive
@@ -26,8 +29,14 @@ export const connectionStore = createConnectionStore({
 
 // Bound re-exports — same named bindings the rest of liveview imports today, so
 // useWebSocket / useAutoUpdate / ReconnectBanner are untouched.
-export const connectionReady = (): void => connectionStore.connectionReady();
-export const connectionLost = (): number => connectionStore.connectionLost();
+export const connectionReady = (): void => {
+  setPwaBackendConnected(true);
+  connectionStore.connectionReady();
+};
+export const connectionLost = (): number => {
+  setPwaBackendConnected(false);
+  return connectionStore.connectionLost();
+};
 export const applyUpdate = (): Promise<void> => connectionStore.applyUpdate();
 export const watchForegroundVersion = (): () => void =>
   connectionStore.watchForegroundVersion();

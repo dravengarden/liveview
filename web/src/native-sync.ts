@@ -12,6 +12,7 @@
 import { nativeAudioRequestState, onNativeAudioEvent } from "./native-audio.ts";
 import { setAllowsCellular } from "./native-host.ts";
 import { remoteUrl } from "./apiBase.ts";
+import { pwaDownloadsEnabled, pwaNetworkAvailable, pwaOfflineAvailable } from "./pwa.ts";
 import {
   artworkBlobSrc,
   currentReplicaPolicy,
@@ -30,6 +31,10 @@ export function nativeSyncAvailable(): boolean {
   return "__TAURI_INTERNALS__" in globalThis;
 }
 
+export function offlineDownloadsAvailable(): boolean {
+  return nativeSyncAvailable() || pwaOfflineAvailable();
+}
+
 /** Drop-in `fetch` for reader content. Resolves through the TypeScript IDB
  *  replica (store-first for manifest resources; cache/network-first for
  *  url-keyed lists). `fresh` is accepted for API compatibility. */
@@ -39,9 +44,11 @@ export async function contentFetch(
 ): Promise<Response> {
   if (replicaFlag() === "idb") {
     return replicaContentFetch(url, {
-      ...(opts?.cacheFirst === true ? { cacheFirst: true } : {}),
+      cacheFirst: opts?.cacheFirst ?? (pwaOfflineAvailable() && opts?.fresh !== true),
       ...(opts?.connectMs !== undefined ? { connectMs: opts.connectMs } : {}),
-      offline: isLikelyOffline() || nativeNetworkClass() === "none",
+      // Browser online hints can be false while this origin is reachable.
+      // Only native reachability is authoritative enough to suppress reads.
+      offline: nativeSyncAvailable() && (isLikelyOffline() || nativeNetworkClass() === "none"),
     });
   }
   // Replica is the only store; leftover `native` flags map to idb.
@@ -192,6 +199,13 @@ let knownNetworkClass: NativeNetworkClass = "unknown";
 const networkListeners = new Set<(net: NativeNetworkClass) => void>();
 
 export function nativeNetworkClass(): NativeNetworkClass {
+  if (!nativeSyncAvailable() && typeof navigator !== "undefined") {
+    if (!pwaNetworkAvailable()) return "none";
+    const type = (navigator as Navigator & { connection?: { type?: string } }).connection?.type;
+    if (type === "wifi" || type === "ethernet") return "wifi";
+    if (type === "cellular") return "cell";
+    return "unknown";
+  }
   return knownNetworkClass;
 }
 
@@ -209,12 +223,12 @@ export function onNativeNetworkClass(
  *  derived flag; off-shell it falls back to `navigator.onLine` (reliable there). */
 export function isLikelyOffline(): boolean {
   if (nativeSyncAvailable()) return knownOffline;
-  return typeof navigator !== "undefined" && navigator.onLine === false;
+  return !pwaNetworkAvailable();
 }
 
 export function startOfflineFlagSync(): void {
   setReplicaOfflineProbe(
-    () => isLikelyOffline() || nativeNetworkClass() === "none",
+    () => nativeSyncAvailable() && (isLikelyOffline() || nativeNetworkClass() === "none"),
   );
   if (!nativeSyncAvailable()) return;
   let last: boolean | null = null;
@@ -273,6 +287,7 @@ export function setOfflineWifiOnly(on: boolean): void {
   // allowsCellularAccess. Those sessions suspend when the app backgrounds —
   // that is the accepted ceiling; JS cannot continue transfers while suspended.
   setAllowsCellular({ on: !on });
+  globalThis.dispatchEvent(new Event("lv-download-policy"));
   // Relaxing the constraint may unblock a previously-refused run.
   if (!on) void ensureAutoSync();
 }
@@ -281,6 +296,7 @@ export function setOfflineWifiOnly(on: boolean): void {
  *  repeatedly — the native side guards against concurrent runs, and a WiFi-only
  *  refusal is a no-op until WiFi returns (the settings poll re-fires it). */
 export async function ensureAutoSync(): Promise<void> {
+  if (pwaOfflineAvailable() && !pwaDownloadsEnabled()) return;
   if (currentReplicaPolicy().mode !== "eager") return;
   try {
     await nativeSyncAll(offlineWifiOnly());

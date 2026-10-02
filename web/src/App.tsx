@@ -64,7 +64,6 @@ import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { useAutoUpdate } from "@/hooks/useAutoUpdate";
 import { useAudioPreloadDriver } from "@/hooks/useAudioPreloadDriver";
-import { applyUpdate, useConnectionBanner } from "@/connectionStore";
 import { NativeReleaseUpdatePrompt, NavShell } from "./_shell";
 import { rootRefreshDue } from "./rootRefresh";
 import type {
@@ -469,22 +468,9 @@ export function App(): React.JSX.Element {
   // reader/listener. See connectionStore + ReconnectBanner.
   useAutoUpdate();
   // Drive the offline audio fill from app level, so it runs the moment the app
-  // opens (not only while the Settings → Downloads panel is mounted). Native
-  // shell only; no-op on web/PWA.
+  // opens (not only while the Settings → Downloads panel is mounted). Browsers
+  // opt in to library downloads; native retains its existing automatic policy.
   useAudioPreloadDriver();
-
-  // Make the update actually LAND on an installed iOS PWA. `useAutoUpdate` only
-  // probes and raises the banner; the reload then depends on the shared overlay's
-  // 3s countdown — which a resumed iOS PWA stalls, so the app sits on an old
-  // bundle forever (observed: an iPad stuck several versions behind despite the
-  // banner firing). When a redeploy is detected AND we're on the shelf (a reload
-  // is seamless there — no reader/listener to yank), reload IMMEDIATELY instead of
-  // waiting on the countdown. Mid-book we still leave the banner to handle it.
-  const updateBanner = useConnectionBanner();
-  useEffect(() => {
-    if (updateBanner?.kind !== "update") return;
-    if (currentPath === null) void applyUpdate();
-  }, [updateBanner, currentPath]);
 
   // When a fresh load pulls a newer playback position from another device, the
   // audio engine raises `syncNotice`; surface it through the shared snackbar
