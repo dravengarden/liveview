@@ -1,5 +1,4 @@
 import {
-  buildBookSearchIndex,
   buildLibraryTaxonomy,
   countTagFacetMatches,
   discoveryTagIds,
@@ -7,10 +6,7 @@ import {
   facetStartsFolded,
   matchesTagFacets,
   readingState,
-  scoreBookSearchIndex,
-  searchScore,
   sortCollectionNames,
-  tokenizeSearchQuery,
 } from "./libraryDiscovery.ts";
 import type { Book } from "@/types";
 
@@ -45,21 +41,6 @@ const book: Book = {
   created_at: 0,
   updated_at: 0,
 };
-
-Deno.test("weighted search covers title, tags, series, author, and description", () => {
-  assertEquals(
-    (searchScore(book, "wetlands") ?? 0) >
-      (searchScore(book, "restored") ?? 0),
-    true,
-  );
-  assertEquals(searchScore(book, "ecology field") != null, true);
-  assertEquals(searchScore(book, "astronomy"), null);
-  const index = buildBookSearchIndex(book);
-  assertEquals(
-    scoreBookSearchIndex(index, tokenizeSearchQuery("ecology field")),
-    searchScore(book, "ecology field"),
-  );
-});
 
 Deno.test("facet preview counts preserve OR-within and AND-across semantics", () => {
   const books = [

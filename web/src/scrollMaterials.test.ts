@@ -855,3 +855,21 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "native connectivity must arrive through NWPathMonitor push events",
   );
 });
+
+test("focusing a text field never triggers the iOS page zoom", async () => {
+  const theme = await source("hooks/useTheme.ts");
+  assertPresent(
+    theme,
+    /MuiInputBase:[\s\S]{0,200}pointer: coarse[\s\S]{0,60}max\(16px, 1rem\)/,
+    "touch text fields must stay at 16px or larger, however the app font scale is set",
+  );
+});
+
+test("search highlighting stays a flat tint", async () => {
+  const highlight = await source("components/SearchHighlight.tsx");
+  assertAbsent(
+    highlight,
+    /backdrop-filter|backdropFilter|mixBlendMode|filter:/,
+    "search highlights inside the scrolling shelf",
+  );
+});

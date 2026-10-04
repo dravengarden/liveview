@@ -32,6 +32,7 @@ material, operational guidance, research evidence, and historical notes.
 - [`design/interactive-view-authoring.md`](design/interactive-view-authoring.md) — Interactive View Authoring
 - [`design/interactive-view.md`](design/interactive-view.md) — Interactive View
 - [`design/read-aloud-narration.md`](design/read-aloud-narration.md) — Read Aloud Narration
+- [`design/library-search.md`](design/library-search.md) — Library Search (typo tolerance, tie-breaking ranking, highlights, iOS field zoom)
 
 ### Website
 

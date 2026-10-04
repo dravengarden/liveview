@@ -75,6 +75,7 @@ const STRINGS: Record<Language, Dict> = {
     "landing.noMounts":
       "No [[book]] in the liveview config — add one and it appears here.",
     "landing.noResults": "No matches",
+    "landing.closeMatches": "includes close matches",
     "landing.otherGroup": "Other",
     "landing.continue": "Continue: {chapter}",
     "landing.generatingAudio": "Generating audio…",
@@ -302,6 +303,7 @@ const STRINGS: Record<Language, Dict> = {
 
     "landing.noMounts": "liveview 配置里没有 [[book]]——添加后会出现在这里。",
     "landing.noResults": "没有匹配的结果",
+    "landing.closeMatches": "含相近结果",
     "landing.otherGroup": "其他",
     "landing.continue": "继续：{chapter}",
     "landing.generatingAudio": "正在生成音频…",

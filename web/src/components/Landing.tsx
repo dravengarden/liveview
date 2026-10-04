@@ -32,8 +32,10 @@ import {
 } from "@mui/icons-material";
 import { BottomSheet } from "@/_shell";
 import {
+  Fragment,
   memo,
   type ReactNode,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -46,17 +48,25 @@ import { useI18n } from "@/i18n";
 import { localeDescriptor } from "@/locales/registry";
 import { useSyncStatus } from "@/syncStore";
 import {
-  buildBookSearchIndex,
   buildLibraryTaxonomy,
   countTagFacetMatches,
   facetStartsFolded,
   matchesTagFacets,
   type ReadingFilter,
   readingState,
-  scoreBookSearchIndex,
   tagLabel,
-  tokenizeSearchQuery,
 } from "@/libraryDiscovery";
+import {
+  type BookSearchMatch,
+  buildBookSearchIndex,
+  buildDirectorySearchIndex,
+  compareSearchMatches,
+  hasSearchTerms,
+  matchBookSearch,
+  matchContext,
+  parseSearchQuery,
+  settleApproximateMatches,
+} from "@/librarySearch";
 import { resumableLibraryBooks, resumableLibraryProgress } from "@/libraryHome";
 import { libraryDirectories } from "@/libraryDirectories";
 import {
@@ -68,6 +78,7 @@ import { LibraryOrganizer } from "./LibraryOrganizer";
 import { DirectoryLocation } from "./DirectoryLocation";
 import { BrandMark } from "./BrandMark";
 import { ScrollToTopButton } from "./ScrollToTopButton";
+import { Highlighted } from "./SearchHighlight";
 
 interface LandingProps {
   books: Book[];
@@ -144,6 +155,8 @@ interface ShelfCardProps {
   generating?: boolean;
   resumeOnly?: boolean;
   directoryLabel?: string | undefined;
+  /** Present while searching: what matched, for highlighting. */
+  match?: BookSearchMatch | undefined;
   onOpen: (slug: string, renditionKind?: string) => void;
   t: ReturnType<typeof useI18n>["t"];
 }
@@ -157,6 +170,7 @@ const ShelfCard = memo(function ShelfCard({
   generating,
   resumeOnly,
   directoryLabel,
+  match,
   onOpen,
   t,
 }: ShelfCardProps): React.JSX.Element {
@@ -174,6 +188,20 @@ const ShelfCard = memo(function ShelfCard({
       100,
       Math.max(0, Math.round(r.fraction * 100)),
     );
+  const context = match ? matchContext(b, match) : null;
+  // With a user library the folder path replaces the manifest collection.
+  const place = directoryLabel ?? b.collection;
+  const byline = [
+    place
+      ? {
+        text: place,
+        ranges: directoryLabel !== undefined
+          ? match?.highlights.directory
+          : match?.highlights.collection,
+      }
+      : null,
+    b.author ? { text: b.author, ranges: match?.highlights.author } : null,
+  ].filter((part) => part !== null);
   const resumeMode = resumableLibraryProgress(b, bp);
   const resume = resumeOnly
     ? resumeMode?.track
@@ -229,7 +257,7 @@ const ShelfCard = memo(function ShelfCard({
             overflow: "hidden",
           }}
         >
-          {b.label}
+          <Highlighted text={b.label} ranges={match?.highlights.label} />
         </Typography>
         <Typography
           variant="caption"
@@ -238,27 +266,45 @@ const ShelfCard = memo(function ShelfCard({
           component="div"
           sx={{ mt: 0.5, display: resumeOnly ? "none" : "block" }}
         >
-          {[directoryLabel ?? b.collection, b.author].filter(Boolean).join(
-            " · ",
-          ) ||
-            t(
+          {byline.length
+            ? byline.map((part, i) => (
+              <Fragment key={i}>
+                {i > 0 && " · "}
+                <Highlighted text={part.text} ranges={part.ranges} />
+              </Fragment>
+            ))
+            : t(
               category === "docs" ? "landing.docsBadge" : "landing.bookBadge",
             )}
         </Typography>
-        {resume
+        {resume && (
+          <Typography
+            variant="caption"
+            color="primary.main"
+            noWrap
+            component="div"
+            sx={{ mt: 0.5 }}
+          >
+            {t("landing.continue", { chapter: resume.chapterLabel })}
+            {b.manifest ? ` · ${pctOf(resume)}%` : ""}
+          </Typography>
+        )}
+        {context
           ? (
+            // Why this result matched, when the title does not show it.
             <Typography
               variant="caption"
-              color="primary.main"
+              color={context.kind === "tags"
+                ? "primary.main"
+                : "text.secondary"}
               noWrap
               component="div"
               sx={{ mt: 0.5 }}
             >
-              {t("landing.continue", { chapter: resume.chapterLabel })}
-              {b.manifest ? ` · ${pctOf(resume)}%` : ""}
+              <Highlighted text={context.text} ranges={context.ranges} />
             </Typography>
           )
-          : b.description && (
+          : !resume && b.description && (
             <Typography
               variant="caption"
               color="text.secondary"
@@ -347,7 +393,10 @@ export function Landing({
   const [pageLimits, setPageLimits] = useState<Record<string, number>>({});
   const [directoryLimit, setDirectoryLimit] = useState(40);
   const savedScroll = useRef(new Map<string, number>());
-  const [query, setQuery] = useState("");
+  const [typedQuery, setQuery] = useState("");
+  // Results follow the typed text at low priority, so a large catalog never
+  // makes keystrokes or IME composition wait on matching and rendering.
+  const query = useDeferredValue(typedQuery);
   const [searchFocused, setSearchFocused] = useState(false);
   const searchEditing = isPhone && searchFocused;
   // Keep the native input uncontrolled. iOS WebKit owns marked text while a
@@ -410,23 +459,57 @@ export function Landing({
     () => new Map(libraryTaxonomy.tags.map((tag) => [tag.id, tag])),
     [libraryTaxonomy],
   );
-  const searchIndexes = useMemo(
-    () => new Map(books.map((book) => [book.slug, buildBookSearchIndex(book)])),
-    [books],
+  const directories = useMemo(
+    () =>
+      library
+        ? directoryTree(library, locale).map((dir) => ({
+          ...dir,
+          books: books.filter((book) =>
+            library.placements[book.slug] === dir.id
+          ),
+        }))
+        : libraryDirectories(books, locale).map((dir) => ({
+          ...dir,
+          id: dir.name,
+          parent: null,
+          depth: 0,
+          path: dir.name,
+        })),
+    [books, locale, library],
   );
-  const queryTokens = useMemo(() => tokenizeSearchQuery(query), [query]);
-  // Score each book exactly once per query. The result is shared by the visible
-  // shelf and the facet preview counts below.
-  const searchScores = useMemo(() => {
-    const scores = new Map<string, number | null>();
-    for (const entry of entries) {
-      scores.set(
-        entry.book.slug,
-        scoreBookSearchIndex(searchIndexes.get(entry.book.slug)!, queryTokens),
+  const directoryById = useMemo(
+    () => new Map(directories.map((dir) => [dir.id, dir])),
+    [directories],
+  );
+  // Fold every searchable field once per catalog or folder change. A book is
+  // also searchable by the path of the user folder it is filed in.
+  const searchIndexes = useMemo(
+    () =>
+      new Map(books.map((book) => [
+        book.slug,
+        buildBookSearchIndex(
+          book,
+          library
+            ? directoryById.get(library.placements[book.slug] ?? "")?.path
+            : undefined,
+        ),
+      ])),
+    [books, library, directoryById],
+  );
+  const searchQuery = useMemo(() => parseSearchQuery(query), [query]);
+  // Match each book exactly once per query. The result is shared by the visible
+  // shelf, its highlights, and the facet preview counts below.
+  const searchMatches = useMemo(() => {
+    const matches = new Map<string, BookSearchMatch | null>();
+    for (const book of books) {
+      matches.set(
+        book.slug,
+        matchBookSearch(searchIndexes.get(book.slug)!, searchQuery),
       );
     }
-    return scores;
-  }, [entries, queryTokens, searchIndexes]);
+    settleApproximateMatches(matches);
+    return matches;
+  }, [books, searchQuery, searchIndexes]);
   // A refreshed catalog can remove its last use of a tag. Drop that stale
   // selection instead of leaving the shelf trapped in an impossible filter.
   useEffect(() => {
@@ -458,7 +541,11 @@ export function Landing({
   // The shelf after both narrowing controls: kind filter AND name search.
   const visible = useMemo(() => {
     const q = query.trim();
-    const ranked: Array<{ entry: ShelfEntry; score: number }> = [];
+    const ranked: Array<{
+      entry: ShelfEntry;
+      match: BookSearchMatch;
+      openedAt: number;
+    }> = [];
     for (const entry of entries) {
       const e = entry;
       if (
@@ -473,11 +560,22 @@ export function Landing({
         continue;
       }
       if (!matchesTagFacets(e.book, selectedTags)) continue;
-      const score = searchScores.get(e.book.slug) ?? null;
-      if (score == null) continue;
-      ranked.push({ entry: e, score });
+      const match = searchMatches.get(e.book.slug);
+      if (!match) continue;
+      const bp = progress[e.book.slug];
+      ranked.push({
+        entry: e,
+        match,
+        openedAt: Math.max(bp?.text?.updatedAt ?? 0, bp?.audio?.updatedAt ?? 0),
+      });
     }
-    if (q) ranked.sort((a, b) => b.score - a.score);
+    // Relevance leads while searching, then what was opened most recently;
+    // remaining ties keep the shelf's own sort order (the sort is stable).
+    if (q) {
+      ranked.sort((a, b) =>
+        compareSearchMatches(a.match, b.match) || b.openedAt - a.openedAt
+      );
+    }
     return ranked.map(({ entry }) => entry);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -487,11 +585,15 @@ export function Landing({
     readingFilter,
     selectedTags,
     progress,
-    searchScores,
+    searchMatches,
     selectedDirectory,
     library,
   ]);
 
+  // Tell the reader when a typo-tolerant match is among the results.
+  const hasCloseMatches = visible.some((entry) =>
+    searchMatches.get(entry.book.slug)?.approximate
+  );
   const discoveryActive = query.trim().length > 0 || selectedTags.size > 0 ||
     kind !== "all" || readingFilter !== "all";
   const activeFilterCount = selectedTags.size + (kind === "all" ? 0 : 1) +
@@ -530,7 +632,7 @@ export function Landing({
         readingFilter !== "all" &&
         readingState(progress[entry.book.slug]) !== readingFilter
       ) continue;
-      if (searchScores.get(entry.book.slug) == null) continue;
+      if (!searchMatches.get(entry.book.slug)) continue;
       result.push(entry.book);
     }
     return result;
@@ -540,7 +642,7 @@ export function Landing({
     kind,
     readingFilter,
     progress,
-    searchScores,
+    searchMatches,
     selectedDirectory,
     library,
     query,
@@ -563,41 +665,36 @@ export function Landing({
   // app-level status-bar tap (both scroll it to the top).
   const scrollerRef = useRef<HTMLDivElement>(null);
 
-  const directories = useMemo(
-    () =>
-      library
-        ? directoryTree(library, locale).map((dir) => ({
-          ...dir,
-          books: books.filter((book) =>
-            library.placements[book.slug] === dir.id
-          ),
-        }))
-        : libraryDirectories(books, locale).map((dir) => ({
-          ...dir,
-          id: dir.name,
-          parent: null,
-          depth: 0,
-          path: dir.name,
-        })),
-    [books, locale, library],
-  );
   const childDirectories = directories.filter((dir) =>
     dir.parent === selectedDirectory
   );
-  const directoryById = useMemo(
-    () => new Map(directories.map((dir) => [dir.id, dir])),
-    [directories],
-  );
-  const directoryMatches = query.trim() && activeFilterCount === 0
-    ? directories.filter((dir) =>
-      dir.path.toLocaleLowerCase(locale).includes(
-        query.trim().toLocaleLowerCase(locale),
-      )
-    )
-    : [];
+  // Folders found by the same query grammar, best match first.
+  const directoryMatches = useMemo(() => {
+    if (!hasSearchTerms(searchQuery) || activeFilterCount > 0) return [];
+    const found: Array<{
+      dir: (typeof directories)[number];
+      match: BookSearchMatch;
+    }> = [];
+    for (const dir of directories) {
+      const match = matchBookSearch(
+        buildDirectorySearchIndex(dir.path),
+        searchQuery,
+      );
+      if (match) found.push({ dir, match });
+    }
+    return found.sort((a, b) => compareSearchMatches(a.match, b.match));
+  }, [directories, searchQuery, activeFilterCount]);
   const displayedDirectories = discoveryActive
-    ? directoryMatches
+    ? directoryMatches.map(({ dir }) => dir)
     : childDirectories;
+  const directoryHighlights = useMemo(
+    () =>
+      new Map(directoryMatches.map(({ dir, match }) => [
+        dir.id,
+        match.highlights.directory,
+      ])),
+    [directoryMatches],
+  );
   const currentDirectory = directories.find((dir) =>
     dir.id === selectedDirectory
   );
@@ -832,6 +929,9 @@ export function Landing({
       directoryLabel={library
         ? directoryById.get(library.placements[e.book.slug] ?? "")?.path ?? ""
         : undefined}
+      match={resumeOnly || !query.trim()
+        ? undefined
+        : searchMatches.get(e.book.slug) ?? undefined}
       onOpen={onOpen}
       t={t}
     />
@@ -1468,7 +1568,10 @@ export function Landing({
                       folders: directories.length,
                       books: books.length,
                     })
-                    : t("landing.libraryCount", { n: visible.length })}
+                    : t("landing.libraryCount", { n: visible.length }) +
+                      (hasCloseMatches
+                        ? ` · ${t("landing.closeMatches")}`
+                        : "")}
                 </Typography>
               </Box>
               {!splitView && atRoot && <BrandMark width={32} height={32} />}
@@ -1624,7 +1727,14 @@ export function Landing({
                             fontWeight={700}
                             sx={{ flex: 1, overflowWrap: "anywhere" }}
                           >
-                            {query.trim() ? directory.path : directory.name}
+                            {query.trim()
+                              ? (
+                                <Highlighted
+                                  text={directory.path}
+                                  ranges={directoryHighlights.get(directory.id)}
+                                />
+                              )
+                              : directory.name}
                           </Typography>
                           <Typography
                             component="span"

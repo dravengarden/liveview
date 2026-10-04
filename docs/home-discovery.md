@@ -47,7 +47,9 @@ See [the directory CLI](library-cli.md) for AI organization examples.
 Search is global and explicitly labeled as such. Folder names and their full
 paths are searchable, with matching folders shown above content results. Title
 results show their current user directory and author, and support the existing title, tag, description, and
-slug matching. Clearing search restores the selected directory and its scroll
+slug matching. Matching tolerates typos, ranks results by a fixed tie-breaking
+order, and highlights why each result matched; see
+[library search](design/library-search.md). Clearing search restores the selected directory and its scroll
 position. Filters narrow the current directory when not searching; at the root
 they search the whole library. Facet counts use the same scope as results.
 Returning from a book preserves the mounted directory, filters, pagination,

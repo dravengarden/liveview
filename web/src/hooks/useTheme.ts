@@ -420,6 +420,17 @@ export function useTheme(): UseThemeResult {
             },
           },
         },
+        // iOS WebKit zooms the whole page when a text field with a computed
+        // font-size under 16px gains focus, and never zooms back out. The
+        // app-wide font scale can take rem below that, so never let a field
+        // on a touch device drop under 16px.
+        MuiInputBase: {
+          styleOverrides: {
+            input: {
+              "@media (pointer: coarse)": { fontSize: "max(16px, 1rem)" },
+            },
+          },
+        },
         MuiCard: {
           styleOverrides: {
             root: {

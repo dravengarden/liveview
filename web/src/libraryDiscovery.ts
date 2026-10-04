@@ -16,13 +16,7 @@ export interface LibraryTaxonomy {
   tags: TaxonomyTag[];
 }
 
-export interface BookSearchIndex {
-  fields: ReadonlyArray<readonly [weight: number, values: readonly string[]]>;
-}
-
 const DEFAULT_TAG_FACET_ID = "tags";
-const normalize = (value: string): string =>
-  value.normalize("NFKC").toLocaleLowerCase();
 
 function tagParts(id: string): { facet: string; value: string } {
   const separator = id.indexOf(".");
@@ -86,60 +80,6 @@ export function facetStartsFolded(valueCount: number): boolean {
  * editorial grouping and never implicitly classify content. */
 export function discoveryTagIds(book: Book): Set<string> {
   return new Set(book.tags ?? []);
-}
-
-/** Build the normalized fields once per catalog revision, not once per keypress. */
-export function buildBookSearchIndex(book: Book): BookSearchIndex {
-  const tagText = (book.tags ?? []).flatMap((id) => [id, tagLabel(id)]).map(
-    normalize,
-  );
-  return {
-    fields: [
-      [12, [book.label]],
-      [9, tagText],
-      [7, [book.collection ?? ""]],
-      [5, [book.author ?? ""]],
-      [3, [book.description ?? ""]],
-      [2, [book.slug]],
-    ].map(([weight, values]) =>
-      [weight as number, (values as string[]).map(normalize)] as const
-    ),
-  };
-}
-
-export function tokenizeSearchQuery(query: string): string[] {
-  return normalize(query).trim().split(/\s+/).filter(Boolean);
-}
-
-/** Score a pre-normalized book index. Every token must match at least one field. */
-export function scoreBookSearchIndex(
-  index: BookSearchIndex,
-  tokens: readonly string[],
-): number | null {
-  if (tokens.length === 0) return 0;
-  let total = 0;
-  for (const token of tokens) {
-    let best = 0;
-    for (const [weight, values] of index.fields) {
-      for (const value of values) {
-        const at = value.indexOf(token);
-        if (at >= 0) best = Math.max(best, weight + (at === 0 ? 2 : 0));
-      }
-    }
-    if (best === 0) return null;
-    total += best;
-  }
-  return total;
-}
-
-/** A weighted, dependency-free catalog search. Strong identity fields outrank
- * incidental prose matches. Callers handling repeated queries should retain the
- * index and use `scoreBookSearchIndex` directly. */
-export function searchScore(book: Book, query: string): number | null {
-  return scoreBookSearchIndex(
-    buildBookSearchIndex(book),
-    tokenizeSearchQuery(query),
-  );
 }
 
 export function matchesTagFacets(
