@@ -1,5 +1,6 @@
 @import "./markdown.css";
 @import "./highlight.css";
+@import "./code-theme.css";
 
 :root {
   font-family:

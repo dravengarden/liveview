@@ -1,0 +1,152 @@
+/* Opaque code surfaces keep syntax contrast predictable in every reader theme.
+   These scoped rules override the vendored highlight.js defaults and legacy
+   per-theme Markdown rules without changing authored content or tokenization. */
+:root {
+  --lv-code-bg: #eeebe5;
+  --lv-code-fg: #242129;
+  --lv-code-comment: #625b65;
+  --lv-code-keyword: #9e2740;
+  --lv-code-title: #68409b;
+  --lv-code-string: #245b36;
+  --lv-code-number: #195f94;
+  --lv-code-built-in: #895019;
+}
+
+:root[data-theme="sepia"] {
+  --lv-code-bg: #e9decd;
+  --lv-code-fg: #453c35;
+  --lv-code-comment: #685b4b;
+  --lv-code-keyword: #92364a;
+  --lv-code-title: #634483;
+  --lv-code-string: #38572f;
+  --lv-code-number: #2a557d;
+  --lv-code-built-in: #765023;
+}
+
+:root[data-theme="lavender"] {
+  --lv-code-bg: #eae3ef;
+  --lv-code-fg: #29232f;
+  --lv-code-comment: #65556e;
+  --lv-code-keyword: #9c2c50;
+  --lv-code-title: #69409c;
+  --lv-code-string: #345b42;
+  --lv-code-number: #28598a;
+  --lv-code-built-in: #855020;
+}
+
+:root[data-theme="dark"] {
+  --lv-code-bg: #1a1d26;
+  --lv-code-fg: #f2efe9;
+  --lv-code-comment: #b0adba;
+  --lv-code-keyword: #ff9ca5;
+  --lv-code-title: #d2b6ff;
+  --lv-code-string: #b4dcb6;
+  --lv-code-number: #9bcbff;
+  --lv-code-built-in: #f0c28b;
+}
+
+:root[data-theme="night"] {
+  --lv-code-bg: #24211d;
+  --lv-code-fg: #e5ddd1;
+  --lv-code-comment: #b7aa98;
+  --lv-code-keyword: #f5a6a0;
+  --lv-code-title: #d2b1df;
+  --lv-code-string: #c5d39c;
+  --lv-code-number: #abd0da;
+  --lv-code-built-in: #efc390;
+}
+
+:root[data-theme="plum"] {
+  --lv-code-bg: #221c30;
+  --lv-code-fg: #f0ebf7;
+  --lv-code-comment: #beb0ce;
+  --lv-code-keyword: #ffacce;
+  --lv-code-title: #dcc0ff;
+  --lv-code-string: #bbd9bd;
+  --lv-code-number: #a9ceff;
+  --lv-code-built-in: #f0c499;
+}
+
+:root[data-theme] .markdown-body pre,
+:root[data-theme] .markdown-body .highlight pre {
+  color: var(--lv-code-fg);
+  background-color: var(--lv-code-bg);
+}
+
+:root[data-theme] .markdown-body pre code,
+:root[data-theme] .markdown-body pre code.hljs {
+  color: var(--lv-code-fg);
+  background: transparent;
+}
+
+:root[data-theme] .markdown-body .hljs-comment,
+:root[data-theme] .markdown-body .hljs-quote,
+:root[data-theme] .markdown-body .hljs-code,
+:root[data-theme] .markdown-body .hljs-formula {
+  color: var(--lv-code-comment);
+}
+
+:root[data-theme] .markdown-body .hljs-doctag,
+:root[data-theme] .markdown-body .hljs-keyword,
+:root[data-theme] .markdown-body .hljs-template-tag,
+:root[data-theme] .markdown-body .hljs-template-variable,
+:root[data-theme] .markdown-body .hljs-type,
+:root[data-theme] .markdown-body .hljs-variable.language_ {
+  color: var(--lv-code-keyword);
+}
+
+:root[data-theme] .markdown-body .hljs-title,
+:root[data-theme] .markdown-body .hljs-section {
+  color: var(--lv-code-title);
+}
+
+:root[data-theme] .markdown-body .hljs-attr,
+:root[data-theme] .markdown-body .hljs-attribute,
+:root[data-theme] .markdown-body .hljs-literal,
+:root[data-theme] .markdown-body .hljs-meta,
+:root[data-theme] .markdown-body .hljs-number,
+:root[data-theme] .markdown-body .hljs-operator,
+:root[data-theme] .markdown-body .hljs-selector-attr,
+:root[data-theme] .markdown-body .hljs-selector-class,
+:root[data-theme] .markdown-body .hljs-selector-id,
+:root[data-theme] .markdown-body .hljs-variable {
+  color: var(--lv-code-number);
+}
+
+:root[data-theme] .markdown-body .hljs-meta .hljs-keyword {
+  color: var(--lv-code-keyword);
+}
+
+:root[data-theme] .markdown-body .hljs-meta .hljs-string,
+:root[data-theme] .markdown-body .hljs-regexp,
+:root[data-theme] .markdown-body .hljs-string,
+:root[data-theme] .markdown-body .hljs-name,
+:root[data-theme] .markdown-body .hljs-selector-pseudo,
+:root[data-theme] .markdown-body .hljs-selector-tag {
+  color: var(--lv-code-string);
+}
+
+:root[data-theme] .markdown-body .hljs-built_in,
+:root[data-theme] .markdown-body .hljs-symbol,
+:root[data-theme] .markdown-body .hljs-bullet {
+  color: var(--lv-code-built-in);
+}
+
+:root[data-theme] .markdown-body .hljs-subst,
+:root[data-theme] .markdown-body .hljs-emphasis,
+:root[data-theme] .markdown-body .hljs-strong,
+:root[data-theme] .markdown-body .hljs-punctuation {
+  color: var(--lv-code-fg);
+}
+
+/* Diff backgrounds share the opaque code surface, so light-theme upstream
+   additions and deletions cannot become bright patches in a dark reader. */
+:root[data-theme] .markdown-body .hljs-addition {
+  color: var(--lv-code-string);
+  background-color: var(--lv-code-bg);
+}
+
+:root[data-theme] .markdown-body .hljs-deletion {
+  color: var(--lv-code-keyword);
+  background-color: var(--lv-code-bg);
+}
