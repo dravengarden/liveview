@@ -73,7 +73,7 @@ An unknown prefix is literal text. No syntax is required for ordinary use.
      prefix. One edit is allowed from 4 characters and two from 8. Words with
      digits, quoted phrases, and excluded words are never approximated. The
      first letter must match. That rule cuts noise and keeps the scan cheap.
-   - Initials: `ml` matches "Machine Learning" (titles only).
+   - Initials: `ml` matches "Machine Learning" (titles and folder paths).
    - CJK character pairs: at least 60% of the word's adjacent character pairs
      appear in the field, so `模型推论` finds `大模型推理`.
    - Approximation skips description and slug. Typos in prose are noise, and

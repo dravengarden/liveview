@@ -130,6 +130,12 @@ Deno.test("typos still find the title", () => {
     assertEquals(rank(books, query), ["wetlands-field-guide"]);
   }
   assertEquals(matchOf(wetlands, "wetlnds").approximate, true);
+  // The highlight covers as much of the word as was typed.
+  assertEquals(
+    matchOf(makeBook("algo", { label: "Algorithms" }), "algoritm").highlights
+      .label,
+    [{ start: 0, end: 8 }],
+  );
   assertEquals(matchOf(wetlands, "wetlands").approximate, false);
   // Too short or numeric to guess at.
   assertEquals(rank(books, "wex"), []);
@@ -215,6 +221,13 @@ Deno.test("a folder name finds the books filed in it", () => {
     parsed,
   );
   assertEquals(folder?.highlights.directory, [{ start: 15, end: 22 }]);
+  assertEquals(
+    matchBookSearch(
+      buildDirectorySearchIndex("Machine Learning"),
+      parseSearchQuery("ml"),
+    ) != null,
+    true,
+  );
 });
 
 Deno.test("highlights cover every visible field that matched", () => {

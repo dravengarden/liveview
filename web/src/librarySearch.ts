@@ -340,7 +340,12 @@ function matchTypo(token: QueryToken, value: SearchValue): Match | null {
       prefix++
     ) {
       const candidate = boundedEditDistance(needle, word.slice(0, prefix), max);
-      if (candidate < typos) {
+      // On equal typos, highlight the span closest to what was typed.
+      if (
+        candidate < typos ||
+        (candidate === typos &&
+          Math.abs(prefix - needle.length) < Math.abs(length - needle.length))
+      ) {
         typos = candidate;
         length = prefix;
       }
@@ -357,7 +362,8 @@ function matchTypo(token: QueryToken, value: SearchValue): Match | null {
   return best;
 }
 
-/** "ml" finds "Machine Learning": the word spells the title's initials. */
+/** "ml" finds "Machine Learning": the word spells the initials of a title or
+ * folder path. */
 function matchInitials(token: QueryToken, value: SearchValue): Match | null {
   const { text } = token;
   if (token.cjk || token.phrase || text.length < 2) return null;
@@ -406,7 +412,9 @@ function matchApproximately(
 ): Match | null {
   if (token.cjk) return matchCharacterPairs(token, value);
   return matchTypo(token, value) ??
-    (key === "label" ? matchInitials(token, value) : null);
+    (key === "label" || key === "directory"
+      ? matchInitials(token, value)
+      : null);
 }
 
 // ---------------------------------------------------------------------------
