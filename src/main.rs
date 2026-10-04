@@ -6,6 +6,7 @@ mod config;
 #[cfg(test)]
 mod http_tests;
 mod interactive_view;
+mod library;
 mod server;
 mod shared;
 mod store;
@@ -301,6 +302,12 @@ fn main() {
 
     match cli.command.clone() {
         // `liveview sync` — reconcile the corpus into pg + rustfs.
+        Some(Command::Dir(args)) => {
+            if let Err(error) = rt.block_on(run_dir(args)) {
+                eprintln!("dir error: {error}");
+                std::process::exit(1);
+            }
+        }
         Some(Command::Sync(args)) => {
             if let Err(e) = rt.block_on(run_sync(args)) {
                 eprintln!("sync error: {e}");
@@ -1511,6 +1518,10 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
     use tower_http::compression::Predicate as _;
     let mut api_router = Router::new()
         .route("/api/books", get(api_books))
+        .route(
+            "/api/library",
+            get(api_library_get).post(api_library_change),
+        )
         .route("/api/cover", get(api_cover))
         .route("/api/backdrop", get(api_backdrop))
         .route("/api/card-backdrop", get(api_card_backdrop))
@@ -3162,6 +3173,65 @@ async fn api_raw(
         Some(resp) => resp,
         None => (StatusCode::NOT_FOUND, "File not found").into_response(),
     }
+}
+
+async fn api_library_get(State(state): State<SharedState>) -> axum::response::Response {
+    match state.store.library_get().await {
+        Ok(library) => Json(library).into_response(),
+        Err(error) => store_unavailable("library_get", error),
+    }
+}
+async fn api_library_change(
+    State(state): State<SharedState>,
+    Json(change): Json<library::Change>,
+) -> axum::response::Response {
+    match state.store.library_change(&change).await {
+        Ok(library) => Json(library).into_response(),
+        Err(error) => (
+            if error.starts_with("Revision conflict") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::BAD_REQUEST
+            },
+            error,
+        )
+            .into_response(),
+    }
+}
+
+async fn run_dir(args: cli::DirArgs) -> Result<(), String> {
+    let mut headers = HeaderMap::new();
+    if let Some(token) = args.token {
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}")
+                .parse()
+                .map_err(|_| "Invalid access token")?,
+        );
+    }
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let url = format!("{}/api/library", args.server.trim_end_matches('/'));
+    let response = match args.command {
+        cli::DirCommand::Tree => client.get(url).send().await,
+        cli::DirCommand::Apply { plan, dry_run } => {
+            let bytes = std::fs::read(plan).map_err(|e| e.to_string())?;
+            let mut change: library::Change = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
+            change.dry_run |= dry_run;
+            client.post(url).header("Content-Type", "application/json").body(serde_json::to_vec(&change).map_err(|e| e.to_string())?).send().await
+        }
+        cli::DirCommand::Undo { revision, expected_revision } => client.post(url).header("Content-Type", "application/json").body(serde_json::json!({"revision":expected_revision,"operations":[],"undo_revision":revision}).to_string()).send().await,
+    }.map_err(|e| e.to_string())?;
+    let status = response.status();
+    let body = response.text().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("{status}: {body}"));
+    }
+    println!("{body}");
+    Ok(())
 }
 
 #[cfg(test)]

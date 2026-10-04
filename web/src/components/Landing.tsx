@@ -57,8 +57,14 @@ import {
   tagLabel,
   tokenizeSearchQuery,
 } from "@/libraryDiscovery";
-import { resumableLibraryBooks } from "@/libraryHome";
+import { resumableLibraryBooks, resumableLibraryProgress } from "@/libraryHome";
 import { libraryDirectories } from "@/libraryDirectories";
+import {
+  directoryAncestors,
+  directoryTree,
+  useUserLibrary,
+} from "@/userLibrary";
+import { LibraryOrganizer } from "./LibraryOrganizer";
 import { BrandMark } from "./BrandMark";
 import { ScrollToTopButton } from "./ScrollToTopButton";
 
@@ -135,6 +141,8 @@ interface ShelfCardProps {
   hasAudio: boolean;
   progress: BookProgress | undefined;
   generating?: boolean;
+  resumeOnly?: boolean;
+  directoryLabel?: string | undefined;
   onOpen: (slug: string, renditionKind?: string) => void;
   t: ReturnType<typeof useI18n>["t"];
 }
@@ -146,6 +154,8 @@ const ShelfCard = memo(function ShelfCard({
   hasAudio,
   progress: bp,
   generating,
+  resumeOnly,
+  directoryLabel,
   onOpen,
   t,
 }: ShelfCardProps): React.JSX.Element {
@@ -163,7 +173,10 @@ const ShelfCard = memo(function ShelfCard({
       100,
       Math.max(0, Math.round(r.fraction * 100)),
     );
-  const resume = textP && audioP
+  const resumeMode = resumableLibraryProgress(b, bp);
+  const resume = resumeOnly
+    ? resumeMode?.track
+    : textP && audioP
     ? (textP.updatedAt >= audioP.updatedAt ? textP : audioP)
     : (textP ?? audioP);
   return (
@@ -179,11 +192,13 @@ const ShelfCard = memo(function ShelfCard({
         alignItems: "stretch",
         overflow: "hidden",
         height: "100%",
+        width: "100%",
       }}
     >
       <Box
         component="button"
-        onClick={() => onOpen(b.slug)}
+        onClick={() =>
+          onOpen(b.slug, resumeOnly ? resumeMode?.kind : undefined)}
         sx={{
           flex: 1,
           minWidth: 0,
@@ -192,7 +207,7 @@ const ShelfCard = memo(function ShelfCard({
           color: "text.primary",
           textAlign: "left",
           cursor: "pointer",
-          p: 2,
+          p: resumeOnly ? 1.25 : 2,
           touchAction: "pan-y",
           "&:focus-visible": {
             outline: "2px solid",
@@ -205,10 +220,10 @@ const ShelfCard = memo(function ShelfCard({
         <Typography
           fontWeight={700}
           sx={{
-            fontSize: rem(15),
+            fontSize: rem(resumeOnly ? 14 : 15),
             lineHeight: 1.4,
             display: "-webkit-box",
-            WebkitLineClamp: 2,
+            WebkitLineClamp: resumeOnly ? 1 : 2,
             WebkitBoxOrient: "vertical",
             overflow: "hidden",
           }}
@@ -220,9 +235,11 @@ const ShelfCard = memo(function ShelfCard({
           color="text.secondary"
           noWrap
           component="div"
-          sx={{ mt: 0.5 }}
+          sx={{ mt: 0.5, display: resumeOnly ? "none" : "block" }}
         >
-          {[b.collection, b.author].filter(Boolean).join(" · ") ||
+          {[directoryLabel ?? b.collection, b.author].filter(Boolean).join(
+            " · ",
+          ) ||
             t(
               category === "docs" ? "landing.docsBadge" : "landing.bookBadge",
             )}
@@ -236,8 +253,8 @@ const ShelfCard = memo(function ShelfCard({
               component="div"
               sx={{ mt: 0.5 }}
             >
-              {t("landing.continue", { chapter: resume.chapterLabel })} ·{" "}
-              {pctOf(resume)}%
+              {t("landing.continue", { chapter: resume.chapterLabel })}
+              {b.manifest ? ` · ${pctOf(resume)}%` : ""}
             </Typography>
           )
           : b.description && (
@@ -261,7 +278,12 @@ const ShelfCard = memo(function ShelfCard({
           </Typography>
         )}
       </Box>
-      <Stack justifyContent="center" sx={{ pr: 1 }}>
+      <Stack
+        direction={resumeOnly ? "row" : "column"}
+        alignItems="center"
+        justifyContent="center"
+        sx={{ pr: 1 }}
+      >
         {hasText && (
           <IconButton
             aria-label={t("landing.bookBadge")}
@@ -309,6 +331,18 @@ export function Landing({
   const [selectedDirectory, setSelectedDirectory] = useState<string | null>(
     null,
   );
+  const {
+    library,
+    error: libraryError,
+    busy: libraryBusy,
+    change: changeLibrary,
+    undo: undoLibrary,
+  } = useUserLibrary();
+  const [continueLimit, setContinueLimit] = useState(4);
+  const directoryOf = (book: Book): string | null =>
+    library
+      ? library.placements[book.slug] ?? null
+      : book.collection?.trim() || null;
   const [pageLimits, setPageLimits] = useState<Record<string, number>>({});
   const [directoryLimit, setDirectoryLimit] = useState(40);
   const savedScroll = useRef(new Map<string, number>());
@@ -428,7 +462,7 @@ export function Landing({
       const e = entry;
       if (
         !query.trim() && selectedDirectory !== null &&
-        e.book.collection?.trim() !== selectedDirectory
+        directoryOf(e.book) !== selectedDirectory
       ) continue;
       if (kind !== "all" && !matchesKind(e, kind)) continue;
       if (
@@ -454,6 +488,7 @@ export function Landing({
     progress,
     searchScores,
     selectedDirectory,
+    library,
   ]);
 
   const discoveryActive = query.trim().length > 0 || selectedTags.size > 0 ||
@@ -487,7 +522,7 @@ export function Landing({
     for (const entry of entries) {
       if (
         !query.trim() && selectedDirectory !== null &&
-        entry.book.collection?.trim() !== selectedDirectory
+        directoryOf(entry.book) !== selectedDirectory
       ) continue;
       if (kind !== "all" && !matchesKind(entry, kind)) continue;
       if (
@@ -506,6 +541,7 @@ export function Landing({
     progress,
     searchScores,
     selectedDirectory,
+    library,
     query,
   ]);
   const tagCounts = useMemo(
@@ -526,40 +562,117 @@ export function Landing({
   // app-level status-bar tap (both scroll it to the top).
   const scrollerRef = useRef<HTMLDivElement>(null);
 
-  const directories = useMemo(() => libraryDirectories(books, locale), [
-    books,
-    locale,
-  ]);
+  const directories = useMemo(
+    () =>
+      library
+        ? directoryTree(library, locale).map((dir) => ({
+          ...dir,
+          books: books.filter((book) =>
+            library.placements[book.slug] === dir.id
+          ),
+        }))
+        : libraryDirectories(books, locale).map((dir) => ({
+          ...dir,
+          id: dir.name,
+          parent: null,
+          depth: 0,
+          path: dir.name,
+        })),
+    [books, locale, library],
+  );
+  const childDirectories = directories.filter((dir) =>
+    dir.parent === selectedDirectory
+  );
+  const directoryById = useMemo(
+    () => new Map(directories.map((dir) => [dir.id, dir])),
+    [directories],
+  );
+  const directoryMatches = query.trim() && activeFilterCount === 0
+    ? directories.filter((dir) =>
+      dir.path.toLocaleLowerCase(locale).includes(
+        query.trim().toLocaleLowerCase(locale),
+      )
+    )
+    : [];
+  const displayedDirectories = discoveryActive
+    ? directoryMatches
+    : childDirectories;
+  const currentDirectory = directories.find((dir) =>
+    dir.id === selectedDirectory
+  );
   const atRoot = selectedDirectory === null && !discoveryActive;
-  const continueBook = useMemo(
-    () => resumableLibraryBooks(books, progress, 1)[0],
+  const continueBooks = useMemo(
+    () =>
+      resumableLibraryBooks(
+        books,
+        progress,
+        continueLimit,
+      ),
+    [books, progress, continueLimit],
+  );
+  const continueCount = useMemo(
+    () => resumableLibraryBooks(books, progress, books.length).length,
     [books, progress],
   );
   const rootEntries = useMemo(
-    () => entries.filter((entry) => !entry.book.collection?.trim()),
-    [entries],
+    () => entries.filter((entry) => directoryOf(entry.book) === null),
+    [entries, library],
   );
   const listEntries = atRoot ? rootEntries : visible;
   const positionKey = `${selectedDirectory ?? ""}\0${discoverySignature}`;
   const visibleLimit = pageLimits[positionKey] ?? 40;
+  // Mount only a bounded batch per frame, including the cold first render.
+  // Restore deep saved positions after all retained rows exist.
+  const paintedRows = useRef({ key: "", limit: 8 });
+  const [, advancePaint] = useState(0);
+  if (paintedRows.current.key !== positionKey) {
+    paintedRows.current = { key: positionKey, limit: 8 };
+  }
+  const desiredRows = Math.min(listEntries.length, visibleLimit);
+  const rowBudget = Math.min(paintedRows.current.limit, desiredRows);
+  useEffect(() => {
+    if (rowBudget >= desiredRows) return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => {
+        if (paintedRows.current.key !== positionKey) return;
+        paintedRows.current.limit = Math.min(rowBudget + 8, desiredRows);
+        advancePaint((version) => version + 1);
+      });
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [positionKey, rowBudget, desiredRows]);
+  const pendingScroll = useRef<{ key: string; top: number } | null>(null);
   const previousPosition = useRef(positionKey);
   useLayoutEffect(() => {
     if (previousPosition.current !== positionKey) {
-      const scroller = scrollerRef.current;
       previousPosition.current = positionKey;
-      scroller?.scrollTo({ top: savedScroll.current.get(positionKey) ?? 0 });
+      pendingScroll.current = {
+        key: positionKey,
+        top: savedScroll.current.get(positionKey) ?? 0,
+      };
+      scrollerRef.current?.scrollTo({ top: pendingScroll.current.top });
     }
-  }, [positionKey]);
+    if (
+      pendingScroll.current?.key === positionKey && rowBudget >= desiredRows
+    ) {
+      scrollerRef.current?.scrollTo({ top: pendingScroll.current.top });
+      pendingScroll.current = null;
+    }
+  }, [positionKey, rowBudget, desiredRows]);
   // Catalog refreshes can remove a folder. Return to the root instead of
   // leaving an empty, inaccessible location selected.
   useEffect(() => {
     if (
-      books.length && selectedDirectory !== null &&
-      !directories.some((dir) => dir.name === selectedDirectory)
+      (library !== null || books.length > 0) && selectedDirectory !== null &&
+      !directories.some((dir) => dir.id === selectedDirectory)
     ) {
       setSelectedDirectory(null);
     }
-  }, [books.length, directories, selectedDirectory]);
+  }, [books.length, directories, selectedDirectory, library]);
   const navigate = (directory: string | null): void => {
     dismissSearchKeyboard();
     if (searchInputRef.current) searchInputRef.current.value = "";
@@ -569,7 +682,7 @@ export function Landing({
   };
   const goBack = (): void => {
     if (discoveryActive) navigate(selectedDirectory);
-    else navigate(null);
+    else navigate(currentDirectory?.parent ?? null);
   };
   const directoryNavigation = (
     <Box
@@ -596,24 +709,23 @@ export function Landing({
       </Button>
       {directories.slice(0, directoryLimit).map((directory) => (
         <Button
-          key={directory.name}
+          key={directory.id}
           disableRipple
           data-lv-directory-nav={directory.name}
-          onClick={() => navigate(directory.name)}
-          aria-current={selectedDirectory === directory.name
-            ? "page"
-            : undefined}
+          onClick={() => navigate(directory.id)}
+          aria-current={selectedDirectory === directory.id ? "page" : undefined}
           sx={{
             justifyContent: "flex-start",
             gap: 1,
             minHeight: 44,
             px: 1.5,
+            pl: 1.5 + Math.min(directory.depth, 6) * 1.5,
             textTransform: "none",
             textAlign: "left",
-            color: selectedDirectory === directory.name
+            color: selectedDirectory === directory.id
               ? "primary.main"
               : "text.secondary",
-            bgcolor: selectedDirectory === directory.name
+            bgcolor: selectedDirectory === directory.id
               ? "action.selected"
               : "transparent",
           }}
@@ -706,7 +818,7 @@ export function Landing({
   // module-level memoized <ShelfCard> — so the flat shelf and each grouped
   // section render the identical card, and when only one book's progress
   // changes (returning from a book) only that one card re-renders.
-  const renderCard = (e: ShelfEntry): React.JSX.Element => (
+  const renderCard = (e: ShelfEntry, resumeOnly = false): React.JSX.Element => (
     <ShelfCard
       key={e.book.slug}
       book={e.book}
@@ -715,6 +827,10 @@ export function Landing({
       hasAudio={e.hasAudio}
       progress={progress[e.book.slug]}
       generating={generatingSlugs.has(e.book.slug)}
+      resumeOnly={resumeOnly}
+      directoryLabel={library
+        ? directoryById.get(library.placements[e.book.slug] ?? "")?.path ?? ""
+        : undefined}
       onOpen={onOpen}
       t={t}
     />
@@ -734,7 +850,7 @@ export function Landing({
         alignItems: "stretch",
       }}
     >
-      {items.map(renderCard)}
+      {items.map((entry) => renderCard(entry))}
     </Box>
   );
 
@@ -1034,6 +1150,17 @@ export function Landing({
                   </Button>
                 </Badge>
               )}
+              <LibraryOrganizer
+                library={library}
+                libraryError={libraryError}
+                libraryBusy={libraryBusy}
+                changeLibrary={changeLibrary}
+                undoLibrary={undoLibrary}
+                selectedDirectory={selectedDirectory}
+                currentDirectory={currentDirectory}
+                directories={directories}
+                listEntries={listEntries}
+              />
               {settingsSlot}
             </Box>
           )}
@@ -1259,7 +1386,14 @@ export function Landing({
         <Box
           ref={scrollerRef}
           data-lv-scroller="shelf"
+          onTouchStart={() => {
+            pendingScroll.current = null;
+          }}
+          onWheel={() => {
+            pendingScroll.current = null;
+          }}
           onScroll={(event) => {
+            if (pendingScroll.current?.key === positionKey) return;
             savedScroll.current.set(positionKey, event.currentTarget.scrollTop);
             if (savedScroll.current.size > 50) {
               savedScroll.current.delete(
@@ -1312,6 +1446,7 @@ export function Landing({
               sx={{
                 mb: 1,
                 display: atRoot ? "none" : "flex",
+                flexWrap: "wrap",
                 position: "sticky",
                 top: 0,
                 zIndex: 2,
@@ -1327,22 +1462,30 @@ export function Landing({
               >
                 {t("landing.directories")}
               </Button>
-              {selectedDirectory !== null && !query.trim() && (
-                <>
-                  <NextIcon fontSize="small" color="disabled" />
-                  <Button
-                    onClick={() => navigate(selectedDirectory)}
-                    sx={{
-                      minWidth: 0,
-                      minHeight: 44,
-                      textTransform: "none",
-                      overflowWrap: "anywhere",
-                    }}
-                  >
-                    {selectedDirectory}
+              {selectedDirectory !== null && !query.trim() && (library
+                ? directoryAncestors(library, selectedDirectory).map((dir) => {
+                  return dir && (
+                    <Stack key={dir.id} direction="row" alignItems="center">
+                      <NextIcon fontSize="small" color="disabled" />
+                      <Button
+                        onClick={() => navigate(dir.id)}
+                        sx={{
+                          minWidth: 0,
+                          minHeight: 44,
+                          textTransform: "none",
+                          overflowWrap: "anywhere",
+                        }}
+                      >
+                        {dir.name}
+                      </Button>
+                    </Stack>
+                  );
+                })
+                : (
+                  <Button onClick={() => navigate(selectedDirectory)}>
+                    {currentDirectory?.name}
                   </Button>
-                </>
-              )}
+                ))}
               {query.trim() && <NextIcon fontSize="small" color="disabled" />}
             </Stack>
             <Stack
@@ -1364,7 +1507,7 @@ export function Landing({
                 >
                   {query.trim()
                     ? t("landing.searchResults")
-                    : selectedDirectory ?? t("landing.directories")}
+                    : currentDirectory?.name ?? t("landing.directories")}
                 </Typography>
                 <Typography
                   variant="body2"
@@ -1418,7 +1561,7 @@ export function Landing({
               </Stack>
             )}
 
-            {atRoot && continueBook && (
+            {atRoot && continueBooks.length > 0 && (
               <Box
                 component="section"
                 aria-label={t("landing.resume")}
@@ -1432,34 +1575,57 @@ export function Landing({
                 >
                   {t("landing.resume")}
                 </Typography>
-                <Button
-                  disableRipple
-                  data-lv-resume={continueBook.slug}
-                  onClick={() => onOpen(continueBook.slug)}
-                  endIcon={<NextIcon />}
-                  sx={{
-                    width: "100%",
-                    minHeight: 48,
-                    justifyContent: "space-between",
-                    textTransform: "none",
-                    textAlign: "left",
-                    px: 1.5,
-                    bgcolor: "action.selected",
-                    color: "text.primary",
-                  }}
-                >
-                  <Typography noWrap fontWeight={650} sx={{ minWidth: 0 }}>
-                    {continueBook.label}
-                  </Typography>
-                </Button>
+                {continueBooks.map((book) => (
+                  <Box
+                    key={book.slug}
+                    data-lv-resume={book.slug}
+                    sx={{ mb: 1 }}
+                  >
+                    {renderCard(
+                      entries.find((entry) => entry.book.slug === book.slug)!,
+                      true,
+                    )}
+                  </Box>
+                ))}
+                {continueCount > 4 && (
+                  <Button
+                    onClick={() =>
+                      setContinueLimit((value) => value > 4 ? 4 : 40)}
+                  >
+                    {continueLimit > 4
+                      ? t("landing.showLess")
+                      : t("landing.showAllContinue", { n: continueCount })}
+                  </Button>
+                )}
               </Box>
             )}
-            {atRoot && directories.length > 0 && (
+            {atRoot && continueLimit > 4 && continueCount > continueLimit && (
+              <Button
+                sx={{ mb: 2 }}
+                onClick={() => setContinueLimit((n) => n + 40)}
+              >
+                {t("landing.loadMore", { n: continueCount - continueLimit })}
+              </Button>
+            )}
+            {displayedDirectories.length > 0 && (
               <Box
                 component="section"
                 aria-label={t("landing.directories")}
                 sx={{ mb: 3 }}
               >
+                {query.trim() && (
+                  <Typography
+                    component="h2"
+                    variant="body2"
+                    fontWeight={650}
+                    color="text.secondary"
+                    sx={{ mb: 1 }}
+                  >
+                    {t("landing.matchingDirectories", {
+                      n: displayedDirectories.length,
+                    })}
+                  </Typography>
+                )}
                 <Box
                   sx={{
                     display: "grid",
@@ -1470,12 +1636,15 @@ export function Landing({
                     gap: 1,
                   }}
                 >
-                  {directories.slice(0, directoryLimit).map((directory) => (
+                  {displayedDirectories.slice(0, directoryLimit).map((
+                    directory,
+                  ) => (
                     <Button
                       disableRipple
-                      key={directory.name}
+                      key={directory.id}
                       data-lv-directory={directory.name}
-                      onClick={() => navigate(directory.name)}
+                      data-lv-directory-id={directory.id}
+                      onClick={() => navigate(directory.id)}
                       sx={{
                         minHeight: 84,
                         px: 1.5,
@@ -1507,7 +1676,7 @@ export function Landing({
                             fontWeight={700}
                             sx={{ flex: 1, overflowWrap: "anywhere" }}
                           >
-                            {directory.name}
+                            {query.trim() ? directory.path : directory.name}
                           </Typography>
                           <Typography
                             component="span"
@@ -1543,13 +1712,13 @@ export function Landing({
                     </Button>
                   ))}
                 </Box>
-                {directories.length > directoryLimit && (
+                {displayedDirectories.length > directoryLimit && (
                   <Button
                     onClick={() => setDirectoryLimit((n) => n + 40)}
                     sx={{ width: "100%", minHeight: 44, mt: 1 }}
                   >
                     {t("landing.loadMore", {
-                      n: directories.length - directoryLimit,
+                      n: displayedDirectories.length - directoryLimit,
                     })}
                   </Button>
                 )}
@@ -1572,7 +1741,8 @@ export function Landing({
                   {t("landing.noMounts")}
                 </Typography>
               )
-              : !atRoot && visible.length === 0
+              : !atRoot && visible.length === 0 &&
+                  displayedDirectories.length === 0
               ? (
                 <Stack alignItems="flex-start" spacing={1}>
                   <Typography color="text.secondary">
@@ -1583,7 +1753,7 @@ export function Landing({
                   </Button>
                 </Stack>
               )
-              : renderGrid(listEntries.slice(0, visibleLimit))}
+              : renderGrid(listEntries.slice(0, rowBudget))}
             {listEntries.length > visibleLimit && (
               <Button
                 variant="outlined"

@@ -33,7 +33,7 @@ function equal(actual: Book[], expected: string[]): void {
     throw new Error(`Unexpected titles: ${actual.map((book) => book.slug)}`);
   }
 }
-Deno.test("Home resumes the latest rendition and excludes finished, unopened, and removed titles", () => {
+Deno.test("Home resumes each latest unfinished rendition and excludes unopened and removed titles", () => {
   const books = [book("text"), book("audio"), book("finished"), book("new")];
   const progress = {
     text: { text: track(20, 0.3), audio: track(10, 1) },
@@ -41,7 +41,11 @@ Deno.test("Home resumes the latest rendition and excludes finished, unopened, an
     finished: { text: track(40, 0.98), audio: track(5, 0.2) },
     removed: { text: track(100, 0.5) },
   };
-  equal(resumableLibraryBooks(books, progress, 4), ["audio", "text"]);
+  equal(resumableLibraryBooks(books, progress, 4), [
+    "audio",
+    "text",
+    "finished",
+  ]);
   equal(resumableLibraryBooks(books, progress, 1), ["audio"]);
   equal(books, ["text", "audio", "finished", "new"]);
 });
@@ -50,4 +54,11 @@ Deno.test("recent content uses change time with creation fallback without mutati
   equal(recentLibraryBooks(books, 2), ["edited", "added"]);
   equal(books, ["old", "edited", "added"]);
   equal(recentLibraryBooks([], 8), []);
+});
+
+Deno.test("documents remain resumable at the end of a document collection", () => {
+  const docs = { ...book("docs"), manifest: false };
+  equal(resumableLibraryBooks([docs], { docs: { text: track(80, 1) } }, 4), [
+    "docs",
+  ]);
 });

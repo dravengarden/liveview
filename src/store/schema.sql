@@ -235,3 +235,7 @@ CREATE TABLE IF NOT EXISTS narration (
     lang  TEXT NOT NULL,
     text  TEXT NOT NULL
 );
+
+-- User organization survives content synchronization and deployment.
+CREATE TABLE IF NOT EXISTS library_state (id INTEGER PRIMARY KEY CHECK (id = 1), snapshot JSONB NOT NULL);
+CREATE TABLE IF NOT EXISTS library_history (revision BIGINT PRIMARY KEY, snapshot JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());

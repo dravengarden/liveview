@@ -1,24 +1,32 @@
 import type { Book, BookProgress } from "./types/index.ts";
 
-/** Resume the most recently used rendition; finished tracks stay in history. */
+/** Pick the latest unfinished mode; document collections have no book-level finish. */
+export function resumableLibraryProgress(
+  book: Book,
+  progress: BookProgress | undefined,
+):
+  | { kind: "text" | "audio"; track: NonNullable<BookProgress["text"]> }
+  | undefined {
+  const tracks = (["text", "audio"] as const).flatMap((kind) => {
+    const track = progress?.[kind];
+    return track && (!book.manifest || track.fraction < 0.98)
+      ? [{ kind, track }]
+      : [];
+  });
+  return tracks.sort((a, b) => b.track.updatedAt - a.track.updatedAt)[0];
+}
 export function resumableLibraryBooks(
   books: Book[],
   progress: Record<string, BookProgress>,
   limit: number,
 ): Book[] {
-  const latest = (book: Book) => {
-    const tracks = progress[book.slug];
-    const text = tracks?.text;
-    const audio = tracks?.audio;
-    return text && audio
-      ? (text.updatedAt >= audio.updatedAt ? text : audio)
-      : text ?? audio;
-  };
-  return books.filter((book) => {
-    const track = latest(book);
-    return track != null && track.fraction < 0.98;
-  }).sort((a, b) => latest(b)!.updatedAt - latest(a)!.updatedAt)
-    .slice(0, limit);
+  return books.filter((book) =>
+    resumableLibraryProgress(book, progress[book.slug])
+  )
+    .sort((a, b) =>
+      resumableLibraryProgress(b, progress[b.slug])!.track.updatedAt -
+      resumableLibraryProgress(a, progress[a.slug])!.track.updatedAt
+    ).slice(0, limit);
 }
 
 export function recentLibraryBooks(books: Book[], limit: number): Book[] {

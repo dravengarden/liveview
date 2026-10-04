@@ -55,6 +55,9 @@ pub enum Command {
     /// env vars the systemd unit sets.
     Sync(SyncArgs),
 
+    /// Inspect or atomically organize user-owned library directories.
+    Dir(DirArgs),
+
     /// Promote legacy MP3-backed chapter audio to canonical content-addressed
     /// Opus/CAF blobs. Idempotent and safe to resume after interruption.
     AudioOptimize(AudioOptimizeArgs),
@@ -349,4 +352,33 @@ pub struct AudioOptimizeArgs {
     pub s3_secret_key: Option<String>,
     #[arg(long, env = "LIVEVIEW_S3_SECRET_KEY_FILE")]
     pub s3_secret_key_file: Option<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct DirArgs {
+    /// Server origin (reader and CLI use the same API).
+    #[arg(long, env = "LIVEVIEW_SERVER")]
+    pub server: String,
+    /// Optional bearer credential for servers with access control.
+    #[arg(long, env = "LIVEVIEW_ACCESS_TOKEN")]
+    pub token: Option<String>,
+    #[command(subcommand)]
+    pub command: DirCommand,
+}
+#[derive(Subcommand, Debug, Clone)]
+pub enum DirCommand {
+    /// Print the complete directory snapshot, stable IDs and revision as JSON.
+    Tree,
+    /// Apply a JSON plan containing revision and operations; conflicts fail.
+    Apply {
+        plan: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Restore the organization before a change, requiring the current revision.
+    Undo {
+        revision: u64,
+        #[arg(long)]
+        expected_revision: u64,
+    },
 }

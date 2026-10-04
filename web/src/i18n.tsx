@@ -27,6 +27,26 @@ type Dict = Record<string, string>;
 // stay untranslated. `{name}` placeholders are filled by `t(key, { name })`.
 const STRINGS: Record<Language, Dict> = {
   en: {
+    "landing.matchingDirectories": "Folders · {n}",
+    "landing.undoOrganization": "Undo last organization change",
+    "landing.organize": "Organize library",
+    "landing.done": "Done",
+    "landing.directoryName": "Directory name",
+    "landing.newDirectory": "Create subdirectory",
+    "landing.renameDirectory": "Rename",
+    "landing.moveTo": "Destination",
+    "landing.moveDirectory": "Move directory",
+    "landing.removeDirectory": "Remove directory",
+    "landing.removeDirectoryHint":
+      "Removing a directory returns its content to the library root and keeps its subdirectories.",
+    "landing.moveContent": "Selected content · {n}",
+    "landing.moveSelected": "Move selected content",
+    "landing.selectAll": "Select all in this view",
+    "landing.showLess": "Show less",
+    "landing.showAllContinue": "Show all {n} in progress",
+    "landing.organizationUnavailable":
+      "Connect to an updated server to organize your library.",
+
     "landing.directories": "Library",
     "landing.directorySummary": "{folders} folders · {books} titles",
     "landing.location": "Current location",
@@ -236,6 +256,24 @@ const STRINGS: Record<Language, Dict> = {
     "shell.updateReloading": "New version · reloading in {n}s",
   },
   zh: {
+    "landing.matchingDirectories": "目录 · {n}",
+    "landing.undoOrganization": "撤销上次整理",
+    "landing.organize": "整理目录",
+    "landing.done": "完成",
+    "landing.directoryName": "目录名称",
+    "landing.newDirectory": "新建子目录",
+    "landing.renameDirectory": "重命名",
+    "landing.moveTo": "目标目录",
+    "landing.moveDirectory": "移动目录",
+    "landing.removeDirectory": "移除目录",
+    "landing.removeDirectoryHint": "移除目录后，内容回到根目录，子目录会保留。",
+    "landing.moveContent": "已选内容 · {n}",
+    "landing.moveSelected": "移动所选内容",
+    "landing.selectAll": "选择当前列表全部内容",
+    "landing.showLess": "收起",
+    "landing.showAllContinue": "查看全部 {n} 项进行中内容",
+    "landing.organizationUnavailable": "连接到新版服务后即可整理目录。",
+
     "landing.directories": "目录",
     "landing.directorySummary": "{folders} 个目录 · {books} 部内容",
     "landing.location": "当前位置",

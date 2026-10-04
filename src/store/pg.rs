@@ -1250,6 +1250,99 @@ pub(crate) fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
+impl PgStore {
+    pub async fn user_library(
+        &self,
+        change: Option<&crate::library::Change>,
+    ) -> Result<crate::library::Library, String> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query("SELECT pg_advisory_xact_lock(8148)")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        let value: Option<serde_json::Value> =
+            sqlx::query_scalar("SELECT snapshot FROM library_state WHERE id = 1")
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+        let rows: Vec<(String, Option<String>)> =
+            sqlx::query_as("SELECT slug, collection FROM books ORDER BY slug")
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+        let current = if let Some(value) = value {
+            serde_json::from_value(value).map_err(|e| e.to_string())?
+        } else {
+            let mut initial = crate::library::Library::default();
+            for (slug, collection) in &rows {
+                if let Some(name) = collection
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    let id = format!("import-{}", blake3::hash(name.as_bytes()).to_hex());
+                    if !initial.directories.iter().any(|d| d.id == id) {
+                        initial.directories.push(crate::library::Directory {
+                            id: id.clone(),
+                            name: name.to_owned(),
+                            parent: None,
+                        });
+                    }
+                    initial.placements.insert(slug.clone(), id);
+                }
+            }
+            sqlx::query("INSERT INTO library_state (id, snapshot) VALUES (1, $1)")
+                .bind(serde_json::to_value(&initial).map_err(|e| e.to_string())?)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| e.to_string())?;
+            initial
+        };
+        let result = if let Some(change) = change {
+            let books = rows.into_iter().map(|(slug, _)| slug).collect();
+            if change.revision != current.revision {
+                return Err("Revision conflict: refresh before retrying".into());
+            }
+            let next = if let Some(revision) = change.undo_revision {
+                if !change.operations.is_empty() {
+                    return Err("Undo cannot include other operations".into());
+                }
+                let snapshot: serde_json::Value =
+                    sqlx::query_scalar("SELECT snapshot FROM library_history WHERE revision = $1")
+                        .bind(revision as i64)
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .ok_or("Change not found")?;
+                let mut previous: crate::library::Library =
+                    serde_json::from_value(snapshot).map_err(|e| e.to_string())?;
+                previous.revision = current.revision + 1;
+                previous
+            } else {
+                current.apply(change, &books)?
+            };
+            if !change.dry_run {
+                sqlx::query("INSERT INTO library_history (revision, snapshot) VALUES ($1, $2)")
+                    .bind(current.revision as i64)
+                    .bind(serde_json::to_value(&current).map_err(|e| e.to_string())?)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                sqlx::query("UPDATE library_state SET snapshot = $1 WHERE id = 1")
+                    .bind(serde_json::to_value(&next).map_err(|e| e.to_string())?)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+            next
+        } else {
+            current
+        };
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(result)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1665,6 +1758,64 @@ mod tests {
             .unwrap();
         assert!(s.get_merkle_node("prune-live").await.unwrap().is_some());
         assert!(s.get_merkle_node("prune-dead").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn library_transactions_survive_reopen_and_reject_concurrent_stale_edits() {
+        let Some(s) = store().await else { return };
+        let initial = s.user_library(None).await.unwrap();
+        let plan = crate::library::Change {
+            revision: initial.revision,
+            operations: vec![
+                crate::library::Operation::Create {
+                    id: "library-test-parent".into(),
+                    name: "Library test parent".into(),
+                    parent: None,
+                },
+                crate::library::Operation::Create {
+                    id: "library-test-child".into(),
+                    name: "Library test child".into(),
+                    parent: Some("library-test-parent".into()),
+                },
+            ],
+            dry_run: true,
+            undo_revision: None,
+        };
+        let preview = s.user_library(Some(&plan)).await.unwrap();
+        assert_eq!(preview.revision, initial.revision + 1);
+        assert_eq!(
+            s.user_library(None).await.unwrap(),
+            initial,
+            "dry runs persist no changes"
+        );
+        let mut plan = plan;
+        plan.dry_run = false;
+        let (first, second) =
+            tokio::join!(s.user_library(Some(&plan)), s.user_library(Some(&plan)));
+        assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+        let persisted = s.user_library(None).await.unwrap();
+        assert_eq!(persisted, preview);
+        let reopened = PgStore::open(&std::env::var("DATABASE_URL").unwrap())
+            .await
+            .unwrap();
+        assert_eq!(reopened.user_library(None).await.unwrap(), persisted);
+        let undo = crate::library::Change {
+            revision: persisted.revision,
+            operations: vec![],
+            dry_run: false,
+            undo_revision: Some(initial.revision),
+        };
+        let restored = reopened.user_library(Some(&undo)).await.unwrap();
+        assert_eq!(restored.directories, initial.directories);
+        assert_eq!(restored.placements, initial.placements);
+        assert_eq!(restored.revision, persisted.revision + 1);
+        assert!(
+            reopened
+                .user_library(Some(&undo))
+                .await
+                .unwrap_err()
+                .starts_with("Revision conflict")
+        );
     }
 
     #[tokio::test]

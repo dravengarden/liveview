@@ -83,6 +83,7 @@ export {
 } from "./sync.ts";
 export {
   artworkBlobSrc,
+  cacheReplicaMetadata,
   fetchServerRoot,
   materializeArtworkSrc,
   refreshReplicaManifest,

@@ -24,6 +24,15 @@ use crate::store::model::{
 /// renders on demand. Object-safe (`Arc<dyn ContentStore>`).
 #[async_trait]
 pub trait ContentStore: Send + Sync {
+    async fn library_get(&self) -> Result<crate::library::Library, String> {
+        Ok(crate::library::Library::default())
+    }
+    async fn library_change(
+        &self,
+        _change: &crate::library::Change,
+    ) -> Result<crate::library::Library, String> {
+        Err("Organization is unavailable in preview".into())
+    }
     async fn list_books(&self) -> Result<Vec<BookRecord>, String>;
     async fn list_renditions(&self, book_slug: &str) -> Result<Vec<RenditionRecord>, String>;
     async fn list_editions(
@@ -145,6 +154,16 @@ use crate::sync::objstore::ObjStore;
 
 #[async_trait]
 impl ContentStore for PgStore {
+    async fn library_get(&self) -> Result<crate::library::Library, String> {
+        self.user_library(None).await
+    }
+    async fn library_change(
+        &self,
+        change: &crate::library::Change,
+    ) -> Result<crate::library::Library, String> {
+        self.user_library(Some(change)).await
+    }
+
     async fn list_books(&self) -> Result<Vec<BookRecord>, String> {
         PgStore::list_books(self).await.map_err(|e| e.to_string())
     }

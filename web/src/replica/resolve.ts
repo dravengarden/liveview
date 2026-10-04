@@ -96,6 +96,19 @@ async function putUrlCache(norm: string, data: ArrayBuffer): Promise<void> {
   });
 }
 
+/** Persist an acknowledged user-metadata mutation for immediate offline reads. */
+export async function cacheReplicaMetadata(
+  url: string,
+  value: unknown,
+): Promise<void> {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  try {
+    await putUrlCache(normalizeReplicaUrl(url), bytes.buffer);
+  } catch {
+    /* An acknowledged server mutation remains successful if the cache fails. */
+  }
+}
+
 async function fetchAbsolute(
   url: string,
   budgetMs: number,

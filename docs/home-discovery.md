@@ -4,16 +4,34 @@ The library answers three questions: where is the content, what is in this
 folder, and how do I return to my place? A directory is the primary navigation
 unit. Opening one shows its contents; opening a title enters the reader.
 
-The root lists every authored collection as a folder with its full title count
-and a preview of three titles. Books without a collection appear directly at
-the root. Collection names are opaque, locale-sorted metadata: punctuation
-does not introduce inferred subfolders, and no preferred subject order is
-built into the app. Counts are computed before pagination, so a folder cannot
-disappear because its books sort below the first page of content.
+Directories belong to the user and support arbitrary nesting. Each has a stable
+ID, name and parent; placements reference content slugs independently of authored
+metadata. Existing collections are imported once into root directories. Later
+content syncs never rebuild or overwrite organization; new content is unfiled at
+the root. Directory rename/move keeps content URLs and progress intact. Root and
+subdirectory views show their immediate children, with a breadcrumb and parent
+back action. The wide sidebar presents the hierarchy in sibling name order.
 
-One compact resume link appears above the folders when unfinished reading or
-listening exists. It follows the most recently used rendition. There is no
-separate dashboard or duplicate set of catalog tabs.
+Multiple Continue entries combine ongoing reading, listening and document use.
+Four entries are initially visible, with a control to show all. Text and audio
+retain separate progress: finishing one mode never hides an unfinished other
+mode. A Continue title tap resumes its latest unfinished mode; explicit read and
+listen controls remain available. Document collections show the last document
+position without treating the collection as a book that must be completed.
+
+The Organize action opens a responsive sheet/dialog for creating subdirectories,
+renaming/moving the current directory, and selecting content to move in bulk.
+Deletion returns the directory's content to the root and reparents its children;
+it never deletes content. An undo action restores the previous organization.
+The undo entry is cleared when an external edit advances the revision.
+These writes require connectivity and a server acknowledgement. The last
+acknowledged tree remains available through the IDB metadata cache offline.
+
+The UI and CLI share `/api/library`. Each atomic plan includes its expected
+revision; stale plans receive HTTP 409, refresh and require a deliberate retry.
+Dry runs return the proposed snapshot without persisting it. PostgreSQL stores
+organization and change history outside the deployed content tables.
+See [the directory CLI](library-cli.md) for AI organization examples.
 
 ## Navigation and search
 
@@ -26,8 +44,9 @@ separate dashboard or duplicate set of catalog tabs.
 - Desktop: the same folder sidebar with search above the content pane. Results
   gain columns as space permits; controls retain their touch target sizes.
 
-Search is global and explicitly labeled as such. Results include their authored
-collection and author, and support the existing title, tag, description, and
+Search is global and explicitly labeled as such. Folder names and their full
+paths are searchable, with matching folders shown above content results. Title
+results show their current user directory and author, and support the existing title, tag, description, and
 slug matching. Clearing search restores the selected directory and its scroll
 position. Filters narrow the current directory when not searching; at the root
 they search the whole library. Facet counts use the same scope as results.
@@ -35,7 +54,8 @@ Returning from a book preserves the mounted directory, filters, pagination,
 and scroll position.
 
 The content list and directory list each initially expose up to 40 items, with
-an explicit load-more control. Plain title rows avoid artwork decoding during
+an explicit load-more control. Title rows mount in batches of 16 across animation
+frames, restoring deep saved positions after the retained page exists. Plain title rows avoid artwork decoding during
 browsing. Chrome and scrolling surfaces use solid materials. The web bundle
 uses the existing native interface and is distributed through reader OTA.
 

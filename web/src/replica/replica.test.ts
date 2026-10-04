@@ -17,6 +17,7 @@ import { installMemoryIndexedDB, type MemoryIdbHandle } from "./memory-idb.ts";
 import { contentFetch } from "../native-sync.ts";
 import {
   artworkBlobSrc,
+  cacheReplicaMetadata,
   enqueueMissingAudio,
   initReplica,
   materializeArtworkSrc,
@@ -1364,4 +1365,24 @@ test("without a native audio store, evictions are never queued (PWA)", async () 
   await setWorklist({ fetch: [], evict: ["stale-audio"] });
   await replayWorklist();
   assert.deepEqual((await getWorklist()).evict, []);
+});
+
+test("acknowledged library edits replace cached metadata for immediate offline reads", async () => {
+  await setup();
+  const before = { revision: 1, directories: [], placements: {} };
+  const after = {
+    revision: 2,
+    directories: [{ id: "dir", name: "Learning", parent: null }],
+    placements: { book: "dir" },
+  };
+  const network = installFetch(() => Response.json(before));
+  try {
+    assert.deepEqual(await (await contentFetch("/api/library")).json(), before);
+    await cacheReplicaMetadata("/api/library", after);
+    setReplicaOfflineProbe(() => true);
+    assert.deepEqual(await (await contentFetch("/api/library")).json(), after);
+  } finally {
+    network.restore();
+    setReplicaOfflineProbe(() => false);
+  }
 });
