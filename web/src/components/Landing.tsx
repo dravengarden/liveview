@@ -65,6 +65,7 @@ import {
   useUserLibrary,
 } from "@/userLibrary";
 import { LibraryOrganizer } from "./LibraryOrganizer";
+import { DirectoryLocation } from "./DirectoryLocation";
 import { BrandMark } from "./BrandMark";
 import { ScrollToTopButton } from "./ScrollToTopButton";
 
@@ -961,6 +962,18 @@ export function Landing({
           },
         }}
       >
+        {!atRoot && !searchEditing && (
+          <DirectoryLocation
+            ancestors={selectedDirectory !== null && !query.trim()
+              ? library
+                ? directoryAncestors(library, selectedDirectory)
+                : currentDirectory
+                ? [{ id: selectedDirectory, name: currentDirectory.name }]
+                : []
+              : []}
+            navigate={navigate}
+          />
+        )}
         <Box
           data-lv-search-editing={searchEditing ? "true" : "false"}
           sx={{
@@ -1437,57 +1450,6 @@ export function Landing({
           }}
         >
           <Box sx={{ width: "100%", maxWidth: 1320, mx: "auto" }}>
-            <Stack
-              component="nav"
-              aria-label={t("landing.location")}
-              direction="row"
-              alignItems="center"
-              gap={0.5}
-              sx={{
-                mb: 1,
-                display: atRoot ? "none" : "flex",
-                flexWrap: "wrap",
-                position: "sticky",
-                top: 0,
-                zIndex: 2,
-                bgcolor: "background.default",
-                borderBottom: 1,
-                borderColor: "divider",
-              }}
-            >
-              <Button
-                data-lv-root
-                onClick={() => navigate(null)}
-                sx={{ ml: -1, minHeight: 44, color: "text.secondary" }}
-              >
-                {t("landing.directories")}
-              </Button>
-              {selectedDirectory !== null && !query.trim() && (library
-                ? directoryAncestors(library, selectedDirectory).map((dir) => {
-                  return dir && (
-                    <Stack key={dir.id} direction="row" alignItems="center">
-                      <NextIcon fontSize="small" color="disabled" />
-                      <Button
-                        onClick={() => navigate(dir.id)}
-                        sx={{
-                          minWidth: 0,
-                          minHeight: 44,
-                          textTransform: "none",
-                          overflowWrap: "anywhere",
-                        }}
-                      >
-                        {dir.name}
-                      </Button>
-                    </Stack>
-                  );
-                })
-                : (
-                  <Button onClick={() => navigate(selectedDirectory)}>
-                    {currentDirectory?.name}
-                  </Button>
-                ))}
-              {query.trim() && <NextIcon fontSize="small" color="disabled" />}
-            </Stack>
             <Stack
               direction="row"
               alignItems="center"
