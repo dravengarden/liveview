@@ -42,6 +42,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -62,7 +63,7 @@ import { TemporaryNav } from "./temporary-nav.tsx";
 type Breakpoint = "sm" | "md" | "lg" | "xl" | number;
 const BOTTOM_PAD = "max(calc(env(safe-area-inset-bottom, 0px) - 22px), 6px)";
 const SPATIAL_PHONE_WIDTH = "min(84%, 360px)";
-const SPATIAL_TABLET_WIDTH = "min(52%, 440px)";
+const SPATIAL_TABLET_WIDTH = "min(64%, 560px)";
 
 function barTopPadding(bottom: boolean, transparent: boolean): string | number {
   if (!bottom) {
@@ -332,7 +333,11 @@ export function NavShell(props: NavShellProps): ReactNode {
     });
   }, [appKey, isMobile]);
 
-  const navBody = nav({ closeMobile, isMobile });
+  // Opening the frame must not reconcile every chapter row again.
+  const navBody = useMemo(
+    () => nav({ closeMobile, isMobile }),
+    [nav, closeMobile, isMobile],
+  );
   const temporaryNavBody = (
     <TemporaryNav
       title={navTitle}
@@ -704,7 +709,7 @@ export function NavShell(props: NavShellProps): ReactNode {
               bgcolor: (t) =>
                 alpha(
                   t.palette.common.black,
-                  t.palette.mode === "dark" ? 0.18 : 0.08,
+                  t.palette.mode === "dark" ? 0.10 : 0.035,
                 ),
               opacity: 0,
             }}

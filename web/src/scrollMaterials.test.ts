@@ -272,7 +272,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     navShell,
-    /const SPATIAL_PHONE_WIDTH = "min\(84%, 360px\)";[\s\S]{0,100}const SPATIAL_TABLET_WIDTH = "min\(52%, 440px\)";[\s\S]{0,14000}data-spatial-drawer[\s\S]{0,500}width: \{ xs: SPATIAL_PHONE_WIDTH, sm: SPATIAL_TABLET_WIDTH \}/,
+    /const SPATIAL_PHONE_WIDTH = "min\(84%, 360px\)";[\s\S]{0,100}const SPATIAL_TABLET_WIDTH = "min\(64%, 560px\)";[\s\S]{0,14000}data-spatial-drawer[\s\S]{0,500}width: \{ xs: SPATIAL_PHONE_WIDTH, sm: SPATIAL_TABLET_WIDTH \}/,
     "mobile Contents must use Cowboy's full-height spatial side navigation proportions",
   );
   assertPresent(
@@ -432,8 +432,8 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     spatialDrawer,
-    /drawerMask\.style\.boxShadow[\s\S]{0,120}-18px 0 42px/,
-    "the empty drawer mask must own the spatial edge shadow",
+    /drawerMask\.style\.boxShadow[\s\S]{0,120}-1px 0 0/,
+    "the empty drawer mask must own the hairline boundary",
   );
   assertPresent(
     spatialDrawer,

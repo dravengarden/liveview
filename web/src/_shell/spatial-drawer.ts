@@ -81,13 +81,13 @@ export function bindSpatialDrawer({
 
   const drawerWidth = (): number => {
     const width = surface.clientWidth;
-    return phone ? Math.min(360, width * 0.84) : Math.min(440, width * 0.52);
+    return phone ? Math.min(360, width * 0.84) : Math.min(560, width * 0.64);
   };
   const applyDepth = (): void => {
     // Keep the heavy reader translation-only. Clipping or shadowing that layer
     // makes iPhone WebKit re-rasterize the entire document on every touch frame.
     // The empty mask follows the same offset and cheaply owns the depth cue.
-    drawerMask.style.boxShadow = "-18px 0 42px rgba(0,0,0,0.16)";
+    drawerMask.style.boxShadow = "-1px 0 0 rgba(0,0,0,0.10)";
   };
   const clearDepth = (): void => {
     drawerMask.style.removeProperty("box-shadow");
