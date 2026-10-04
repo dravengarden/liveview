@@ -347,8 +347,8 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     sidebar,
-    /data-liveview-nav-row[\s\S]{0,180}mx: 0\.75[\s\S]{0,80}my: 0\.25[\s\S]{0,100}borderRadius:/,
-    "navigation rows must use Cowboy-style inset selected surfaces",
+    /data-liveview-nav-row[\s\S]{0,250}mx: 1,[\s\S]{0,80}my: 0\.25[\s\S]{0,100}borderRadius:/,
+    "navigation rows must retain inset selected surfaces",
   );
   assertPresent(
     sidebar,

@@ -121,12 +121,13 @@ function TreeItem({
         data-liveview-nav-row
         onClick={handleClick}
         selected={isSelected}
+        aria-current={isSelected ? "page" : undefined}
         sx={{
-          pl: 1 + level * 2,
+          pl: 1.5 + level * 2,
           pr: 1.5,
-          mx: 0.75,
+          mx: 1,
           my: 0.25,
-          borderRadius: `${LIVEVIEW_RADII.control}px`,
+          borderRadius: `${LIVEVIEW_RADII.control / 2}px`,
           // Taller, finger-friendly rows on touch screens; compact on desktop.
           py: { xs: 0.75, md: 0.5 },
           minHeight: { xs: 44, md: 32 },
@@ -136,24 +137,15 @@ function TreeItem({
             bgcolor: (theme) =>
               alpha(
                 theme.palette.primary.main,
-                theme.palette.mode === "dark" ? 0.18 : 0.11,
+                theme.palette.mode === "dark" ? 0.12 : 0.065,
               ),
-            "&::before": {
-              content: '""',
-              position: "absolute",
-              left: 4,
-              top: 10,
-              bottom: 10,
-              width: 3,
-              borderRadius: 999,
-              bgcolor: "primary.main",
-            },
-            "& .MuiTypography-root": { fontWeight: 650 },
+            color: "primary.main",
+            "& .MuiTypography-root": { fontWeight: 600 },
             "&:hover": {
               bgcolor: (theme) =>
                 alpha(
                   theme.palette.primary.main,
-                  theme.palette.mode === "dark" ? 0.22 : 0.15,
+                  theme.palette.mode === "dark" ? 0.16 : 0.09,
                 ),
             },
           },
