@@ -1,73 +1,54 @@
-# Library home and discovery
+# Directory browsing and discovery
 
-The library starts with the reader's next action rather than the catalog's
-folder structure. Home shows up to four unfinished, recently used titles and
-eight recently changed titles. A resume card follows the latest reading or
-listening track; finishing that track removes the card from Continue while
-leaving it available in History. Recent content uses publication change time,
-falling back to creation time.
+The library answers three questions: where is the content, what is in this
+folder, and how do I return to my place? A directory is the primary navigation
+unit. Opening one shows its contents; opening a title enters the reader.
 
-## Navigation
+The root lists every authored collection as a folder with its full title count
+and a preview of three titles. Books without a collection appear directly at
+the root. Collection names are opaque, locale-sorted metadata: punctuation
+does not introduce inferred subfolders, and no preferred subject order is
+built into the app. Counts are computed before pagination, so a folder cannot
+disappear because its books sort below the first page of content.
 
-- Home: continue reading or listening, see recent updates, enter a series.
-- All content: a flat catalog with search, visible reading-state shortcuts,
-  metadata facets, and sorting. Previous grouping preferences cannot hide titles
-  here. An empty result offers a direct return to the full catalog.
-- Series: the existing collection hierarchy, retaining saved collapse choices.
-  Search and filters expand matching series without overwriting those choices.
+One compact resume link appears above the folders when unfinished reading or
+listening exists. It follows the most recently used rendition. There is no
+separate dashboard or duplicate set of catalog tabs.
 
-On iPhone and narrow iPad windows, labeled navigation and search remain at the
-bottom, above the safe area. Search takes the full toolbar while editing with
-an on-screen keyboard. Wider iPad windows and desktop use a persistent left
-navigation rail with search above the catalog. Cards remain one-column on phones
-and gain columns as available width increases. The catalog initially renders
-40 titles, with an explicit control to load the next 40. Home uses illustrated
-cards; the catalog uses dense title rows with author, series, resume position,
-and explicit read/listen controls. This avoids decoding artwork while scanning
-search results and keeps the illustrated resume surface intact. Home sections
-are bounded.
+## Navigation and search
 
-Series names and ordering come from catalog metadata. No built-in subject
-vocabulary, collection priorities, or inferred classification is introduced.
-Artwork continues through the content-addressed replica. The implementation
-changes the web bundle and uses the existing native interface.
+- iPhone: one column, folder drill-down, visible location, and bottom search,
+  back, filter, and settings controls. Search expands while typing and respects
+  native IME composition.
+- iPad windows at least 700 px wide: a persistent folder sidebar and a content
+  pane. Below 1000 px, common controls remain at the bottom. Narrow multitasking
+  windows return to the single-column layout.
+- Desktop: the same folder sidebar with search above the content pane. Results
+  gain columns as space permits; controls retain their touch target sizes.
 
-## Community references
+Search is global and explicitly labeled as such. Results include their authored
+collection and author, and support the existing title, tag, description, and
+slug matching. Clearing search restores the selected directory and its scroll
+position. Filters narrow the current directory when not searching; at the root
+they search the whole library. Facet counts use the same scope as results.
+Returning from a book preserves the mounted directory, filters, pagination,
+and scroll position.
 
-- [Plex recommendations](https://support.plex.tv/articles/manage-recommendations/)
-  keep Continue Watching on Home. This motivates a stable resume entry point.
-- [Kavita dashboard customization](https://wiki.kavitareader.com/guides/features/customization/)
-  organizes discovery into streams and allows filters to become dashboard
-  entries. LiveView adopts separate resume and recent streams; saved custom
-  streams remain future work.
-- [Kavita filtering](https://wiki.kavitareader.com/guides/features/filtering/)
-  treats rich metadata as a discovery tool. LiveView keeps its existing
-  catalog-derived facets and makes reading state available outside the sheet.
-- [Material adaptive layout](https://m3.material.io/foundations/layout/canonical-examples/overview)
-  distinguishes compact, medium, and expanded windows. LiveView adapts to window
-  width, including iPad multitasking, rather than treating device names as fixed
-  layouts.
+The content list and directory list each initially expose up to 40 items, with
+an explicit load-more control. Plain title rows avoid artwork decoding during
+browsing. Chrome and scrolling surfaces use solid materials. The web bundle
+uses the existing native interface and is distributed through reader OTA.
 
-These references inform the design; they do not establish that this specific
-layout is optimal. Actual usage and the Simulator acceptance gate determine
-whether the implementation is ready to release.
+## Design references
 
-## Verification
+[Apple Files](https://support.apple.com/en-za/guide/iphone/iphe4bff8827/ios)
+provides a familiar browse-and-open folder model. The
+[split-view guidance](https://developer.apple.com/design/human-interface-guidelines/split-views)
+describes adjacent navigation and content panes that adapt to available window
+width. These inform the interaction model; bottom controls and compact folder
+previews are choices made for LiveView's reading workflow.
 
-The local `just verify` gate passes, including 120 web tests. Dashboard tests
-cover rendition-specific resume order, completed and removed titles, timestamp
-fallback, and non-mutating catalog sorting.
-
-The final web bundle was inspected in the actual Simulator WKWebView with a
-163-title catalog: iPhone at 402 px, iPad at 744 px, and a 1280 px wide viewport.
-Light and dark layouts, global search with empty-result recovery, direct series
-entry, and loading from 40 to 80 catalog entries were exercised. The wide
-viewport check verifies responsive layout in WKWebView; it is not a desktop
-browser test.
-
-Each final catalog scroll capture recorded 600 animation-frame intervals while
-two audio resources were streamed concurrently. iPhone measured p99 17 ms and
-maximum 34 ms; iPad measured p99 17 ms and maximum 33 ms, with no gap above 50 ms.
-The iPhone Home capture measured p99 17 ms and maximum 29 ms under the same load.
-The static Simulator baseline was p99 17 ms. These captures are evidence for
-this implementation and test environment, not a guarantee for every device.
+The release gate is the repository verification suite plus actual iPhone and
+iPad Simulator WKWebView navigation, light/dark, and 600-frame scroll captures
+with concurrent audio transfers. A wide WKWebView viewport is responsive-layout
+evidence, not a substitute for a native desktop browser test.

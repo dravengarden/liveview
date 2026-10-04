@@ -101,6 +101,8 @@ from collection names, or preferred collection ordering. Manifest-tag changes
 are catalog metadata changes and therefore advance the deploy Merkle root so
 native offline clients cannot keep a stale bookshelf index.
 
-During active search or filtering, matching series expand in an ephemeral view.
-Clearing discovery restores the reader's persisted series-collapse choices.
-Core Spotlight indexing is intentionally outside this requirement.
+Directory browsing preserves the reader's selected location and scroll position.
+Global search exposes matching titles across directories without changing that
+location; clearing search returns to it. Filters and their preview counts must
+use the same directory or global scope as the displayed results. Core Spotlight
+indexing is intentionally outside this requirement.
