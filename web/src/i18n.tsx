@@ -27,6 +27,21 @@ type Dict = Record<string, string>;
 // stay untranslated. `{name}` placeholders are filled by `t(key, { name })`.
 const STRINGS: Record<Language, Dict> = {
   en: {
+    "landing.home": "Home",
+    "landing.library": "All content",
+    "landing.series": "Series",
+    "landing.navigation": "Library navigation",
+    "landing.homeHint": "Pick up where you left off, or find your next read.",
+    "landing.libraryCount": "{n} titles",
+    "landing.results": "Search & browse",
+    "landing.resume": "Continue reading & listening",
+    "landing.recent": "Recently updated",
+    "landing.seeAll": "See all",
+    "landing.history": "History",
+    "landing.resumeEmpty": "Open a title to keep your reading and listening here.",
+    "landing.browseAll": "Browse all content",
+    "landing.loadMore": "Show more · {n} remaining",
+
     "landing.noMounts":
       "No [[book]] in the liveview config — add one and it appears here.",
     "landing.noResults": "No matches",
@@ -205,6 +220,21 @@ const STRINGS: Record<Language, Dict> = {
     "shell.updateReloading": "New version · reloading in {n}s",
   },
   zh: {
+    "landing.home": "首页",
+    "landing.library": "全部内容",
+    "landing.series": "系列",
+    "landing.navigation": "内容库导航",
+    "landing.homeHint": "继续上次阅读，或找到下一本想读的内容。",
+    "landing.libraryCount": "{n} 部内容",
+    "landing.results": "查找内容",
+    "landing.resume": "继续阅读与收听",
+    "landing.recent": "最近更新",
+    "landing.seeAll": "查看全部",
+    "landing.history": "最近打开",
+    "landing.resumeEmpty": "打开一本书或文档，下次就能从这里继续。",
+    "landing.browseAll": "浏览全部内容",
+    "landing.loadMore": "显示更多 · 还有 {n} 部",
+
     "landing.noMounts": "liveview 配置里没有 [[book]]——添加后会出现在这里。",
     "landing.noResults": "没有匹配的结果",
     "landing.otherGroup": "其他",

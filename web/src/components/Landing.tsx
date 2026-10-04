@@ -24,9 +24,12 @@ import { alpha, type Theme, useTheme } from "@mui/material/styles";
 import {
   Article as DocsIcon,
   Clear as ClearIcon,
+  CollectionsBookmarkOutlined as SeriesIcon,
   ExpandMore as ExpandMoreIcon,
   Headphones as AudiobookIcon,
+  HomeOutlined as HomeIcon,
   KeyboardHide as KeyboardHideIcon,
+  LibraryBooksOutlined as LibraryIcon,
   MenuBook as BookIcon,
   Search as SearchIcon,
   Tune as TuneIcon,
@@ -51,7 +54,6 @@ import {
   type ShelfSort,
   toggleGroupCollapsed,
   useCollapsedGroups,
-  useShelfGroup,
   useShelfSort,
 } from "@/hooks";
 import { useI18n } from "@/i18n";
@@ -70,6 +72,8 @@ import {
   tagLabel,
   tokenizeSearchQuery,
 } from "@/libraryDiscovery";
+import { recentLibraryBooks, resumableLibraryBooks } from "@/libraryHome";
+import { BrandMark } from "./BrandMark";
 import { ShelfCardArtwork } from "./CoverTile";
 import { ScrollToTopButton } from "./ScrollToTopButton";
 
@@ -280,6 +284,13 @@ function CoverRenditionSwitch({
             // read↔listen widget); the two glyphs are self-explanatory.
             aria-label={s.label}
             aria-pressed={active}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                onOpen(slug, s.kind);
+              }
+            }}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
@@ -290,6 +301,8 @@ function CoverRenditionSwitch({
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
+              minWidth: 44,
+              minHeight: 44,
               px: 1,
               py: 0.5,
               color: active
@@ -532,6 +545,7 @@ function GroupSection({
 
 interface ShelfCardProps {
   book: Book;
+  catalog?: boolean;
   category: Category;
   hasText: boolean;
   hasAudio: boolean;
@@ -550,6 +564,7 @@ interface ShelfCardProps {
 // card whose props actually changed re-renders.
 const ShelfCard = memo(function ShelfCard({
   book: b,
+  catalog = false,
   category,
   hasText,
   hasAudio,
@@ -585,11 +600,129 @@ const ShelfCard = memo(function ShelfCard({
     : audioP
     ? "audio"
     : "text";
+  if (catalog) {
+    return (
+      <Box
+        component="article"
+        sx={{
+          border: 1,
+          borderColor: "divider",
+          borderRadius: "14px",
+          bgcolor: "background.paper",
+          display: "flex",
+          alignItems: "stretch",
+          overflow: "hidden",
+          height: "100%",
+        }}
+      >
+        <Box
+          component="button"
+          onClick={() => onOpen(b.slug)}
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            border: 0,
+            bgcolor: "transparent",
+            color: "text.primary",
+            textAlign: "left",
+            cursor: "pointer",
+            p: 2,
+            touchAction: "pan-y",
+            "&:focus-visible": {
+              outline: "2px solid",
+              outlineColor: "primary.main",
+              outlineOffset: -2,
+            },
+            "&:hover": { bgcolor: "action.hover" },
+          }}
+        >
+          <Typography
+            fontWeight={700}
+            sx={{
+              fontSize: rem(15),
+              lineHeight: 1.4,
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            {b.label}
+          </Typography>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            noWrap
+            component="div"
+            sx={{ mt: 0.5 }}
+          >
+            {[b.collection, b.author].filter(Boolean).join(" · ") ||
+              t(
+                category === "docs" ? "landing.docsBadge" : "landing.bookBadge",
+              )}
+          </Typography>
+          {resume
+            ? (
+              <Typography
+                variant="caption"
+                color="primary.main"
+                noWrap
+                component="div"
+                sx={{ mt: 0.5 }}
+              >
+                {t("landing.continue", { chapter: resume.chapterLabel })} ·{" "}
+                {pctOf(resume)}%
+              </Typography>
+            )
+            : b.description && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                noWrap
+                component="div"
+                sx={{ mt: 0.5 }}
+              >
+                {b.description}
+              </Typography>
+            )}
+          {generating && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              component="div"
+            >
+              {t("landing.generatingAudio")}
+            </Typography>
+          )}
+        </Box>
+        <Stack justifyContent="center" sx={{ pr: 1 }}>
+          {hasText && (
+            <IconButton
+              aria-label={t("landing.bookBadge")}
+              onClick={() => onOpen(b.slug, "text")}
+              sx={{ width: 44, height: 44 }}
+            >
+              <BookIcon fontSize="small" />
+            </IconButton>
+          )}
+          {hasAudio && (
+            <IconButton
+              aria-label={t("landing.audiobookBadge")}
+              onClick={() => onOpen(b.slug, "audio")}
+              sx={{ width: 44, height: 44 }}
+            >
+              <AudiobookIcon fontSize="small" />
+            </IconButton>
+          )}
+        </Stack>
+      </Box>
+    );
+  }
   return (
     <Card
       variant="outlined"
       sx={{
-        borderRadius: 2,
+        borderRadius: "24px",
         overflow: "hidden",
         position: "relative",
         backgroundImage: compactTint(b.slug),
@@ -764,23 +897,9 @@ const ShelfCard = memo(function ShelfCard({
   );
 });
 
-/**
- * The "bookshelf" landing page: a sticky navbar (title · search · filters ·
- * settings · launcher) over a cover-first book grid.
- *
- * A 2:3 cover is the primary scan target; title and author stay as accessible
- * real text beneath it. Coverless books use the same geometry with a stable
- * gradient fallback, so a partially illustrated shelf never changes layout.
- * Picking a card
- * enters that book (resuming the last-read chapter); books with more than one
- * language edition show their editions as chips, and books with saved progress
- * show a % badge on the cover plus a progress bar along the card's bottom.
- *
- * The navbar stays put while the shelf scrolls so search/filter/settings are
- * always one tap away. Search matches by name (label/slug); a compact
- * multi-select dropdown narrows the shelf by kind (书 / 有声书 / docs) and
- * combines with search (empty selection = all kinds).
- */
+/** Task-first library: resume and recent titles on Home, a flat catalog for
+ * discovery, and a separate series view. Touch navigation stays within reach;
+ * desktop keeps destinations alongside the catalog. */
 export function Landing({
   books,
   progress,
@@ -803,7 +922,11 @@ export function Landing({
   // Group-by-series: when "collection", the shelf splits into collapsible
   // per-series sections (each with a sticky frosted header); `collapsed` is the
   // set of currently-folded section names.
-  const group = useShelfGroup();
+  const [destination, setDestination] = useState<"home" | "library" | "series">(
+    "home",
+  );
+  const [selectedSeries, setSelectedSeries] = useState<string | null>(null);
+  const [visibleLimit, setVisibleLimit] = useState(40);
   const collapsed = useCollapsedGroups();
   const [query, setQuery] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
@@ -930,6 +1053,9 @@ export function Landing({
     const ranked: Array<{ entry: ShelfEntry; score: number }> = [];
     for (const entry of entries) {
       const e = entry;
+      if (
+        selectedSeries !== null && e.book.collection?.trim() !== selectedSeries
+      ) continue;
       if (kind !== "all" && !matchesKind(e, kind)) continue;
       if (
         readingFilter !== "all" &&
@@ -953,15 +1079,19 @@ export function Landing({
     selectedTags,
     progress,
     searchScores,
+    selectedSeries,
   ]);
 
-  const discoveryActive = query.trim().length > 0 || selectedTags.size > 0 ||
+  const discoveryActive = selectedSeries !== null || query.trim().length > 0 ||
+    selectedTags.size > 0 ||
     kind !== "all" || readingFilter !== "all";
-  const activeFilterCount = selectedTags.size + (kind === "all" ? 0 : 1) +
+  const activeFilterCount = (selectedSeries === null ? 0 : 1) +
+    selectedTags.size + (kind === "all" ? 0 : 1) +
     (readingFilter === "all" ? 0 : 1);
-  const discoverySignature = `${query}\0${kind}\0${readingFilter}\0${
-    [...selectedTags].sort().join(",")
-  }`;
+  const discoverySignature =
+    `${selectedSeries}\0${query}\0${kind}\0${readingFilter}\0${
+      [...selectedTags].sort().join(",")
+    }`;
   useEffect(() => setDiscoveryCollapsed(new Set()), [discoverySignature]);
 
   const toggleTag = (id: string): void => {
@@ -974,6 +1104,7 @@ export function Landing({
   };
 
   const clearDiscoveryFilters = (): void => {
+    setSelectedSeries(null);
     setSelectedTags(new Set());
     setKind("all");
     setReadingFilter("all");
@@ -985,6 +1116,10 @@ export function Landing({
   const tagCountBooks = useMemo(() => {
     const result: Book[] = [];
     for (const entry of entries) {
+      if (
+        selectedSeries !== null &&
+        entry.book.collection?.trim() !== selectedSeries
+      ) continue;
       if (kind !== "all" && !matchesKind(entry, kind)) continue;
       if (
         readingFilter !== "all" &&
@@ -1001,6 +1136,7 @@ export function Landing({
     readingFilter,
     progress,
     searchScores,
+    selectedSeries,
   ]);
   const tagCounts = useMemo(
     () =>
@@ -1016,14 +1152,14 @@ export function Landing({
   // collections use locale order and the "Other" catch-all remains last.
   const groupSections = useMemo(
     () =>
-      group === "collection"
+      destination === "series"
         ? groupByCollection(
-          visible,
+          visible.slice(0, visibleLimit),
           t("landing.otherGroup"),
           locale,
         )
         : [],
-    [group, visible, t, locale],
+    [destination, visible, visibleLimit, t, locale],
   );
   const visibleGroupNames = useMemo(
     () => groupSections.map((section) => section.name),
@@ -1066,6 +1202,72 @@ export function Landing({
   // The shelf scroll container — ref'd for the back-to-top button + the
   // app-level status-bar tap (both scroll it to the top).
   const scrollerRef = useRef<HTMLDivElement>(null);
+
+  const homeVisible = destination === "home" && !discoveryActive;
+  const continueBooks = useMemo(
+    () => resumableLibraryBooks(books, progress, 4),
+    [books, progress],
+  );
+  const recentBooks = useMemo(() => recentLibraryBooks(books, 8), [books]);
+  const collections = useMemo(
+    () => groupByCollection(entries, t("landing.otherGroup"), locale),
+    [entries, t, locale],
+  );
+  const entryBySlug = useMemo(
+    () => new Map(entries.map((entry) => [entry.book.slug, entry])),
+    [entries],
+  );
+  useEffect(() => {
+    setVisibleLimit(40);
+    scrollerRef.current?.scrollTo({ top: 0 });
+  }, [destination, discoverySignature]);
+  const navigate = (next: typeof destination): void => {
+    dismissSearchKeyboard();
+    if (searchInputRef.current) searchInputRef.current.value = "";
+    setQuery("");
+    clearDiscoveryFilters();
+    setDestination(next);
+    scrollerRef.current?.scrollTo({ top: 0 });
+  };
+  const destinations = [
+    { id: "home" as const, label: t("landing.home"), Icon: HomeIcon },
+    { id: "library" as const, label: t("landing.library"), Icon: LibraryIcon },
+    { id: "series" as const, label: t("landing.series"), Icon: SeriesIcon },
+  ];
+  const navigation = (rail: boolean): React.JSX.Element => (
+    <Box
+      component="nav"
+      aria-label={t("landing.navigation")}
+      sx={{ display: "flex", flexDirection: rail ? "column" : "row", gap: 0.5 }}
+    >
+      {destinations.map(({ id, label, Icon }) => (
+        <Button
+          key={id}
+          data-lv-destination={id}
+          aria-current={destination === id ? "page" : undefined}
+          onClick={() => navigate(id)}
+          startIcon={rail ? <Icon /> : undefined}
+          sx={{
+            flex: rail ? undefined : 1,
+            minWidth: 0,
+            minHeight: 48,
+            justifyContent: rail ? "flex-start" : "center",
+            flexDirection: rail ? "row" : "column",
+            gap: 0.25,
+            borderRadius: "14px",
+            bgcolor: destination === id ? "action.selected" : "transparent",
+            color: destination === id ? "primary.main" : "text.secondary",
+            fontWeight: 650,
+            textTransform: "none",
+            fontSize: rem(12),
+          }}
+        >
+          {!rail && <Icon sx={{ fontSize: rem(22) }} />}
+          {label}
+        </Button>
+      ))}
+    </Box>
+  );
 
   // Frosted-overlay toolbar: the bookshelf bar is now an iOS-style frosted
   // OVERLAY (like the in-book NavShell bar + the audio transport) that the shelf
@@ -1147,6 +1349,7 @@ export function Landing({
     <ShelfCard
       key={e.book.slug}
       book={e.book}
+      catalog={!homeVisible}
       category={e.category}
       hasText={e.hasText}
       hasAudio={e.hasAudio}
@@ -1157,30 +1360,29 @@ export function Landing({
     />
   );
 
-  // Compact artwork-backed cards stay one-up on phones, then progressively add
-  // columns. Equal tracks keep reading order stable in every engine.
-  const renderGrid = (entries2: ShelfEntry[]): React.JSX.Element => (
+  // Home uses illustrated resume cards; the catalog uses denser title rows for
+  // scanning. Both retain direct reading/listening actions and saved progress.
+  const renderGrid = (items: ShelfEntry[]): React.JSX.Element => (
     <Box
       sx={{
         display: "grid",
         gridTemplateColumns: {
-          xs: "repeat(1, minmax(0, 1fr))",
+          xs: "minmax(0, 1fr)",
           sm: "repeat(2, minmax(0, 1fr))",
-          md: "repeat(3, minmax(0, 1fr))",
-          lg: "repeat(4, minmax(0, 1fr))",
-          xl: "repeat(5, minmax(0, 1fr))",
+          lg: "repeat(3, minmax(0, 1fr))",
+          xl: "repeat(4, minmax(0, 1fr))",
         },
-        columnGap: { xs: 2, sm: 2.5, md: 3 },
-        rowGap: { xs: 3, md: 4 },
-        alignItems: "start",
+        gap: homeVisible ? 2 : 1.25,
+        alignItems: "stretch",
       }}
     >
-      {entries2.map((e) => renderCard(e))}
+      {items.map(renderCard)}
     </Box>
   );
 
   return (
     <Box
+      data-lv-library="true"
       ref={shelfRegionRef}
       sx={{
         flex: 1,
@@ -1206,11 +1408,46 @@ export function Landing({
           subtle edge (hairline / divider) still marks the boundary. zIndex above
           the scroller + the back-to-top button. */
       }
+      {!navbarAtBottom && (
+        <Box
+          component="aside"
+          sx={{
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            left: 0,
+            width: 208,
+            p: 2,
+            pt: "calc(env(safe-area-inset-top, 0px) + 24px)",
+            borderRight: 1,
+            borderColor: "divider",
+            bgcolor: "background.paper",
+          }}
+        >
+          <Stack
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            sx={{ mb: 4, px: 1 }}
+          >
+            <BrandMark width={32} height={32} />
+            <Typography fontWeight={750}>LiveView</Typography>
+          </Stack>
+          {navigation(true)}
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{ mt: 3, px: 1 }}
+          >
+            {t("landing.libraryCount", { n: books.length })}
+          </Typography>
+        </Box>
+      )}
       <Box
         ref={toolbarRef}
         sx={{
           position: "absolute",
-          left: 0,
+          left: navbarAtBottom ? 0 : 208,
           right: 0,
           // Bottom: lift above the keyboard (var set above; 0 when closed).
           ...(navbarAtBottom
@@ -1224,11 +1461,7 @@ export function Landing({
           // cards scrolling under it every frame for a result that's invisible at
           // this opacity = scroll jank for nothing. The opaque tint alone hides
           // them.
-          bgcolor: (t) =>
-            alpha(
-              t.palette.background.default,
-              t.palette.mode === "dark" ? 0.94 : 0.96,
-            ),
+          bgcolor: "background.default",
           ...(navbarAtBottom
             ? {
               // A hard, edge-to-edge 1px rule looks like a stray line when the
@@ -1456,6 +1689,7 @@ export function Landing({
             </Box>
           )}
         </Box>
+        {navbarAtBottom && !searchEditing && navigation(false)}
       </Box>
 
       {/* Sort & Filter sheet — both shelf-organizing controls in one surface. */}
@@ -1475,7 +1709,13 @@ export function Landing({
             >
               {t("landing.clearFilters")}
             </Button>
-            <Button variant="contained" onClick={() => setSfOpen(false)}>
+            <Button
+              variant="contained"
+              onClick={() => {
+                setSfOpen(false);
+                if (destination === "home") setDestination("library");
+              }}
+            >
               {t("landing.showResults", { n: visible.length })}
             </Button>
           </>
@@ -1659,8 +1899,13 @@ export function Landing({
               exclusive
               fullWidth
               size="small"
-              value={group}
-              onChange={(_e, v: ShelfGroup | null) => v && setShelfGroup(v)}
+              value={destination === "series" ? "collection" : "none"}
+              onChange={(_e, v: ShelfGroup | null) => {
+                if (v) {
+                  setShelfGroup(v);
+                  setDestination(v === "collection" ? "series" : "library");
+                }
+              }}
               aria-label={t("settings.group")}
             >
               {SHELF_GROUPS.map((g) => (
@@ -1681,6 +1926,7 @@ export function Landing({
       }
       <Box
         sx={{
+          ml: navbarAtBottom ? 0 : "208px",
           order: navbarAtBottom ? 1 : 0,
           position: "relative",
           flex: 1,
@@ -1727,7 +1973,188 @@ export function Landing({
               }),
           }}
         >
-          <Box sx={{ width: "100%", mx: "auto" }}>
+          <Box sx={{ width: "100%", maxWidth: 1600, mx: "auto" }}>
+            <Stack
+              direction="row"
+              justifyContent="space-between"
+              alignItems="center"
+              sx={{ mb: 2.5 }}
+            >
+              <Box>
+                <Typography
+                  variant="h4"
+                  component="h1"
+                  sx={{
+                    fontWeight: 750,
+                    letterSpacing: "-0.04em",
+                    fontSize: { xs: rem(30), sm: rem(36) },
+                  }}
+                >
+                  {discoveryActive
+                    ? t("landing.results")
+                    : t(`landing.${destination}`)}
+                </Typography>
+                <Typography
+                  color="text.secondary"
+                  variant="body2"
+                  sx={{ mt: 0.75 }}
+                >
+                  {homeVisible
+                    ? t("landing.homeHint")
+                    : t("landing.libraryCount", { n: visible.length })}
+                </Typography>
+              </Box>
+              {homeVisible && <BrandMark width={40} height={40} />}
+            </Stack>
+            {!homeVisible && (
+              <Stack
+                direction="row"
+                useFlexGap
+                gap={1}
+                sx={{ mb: 2, flexWrap: "wrap" }}
+              >
+                {(["all", "progress", "unread", "finished"] as ReadingFilter[])
+                  .map((state) => (
+                    <Chip
+                      key={state}
+                      label={t(`reading.${state}`)}
+                      onClick={() => setReadingFilter(state)}
+                      color={readingFilter === state ? "primary" : "default"}
+                      variant={readingFilter === state ? "filled" : "outlined"}
+                      sx={{ minHeight: 44 }}
+                    />
+                  ))}
+              </Stack>
+            )}
+            {homeVisible && books.length > 0 && (
+              <Stack spacing={4}>
+                <Box component="section" aria-label={t("landing.resume")}>
+                  <Stack
+                    direction="row"
+                    justifyContent="space-between"
+                    alignItems="center"
+                    sx={{ mb: 1.5 }}
+                  >
+                    <Typography variant="h6" component="h2" fontWeight={700}>
+                      {t("landing.resume")}
+                    </Typography>
+                    <Button
+                      onClick={() => {
+                        navigate("library");
+                        setShelfSort("read");
+                      }}
+                    >
+                      {t("landing.history")}
+                    </Button>
+                  </Stack>
+                  {continueBooks.length > 0
+                    ? renderGrid(
+                      continueBooks.map((book) => entryBySlug.get(book.slug)!),
+                    )
+                    : (
+                      <Box
+                        sx={{
+                          p: 2.5,
+                          border: 1,
+                          borderColor: "divider",
+                          borderRadius: "24px",
+                          bgcolor: "background.paper",
+                        }}
+                      >
+                        <Typography color="text.secondary" sx={{ mb: 1 }}>
+                          {t("landing.resumeEmpty")}
+                        </Typography>
+                        <Button
+                          variant="contained"
+                          onClick={() => navigate("library")}
+                        >
+                          {t("landing.browseAll")}
+                        </Button>
+                      </Box>
+                    )}
+                </Box>
+                <Box component="section" aria-label={t("landing.recent")}>
+                  <Stack
+                    direction="row"
+                    justifyContent="space-between"
+                    alignItems="center"
+                    sx={{ mb: 1.5 }}
+                  >
+                    <Typography variant="h6" component="h2" fontWeight={700}>
+                      {t("landing.recent")}
+                    </Typography>
+                    <Button
+                      onClick={() => {
+                        navigate("library");
+                        setShelfSort("updated");
+                      }}
+                    >
+                      {t("landing.seeAll")}
+                    </Button>
+                  </Stack>
+                  {renderGrid(
+                    recentBooks.map((book) => entryBySlug.get(book.slug)!),
+                  )}
+                </Box>
+                <Box component="section" aria-label={t("landing.series")}>
+                  <Stack
+                    direction="row"
+                    justifyContent="space-between"
+                    alignItems="center"
+                    sx={{ mb: 1.5 }}
+                  >
+                    <Typography variant="h6" component="h2" fontWeight={700}>
+                      {t("landing.series")}
+                    </Typography>
+                    <Button onClick={() => navigate("series")}>
+                      {t("landing.seeAll")}
+                    </Button>
+                  </Stack>
+                  <Box
+                    sx={{
+                      display: "grid",
+                      gridTemplateColumns: {
+                        xs: "1fr",
+                        sm: "1fr 1fr",
+                        lg: "1fr 1fr 1fr",
+                      },
+                      gap: 1,
+                    }}
+                  >
+                    {collections.filter((section) =>
+                      section.entries.some((entry) =>
+                        entry.book.collection?.trim()
+                      )
+                    ).slice(0, 6).map((section) => (
+                      <Button
+                        key={section.name}
+                        variant="outlined"
+                        onClick={() => {
+                          navigate("library");
+                          setSelectedSeries(section.name);
+                        }}
+                        sx={{
+                          justifyContent: "space-between",
+                          textTransform: "none",
+                          color: "text.primary",
+                          borderColor: "divider",
+                          p: 2,
+                          minHeight: 64,
+                          gap: 1,
+                        }}
+                      >
+                        <Typography noWrap fontWeight={650}>
+                          {section.name}
+                        </Typography>
+                        <Typography color="text.secondary">
+                          {section.entries.length}
+                        </Typography>
+                      </Button>
+                    ))}
+                  </Box>
+                </Box>
+              </Stack>
+            )}
             {activeFilterCount > 0 && (
               <Stack
                 direction="row"
@@ -1735,6 +2162,12 @@ export function Landing({
                 gap={0.75}
                 sx={{ mb: 1.25, overflowX: "auto", pb: 0.25 }}
               >
+                {selectedSeries !== null && (
+                  <Chip
+                    label={selectedSeries}
+                    onDelete={() => setSelectedSeries(null)}
+                  />
+                )}
                 {[...selectedTags].map((id) => (
                   <Chip
                     key={id}
@@ -1772,13 +2205,20 @@ export function Landing({
                   {t("landing.noMounts")}
                 </Typography>
               )
+              : homeVisible
+              ? null
               : visible.length === 0
               ? (
-                <Typography color="text.secondary">
-                  {t("landing.noResults")}
-                </Typography>
+                <Stack spacing={1} alignItems="flex-start">
+                  <Typography color="text.secondary">
+                    {t("landing.noResults")}
+                  </Typography>
+                  <Button onClick={() => navigate("library")}>
+                    {t("landing.browseAll")}
+                  </Button>
+                </Stack>
               )
-              : group === "collection"
+              : destination === "series"
               ? (
                 <>
                   {
@@ -1834,8 +2274,17 @@ export function Landing({
               )
               : (
                 // Flat shelf: one responsive cover grid over all visible entries.
-                renderGrid(visible)
+                renderGrid(visible.slice(0, visibleLimit))
               )}
+            {!homeVisible && visible.length > visibleLimit && (
+              <Button
+                variant="outlined"
+                onClick={() => setVisibleLimit((current) => current + 40)}
+                sx={{ mt: 3, minHeight: 44, width: "100%" }}
+              >
+                {t("landing.loadMore", { n: visible.length - visibleLimit })}
+              </Button>
+            )}
           </Box>
         </Box>
         {
