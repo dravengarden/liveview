@@ -207,8 +207,8 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     landing,
-    /minWidth: \{ xs: 44, sm: "auto" \}[\s\S]{0,700}display: \{ xs: "none", sm: "inline" \}/,
-    "the phone toolbar must preserve search width with an icon-only filter action",
+    /flexWrap: \{ xs: "wrap", sm: "nowrap" \}[\s\S]{0,10000}data-lv-shelf-actions[\s\S]{0,500}flexBasis: \{ xs: "100%", sm: "auto" \}/,
+    "the phone toolbar must place labeled actions on a separate row to preserve search width",
   );
   assertPresent(
     landing,

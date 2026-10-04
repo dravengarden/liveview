@@ -1,4 +1,4 @@
-import { Box, Button, IconButton, Stack, Typography } from "@mui/material";
+import { Box, Button, Stack, Typography } from "@mui/material";
 import { FolderOutlined as FolderIcon } from "@mui/icons-material";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -311,7 +311,14 @@ export function LibraryOrganizer(
 
   return (
     <>
-      <IconButton
+      <Button
+        startIcon={<FolderIcon fontSize="small" />}
+        sx={{
+          minHeight: 44,
+          textTransform: "none",
+          whiteSpace: "nowrap",
+          flex: { xs: 1, sm: "0 0 auto" },
+        }}
         data-lv-organize
         aria-label={t("landing.organize")}
         onClick={() => {
@@ -321,8 +328,8 @@ export function LibraryOrganizer(
           setMoveTarget(currentDirectory?.parent ?? "");
         }}
       >
-        <FolderIcon />
-      </IconButton>
+        {t("landing.organizeAction")}
+      </Button>
       {createPortal(
         <BottomSheet
           open={organizeOpen}

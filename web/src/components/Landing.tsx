@@ -983,6 +983,7 @@ export function Landing({
             alignItems: "center",
             gap: { xs: 0.75, sm: 1 },
             minHeight: 44,
+            flexWrap: { xs: "wrap", sm: "nowrap" },
           }}
         >
           {!searchEditing && (selectedDirectory !== null || discoveryActive) &&
@@ -1099,21 +1100,15 @@ export function Landing({
                     )
                     : null,
                 }}
-                sx={{ flexGrow: 1, minWidth: 0 }}
+                sx={{
+                  flexGrow: 1,
+                  minWidth: 0,
+                  flexBasis: { xs: "calc(100% - 56px)", sm: 0 },
+                }}
               />
-              {
-                /* ONE control for both shelf order + kind narrowing — opens the
-                  Sort & Filter sheet. The pill shows the active sort at a glance
-                  (always set); a primary dot flags an active kind filter (the
-                  occasional state). Replaces the old two-dropdown clutter. */
-              }
             </>
           )}
-          {
-            /* Settings (gear / launcher), pinned at the row's end. The reading-
-              history widget was removed — sort by "Read" surfaces the same thing,
-              and each card now carries its own last-read stamp. */
-          }
+          {/* Search finds content; these explicit actions change the view or library. */}
           {!searchEditing && (
             <Box
               data-lv-shelf-actions
@@ -1122,6 +1117,8 @@ export function Landing({
                 display: "flex",
                 alignItems: "center",
                 gap: { xs: 0.75, sm: 1 },
+                flexBasis: { xs: "100%", sm: "auto" },
+                justifyContent: "flex-end",
               }}
             >
               {books.length > 0 && (
@@ -1129,37 +1126,26 @@ export function Landing({
                   color="primary"
                   badgeContent={activeFilterCount}
                   invisible={activeFilterCount === 0}
-                  sx={{ flexShrink: 0 }}
+                  sx={{ flex: { xs: 1, sm: "0 0 auto" } }}
                 >
                   <Button
                     size="small"
-                    variant="outlined"
                     startIcon={<TuneIcon fontSize="small" />}
                     onClick={() => setSfOpen(true)}
                     aria-label={t("landing.sortFilter")}
                     sx={{
                       flexShrink: 0,
                       minHeight: 44,
-                      minWidth: { xs: 44, sm: "auto" },
-                      width: { xs: 44, sm: "auto" },
-                      px: { xs: 0, sm: 1.25 },
+                      width: "100%",
+                      px: 1.25,
                       textTransform: "none",
-                      color: "text.secondary",
-                      borderColor: "divider",
+                      color: activeFilterCount > 0
+                        ? "primary.main"
+                        : "text.secondary",
                       whiteSpace: "nowrap",
-                      "& .MuiButton-startIcon": {
-                        m: { xs: 0, sm: "0 8px 0 -4px" },
-                      },
                     }}
                   >
-                    <Box
-                      component="span"
-                      sx={{ display: { xs: "none", sm: "inline" } }}
-                    >
-                      {activeFilterCount > 0
-                        ? t("landing.filtersN", { n: activeFilterCount })
-                        : t(`sort.${sort}`)}
-                    </Box>
+                    {t("landing.sortFilterAction")}
                   </Button>
                 </Badge>
               )}
