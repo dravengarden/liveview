@@ -7,6 +7,7 @@ import { dispatchChapterReady } from "@/syncStore";
 import { runOtaCheck } from "@/otaUpdater";
 import { webSocketUrl } from "@/webSocketUrl";
 import { setPwaBackendConnected } from "@/pwa";
+import { dispatchLibraryUpdate, setLiveSocketConnected } from "@/liveSocket";
 
 interface UseWebSocketOptions {
   onContentUpdate: (
@@ -48,6 +49,7 @@ export function useWebSocket(
         // Resets the reconnect counter, flashes the green banner if an outage was
         // surfaced, and probes /version for a redeploy (see connectionStore).
         connectionReady();
+        setLiveSocketConnected(true);
         // App-bundle OTA is now SERVER-PUSHED: the server sends an `AppVersion`
         // message right after this connect (see below), so there's nothing to poll
         // here — a deploy = server restart = reconnect = fresh AppVersion push.
@@ -94,6 +96,8 @@ export function useWebSocket(
             // store subscribed on this key (it re-reconciles). The client also
             // sees the echo of its OWN PUT here — that's a no-op (remote == local).
             emitServerSettingPush(msg.key, msg.value);
+          } else if (msg.type === "LibraryUpdate") {
+            dispatchLibraryUpdate(msg.revision);
           }
         } catch (e) {
           console.error("Failed to parse WebSocket message:", e);
@@ -105,6 +109,7 @@ export function useWebSocket(
         // a new reconnect loop, and ignore events from a superseded socket.
         if (stopped || activeSocket !== ws) return;
         activeSocket = null;
+        setLiveSocketConnected(false);
         // Raises the warning past the failure threshold and hands back the
         // exponential-backoff delay to wait before retrying.
         reconnectTimeout = setTimeout(() => {
@@ -122,7 +127,10 @@ export function useWebSocket(
 
     // A new offline event invalidates evidence from an older socket, even if
     // WebKit has not delivered its eventual close notification yet.
-    const onOffline = (): void => setPwaBackendConnected(false);
+    const onOffline = (): void => {
+      setPwaBackendConnected(false);
+      setLiveSocketConnected(false);
+    };
     window.addEventListener("offline", onOffline);
     connect();
 
@@ -130,6 +138,7 @@ export function useWebSocket(
       stopped = true;
       window.removeEventListener("offline", onOffline);
       setPwaBackendConnected(false);
+      setLiveSocketConnected(false);
       if (reconnectTimeout !== null) {
         clearTimeout(reconnectTimeout);
         reconnectTimeout = null;

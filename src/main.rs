@@ -2356,7 +2356,16 @@ async fn api_library_change(
     Json(change): Json<library::Change>,
 ) -> axum::response::Response {
     match state.store.library_change(&change).await {
-        Ok(library) => Json(library).into_response(),
+        Ok(library) => {
+            // Every organization write (UI or `liveview dir`) goes through here,
+            // so this push lets connected clients refetch instead of polling.
+            if let Ok(s) = serde_json::to_string(&WsMessage::LibraryUpdate {
+                revision: library.revision,
+            }) {
+                let _ = state.tx.send(s);
+            }
+            Json(library).into_response()
+        }
         Err(error) => (
             if error.starts_with("Revision conflict") {
                 StatusCode::CONFLICT

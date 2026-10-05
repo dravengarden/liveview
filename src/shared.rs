@@ -119,4 +119,24 @@ pub enum WsMessage {
     AppVersion {
         version: String,
     },
+    /// The user's library organization advanced to `revision` (any client's or
+    /// the CLI's `/api/library` change). Connected clients refetch instead of
+    /// polling. Older clients ignore the unknown type.
+    LibraryUpdate {
+        revision: u64,
+    },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn library_update_wire_shape_is_type_tagged() {
+        let json = serde_json::to_value(WsMessage::LibraryUpdate { revision: 7 }).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({ "type": "LibraryUpdate", "revision": 7 })
+        );
+    }
 }

@@ -2,6 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { contentFetch } from "./native-sync.ts";
 import { cacheReplicaMetadata } from "./replica/mod.ts";
 import { remoteUrl } from "./apiBase.ts";
+import {
+  isLiveSocketConnected,
+  onLibraryUpdate,
+  onLiveSocketReconnect,
+  pollTickDue,
+} from "./liveSocket.ts";
 
 import type { UserLibrary } from "./libraryOrganization.ts";
 export {
@@ -29,7 +35,9 @@ export function useUserLibrary(): {
   const [undoRevision, setUndoRevision] = useState<number | null>(null);
   const acknowledgedRevision = useRef<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const lastRefreshAt = useRef(0);
   const refresh = useCallback(async () => {
+    lastRefreshAt.current = Date.now();
     try {
       const response = await contentFetch("/api/library", { fresh: true });
       if (!response.ok) throw new Error("Library organization unavailable");
@@ -53,11 +61,24 @@ export function useUserLibrary(): {
       void refresh();
     };
     globalThis.addEventListener("focus", onFocus);
+    // The server pushes `LibraryUpdate` on every organization write, so a
+    // connected socket needs only the slow safety-net poll; refetch on a push
+    // that is newer than what this client already acknowledged, and after a
+    // reconnect that may have missed one.
+    const offPush = onLibraryUpdate((revision) => {
+      if (revision > (acknowledgedRevision.current ?? -1)) void refresh();
+    });
+    const offReconnect = onLiveSocketReconnect(onFocus);
     const timer = globalThis.setInterval(() => {
-      if (document.visibilityState === "visible") void refresh();
+      if (
+        document.visibilityState === "visible" &&
+        pollTickDue(isLiveSocketConnected(), lastRefreshAt.current, Date.now())
+      ) void refresh();
     }, 30000);
     return () => {
       globalThis.removeEventListener("focus", onFocus);
+      offPush();
+      offReconnect();
       globalThis.clearInterval(timer);
     };
   }, [refresh]);

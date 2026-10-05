@@ -171,7 +171,9 @@ export type WsMessage =
   | { type: "SettingUpdate"; key: string; value: string }
   // Server push of the current app-bundle version (sent on WS connect). The
   // native shell reacts by running the OTA check; the web/PWA ignores it.
-  | { type: "AppVersion"; version: string };
+  | { type: "AppVersion"; version: string }
+  // The user's library organization advanced; connected clients refetch it.
+  | { type: "LibraryUpdate"; revision: number };
 
 // Reading-oriented themes only (Day / Sepia / Dark / Night). The old
 // code-editor schemes (solarized, dracula, nord, monokai, one-dark, gruvbox)
