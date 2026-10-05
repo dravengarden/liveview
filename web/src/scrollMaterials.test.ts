@@ -28,7 +28,12 @@ function assertPresent(
 }
 
 test("scrolling shelf surfaces avoid live backdrop filters", async () => {
-  const landing = await source("components/Landing.tsx");
+  // The shelf spans the screen and its card component; every shelf rule below
+  // must hold across both files.
+  const landing = [
+    await source("components/Landing.tsx"),
+    await source("components/ShelfCard.tsx"),
+  ].join("\n");
   const artwork = await source("components/CoverTile.tsx");
   const segmented = await source("components/SegmentedPill.tsx");
   const syncIndicator = await source("components/SyncIndicator.tsx");
