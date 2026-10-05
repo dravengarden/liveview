@@ -70,28 +70,35 @@ export const BUNDLED =
   !!(globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ &&
   !["http:", "https:"].includes(globalThis.location?.protocol ?? "");
 
-/** Select the first reachable configured native backend instead of treating one
- *  route as a single point of failure. A short bounded probe adds at most 750 ms
- *  to an offline cold launch, and the last winner is retained as a candidate. */
-export async function selectRemote(): Promise<string> {
-  if (!BUNDLED) return REMOTE;
-  let previous: string | null = null;
+const remoteListeners = new Set<(origin: string) => void>();
+
+/** Subscribe to a later REMOTE switch (a background re-probe found a different
+ *  reachable route). Returns an unsubscribe. */
+export function onRemoteChange(listener: (origin: string) => void): () => void {
+  remoteListeners.add(listener);
+  return () => remoteListeners.delete(listener);
+}
+
+function adoptRemote(origin: string): void {
   try {
-    previous = globalThis.localStorage?.getItem(REMOTE_KEY) ?? null;
+    globalThis.localStorage?.setItem(REMOTE_KEY, origin);
   } catch {
-    // Storage is an optimization only.
+    // Private mode / quota: use the in-memory winner for this launch.
   }
-  const candidates = [
-    ...new Set([
-      ...(await nativeOrigins()),
-      previous,
-      ...CONFIGURED_REMOTES,
-    ].filter(Boolean)),
-  ] as string[];
+  if (origin === REMOTE) return;
+  REMOTE = origin;
+  for (const listener of remoteListeners) listener(origin);
+}
+
+/** The first configured backend answering `/api/version` within 750 ms, or
+ *  null when every route is unavailable. */
+async function probeRemotes(
+  candidates: readonly string[],
+): Promise<string | null> {
   const controller = new AbortController();
   const timer = globalThis.setTimeout(() => controller.abort(), 750);
   try {
-    REMOTE = await Promise.any(
+    return await Promise.any(
       candidates.map(async (origin) => {
         const response = await fetch(`${origin}/api/version`, {
           cache: "no-store",
@@ -101,18 +108,48 @@ export async function selectRemote(): Promise<string> {
         return origin;
       }),
     );
-    try {
-      globalThis.localStorage?.setItem(REMOTE_KEY, REMOTE);
-    } catch {
-      // Private mode / quota: use the in-memory winner for this launch.
-    }
   } catch {
-    // Every route is unavailable: keep the prior/default origin and let the native
-    // content cache provide the offline experience.
-    REMOTE = previous ?? DEFAULT_REMOTE;
+    return null;
   } finally {
     globalThis.clearTimeout(timer);
     controller.abort();
+  }
+}
+
+/** Select a reachable configured native backend instead of treating one route
+ *  as a single point of failure. When the last winner is still configured it is
+ *  used at once and the probe runs in the background, switching REMOTE only if
+ *  another route answers first; an offline cold launch therefore never waits on
+ *  the probe. Without a usable winner (first launch, changed configuration) the
+ *  bounded probe is awaited. */
+export async function selectRemote(): Promise<string> {
+  if (!BUNDLED) return REMOTE;
+  let previous: string | null = null;
+  try {
+    previous = globalThis.localStorage?.getItem(REMOTE_KEY) ?? null;
+  } catch {
+    // Storage is an optimization only.
+  }
+  const configured = [
+    ...new Set([...(await nativeOrigins()), ...CONFIGURED_REMOTES]),
+  ];
+  const candidates = [
+    ...new Set([...configured, previous].filter(Boolean)),
+  ] as string[];
+  if (previous && configured.includes(previous)) {
+    REMOTE = previous;
+    void probeRemotes(candidates).then((winner) => {
+      if (winner) adoptRemote(winner);
+    });
+    return REMOTE;
+  }
+  const winner = await probeRemotes(candidates);
+  if (winner) {
+    adoptRemote(winner);
+  } else {
+    // Every route is unavailable: keep the prior/default origin and let the
+    // replica provide the offline experience.
+    REMOTE = previous ?? DEFAULT_REMOTE;
   }
   return REMOTE;
 }

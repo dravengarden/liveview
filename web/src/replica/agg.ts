@@ -134,7 +134,15 @@ export async function rewriteTotals(
   txn: IDBTransaction,
   resources: readonly { hash: string; kind: string; bytes: number }[],
 ): Promise<void> {
-  const next: Record<AggKind, { count: number; bytes: number }> = {
+  await writeTotals(txn, dagTotals(resources));
+}
+
+type Totals = Record<AggKind, { count: number; bytes: number }>;
+
+function dagTotals(
+  resources: Iterable<{ hash: string; kind: string; bytes: number }>,
+): Totals {
+  const next: Totals = {
     [AGG_ALL]: { count: 0, bytes: 0 },
     [AGG_AUDIO]: { count: 0, bytes: 0 },
     [AGG_TEXT]: { count: 0, bytes: 0 },
@@ -150,12 +158,40 @@ export async function rewriteTotals(
     next[AGG_ALL].count += 1;
     next[AGG_ALL].bytes += resource.bytes;
   }
+  return next;
+}
+
+async function writeTotals(
+  txn: IDBTransaction,
+  next: Totals,
+): Promise<boolean> {
+  let changed = false;
   for (const kind of AGG_KINDS) {
     const row = await loadAgg(txn, kind);
+    if (
+      row.totalCount === next[kind].count && row.totalBytes === next[kind].bytes
+    ) continue;
     row.totalCount = next[kind].count;
     row.totalBytes = next[kind].bytes;
     await putAgg(txn, row);
+    changed = true;
   }
+  return changed;
+}
+
+/** Re-derive the totals from the hydrated path index. Totals are otherwise
+ *  rewritten only when a new root is applied, so rows written by an older
+ *  counting rule would stay stale until the next deploy. One pass over the
+ *  in-memory index and at most four row writes; returns whether any changed. */
+export async function reconcileTotals(
+  resources: Iterable<{ hash: string; kind: string; bytes: number }>,
+): Promise<boolean> {
+  const next = dagTotals(resources);
+  return await withTxn(
+    [STORE_AGG],
+    "readwrite",
+    (txn) => writeTotals(txn, next),
+  );
 }
 
 export async function ensureAggRows(): Promise<void> {

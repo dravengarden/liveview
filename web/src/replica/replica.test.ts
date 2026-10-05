@@ -11,7 +11,7 @@ import {
   setPresent,
 } from "./blobs.ts";
 import { evictUnpinnedLru } from "./gc.ts";
-import { closeReplicaDb, openReplicaDb } from "./idb.ts";
+import { closeReplicaDb, openReplicaDb, withTxn } from "./idb.ts";
 import { applyDag, parseManifest, parseRoot } from "./manifest.ts";
 import { installMemoryIndexedDB, type MemoryIdbHandle } from "./memory-idb.ts";
 import { contentFetch } from "../native-sync.ts";
@@ -1385,4 +1385,31 @@ test("acknowledged library edits replace cached metadata for immediate offline r
     network.restore();
     setReplicaOfflineProbe(() => false);
   }
+});
+
+test("initReplica heals totals written under an older per-path counting rule", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [
+      textResource("shared", "a/text/en/01.md"),
+      textResource("shared", "b/text/en/01.md"),
+      textResource("solo"),
+    ],
+  });
+  // Simulate a row written before totals were deduplicated by hash.
+  await withTxn(["agg"], "readwrite", async (txn) => {
+    const store = txn.objectStore("agg");
+    const row = await new Promise<Record<string, number | string>>((resolve) => {
+      const request = store.get("all");
+      request.onsuccess = () => resolve(request.result);
+    });
+    store.put({ ...row, totalCount: 3, totalBytes: 6 });
+  });
+  assert.equal((await replicaStats()).total, 3);
+  await initReplica("lazy");
+  const stats = await replicaStats();
+  assert.equal(stats.total, 2);
+  assert.equal(stats.totalBytes, 4);
 });

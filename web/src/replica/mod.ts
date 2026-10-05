@@ -1,4 +1,4 @@
-import { replicaStats as readReplicaStats } from "./agg.ts";
+import { reconcileTotals, replicaStats as readReplicaStats } from "./agg.ts";
 import {
   getBlob,
   hasBlob,
@@ -15,6 +15,7 @@ import {
   withTxn,
 } from "./idb.ts";
 import {
+  allPathRecords,
   applyDag,
   hydratePathIndex,
   pathRecordForHash,
@@ -198,7 +199,24 @@ export async function initReplica(mode?: DataMode, opts?: {
     mediaUnsub = installMediaBridge(() => scheduleEvictUnpinnedAudioToFit());
   }
   await hydratePathIndex();
+  // Heal totals written under an older counting rule; normally a no-op.
+  await reconcileTotals(allPathRecords());
   await replayWorklist();
+}
+
+/** Ask the engine to exempt the replica from storage-pressure eviction, so an
+ *  offline library is not silently dropped and re-downloaded. Best-effort: an
+ *  unsupported engine or a denial keeps the default (evictable) behaviour.
+ *  Returns whether storage is persisted afterwards. */
+export async function requestPersistentStorage(): Promise<boolean> {
+  try {
+    const storage = globalThis.navigator?.storage;
+    if (!storage?.persist) return false;
+    if (await storage.persisted?.()) return true;
+    return await storage.persist();
+  } catch {
+    return false;
+  }
 }
 
 export async function resetReplica(): Promise<void> {

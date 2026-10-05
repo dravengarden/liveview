@@ -4,18 +4,31 @@ import { App } from "./App";
 import { I18nProvider } from "./i18n";
 import { AudioPlayerProvider } from "./audio/player";
 import { installHaptics } from "./_shell";
-import { BUNDLED, installApiShim, REMOTE, selectRemote } from "./apiBase";
+import {
+  BUNDLED,
+  installApiShim,
+  onRemoteChange,
+  REMOTE,
+  selectRemote,
+} from "./apiBase";
 import { startOfflineFlagSync } from "./native-sync";
 import { startSyncQueue } from "./syncQueue";
 import { startApm } from "./apm";
 import { startOtaUpdater } from "./otaUpdater";
-import { disableReplica, initReplica, replicaFlag } from "./replica/mod.ts";
+import {
+  disableReplica,
+  initReplica,
+  replicaFlag,
+  requestPersistentStorage,
+  setReplicaRemote,
+} from "./replica/mod.ts";
+import { installedPwa } from "./pwa.ts";
 import { connectionStore } from "./connectionStore.ts";
 import "./styles/index.css";
 
-// Choose a reachable native endpoint before any subsystem captures/uses REMOTE.
-// This races the public/tailnet route with the direct LAN route and is a no-op in
-// the PWA, where relative same-origin URLs remain authoritative.
+// Choose the native endpoint before any subsystem captures/uses REMOTE. With a
+// remembered winner this returns at once and re-probes in the background, so an
+// offline cold launch never waits on the probe; the first launch still waits.
 await selectRemote();
 
 // When bundled into the native shell (local origin), point relative /api/* fetches
@@ -49,7 +62,15 @@ if (replicaFlag() === "idb") {
     // Browser replicas must use their own origin, not a native compile-time
     // endpoint (whose default is loopback on the user's device).
     const replicaOrigin = BUNDLED ? REMOTE : globalThis.location.origin;
-    await initReplica(undefined, { remoteBase: replicaOrigin, origins: [replicaOrigin] });
+    await initReplica(undefined, {
+      remoteBase: replicaOrigin,
+      origins: [replicaOrigin],
+    });
+    // A background re-probe may pick a different native route after launch.
+    if (BUNDLED) onRemoteChange((origin) => setReplicaRemote(origin, [origin]));
+    // Installed apps hold an offline library worth protecting from eviction. A
+    // plain browser tab does not ask (Firefox would show a permission prompt).
+    if (BUNDLED || installedPwa()) void requestPersistentStorage();
   } catch (error) {
     console.error("Replica init failed; continuing network-only:", error);
     disableReplica();
