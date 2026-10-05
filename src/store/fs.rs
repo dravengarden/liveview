@@ -312,9 +312,6 @@ impl ContentStore for FsStore {
     async fn manifest_root(&self) -> Result<Option<String>, String> {
         Ok(None) // preview has no deploy/manifest
     }
-    async fn manifest_books(&self) -> Result<(Option<String>, Vec<(String, String)>), String> {
-        Ok((None, Vec::new())) // preview has no deploy/manifest
-    }
     async fn manifest_chapters(&self, _slug: &str) -> Result<Vec<ManifestChapter>, String> {
         Ok(Vec::new())
     }

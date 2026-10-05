@@ -306,9 +306,6 @@ impl ContentStore for FailingStore {
     async fn manifest_root(&self) -> Result<Option<String>, String> {
         down()
     }
-    async fn manifest_books(&self) -> Result<(Option<String>, Vec<(String, String)>), String> {
-        down()
-    }
     async fn manifest_chapters(&self, _: &str) -> Result<Vec<ManifestChapter>, String> {
         down()
     }

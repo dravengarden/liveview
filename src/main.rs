@@ -859,47 +859,6 @@ fn store_unavailable(operation: &'static str, error: String) -> Response {
         .into_response()
 }
 
-/// `GET /api/manifest` — the top-level Merkle manifest: the deploy root + each
-/// book's subtree hash (the SW's O(1) "anything changed?" + per-book prune) plus
-/// an audio-readiness rollup for the shelf badge.
-async fn api_manifest(State(state): State<SharedState>) -> impl IntoResponse {
-    let (root, books) = match state.store.manifest_books().await {
-        Ok(value) => value,
-        Err(error) => return store_unavailable("manifest_books", error),
-    };
-    let mut audio: std::collections::HashMap<String, (i64, i64)> = std::collections::HashMap::new();
-    let audio_rollup = match state.store.audio_task_rollup().await {
-        Ok(value) => value,
-        Err(error) => return store_unavailable("audio_task_rollup", error),
-    };
-    for r in audio_rollup {
-        if let Some(s) = r.book_slug {
-            audio.insert(s, (r.done, r.total));
-        }
-    }
-    let books_updated = match state.store.list_books().await {
-        Ok(value) => value,
-        Err(error) => return store_unavailable("list_books", error),
-    };
-    let updated: std::collections::HashMap<String, i64> = books_updated
-        .into_iter()
-        .map(|b| (b.slug, b.updated_at))
-        .collect();
-    let arr: Vec<_> = books
-        .iter()
-        .map(|(slug, hash)| {
-            let (done, total) = audio.get(slug).copied().unwrap_or((0, 0));
-            serde_json::json!({
-                "slug": slug,
-                "subtree_hash": hash,
-                "updated_at": updated.get(slug).copied().unwrap_or(0),
-                "audio": {"done": done, "total": total},
-            })
-        })
-        .collect();
-    Json(serde_json::json!({ "root": root, "books": arr })).into_response()
-}
-
 /// `GET /api/manifest/<slug>` — one book's content-addressed chapters (audio +
 /// assets) with blob sizes + audio-task status (the SW's Lane-B prefetch index +
 /// the per-chapter readiness signal). Text/HTML is Lane A, not here.
@@ -1492,7 +1451,6 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
         // Content-addressed immutable blob (audio / marks / images) for the SW's
         // offline cache (Lane B), + the Merkle manifest the SW diffs.
         .route("/api/blob/{hash}", get(api_blob))
-        .route("/api/manifest", get(api_manifest))
         .route("/api/manifest/{slug}", get(api_manifest_book))
         .route("/api/root", get(api_root))
         .route("/api/dag", get(api_dag))

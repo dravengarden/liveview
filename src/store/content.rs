@@ -127,10 +127,6 @@ pub trait ContentStore: Send + Sync {
     /// change token. `None` before the first sync / on the preview backend.
     async fn manifest_root(&self) -> Result<Option<String>, String>;
 
-    /// Manifest top level: deploy root + per-book subtree hashes (the SW diffs
-    /// this). Empty before the first sync / on the preview backend.
-    async fn manifest_books(&self) -> Result<(Option<String>, Vec<(String, String)>), String>;
-
     /// One book's content-addressed chapters (audio + assets) for the SW's
     /// Lane-B prefetch + the readiness UX. Empty on the preview backend.
     async fn manifest_chapters(&self, slug: &str) -> Result<Vec<ManifestChapter>, String>;
@@ -267,11 +263,6 @@ impl ContentStore for PgStore {
     }
     async fn manifest_root(&self) -> Result<Option<String>, String> {
         PgStore::manifest_root(self)
-            .await
-            .map_err(|e| e.to_string())
-    }
-    async fn manifest_books(&self) -> Result<(Option<String>, Vec<(String, String)>), String> {
-        PgStore::manifest_books(self)
             .await
             .map_err(|e| e.to_string())
     }

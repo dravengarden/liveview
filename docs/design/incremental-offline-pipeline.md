@@ -145,6 +145,9 @@ sharded manifest so the Merkle subtree-prune works over the wire.
   audio: {done, total} }] }`. Tiny (~one row/book). The `root` is the O(1)
   early-out; per-book `subtree_hash` lets the client skip unchanged books; the
   `audio.{done,total}` rollup feeds the shelf badge + indicator.
+  *Superseded:* the change probe is `GET /api/root`, the whole-corpus index is
+  `GET /api/dag`, and audio status is `GET /api/tasks`; this top-level
+  endpoint had no remaining client and was removed.
 - **`GET /api/manifest/<slug>`** → that book's chapters, **scoped to the
   content-addressed + readiness payload** (text/HTML is Lane A's job, §4.1, and
   is *not* in the manifest): `[{ id: "rendition/lang/rel", audio: {status,

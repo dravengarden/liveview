@@ -1086,24 +1086,6 @@ impl PgStore {
             .map(|(root, epoch)| manifest_root(&root, epoch)))
     }
 
-    /// The deploy root + its per-book child subtree hashes — the top-level
-    /// manifest the SW diffs (root unchanged ⇒ nothing to sync; a changed book
-    /// subtree ⇒ fetch that book's sub-manifest). Empty before the first sync.
-    pub async fn manifest_books(
-        &self,
-    ) -> Result<(Option<String>, Vec<(String, String)>), sqlx::Error> {
-        let Some((root, epoch)) = self.deploy_root_row().await? else {
-            return Ok((None, Vec::new()));
-        };
-        let children = match self.get_merkle_node(&root).await? {
-            Some(n) if n.kind == "tree" => {
-                serde_json::from_str::<Vec<(String, String)>>(&n.payload).unwrap_or_default()
-            }
-            _ => Vec::new(),
-        };
-        Ok((Some(manifest_root(&root, epoch)), children))
-    }
-
     /// One book's content-addressed chapters (audio + assets) with blob sizes and
     /// audio-task status, for `/api/manifest/<slug>`.
     pub async fn manifest_chapters(&self, slug: &str) -> Result<Vec<ManifestChapter>, sqlx::Error> {
@@ -1769,11 +1751,6 @@ mod tests {
         let root = || async { s.manifest_root().await.unwrap().unwrap() };
         let before = root().await;
         assert!(before.contains('.'), "deploys qualify the root: {before}");
-        assert_eq!(
-            s.manifest_books().await.unwrap().0.as_deref(),
-            Some(before.as_str()),
-            "the cheap root and the manifest root agree"
-        );
         assert!(
             s.set_chapter_audio(&bake(slug, "h", "v", "a"))
                 .await
