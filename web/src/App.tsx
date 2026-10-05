@@ -8,7 +8,6 @@ import {
   isLikelyOffline,
   nativeRefreshManifest,
 } from "@/native-sync";
-import { fetchServerRoot, replicaAppliedRoot } from "@/replica/mod.ts";
 import { fetchChapterResponse } from "@/contentLoad";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
@@ -57,20 +56,16 @@ import {
   prefetchBookText,
   prefetchTrees,
 } from "@/prefetch";
-import { loadAllServerSettings, putServerSetting } from "@/syncBackends";
 import { useAudioPlayer } from "@/audio/player";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { useAutoUpdate } from "@/hooks/useAutoUpdate";
 import { useAudioPreloadDriver } from "@/hooks/useAudioPreloadDriver";
+import { useBookPrefs } from "@/hooks/useBookPrefs";
+import { useForegroundRepaint } from "@/hooks/useForegroundRepaint";
+import { useShelfRootRefresh } from "@/hooks/useShelfRootRefresh";
+import { useStatusBarScroll } from "@/hooks/useStatusBarScroll";
 import { NativeReleaseUpdatePrompt, NavShell } from "./_shell";
-import { rootRefreshDue } from "./rootRefresh";
-import {
-  isLiveSocketConnected,
-  onLiveSocketReconnect,
-  pollTickDue,
-} from "./liveSocket";
-import { onChapterReady } from "@/syncStore";
 import {
   findFirstFile,
   findNode,
@@ -180,87 +175,9 @@ export function App(): React.JSX.Element {
   // reflects progress made since the last visit.
   const [recentProgress, setRecentProgress] = useState<ProgressEntry[]>([]);
 
-  // Per-book card state, SERVER-side (cross-device, survives a reload): which
-  // rendition (read/listen) and which language edition the book was last opened
-  // in. Keyed by slug; hydrated from /api/settings (`book.<slug>.{rendition,lang}`)
-  // and written on every switch. The per-rendition reading position is already
-  // server-side (it's keyed by chapter path, and text vs audio chapters differ).
-  const [bookPrefs, setBookPrefs] = useState<
-    Record<string, { rendition?: string; lang?: string }>
-  >({});
-  useEffect(() => {
-    void loadAllServerSettings().then((s) => {
-      const out: Record<string, { rendition?: string; lang?: string }> = {};
-      for (const [k, v] of Object.entries(s)) {
-        const m = /^book\.(.+)\.(rendition|lang)$/.exec(k);
-        if (m?.[1] && m[2]) {
-          (out[m[1]] ??= {})[m[2] as "rendition" | "lang"] = v;
-        }
-      }
-      setBookPrefs(out);
-    });
-  }, []);
+  const { bookPrefs, saveBookPref } = useBookPrefs();
 
-  // Repaint the reading scrollers when the app returns from the background. iOS
-  // WKWebView frees a backgrounded scroller's rasterized content to reclaim
-  // memory, so on resume the read-along / text column shows BLANK or HALF-painted
-  // (the content is still in the DOM, just not rasterized) until something forces
-  // a repaint.
-  //
-  // We force it with a SYNCHRONOUS display reflow: hide → read layout → show →
-  // read layout. It's fully synchronous, so no intermediate frame ever paints
-  // (no visible blink) and it leaves NO lingering style. Deliberately NOT a
-  // `transform: translateZ(0)` nudge — that promotes the scroller to a COMPOSITED
-  // layer, which iOS rasterizes in TILES (only the visible top tile paints → the
-  // rest stays blank, the "half shown" bug); and if the rAF that removes it is
-  // deferred during the foreground transition, the tiled layer sticks. A plain
-  // reflow re-rasterizes in the normal path. Run once now + once next frame (the
-  // first can fire before the webview has fully foregrounded). Covers both readers
-  // + the shelf (every `[data-lv-scroller]`); `pageshow` covers a bfcache restore.
-  useEffect(() => {
-    const reflow = (el: HTMLElement): void => {
-      const top = el.scrollTop;
-      el.style.display = "none";
-      void el.offsetHeight;
-      el.style.display = "";
-      void el.offsetHeight;
-      if (el.scrollTop !== top) el.scrollTop = top;
-    };
-    const repaint = (): void => {
-      if (document.visibilityState !== "visible") return;
-      const els = document.querySelectorAll<HTMLElement>("[data-lv-scroller]");
-      els.forEach(reflow);
-      requestAnimationFrame(() => els.forEach(reflow));
-    };
-    document.addEventListener("visibilitychange", repaint);
-    window.addEventListener("pageshow", repaint);
-    return () => {
-      document.removeEventListener("visibilitychange", repaint);
-      window.removeEventListener("pageshow", repaint);
-    };
-  }, []);
-
-  const saveBookPref = useCallback(
-    (slug: string, patch: { rendition?: string; lang?: string }) => {
-      setBookPrefs((prev) => ({
-        ...prev,
-        [slug]: { ...prev[slug], ...patch },
-      }));
-      if (patch.rendition !== undefined) {
-        putServerSetting(
-          `book.${slug}.rendition`,
-          patch.rendition,
-        );
-      }
-      if (patch.lang !== undefined) {
-        putServerSetting(
-          `book.${slug}.lang`,
-          patch.lang,
-        );
-      }
-    },
-    [],
-  );
+  useForegroundRepaint();
 
   const { t, lang: uiLang } = useI18n();
   const { theme, muiTheme, variant, mode, setVariant, setMode } = useTheme();
@@ -337,77 +254,7 @@ export function App(): React.JSX.Element {
   // only while audio plays or its read-along page is open.
   const { helpOpen, closeHelp } = useKeyboardShortcuts(onPlayingPage);
 
-  // Tap the BOTTOM nav bar's title to jump the reader to the BOTTOM (the bar sits
-  // at the bottom, so down-to-the-end is the spatially natural direction; the
-  // scroll-to-top FAB owns the other direction). The reader's scroll container is
-  // the one tagged `data-lv-scroller="reader"` (MarkdownViewer / AudiobookPlayer);
-  // query it lazily so a chapter remount (which swaps the node) never leaves a
-  // stale ref.
-  const scrollReaderBottom = useCallback(() => {
-    const el = document.querySelector<HTMLElement>(
-      '[data-lv-scroller="reader"]',
-    );
-    el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, []);
-  // Scroll whichever view is showing back to the top. Every scrollable view
-  // tags its container `data-lv-scroller` (the shelf, and the book/audiobook
-  // reader), so scrolling them all is safe — the hidden one is a no-op. Drives
-  // the status-bar tap target below.
-  const scrollAllTop = useCallback(() => {
-    for (
-      const el of document.querySelectorAll<HTMLElement>("[data-lv-scroller]")
-    ) {
-      el.scrollTo({ top: 0, behavior: "smooth" });
-    }
-  }, []);
-  // Wire the status-bar tap target (below) with NATIVE pointer events, not React
-  // onClick: iOS WKWebView (standalone PWA / Tauri shell) does NOT reliably
-  // deliver a synthetic `click` to a non-interactive div even with the
-  // cursor:pointer heuristic — the status-bar tap-to-top silently no-op'd there
-  // (the reported "tapping the top does nothing"). A real pointerdown→pointerup
-  // tap, slop-gated (the same recogniser the figure lightbox uses, which is
-  // verified to fire on iOS), is reliable. Bound to the element via a ref.
-  const statusBarTapRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = statusBarTapRef.current;
-    if (!el) {
-      return undefined;
-    }
-    let startX = 0;
-    let startY = 0;
-    let startedAt = 0;
-    let tap = false;
-    const travel = (e: PointerEvent): number =>
-      Math.hypot(e.clientX - startX, e.clientY - startY);
-    const down = (e: PointerEvent): void => {
-      startX = e.clientX;
-      startY = e.clientY;
-      startedAt = e.timeStamp;
-      tap = true;
-    };
-    const move = (e: PointerEvent): void => {
-      if (tap && travel(e) > 12) tap = false;
-    };
-    const up = (e: PointerEvent): void => {
-      if (tap && e.timeStamp - startedAt <= 700 && travel(e) <= 12) {
-        scrollAllTop();
-      }
-      tap = false;
-    };
-    const cancel = (): void => {
-      tap = false;
-    };
-    el.addEventListener("pointerdown", down);
-    el.addEventListener("pointermove", move);
-    el.addEventListener("pointerup", up);
-    el.addEventListener("pointercancel", cancel);
-    return () => {
-      el.removeEventListener("pointerdown", down);
-      el.removeEventListener("pointermove", move);
-      el.removeEventListener("pointerup", up);
-      el.removeEventListener("pointercancel", cancel);
-    };
-  }, [scrollAllTop]);
+  const { scrollReaderBottom, statusBarTapRef } = useStatusBarScroll();
   // "book" mode (book.toml-driven) renders a clean titled spine; "docs" mode
   // renders the raw filesystem tree. The flag also drives whether the root
   // folder node is shown (see below) and the per-row styling in the sidebar.
@@ -596,70 +443,7 @@ export function App(): React.JSX.Element {
     }
   }, []);
 
-  // Live shelf refresh (fallback path): a newly-deployed book changes the Merkle
-  // deploy root, so check /api/root (tiny, plain no-store fetch) at startup, on
-  // foreground, after a socket reconnect or an audio bake, and on a visible-page
-  // interval: every tick while the socket is down, only as a slow safety net
-  // while it is up. The baseline is the root the replica last
-  // APPLIED, not the server's first answer: a deploy that landed while the app
-  // was closed must still refresh the replica manifest (chapters are served
-  // store-first by hash) and the shelf. Runs on every platform. The PRIMARY live
-  // path is the server's WS `TreeUpdate` broadcast (handleTreeUpdate below).
-  useEffect(() => {
-    // Fallback baseline when the replica has no applied root (disabled/empty).
-    let lastRoot: string | null = null;
-    let lastRefreshAt = 0;
-    let lastCheckAt = 0;
-    let cancelled = false;
-    let checking = false;
-    const check = async (): Promise<void> => {
-      if (checking) return;
-      checking = true;
-      lastCheckAt = Date.now();
-      try {
-        const root = await fetchServerRoot();
-        if (cancelled || !root) return;
-        const applied = (await replicaAppliedRoot()) ?? lastRoot;
-        if (!rootRefreshDue(root, applied, lastRefreshAt, Date.now())) return;
-        await refreshShelf();
-        lastRefreshAt = Date.now();
-        lastRoot = root;
-      } catch {
-        // offline / transient — retry on the next tick or foreground.
-      } finally {
-        checking = false;
-      }
-    };
-    void check();
-    // Hidden pages skip the tick: background audio keeps the native WebView's
-    // timers alive, and a refresh there would refetch `/api/dag` mid-playback.
-    // The visibilitychange handler below catches up on return.
-    const tickMs = 20_000;
-    const id = window.setInterval(() => {
-      if (
-        document.visibilityState === "visible" &&
-        pollTickDue(isLiveSocketConnected(), lastCheckAt, Date.now())
-      ) void check();
-    }, tickMs);
-    const checkIfVisible = (): void => {
-      if (document.visibilityState === "visible") void check();
-    };
-    document.addEventListener("visibilitychange", checkIfVisible);
-    // A bake advances the root's epoch (refresh stays coalesced by
-    // rootRefreshDue); a backfill bakes every few seconds, so space these
-    // probes by one tick. A reconnect may have missed a TreeUpdate.
-    const offChapterReady = onChapterReady(() => {
-      if (Date.now() - lastCheckAt >= tickMs) checkIfVisible();
-    });
-    const offReconnect = onLiveSocketReconnect(checkIfVisible);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-      document.removeEventListener("visibilitychange", checkIfVisible);
-      offChapterReady();
-      offReconnect();
-    };
-  }, [refreshShelf]);
+  useShelfRootRefresh(refreshShelf);
 
   // Refresh the landing's reading-progress whenever the bookshelf is shown
   // (initial load and every return from a book). Skip the state update when the
