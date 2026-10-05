@@ -2,16 +2,15 @@ import { rem } from "@/px";
 import { nativeNavPop, nativeNavPush, nativeNavReady } from "@/native-nav";
 import { remoteUrl } from "@/apiBase";
 import { nativeWidgetPublish } from "@/native-audio";
-import { contentFetch, ensureAutoSync, isLikelyOffline, nativeRefreshManifest } from "@/native-sync";
+import {
+  contentFetch,
+  ensureAutoSync,
+  isLikelyOffline,
+  nativeRefreshManifest,
+} from "@/native-sync";
 import { fetchServerRoot, replicaAppliedRoot } from "@/replica/mod.ts";
 import { fetchChapterResponse } from "@/contentLoad";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
   Alert,
@@ -31,8 +30,8 @@ import {
 } from "@mui/icons-material";
 import {
   AudiobookPlayer,
-  ContentViewer,
   ChapterPager,
+  ContentViewer,
   FloatingBubble,
   Landing,
   PlaybackSheet,
@@ -163,8 +162,13 @@ export function App(): React.JSX.Element {
   // arrive as the default text spine) must not clobber a non-text spine.
   const renditionRef = useRef<string>("text");
 
-  const { loadBook, loadBookRows, loadRecent, savedScroll, save: saveProgress } =
-    useProgress();
+  const {
+    loadBook,
+    loadBookRows,
+    loadRecent,
+    savedScroll,
+    save: saveProgress,
+  } = useProgress();
   // Latest-read chapter per book (newest first), for the landing "continue
   // reading" indicators. Refetched whenever the bookshelf is shown so it
   // reflects progress made since the last visit.
@@ -334,7 +338,9 @@ export function App(): React.JSX.Element {
   // query it lazily so a chapter remount (which swaps the node) never leaves a
   // stale ref.
   const scrollReaderBottom = useCallback(() => {
-    const el = document.querySelector<HTMLElement>('[data-lv-scroller="reader"]');
+    const el = document.querySelector<HTMLElement>(
+      '[data-lv-scroller="reader"]',
+    );
     el?.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, []);
   // Scroll whichever view is showing back to the top. Every scrollable view
@@ -544,7 +550,8 @@ export function App(): React.JSX.Element {
   const refreshShelf = useCallback(async (): Promise<void> => {
     await nativeRefreshManifest();
     try {
-      const list = (await (await contentFetch("/api/books", { fresh: true })).json()) as Book[];
+      const list = (await (await contentFetch("/api/books", { fresh: true }))
+        .json()) as Book[];
       setBooks(list);
     } catch {
       /* offline / transient — the cached shelf stands */
@@ -554,8 +561,12 @@ export function App(): React.JSX.Element {
       // are what the open-book entry paths read. ALL three must be revalidated, or
       // one stays stale across a deploy.
       contentFetch("/api/tree", { fresh: true }).catch(() => undefined),
-      contentFetch("/api/tree?rendition=text", { fresh: true }).catch(() => undefined),
-      contentFetch("/api/tree?rendition=audio", { fresh: true }).catch(() => undefined),
+      contentFetch("/api/tree?rendition=text", { fresh: true }).catch(() =>
+        undefined
+      ),
+      contentFetch("/api/tree?rendition=audio", { fresh: true }).catch(() =>
+        undefined
+      ),
     ]);
     // Re-seed the live `tree` so the shelf's reading-progress meters index against
     // the NEW spine. ONLY on the shelf (`currentPath === null`) — inside a book
@@ -627,7 +638,6 @@ export function App(): React.JSX.Element {
     };
   }, [refreshShelf]);
 
-
   // Refresh the landing's reading-progress whenever the bookshelf is shown
   // (initial load and every return from a book). Skip the state update when the
   // fetched rows are identical to what we already hold: returning from a book
@@ -666,10 +676,15 @@ export function App(): React.JSX.Element {
     // ms), and it's INDEPENDENT of how many books the shelf shows (why filtering
     // didn't help). Here we index only the books that actually have progress, each
     // flattened ONCE, then do O(1) lookups per row.
-    const slugs = new Set(recentProgress.map((r) => r.path.split("/")[0] ?? ""));
+    const slugs = new Set(
+      recentProgress.map((r) => r.path.split("/")[0] ?? ""),
+    );
     const nodeByPath = new Map<string, TreeNode>();
     const leavesBySlug = new Map<string, ReturnType<typeof flattenTracks>>();
-    const audioLeavesBySlug = new Map<string, ReturnType<typeof flattenTracks>>();
+    const audioLeavesBySlug = new Map<
+      string,
+      ReturnType<typeof flattenTracks>
+    >();
     const indexNode = (n: TreeNode): void => {
       nodeByPath.set(n.path, n);
       n.children?.forEach(indexNode);
@@ -710,7 +725,8 @@ export function App(): React.JSX.Element {
       // text spine; audio (.spoken.md) rows index the audio spine — each collapses
       // to raw scroll only if its spine is missing (offline before it loads).
       const scroll = Math.min(1, Math.max(0, r.scroll));
-      const leaves = (kind === "audio" ? audioLeavesBySlug : leavesBySlug).get(slug) ?? [];
+      const leaves =
+        (kind === "audio" ? audioLeavesBySlug : leavesBySlug).get(slug) ?? [];
       const idx = leaves.findIndex((l) => l.path === r.path);
       const fraction = leaves.length > 0 && idx >= 0
         ? (idx + scroll) / leaves.length
@@ -744,7 +760,10 @@ export function App(): React.JSX.Element {
       .slice(0, 4);
     const recentSlugs = new Set(recent.map(({ book }) => book.slug));
     const items = [
-      ...recent.map(({ book, latest }) => ({ book, progress: latest.fraction })),
+      ...recent.map(({ book, latest }) => ({
+        book,
+        progress: latest.fraction,
+      })),
       ...books
         .filter((book) => !recentSlugs.has(book.slug))
         .map((book) => ({ book, progress: 0 })),
@@ -1091,7 +1110,12 @@ export function App(): React.JSX.Element {
         (e) => e.path.startsWith(`${slug}/`) && !e.path.includes(".spoken"),
       )?.path;
       renditionRef.current = r.kind;
-      void openFile(resume ?? `${slug}/README.md`, initialLang, r.kind, replace);
+      void openFile(
+        resume ?? `${slug}/README.md`,
+        initialLang,
+        r.kind,
+        replace,
+      );
       // Warm THIS rendition's spine (sidebar/TOC) in the BACKGROUND — cache-first and
       // strictly non-blocking; it must never gate navigation. prefetchTrees already
       // warms both spines on load; this just refreshes the in-state tree on entry.
@@ -1147,7 +1171,9 @@ export function App(): React.JSX.Element {
     // Tell native the shelf has painted so it swaps the held snapshot for the live
     // webview. Double-rAF = through the first painted frame.
     if (native) {
-      requestAnimationFrame(() => requestAnimationFrame(() => nativeNavReady()));
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => nativeNavReady())
+      );
     }
   }, []);
 
@@ -1479,7 +1505,8 @@ export function App(): React.JSX.Element {
     const np = nowPlaying;
     // Only while viewing the playing book in the rendition it's playing.
     if (
-      !np || activeSlug !== np.bookSlug || activeRendition?.kind !== np.rendition
+      !np || activeSlug !== np.bookSlug ||
+      activeRendition?.kind !== np.rendition
     ) {
       syncedChapterRef.current = null;
       return;
@@ -1578,7 +1605,11 @@ export function App(): React.JSX.Element {
   const goToNowPlaying = useCallback(() => {
     if (!nowPlaying) return;
     if (nowPlaying.rendition === "audio") openPlayingAudio();
-    else openFile(nowPlaying.chapterPath, nowPlaying.lang, nowPlaying.rendition);
+    else {openFile(
+        nowPlaying.chapterPath,
+        nowPlaying.lang,
+        nowPlaying.rendition,
+      );}
   }, [nowPlaying, openPlayingAudio, openFile]);
 
   // Switch the active book between its text and audio renditions, in place.
@@ -1621,9 +1652,11 @@ export function App(): React.JSX.Element {
 
   const bookActions = (
     <>
-      {/* 🗣 Read this page aloud — only on a text edition (it voices the rich
+      {
+        /* 🗣 Read this page aloud — only on a text edition (it voices the rich
           markdown in place). A dual-rendition book keeps this AND the 🎧 switch
-          below, because they're two distinct features. */}
+          below, because they're two distinct features. */
+      }
       {rendition === "text" && currentPath && hasText && (
         <IconButton
           aria-label={readingThisInPlace
@@ -1640,9 +1673,11 @@ export function App(): React.JSX.Element {
           <ReadAloudIcon sx={{ fontSize: rem(22) }} />
         </IconButton>
       )}
-      {/* 🎧 Audiobook edition — text ⇄ curated audiobook (same glyph as the
+      {
+        /* 🎧 Audiobook edition — text ⇄ curated audiobook (same glyph as the
           floating now-playing bubble). Only for books that offer both. Accent
-          while you're on the audiobook page. */}
+          while you're on the audiobook page. */
+      }
       {hasAudio && hasText && currentPath && (
         <IconButton
           aria-label={rendition === "audio"
@@ -1756,7 +1791,9 @@ export function App(): React.JSX.Element {
               // their own part of the safe area. Recreate it on close to retain
               // the original near-opaque reading material while scrolling.
               bgcolor: (t) =>
-                `var(--lv-safe-area-bg, ${alpha(t.palette.background.default, 0.94)})`,
+                `var(--lv-safe-area-bg, ${
+                  alpha(t.palette.background.default, 0.94)
+                })`,
               "html[data-lv-spatial-drawer-open] &": {
                 display: "none",
               },
@@ -1981,12 +2018,16 @@ export function App(): React.JSX.Element {
         suppressed={readingThisInPlace}
         onOpenControls={() => setPlaybackSheetOpen(true)}
       />
-      {/* Ambient background-work indicator (audio generation + offline prefetch)
-          → the Sync sheet. Low-weight; only shows while something is in flight. */}
+      {
+        /* Ambient background-work indicator (audio generation + offline prefetch)
+          → the Sync sheet. Low-weight; only shows while something is in flight. */
+      }
       <SyncIndicator bookSlug={activeSlug} />
-      {/* Desktop keyboard-shortcut cheat-sheet (opened with `?`). The Dialog
+      {
+        /* Desktop keyboard-shortcut cheat-sheet (opened with `?`). The Dialog
           renders nothing while closed; on touch it never opens (the `?` handler
-          is desktop-gated). */}
+          is desktop-gated). */
+      }
       <ShortcutsDialog open={helpOpen} onClose={closeHelp} />
       <PlaybackSheet
         open={playbackSheetOpen}
