@@ -131,12 +131,16 @@
           cp -RL $src/. .
           chmod -R u+w .
           deno install --frozen --allow-scripts
+          # Deno's CommonJS analysis cache is a SQLite database whose WAL/SHM
+          # bytes differ between identical installs. It is regenerated on
+          # demand, so drop it to keep this fixed-output hash reproducible.
+          rm -f "$out"/node_analysis_cache_v*
         '';
         dontInstall = true;
         dontFixup = true;
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-dokYGf4JRbzHVvUUTEJbx2qagmBI+V8Yudf9wZmwdn8=";
+        outputHash = "sha256-vyjGtUo+lX2EoZ3M/s278UPbUqgn4ZyzaKnOtek67ig=";
       };
 
       liveview-web = pkgs.stdenvNoCC.mkDerivation {
