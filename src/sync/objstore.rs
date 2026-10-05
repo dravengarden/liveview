@@ -185,6 +185,77 @@ impl ObjStore {
 mod tests {
     use super::*;
 
+    /// Read-only ranged-GET check against an EXISTING object in a live rustfs:
+    /// `S3_BUCKET` + `S3_RANGE_KEY` (plus the `S3_*` credentials below). Writes
+    /// nothing, so it may target a deployed bucket.
+    #[tokio::test]
+    #[ignore = "needs a live rustfs (LIVEVIEW_TEST_S3=1 + S3_* env + S3_RANGE_KEY)"]
+    async fn ranged_get_matches_the_full_object() {
+        if std::env::var("LIVEVIEW_TEST_S3").ok().as_deref() != Some("1") {
+            return;
+        }
+        let env = |name: &str| std::env::var(name).expect(name);
+        let s = ObjStore::connect(
+            &env("S3_ENDPOINT"),
+            &env("S3_ACCESS_KEY"),
+            &env("S3_SECRET_KEY"),
+            &env("S3_BUCKET"),
+        );
+        let key = env("S3_RANGE_KEY");
+        let full = s.get(&key).await.expect("full get");
+        let total = full.len() as u64;
+        assert!(total > 32, "pick an object larger than 32 bytes");
+        let cases = [
+            (
+                RangeSpec::From {
+                    start: 0,
+                    end: Some(1),
+                },
+                0,
+                1,
+            ),
+            (
+                RangeSpec::From {
+                    start: 10,
+                    end: Some(total + 1000),
+                },
+                10,
+                total - 1,
+            ),
+            (RangeSpec::Suffix(16), total - 16, total - 1),
+        ];
+        for (range, start, end) in cases {
+            match s.get_range(&key, range).await.expect("ranged get") {
+                RangedBlob::Partial {
+                    bytes,
+                    start: got_start,
+                    end: got_end,
+                    total: got_total,
+                } => {
+                    assert_eq!(
+                        (got_start, got_end, got_total),
+                        (start, end, total),
+                        "{range:?}"
+                    );
+                    assert_eq!(bytes, full[start as usize..=end as usize], "{range:?}");
+                }
+                other => panic!("{range:?} returned {other:?}"),
+            }
+        }
+        assert_eq!(
+            s.get_range(
+                &key,
+                RangeSpec::From {
+                    start: total,
+                    end: None
+                }
+            )
+            .await
+            .expect("unsatisfiable range"),
+            RangedBlob::Full(full)
+        );
+    }
+
     /// Gated round-trip against a live rustfs. Skips unless `LIVEVIEW_TEST_S3=1`
     /// with `S3_ENDPOINT` / `S3_ACCESS_KEY` / `S3_SECRET_KEY` set. Run with e.g.:
     ///   LIVEVIEW_TEST_S3=1 S3_ENDPOINT=http://127.0.0.1:9000 \
