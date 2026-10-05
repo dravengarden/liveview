@@ -59,13 +59,27 @@ import {
   prefetchTrees,
 } from "@/prefetch";
 import { loadAllServerSettings, putServerSetting } from "@/syncBackends";
-import { type Track, useAudioPlayer } from "@/audio/player";
+import { useAudioPlayer } from "@/audio/player";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { useAutoUpdate } from "@/hooks/useAutoUpdate";
 import { useAudioPreloadDriver } from "@/hooks/useAudioPreloadDriver";
 import { NativeReleaseUpdatePrompt, NavShell } from "./_shell";
 import { rootRefreshDue } from "./rootRefresh";
+import {
+  findFirstFile,
+  findNode,
+  flattenTracks,
+  hasFilePath,
+  resolveFirstChapter,
+} from "./readerTree";
+import {
+  getHashState,
+  readResume,
+  type ResumeLocation,
+  writeHash,
+  writeResume,
+} from "./readerLocation";
 import type {
   Book,
   BookProgress,
@@ -83,199 +97,10 @@ const NATIVE_RELEASE_MANIFEST_URL = (
   import.meta.env["VITE_NATIVE_RELEASE_MANIFEST_URL"] as string | undefined
 )?.trim();
 
-function hasFilePath(nodes: TreeNode[], target: string): boolean {
-  for (const node of nodes) {
-    if (!node.is_dir && node.path === target) return true;
-    if (node.is_dir && hasFilePath(node.children, target)) return true;
-  }
-  return false;
-}
-
-function findNode(nodes: TreeNode[], target: string): TreeNode | null {
-  for (const node of nodes) {
-    if (node.path === target) return node;
-    if (node.is_dir) {
-      const found = findNode(node.children, target);
-      if (found !== null) return found;
-    }
-  }
-  return null;
-}
-
-function findFirstFile(nodes: TreeNode[]): string | null {
-  for (const node of nodes) {
-    if (!node.is_dir) {
-      return node.path;
-    }
-  }
-  for (const node of nodes) {
-    if (node.is_dir) {
-      const found = findFirstFile(node.children);
-      if (found !== null) {
-        return found;
-      }
-    }
-  }
-  return null;
-}
-
-/** Flatten a rendition spine into ordered chapter tracks — the playback queue
- *  for next/prev + auto-advance. Leaf files in depth-first (reading) order. */
-function flattenTracks(nodes: TreeNode[], uiLang: string): Track[] {
-  const out: Track[] = [];
-  const walk = (ns: TreeNode[]): void => {
-    for (const n of ns) {
-      if (n.is_dir) walk(n.children);
-      else {out.push({
-          path: n.path,
-          label: (uiLang && n.titles?.[uiLang]) || n.name,
-        });}
-    }
-  };
-  walk(nodes);
-  return out;
-}
-
-interface HashState {
-  path: string | null;
-  lang: string | null;
-  rendition: string | null;
-}
-
-// Hash scheme: `#<encoded-path>` for a file, optionally `&lang=<code>` to pin a
-// non-default language edition and `&rendition=<kind>` to pin a non-default
-// reading mode. `encodeURIComponent` escapes `&`/`=`, so the path segment can
-// never collide with the `&lang=`/`&rendition=` separators. Both are omitted
-// when they equal the book's default, to keep URLs clean.
-function getHashState(): HashState {
-  const hash = window.location.hash;
-  if (!hash.startsWith("#")) {
-    return { path: null, lang: null, rendition: null };
-  }
-  const body = hash.slice(1);
-  if (!body) {
-    return { path: null, lang: null, rendition: null };
-  }
-  const parts = body.split("&");
-  const path = decodeURIComponent(parts[0] ?? "") || null;
-  let lang: string | null = null;
-  let rendition: string | null = null;
-  for (const seg of parts.slice(1)) {
-    if (seg.startsWith("lang=")) {
-      lang = decodeURIComponent(seg.slice(5)) || null;
-    } else if (seg.startsWith("rendition=")) {
-      rendition = decodeURIComponent(seg.slice(10)) || null;
-    }
-  }
-  return { path, lang, rendition };
-}
-
-function buildHash(
-  path: string | null,
-  lang: string | null,
-  rendition: string | null,
-): string {
-  if (!path) {
-    return "";
-  }
-  let h = `#${encodeURIComponent(path)}`;
-  if (lang) {
-    h += `&lang=${encodeURIComponent(lang)}`;
-  }
-  if (rendition) {
-    h += `&rendition=${encodeURIComponent(rendition)}`;
-  }
-  return h;
-}
-
-function writeHash(
-  path: string | null,
-  lang: string | null,
-  rendition: string | null,
-  replace: boolean,
-): void {
-  const h = buildHash(path, lang, rendition);
-  const url = h || window.location.pathname;
-  if (replace) {
-    window.history.replaceState(null, "", url);
-  } else {
-    window.history.pushState(null, "", url);
-  }
-}
-
-// Device-local "resume where I left off". The native shell reopens the BASE url
-// (no hash) on a cold relaunch, so a browser-style hash deep link isn't there to
-// restore from — we stash the last reading location here and re-enter it on a
-// hash-less load. (A normal in-browser reload keeps the hash and never needs
-// this.) Cleared on return to the shelf, so relaunching from the shelf stays on
-// the shelf. Scroll position within the chapter is restored separately from the
-// server progress store.
-const RESUME_KEY = "lv-resume";
-interface ResumeLocation {
-  path: string;
-  lang: string | null;
-  rendition: string | null;
-}
-function readResume(): ResumeLocation | null {
-  try {
-    const raw = localStorage.getItem(RESUME_KEY);
-    const v = raw ? (JSON.parse(raw) as Partial<ResumeLocation>) : null;
-    return v && typeof v.path === "string" && v.path
-      ? { path: v.path, lang: v.lang ?? null, rendition: v.rendition ?? null }
-      : null;
-  } catch {
-    // Unavailable (private mode) or corrupt JSON — resume is best-effort.
-    return null;
-  }
-}
-function writeResume(loc: ResumeLocation | null): void {
-  try {
-    if (loc) localStorage.setItem(RESUME_KEY, JSON.stringify(loc));
-    else localStorage.removeItem(RESUME_KEY);
-  } catch {
-    // Best-effort; ignore storage failures.
-  }
-}
-
 /** A page missing in the selected edition; we render `shown` content instead. */
 interface UntranslatedNotice {
   requested: string;
   shown: string;
-}
-
-/** First non-dir leaf under a tree node (depth-first), or null. */
-function firstLeafPath(node: TreeNode): string | null {
-  if (!node.is_dir) return node.path;
-  for (const child of node.children ?? []) {
-    const p = firstLeafPath(child);
-    if (p) return p;
-  }
-  return null;
-}
-
-/**
- * The real first spine chapter of `slug` for a rendition, from the cached tree.
- * Used to self-heal a dead entry path: a brand-new book with no reading progress
- * falls back to `<slug>/README.md` (which authored books — `00-introduction.md`
- * spine, no README — don't have), and a cross-book resume can carry the previous
- * book's path; either 404s. `/api/tree` is cache-first (prefetchTrees warms it),
- * so this stays offline-safe — and a 404 only happens online anyway.
- */
-async function resolveFirstChapter(
-  slug: string,
-  rendition: string,
-): Promise<string | null> {
-  try {
-    const res = await contentFetch(
-      `/api/tree?rendition=${encodeURIComponent(rendition)}`,
-    );
-    if (!res.ok) return null;
-    const forest = (await res.json()) as TreeNode[];
-    const book = forest.find((n) => n.path === slug);
-    return book ? firstLeafPath(book) : null;
-  } catch {
-    return null;
-  }
 }
 
 export function App(): React.JSX.Element {
