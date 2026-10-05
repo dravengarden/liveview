@@ -756,7 +756,7 @@ export function App(): React.JSX.Element {
 
   // Live shelf refresh (fallback path): a newly-deployed book changes the Merkle
   // deploy root, so poll /api/root (tiny, plain no-store fetch) at startup, on an
-  // interval, and on foreground. The baseline is the root the replica last
+  // interval while visible, and on foreground. The baseline is the root the replica last
   // APPLIED, not the server's first answer: a deploy that landed while the app
   // was closed must still refresh the replica manifest (chapters are served
   // store-first by hash) and the shelf. Runs on every platform. The PRIMARY live
@@ -785,7 +785,12 @@ export function App(): React.JSX.Element {
       }
     };
     void check();
-    const id = window.setInterval(() => void check(), 20_000);
+    // Hidden pages skip the tick: background audio keeps the native WebView's
+    // timers alive, and a refresh there would refetch `/api/dag` mid-playback.
+    // The visibilitychange handler below catches up on return.
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") void check();
+    }, 20_000);
     const onVis = (): void => {
       if (document.visibilityState === "visible") void check();
     };
