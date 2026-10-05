@@ -1136,7 +1136,7 @@ impl PgStore {
             "SELECT c.book_slug, c.rendition, c.lang, c.rel_path,
                     c.content_hash, c.file_type,
                     octet_length(c.html)::bigint AS html_bytes,
-                    c.audio_hash, aa.size AS audio_size, aa.mime AS audio_mime,
+                    c.audio_hash, aa.size AS audio_size,
                     c.marks_hash, am.size AS marks_size,
                     c.asset_hash, ab.size AS asset_size
              FROM chapters c

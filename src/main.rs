@@ -1185,17 +1185,10 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
         }
         if let Some(h) = &c.audio_hash {
             // Canonical CAF makes the manifest hash, stored object, served bytes,
-            // native cache key, and integrity identity the SAME value. The legacy
-            // estimate remains only for a migration interrupted mid-run.
-            let canonical = c.audio_mime.as_deref() == Some(AUDIO_VARIANT.mime);
-            let bytes = if canonical {
-                c.audio_size.unwrap_or(0)
-            } else {
-                c.audio_size.unwrap_or(0) * 33 / 100
-            };
+            // native cache key, and integrity identity the SAME value.
             resources.push(serde_json::json!({
                 "path": format!("{doc}#audio"), "hash": h, "kind": "audio",
-                "bytes": bytes,
+                "bytes": c.audio_size.unwrap_or(0),
                 "url": format!("/api/audio?{q}"),
             }));
         }
@@ -1320,11 +1313,7 @@ async fn api_sizes(State(state): State<SharedState>, headers: HeaderMap) -> Resp
             total.text_count += 1;
         }
         if c.audio_hash.is_some() {
-            let b = if c.audio_mime.as_deref() == Some(AUDIO_VARIANT.mime) {
-                c.audio_size.unwrap_or(0)
-            } else {
-                c.audio_size.unwrap_or(0) * 33 / 100
-            };
+            let b = c.audio_size.unwrap_or(0);
             e.audio_bytes += b;
             e.audio_count += 1;
             total.audio_bytes += b;
@@ -2574,8 +2563,8 @@ async fn api_units(
 /// speech, so a low-bitrate speech codec is near-transparent at a fraction of the
 /// source size. CAF is retained because the native offline cache uses that
 /// container; MPEG Layer III is used because FFmpeg's CAF muxer does not support
-/// Opus or AAC. The legacy cache tag remains only for resumable migration and
-/// optional book-end derivatives.
+/// Opus or AAC. The tag names the `audio-optimize` migration's derived keys and
+/// the optional book-end derivatives.
 pub struct AudioVariant {
     pub tag: &'static str,
     pub mime: &'static str,
@@ -2693,47 +2682,31 @@ async fn transcode_audio_with_tail(caf: &[u8], cue_mp3: &[u8]) -> Result<Vec<u8>
     bytes
 }
 
-/// Cache-first compressed audio for already-assembled `data`, keyed by `cache_key`
-/// (`<hash>` or `<hash>.tail`). Returns (bytes, mime). On transcode failure it
-/// gracefully serves the original MP3 so playback never hard-fails.
-async fn compressed_audio(
-    state: &SharedState,
-    cache_key: &str,
-    data: Vec<u8>,
-) -> (Vec<u8>, &'static str) {
-    let key = format!("{cache_key}.{}", AUDIO_VARIANT.tag);
-    if let Ok(b) = state.obj.get(&key).await {
-        return (b, AUDIO_VARIANT.mime);
-    }
-    match transcode_audio(data.clone()).await {
-        Ok(b) => {
-            let _ = state
-                .obj
-                .put_if_absent(&key, b.clone(), AUDIO_VARIANT.mime)
-                .await;
-            (b, AUDIO_VARIANT.mime)
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "audio transcode failed; serving source mp3");
-            (data, "audio/mpeg")
-        }
-    }
-}
-
-/// Serve audio `data` with an explicit content-type, `Content-Length`,
-/// `Accept-Ranges` and HTTP Range support (seeking). Audio is always the compressed
-/// variant now (Opus-in-CAF); the MP3 fallback path only triggers on a transcode
-/// failure. AVPlayer infers the format from this
-/// header when the URL has no extension.
-fn serve_audio_range(
-    data: Vec<u8>,
-    headers: &axum::http::HeaderMap,
-    mime: &'static str,
-) -> axum::response::Response {
-    ranged_bytes_response(data, headers, mime, AUDIO_CACHE_CONTROL)
-}
-
 const AUDIO_CACHE_CONTROL: &str = "public, max-age=3600";
+
+/// Whether stored audio predates the canonical representation. Every writer
+/// stores `AUDIO_VARIANT`; only an asset row recording another MIME is legacy,
+/// so a missing row or store hiccup still serves the bytes.
+async fn is_legacy_audio(state: &AppState, hash: &str) -> bool {
+    matches!(
+        state.store.get_asset(hash).await,
+        Ok(Some(asset)) if asset.mime != AUDIO_VARIANT.mime
+    )
+}
+
+/// Legacy MP3 pointers are migrated offline by `liveview audio-optimize`; the
+/// server no longer transcodes them per request.
+fn legacy_audio_response(hash: &str) -> Response {
+    tracing::warn!(
+        audio_hash = hash,
+        "legacy audio pointer; run `liveview audio-optimize`"
+    );
+    (
+        StatusCode::CONFLICT,
+        "legacy audio: run `liveview audio-optimize`",
+    )
+        .into_response()
+}
 
 /// Serve canonical stored audio straight from the blob store, reading only the
 /// requested range so a seek does not load the whole chapter.
@@ -2744,36 +2717,21 @@ async fn serve_stored_audio(state: &AppState, key: &str, headers: &HeaderMap) ->
 }
 
 /// Chapter narration audio from rustfs, with `Content-Length` + HTTP Range
-/// support (seeking). Canonical audio is read per range; derived variants
-/// (book-end tail, legacy transcode) load the whole blob and slice.
+/// support (seeking). Stored audio is read per range; the derived book-end tail
+/// loads the whole chapter once to build its cached variant.
 async fn api_audio(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
     headers: axum::http::HeaderMap,
 ) -> impl IntoResponse {
     // Text rendition → read-aloud for an ordinary document (units-driven synth).
-    // Additive: the audiobook (`audio` rendition) path below is byte-for-byte
-    // unchanged.
     if query.rendition.as_deref() == Some("text") {
         return match ensure_text_audio(&state, &query).await {
             Ok((audio_hash, _)) => {
-                let mime = state
-                    .store
-                    .get_asset(&audio_hash)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|a| a.mime);
-                if mime.as_deref() == Some(AUDIO_VARIANT.mime) {
-                    serve_stored_audio(&state, &audio_hash, &headers).await
+                if is_legacy_audio(&state, &audio_hash).await {
+                    legacy_audio_response(&audio_hash)
                 } else {
-                    match state.obj.get(&audio_hash).await {
-                        Ok(data) => {
-                            let (b, mime) = compressed_audio(&state, &audio_hash, data).await;
-                            serve_audio_range(b, &headers, mime)
-                        }
-                        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response(),
-                    }
+                    serve_stored_audio(&state, &audio_hash, &headers).await
                 }
             }
             Err(e) => {
@@ -2804,73 +2762,53 @@ async fn api_audio(
     // cleanly (same as `assemble()` joins per-sentence clips). Marks are
     // untouched: the tail sits past the last sentence's end_ms, a silent gap in
     // the read-along. Only the last chapter pays the (tiny) append.
+    if is_legacy_audio(&state, &hash).await {
+        return legacy_audio_response(&hash);
+    }
     let is_bookend = query.tail.as_deref() == Some("bookend");
-    let asset_mime = state
-        .store
-        .get_asset(&hash)
+    if is_bookend && let Some(phrase) = book_end_phrase(&state.book_end_phrases, &row.lang) {
+        // Include the configured phrase in the derived cache identity so a
+        // configuration change can never replay an older deployment's cue.
+        let phrase_hash = blake3::hash(phrase.as_bytes()).to_hex();
+        let tail_key = format!("{hash}.tail.{}.{phrase_hash}", AUDIO_VARIANT.tag);
+        if let Ok(tail) = stored_blob_response(
+            &state,
+            &tail_key,
+            &headers,
+            AUDIO_VARIANT.mime,
+            AUDIO_CACHE_CONTROL,
+        )
         .await
-        .ok()
-        .flatten()
-        .map(|a| a.mime);
-    if asset_mime.as_deref() == Some(AUDIO_VARIANT.mime) {
-        if is_bookend && let Some(phrase) = book_end_phrase(&state.book_end_phrases, &row.lang) {
-            // Include the configured phrase in the derived cache identity so a
-            // configuration change can never replay an older deployment's cue.
-            let phrase_hash = blake3::hash(phrase.as_bytes()).to_hex();
-            let tail_key = format!("{hash}.tail.{}.{phrase_hash}", AUDIO_VARIANT.tag);
-            if let Ok(tail) = stored_blob_response(
-                &state,
-                &tail_key,
-                &headers,
-                AUDIO_VARIANT.mime,
-                AUDIO_CACHE_CONTROL,
-            )
-            .await
-            {
-                return tail;
-            }
-            if let Some(cue) = book_end_cue(&state, &row).await {
-                let Ok(data) = state.obj.get(&hash).await else {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response();
-                };
-                match transcode_audio_with_tail(&data, &cue).await {
-                    Ok(tail) => {
-                        if let Err(error) = state
-                            .obj
-                            .put_if_absent(&tail_key, tail.clone(), AUDIO_VARIANT.mime)
-                            .await
-                        {
-                            tracing::warn!(%error, "store canonical book-end tail failed");
-                        }
-                        return serve_audio_range(tail, &headers, AUDIO_VARIANT.mime);
+        {
+            return tail;
+        }
+        if let Some(cue) = book_end_cue(&state, &row).await {
+            let Ok(data) = state.obj.get(&hash).await else {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response();
+            };
+            match transcode_audio_with_tail(&data, &cue).await {
+                Ok(tail) => {
+                    if let Err(error) = state
+                        .obj
+                        .put_if_absent(&tail_key, tail.clone(), AUDIO_VARIANT.mime)
+                        .await
+                    {
+                        tracing::warn!(%error, "store canonical book-end tail failed");
                     }
-                    Err(error) => {
-                        tracing::warn!(audio_hash = hash, %error, "build canonical book-end tail failed");
-                    }
+                    return ranged_bytes_response(
+                        tail,
+                        &headers,
+                        AUDIO_VARIANT.mime,
+                        AUDIO_CACHE_CONTROL,
+                    );
+                }
+                Err(error) => {
+                    tracing::warn!(audio_hash = hash, %error, "build canonical book-end tail failed");
                 }
             }
         }
-        return serve_stored_audio(&state, &hash, &headers).await;
     }
-
-    // Backward-compatible legacy path while an interrupted migration still has
-    // MP3 chapter pointers.
-    let Ok(mut data) = state.obj.get(&hash).await else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response();
-    };
-    if is_bookend && let Some(cue) = book_end_cue(&state, &row).await {
-        data.extend_from_slice(&cue);
-    }
-    // ALWAYS the compressed variant — MP3 is fully sunset client-side (one format;
-    // the source MP3 is only the internal transcode input). Cached by the source
-    // hash (+ ".tail" when the bookend cue is baked in, which differs from the blob).
-    let ck = if is_bookend {
-        format!("{hash}.tail")
-    } else {
-        hash.clone()
-    };
-    let (bytes, mime) = compressed_audio(&state, &ck, data).await;
-    serve_audio_range(bytes, &headers, mime)
+    serve_stored_audio(&state, &hash, &headers).await
 }
 
 /// Per-sentence time marks for the chapter audio (drives read-along highlight).

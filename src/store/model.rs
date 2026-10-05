@@ -191,7 +191,6 @@ pub struct DagChapter {
     pub html_bytes: Option<i64>,
     pub audio_hash: Option<String>,
     pub audio_size: Option<i64>,
-    pub audio_mime: Option<String>,
     pub marks_hash: Option<String>,
     pub marks_size: Option<i64>,
     pub asset_hash: Option<String>,
