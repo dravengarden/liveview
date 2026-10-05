@@ -128,30 +128,6 @@ async fn transcode_audio_with_tail(caf: &[u8], cue_mp3: &[u8]) -> Result<Vec<u8>
 
 const AUDIO_CACHE_CONTROL: &str = "public, max-age=3600";
 
-/// Whether stored audio predates the canonical representation. Every writer
-/// stores `AUDIO_VARIANT`; only an asset row recording another MIME is legacy,
-/// so a missing row or store hiccup still serves the bytes.
-async fn is_legacy_audio(state: &AppState, hash: &str) -> bool {
-    matches!(
-        state.store.get_asset(hash).await,
-        Ok(Some(asset)) if asset.mime != AUDIO_VARIANT.mime
-    )
-}
-
-/// Legacy MP3 pointers are migrated offline by `liveview audio-optimize`; the
-/// server no longer transcodes them per request.
-fn legacy_audio_response(hash: &str) -> Response {
-    tracing::warn!(
-        audio_hash = hash,
-        "legacy audio pointer; run `liveview audio-optimize`"
-    );
-    (
-        StatusCode::CONFLICT,
-        "legacy audio: run `liveview audio-optimize`",
-    )
-        .into_response()
-}
-
 /// Serve canonical stored audio straight from the blob store, reading only the
 /// requested range so a seek does not load the whole chapter.
 async fn serve_stored_audio(state: &AppState, key: &str, headers: &HeaderMap) -> Response {
@@ -171,13 +147,7 @@ pub(crate) async fn api_audio(
     // Text rendition → read-aloud for an ordinary document (units-driven synth).
     if query.rendition.as_deref() == Some("text") {
         return match ensure_text_audio(&state, &query).await {
-            Ok((audio_hash, _)) => {
-                if is_legacy_audio(&state, &audio_hash).await {
-                    legacy_audio_response(&audio_hash)
-                } else {
-                    serve_stored_audio(&state, &audio_hash, &headers).await
-                }
-            }
+            Ok((audio_hash, _)) => serve_stored_audio(&state, &audio_hash, &headers).await,
             Err(e) => {
                 tracing::warn!(error = %e, "text read-aloud synth failed");
                 (StatusCode::INTERNAL_SERVER_ERROR, "audio synth").into_response()
@@ -206,9 +176,6 @@ pub(crate) async fn api_audio(
     // cleanly (same as `assemble()` joins per-sentence clips). Marks are
     // untouched: the tail sits past the last sentence's end_ms, a silent gap in
     // the read-along. Only the last chapter pays the (tiny) append.
-    if is_legacy_audio(&state, &hash).await {
-        return legacy_audio_response(&hash);
-    }
     let is_bookend = query.tail.as_deref() == Some("bookend");
     if is_bookend && let Some(phrase) = book_end_phrase(&state.book_end_phrases, &row.lang) {
         // Include the configured phrase in the derived cache identity so a

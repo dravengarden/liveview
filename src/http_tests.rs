@@ -140,8 +140,17 @@ async fn blob_range_requests_read_only_the_range() {
     assert_eq!(body_bytes(partial).await, payload[250..].to_vec());
 
     let unsatisfiable = get(&app, "/api/blob/h", &[(header::RANGE, "bytes=300-")]).await;
-    assert_eq!(unsatisfiable.status(), StatusCode::OK);
-    assert_eq!(body_bytes(unsatisfiable).await, payload);
+    assert_eq!(unsatisfiable.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(
+        unsatisfiable.headers()[header::CONTENT_RANGE],
+        "bytes */256"
+    );
+    assert!(body_bytes(unsatisfiable).await.is_empty());
+
+    // A malformed or multi-range header is ignored per RFC 9110; RangeOnlyBlobs
+    // refuses full reads, so it surfaces as the not-found full-body path.
+    let multi = get(&app, "/api/blob/h", &[(header::RANGE, "bytes=0-1,4-5")]).await;
+    assert_eq!(multi.status(), StatusCode::NOT_FOUND);
 
     let full = get(&app, "/api/blob/h", &[]).await;
     assert_eq!(full.status(), StatusCode::NOT_FOUND);

@@ -70,8 +70,9 @@ pub enum RangedBlob {
         end: u64,
         total: u64,
     },
-    /// The range was unsatisfiable; the whole object is returned instead.
-    Full(Vec<u8>),
+    /// The range selects no byte of an object that is `total` bytes long
+    /// (answered with `416 Range Not Satisfiable`).
+    Unsatisfiable { total: u64 },
 }
 
 impl RangedBlob {
@@ -90,7 +91,7 @@ impl RangedBlob {
                     total,
                 }
             }
-            None => Self::Full(bytes),
+            None => Self::Unsatisfiable { total },
         }
     }
 }
@@ -167,8 +168,8 @@ mod tests {
             }
         );
         assert_eq!(
-            RangedBlob::from_full(bytes.clone(), RangeSpec::parse("bytes=20-").unwrap()),
-            RangedBlob::Full(bytes)
+            RangedBlob::from_full(bytes, RangeSpec::parse("bytes=20-").unwrap()),
+            RangedBlob::Unsatisfiable { total: 10 }
         );
     }
 

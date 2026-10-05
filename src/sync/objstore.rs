@@ -86,6 +86,21 @@ impl ObjStore {
         }
     }
 
+    /// An existing object's size in bytes, without reading its body.
+    pub async fn size(&self, key: &str) -> Result<u64> {
+        let out = self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| format!("head_object {key}: {e}"))?;
+        out.content_length()
+            .and_then(|len| u64::try_from(len).ok())
+            .ok_or_else(|| format!("head_object {key}: missing Content-Length"))
+    }
+
     /// Upload `bytes` under `key` only if not already present (content-addressed
     /// → identical bytes need no re-upload).
     pub async fn put_if_absent(&self, key: &str, bytes: Vec<u8>, mime: &str) -> Result<()> {
@@ -124,7 +139,7 @@ impl ObjStore {
     }
 
     /// Fetch only `range` of an object with an S3 ranged `GetObject`. An
-    /// unsatisfiable range falls back to the whole object; a server that
+    /// unsatisfiable range reports the object size (from `HeadObject`); a server that
     /// ignores `Range` has its full body sliced locally.
     pub async fn get_range(&self, key: &str, range: RangeSpec) -> Result<RangedBlob> {
         let out = match self
@@ -138,7 +153,10 @@ impl ObjStore {
         {
             Ok(out) => out,
             Err(SdkError::ServiceError(se)) if se.err().meta().code() == Some("InvalidRange") => {
-                return self.get(key).await.map(RangedBlob::Full);
+                return self
+                    .size(key)
+                    .await
+                    .map(|total| RangedBlob::Unsatisfiable { total });
             }
             Err(e) => return Err(format!("get_object {key} ({range:?}): {e}")),
         };
@@ -252,7 +270,7 @@ mod tests {
             )
             .await
             .expect("unsatisfiable range"),
-            RangedBlob::Full(full)
+            RangedBlob::Unsatisfiable { total }
         );
     }
 

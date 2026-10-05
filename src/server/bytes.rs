@@ -33,7 +33,7 @@ pub async fn stored_blob_response(
                 end,
                 total,
             } => partial_response(bytes.into(), start, end, total, mime, cache_control),
-            RangedBlob::Full(bytes) => full_response(bytes.into(), mime, cache_control),
+            RangedBlob::Unsatisfiable { total } => unsatisfiable_response(total),
         },
         None => full_response(state.obj.get(key).await?.into(), mime, cache_control),
     };
@@ -41,7 +41,8 @@ pub async fn stored_blob_response(
 }
 
 /// Serve `data` with `Content-Length`, `Accept-Ranges` and single-range
-/// support. A satisfiable `Range` yields a zero-copy 206 slice of the buffer.
+/// support. A satisfiable `Range` yields a zero-copy 206 slice of the buffer;
+/// an unsatisfiable one yields 416, and a malformed one is ignored (200).
 pub fn ranged_bytes_response(
     data: Vec<u8>,
     headers: &HeaderMap,
@@ -50,7 +51,10 @@ pub fn ranged_bytes_response(
 ) -> Response {
     let data = Bytes::from(data);
     let total = data.len() as u64;
-    match request_range(headers).and_then(|range| range.resolve(total)) {
+    let Some(range) = request_range(headers) else {
+        return full_response(data, mime, cache_control);
+    };
+    match range.resolve(total) {
         Some((start, end)) => partial_response(
             data.slice(start as usize..=end as usize),
             start,
@@ -59,8 +63,20 @@ pub fn ranged_bytes_response(
             mime,
             cache_control,
         ),
-        None => full_response(data, mime, cache_control),
+        None => unsatisfiable_response(total),
     }
+}
+
+/// `416 Range Not Satisfiable` with the object size, so a client can retry
+/// with a valid range (RFC 9110 §15.5.17).
+fn unsatisfiable_response(total: u64) -> Response {
+    Response::builder()
+        .status(StatusCode::RANGE_NOT_SATISFIABLE)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CONTENT_RANGE, format!("bytes */{total}"))
+        .body(Body::empty())
+        .unwrap()
+        .into_response()
 }
 
 fn bytes_response_base(mime: &str, cache_control: &str) -> axum::http::response::Builder {
@@ -97,4 +113,33 @@ fn full_response(data: Bytes, mime: &str, cache_control: &str) -> Response {
         .body(Body::from(data))
         .unwrap()
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_range(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::RANGE, value.parse().unwrap());
+        headers
+    }
+
+    #[test]
+    fn in_memory_ranges_follow_rfc_9110() {
+        let data = || vec![1u8; 10];
+        let ok = ranged_bytes_response(data(), &HeaderMap::new(), "audio/x-caf", "c");
+        assert_eq!(ok.status(), StatusCode::OK);
+
+        let partial = ranged_bytes_response(data(), &with_range("bytes=8-99"), "audio/x-caf", "c");
+        assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(partial.headers()[header::CONTENT_RANGE], "bytes 8-9/10");
+
+        let past = ranged_bytes_response(data(), &with_range("bytes=10-"), "audio/x-caf", "c");
+        assert_eq!(past.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(past.headers()[header::CONTENT_RANGE], "bytes */10");
+
+        let malformed = ranged_bytes_response(data(), &with_range("bytes=x-"), "audio/x-caf", "c");
+        assert_eq!(malformed.status(), StatusCode::OK);
+    }
 }
