@@ -9,6 +9,7 @@ use crate::store::model::{
     AssetRecord, AudioBake, AudioTaskRollup, BookRecord, DagArtwork, DagChapter, EditionRecord,
     ManifestChapter, RenditionRecord,
 };
+use crate::store::range::{RangeSpec, RangedBlob};
 use tower::ServiceExt;
 
 fn state_over(

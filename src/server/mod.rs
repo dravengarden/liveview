@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod audio_worker;
+pub mod bytes;
 pub mod catalog;
 pub mod narration;
 pub mod renderer;

@@ -24,6 +24,7 @@ use axum::{
 use clap::Parser;
 use cli::{Cli, Command};
 use config::{Config, RenditionKind, Resolved, auto_discover, implicit_resolved};
+use server::bytes::{ranged_bytes_response, stored_blob_response};
 use server::catalog::Catalog;
 use server::state::{ApmSink, AppState, CachedJson, SharedState};
 use shared::{FileContent, FileType, TreeNode, WsMessage};
@@ -32,7 +33,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use store::model::{AudioBake, ChapterRecord, ProgressEntry};
 use store::pg::PgStore;
-use store::range::{RangeSpec, RangedBlob};
 use sync::objstore::ObjStore;
 use tokio::sync::{RwLock, broadcast};
 use tracing_subscriber::EnvFilter;
@@ -842,97 +842,6 @@ async fn api_blob(
     stored_blob_response(&state, &hash, &headers, &mime, cache_control)
         .await
         .unwrap_or_else(|_| (StatusCode::NOT_FOUND, "blob not found").into_response())
-}
-
-/// The single byte range a request asks for; `None` serves the full body.
-fn request_range(headers: &HeaderMap) -> Option<RangeSpec> {
-    headers
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(RangeSpec::parse)
-}
-
-/// Serve a stored blob, reading only the requested range from the blob store
-/// so audio seeks do not load the whole object per request.
-async fn stored_blob_response(
-    state: &AppState,
-    key: &str,
-    headers: &HeaderMap,
-    mime: &str,
-    cache_control: &str,
-) -> Result<Response, String> {
-    let response = match request_range(headers) {
-        Some(range) => match state.obj.get_range(key, range).await? {
-            RangedBlob::Partial {
-                bytes,
-                start,
-                end,
-                total,
-            } => partial_response(bytes.into(), start, end, total, mime, cache_control),
-            RangedBlob::Full(bytes) => full_response(bytes.into(), mime, cache_control),
-        },
-        None => full_response(state.obj.get(key).await?.into(), mime, cache_control),
-    };
-    Ok(response)
-}
-
-/// Serve `data` with `Content-Length`, `Accept-Ranges` and single-range
-/// support. A satisfiable `Range` yields a zero-copy 206 slice of the buffer.
-fn ranged_bytes_response(
-    data: Vec<u8>,
-    headers: &HeaderMap,
-    mime: &str,
-    cache_control: &str,
-) -> Response {
-    let data = axum::body::Bytes::from(data);
-    let total = data.len() as u64;
-    match request_range(headers).and_then(|range| range.resolve(total)) {
-        Some((start, end)) => partial_response(
-            data.slice(start as usize..=end as usize),
-            start,
-            end,
-            total,
-            mime,
-            cache_control,
-        ),
-        None => full_response(data, mime, cache_control),
-    }
-}
-
-fn bytes_response_base(mime: &str, cache_control: &str) -> axum::http::response::Builder {
-    Response::builder()
-        .header(header::CONTENT_TYPE, mime)
-        .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CACHE_CONTROL, cache_control)
-}
-
-fn partial_response(
-    data: axum::body::Bytes,
-    start: u64,
-    end: u64,
-    total: u64,
-    mime: &str,
-    cache_control: &str,
-) -> Response {
-    bytes_response_base(mime, cache_control)
-        .status(StatusCode::PARTIAL_CONTENT)
-        .header(
-            header::CONTENT_RANGE,
-            format!("bytes {start}-{end}/{total}"),
-        )
-        .header(header::CONTENT_LENGTH, data.len())
-        .body(Body::from(data))
-        .unwrap()
-        .into_response()
-}
-
-fn full_response(data: axum::body::Bytes, mime: &str, cache_control: &str) -> Response {
-    bytes_response_base(mime, cache_control)
-        .status(StatusCode::OK)
-        .header(header::CONTENT_LENGTH, data.len())
-        .body(Body::from(data))
-        .unwrap()
-        .into_response()
 }
 
 fn store_unavailable(operation: &'static str, error: String) -> Response {
@@ -2134,8 +2043,20 @@ async fn api_artwork(
     {
         return resp;
     }
-    // No (readable) cover: synthesize the slug's gradient as a PNG.
-    let png = gradient_png(&q.book);
+    // No (readable) cover: synthesize the slug's gradient as a PNG off the
+    // async workers (the deflate pass is CPU-bound).
+    let slug = q.book.clone();
+    let png = match tokio::task::spawn_blocking(move || artwork::gradient_png(&slug)).await {
+        Ok(Ok(png)) => png,
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "gradient cover synthesis failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "artwork").into_response();
+        }
+        Err(error) => {
+            tracing::warn!(%error, "gradient cover task failed");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "artwork").into_response();
+        }
+    };
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "image/png")
@@ -2143,134 +2064,6 @@ async fn api_artwork(
         .body(Body::from(png))
         .unwrap()
         .into_response()
-}
-
-// ── Deterministic gradient cover synthesis (dependency-free PNG) ───────────
-// A cover-less book shows a slug-keyed CSS gradient on the bookshelf
-// (web/.../Landing.tsx `coverGradient`). The Media Session lock-screen tile
-// can't use CSS — it needs a real raster URL — so we render the SAME gradient
-// to a PNG here. Hand-rolled (uncompressed zlib + manual chunks) to avoid
-// pulling an image/PNG crate into the Nix-vendored build for one gradient.
-
-/// Slug → hue 0–359. Mirrors Landing.tsx `slugHue` exactly (int32 wrapping over
-/// UTF-16 code units) so the PNG matches the shelf's colour for the same book.
-fn slug_hue(slug: &str) -> f64 {
-    let mut h: i32 = 0;
-    for c in slug.encode_utf16() {
-        h = h.wrapping_mul(31).wrapping_add(i32::from(c));
-    }
-    f64::from(h.unsigned_abs() % 360)
-}
-
-fn hsl_to_rgb(h: f64, s: f64, l: f64) -> (u8, u8, u8) {
-    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
-    let hp = h / 60.0;
-    let x = c * (1.0 - ((hp % 2.0) - 1.0).abs());
-    let (r, g, b) = if hp < 1.0 {
-        (c, x, 0.0)
-    } else if hp < 2.0 {
-        (x, c, 0.0)
-    } else if hp < 3.0 {
-        (0.0, c, x)
-    } else if hp < 4.0 {
-        (0.0, x, c)
-    } else if hp < 5.0 {
-        (x, 0.0, c)
-    } else {
-        (c, 0.0, x)
-    };
-    let m = l - c / 2.0;
-    let to = |v: f64| (((v + m) * 255.0).round()).clamp(0.0, 255.0) as u8;
-    (to(r), to(g), to(b))
-}
-
-fn lerp(a: u8, b: u8, t: f64) -> u8 {
-    (f64::from(a) + (f64::from(b) - f64::from(a)) * t).round() as u8
-}
-
-/// 512×512 PNG of the slug's two-stop 135° gradient (top-left → bottom-right),
-/// matching Landing.tsx `coverGradient`.
-fn gradient_png(slug: &str) -> Vec<u8> {
-    const SIZE: usize = 512;
-    let hue = slug_hue(slug);
-    let (r0, g0, b0) = hsl_to_rgb(hue, 0.52, 0.52);
-    let (r1, g1, b1) = hsl_to_rgb((hue + 38.0) % 360.0, 0.48, 0.42);
-    let denom = (2 * (SIZE - 1)) as f64;
-    let mut raw = Vec::with_capacity(SIZE * (1 + SIZE * 3));
-    for y in 0..SIZE {
-        raw.push(0); // per-scanline filter byte: None
-        for x in 0..SIZE {
-            let t = (x + y) as f64 / denom;
-            raw.push(lerp(r0, r1, t));
-            raw.push(lerp(g0, g1, t));
-            raw.push(lerp(b0, b1, t));
-        }
-    }
-    encode_png_rgb(SIZE as u32, SIZE as u32, &raw)
-}
-
-fn encode_png_rgb(width: u32, height: u32, raw: &[u8]) -> Vec<u8> {
-    let mut out = vec![137, 80, 78, 71, 13, 10, 26, 10]; // PNG signature
-    let mut ihdr = Vec::with_capacity(13);
-    ihdr.extend_from_slice(&width.to_be_bytes());
-    ihdr.extend_from_slice(&height.to_be_bytes());
-    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]); // 8-bit, truecolour RGB, no interlace
-    png_chunk(&mut out, b"IHDR", &ihdr);
-    png_chunk(&mut out, b"IDAT", &zlib_stored(raw));
-    png_chunk(&mut out, b"IEND", &[]);
-    out
-}
-
-fn png_chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
-    out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-    out.extend_from_slice(tag);
-    out.extend_from_slice(data);
-    out.extend_from_slice(&png_crc(tag, data).to_be_bytes());
-}
-
-/// zlib stream wrapping deflate *stored* (uncompressed) blocks — no compressor
-/// needed. The gradient PNG is ~770 KB this way, but it's generated once per
-/// slug and served `immutable`, so size is a non-issue.
-fn zlib_stored(data: &[u8]) -> Vec<u8> {
-    let mut out = vec![0x78, 0x01]; // zlib header: deflate, no preset dict
-    let mut i = 0;
-    while i < data.len() {
-        let n = (data.len() - i).min(0xFFFF);
-        let last = i + n >= data.len();
-        out.push(u8::from(last)); // BFINAL bit, BTYPE=00 (stored)
-        let len = n as u16;
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&(!len).to_le_bytes());
-        out.extend_from_slice(&data[i..i + n]);
-        i += n;
-    }
-    out.extend_from_slice(&adler32(data).to_be_bytes());
-    out
-}
-
-fn adler32(data: &[u8]) -> u32 {
-    const MOD: u32 = 65521;
-    let (mut a, mut b) = (1u32, 0u32);
-    for &byte in data {
-        a = (a + u32::from(byte)) % MOD;
-        b = (b + a) % MOD;
-    }
-    (b << 16) | a
-}
-
-fn png_crc(tag: &[u8; 4], data: &[u8]) -> u32 {
-    let mut crc: u32 = 0xFFFF_FFFF;
-    for &byte in tag.iter().chain(data) {
-        crc ^= u32::from(byte);
-        for _ in 0..8 {
-            crc = if crc & 1 != 0 {
-                (crc >> 1) ^ 0xEDB8_8320
-            } else {
-                crc >> 1
-            };
-        }
-    }
-    crc ^ 0xFFFF_FFFF
 }
 
 #[derive(serde::Deserialize)]
