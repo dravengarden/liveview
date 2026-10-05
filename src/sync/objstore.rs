@@ -13,6 +13,8 @@ use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::primitives::ByteStream;
 
+use crate::store::range::{RangeSpec, RangedBlob, parse_content_range};
+
 pub type Result<T> = std::result::Result<T, String>;
 
 #[derive(Clone)]
@@ -119,6 +121,51 @@ impl ObjStore {
             .map_err(|e| format!("read body {key}: {e}"))?;
         let bytes = data.into_bytes().to_vec();
         Ok(bytes)
+    }
+
+    /// Fetch only `range` of an object with an S3 ranged `GetObject`. An
+    /// unsatisfiable range falls back to the whole object; a server that
+    /// ignores `Range` has its full body sliced locally.
+    pub async fn get_range(&self, key: &str, range: RangeSpec) -> Result<RangedBlob> {
+        let out = match self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .range(range.header_value())
+            .send()
+            .await
+        {
+            Ok(out) => out,
+            Err(SdkError::ServiceError(se)) if se.err().meta().code() == Some("InvalidRange") => {
+                return self.get(key).await.map(RangedBlob::Full);
+            }
+            Err(e) => return Err(format!("get_object {key} ({range:?}): {e}")),
+        };
+        let content_range = out.content_range().and_then(parse_content_range);
+        let bytes = out
+            .body
+            .collect()
+            .await
+            .map_err(|e| format!("read body {key}: {e}"))?
+            .into_bytes()
+            .to_vec();
+        Ok(match content_range {
+            Some((start, end, total)) if end >= start && end - start + 1 == bytes.len() as u64 => {
+                RangedBlob::Partial {
+                    bytes,
+                    start,
+                    end,
+                    total,
+                }
+            }
+            Some(_) => {
+                return Err(format!(
+                    "get_object {key}: Content-Range does not match body"
+                ));
+            }
+            None => RangedBlob::from_full(bytes, range),
+        })
     }
 
     /// Remove an object (idempotent — deleting a missing key is not an error).

@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use store::model::{AudioBake, ChapterRecord, ProgressEntry};
 use store::pg::PgStore;
+use store::range::{RangeSpec, RangedBlob};
 use sync::objstore::ObjStore;
 use tokio::sync::{RwLock, broadcast};
 use tracing_subscriber::EnvFilter;
@@ -838,10 +839,41 @@ async fn api_blob(
         Ok(None) => ("application/octet-stream".to_string(), "no-cache"),
         Err(error) => return store_unavailable("get_asset", error),
     };
-    let Ok(data) = state.obj.get(&hash).await else {
-        return (StatusCode::NOT_FOUND, "blob not found").into_response();
+    stored_blob_response(&state, &hash, &headers, &mime, cache_control)
+        .await
+        .unwrap_or_else(|_| (StatusCode::NOT_FOUND, "blob not found").into_response())
+}
+
+/// The single byte range a request asks for; `None` serves the full body.
+fn request_range(headers: &HeaderMap) -> Option<RangeSpec> {
+    headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(RangeSpec::parse)
+}
+
+/// Serve a stored blob, reading only the requested range from the blob store
+/// so audio seeks do not load the whole object per request.
+async fn stored_blob_response(
+    state: &AppState,
+    key: &str,
+    headers: &HeaderMap,
+    mime: &str,
+    cache_control: &str,
+) -> Result<Response, String> {
+    let response = match request_range(headers) {
+        Some(range) => match state.obj.get_range(key, range).await? {
+            RangedBlob::Partial {
+                bytes,
+                start,
+                end,
+                total,
+            } => partial_response(bytes.into(), start, end, total, mime, cache_control),
+            RangedBlob::Full(bytes) => full_response(bytes.into(), mime, cache_control),
+        },
+        None => full_response(state.obj.get(key).await?.into(), mime, cache_control),
     };
-    ranged_bytes_response(data, &headers, &mime, cache_control)
+    Ok(response)
 }
 
 /// Serve `data` with `Content-Length`, `Accept-Ranges` and single-range
@@ -854,32 +886,53 @@ fn ranged_bytes_response(
 ) -> Response {
     let data = axum::body::Bytes::from(data);
     let total = data.len() as u64;
-    let range = headers
-        .get(header::RANGE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| parse_range(v, total));
-    let base = Response::builder()
+    match request_range(headers).and_then(|range| range.resolve(total)) {
+        Some((start, end)) => partial_response(
+            data.slice(start as usize..=end as usize),
+            start,
+            end,
+            total,
+            mime,
+            cache_control,
+        ),
+        None => full_response(data, mime, cache_control),
+    }
+}
+
+fn bytes_response_base(mime: &str, cache_control: &str) -> axum::http::response::Builder {
+    Response::builder()
         .header(header::CONTENT_TYPE, mime)
         .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CACHE_CONTROL, cache_control);
-    match range {
-        Some((start, end)) => base
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(
-                header::CONTENT_RANGE,
-                format!("bytes {start}-{end}/{total}"),
-            )
-            .header(header::CONTENT_LENGTH, end - start + 1)
-            .body(Body::from(data.slice(start as usize..=end as usize)))
-            .unwrap()
-            .into_response(),
-        None => base
-            .status(StatusCode::OK)
-            .header(header::CONTENT_LENGTH, total)
-            .body(Body::from(data))
-            .unwrap()
-            .into_response(),
-    }
+        .header(header::CACHE_CONTROL, cache_control)
+}
+
+fn partial_response(
+    data: axum::body::Bytes,
+    start: u64,
+    end: u64,
+    total: u64,
+    mime: &str,
+    cache_control: &str,
+) -> Response {
+    bytes_response_base(mime, cache_control)
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{total}"),
+        )
+        .header(header::CONTENT_LENGTH, data.len())
+        .body(Body::from(data))
+        .unwrap()
+        .into_response()
+}
+
+fn full_response(data: axum::body::Bytes, mime: &str, cache_control: &str) -> Response {
+    bytes_response_base(mime, cache_control)
+        .status(StatusCode::OK)
+        .header(header::CONTENT_LENGTH, data.len())
+        .body(Body::from(data))
+        .unwrap()
+        .into_response()
 }
 
 fn store_unavailable(operation: &'static str, error: String) -> Response {
@@ -1027,11 +1080,10 @@ fn manifest_not_modified_response(root: &str) -> Response {
 }
 
 async fn api_root(State(state): State<SharedState>, headers: HeaderMap) -> Response {
-    let (root, _) = match state.store.manifest_books().await {
-        Ok(value) => value,
-        Err(error) => return store_unavailable("manifest_books", error),
+    let root = match state.store.manifest_root().await {
+        Ok(value) => value.unwrap_or_default(),
+        Err(error) => return store_unavailable("manifest_root", error),
     };
-    let root = root.unwrap_or_default();
     if manifest_not_modified(&headers, &root) {
         return manifest_not_modified_response(&root);
     }
@@ -1046,11 +1098,10 @@ async fn api_root(State(state): State<SharedState>, headers: HeaderMap) -> Respo
 }
 
 async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Response {
-    let (root, _) = match state.store.manifest_books().await {
-        Ok(value) => value,
-        Err(error) => return store_unavailable("manifest_books", error),
+    let root = match state.store.manifest_root().await {
+        Ok(value) => value.unwrap_or_default(),
+        Err(error) => return store_unavailable("manifest_root", error),
     };
-    let root = root.unwrap_or_default();
     if manifest_not_modified(&headers, &root) {
         return manifest_not_modified_response(&root);
     }
@@ -1234,11 +1285,10 @@ fn encode_query_value(value: &str) -> String {
 /// re-fetches only when the root changes; the per-device CACHED progress is the
 /// client's own index — this endpoint is the denominator, not the numerator.
 async fn api_sizes(State(state): State<SharedState>, headers: HeaderMap) -> Response {
-    let (root, _) = match state.store.manifest_books().await {
-        Ok(value) => value,
-        Err(error) => return store_unavailable("manifest_books", error),
+    let root = match state.store.manifest_root().await {
+        Ok(value) => value.unwrap_or_default(),
+        Err(error) => return store_unavailable("manifest_root", error),
     };
-    let root = root.unwrap_or_default();
     if manifest_not_modified(&headers, &root) {
         return manifest_not_modified_response(&root);
     }
@@ -2520,26 +2570,6 @@ async fn api_units(
     }
 }
 
-/// Parse an HTTP `Range: bytes=…` value into an inclusive `(start, end)` within
-/// `total`. Supports `start-`, `start-end`, and `-suffix`; `None` if malformed
-/// or unsatisfiable (caller then serves the full body).
-fn parse_range(value: &str, total: u64) -> Option<(u64, u64)> {
-    let (s, e) = value.strip_prefix("bytes=")?.split_once('-')?;
-    let (start, end) = if s.is_empty() {
-        let suffix: u64 = e.parse().ok()?;
-        (total.saturating_sub(suffix), total.checked_sub(1)?)
-    } else {
-        let start: u64 = s.parse().ok()?;
-        let end = if e.is_empty() {
-            total.checked_sub(1)?
-        } else {
-            e.parse().ok()?
-        };
-        (start, end)
-    };
-    (start <= end && end < total).then_some((start, end))
-}
-
 /// The canonical audio representation. Audiobook narration is mono
 /// speech, so a low-bitrate speech codec is near-transparent at a fraction of the
 /// source size. CAF is retained because the native offline cache uses that
@@ -2700,12 +2730,22 @@ fn serve_audio_range(
     headers: &axum::http::HeaderMap,
     mime: &'static str,
 ) -> axum::response::Response {
-    ranged_bytes_response(data, headers, mime, "public, max-age=3600")
+    ranged_bytes_response(data, headers, mime, AUDIO_CACHE_CONTROL)
 }
 
-/// Chapter narration audio — the pre-generated MP3 from rustfs, with
-/// `Content-Length` + HTTP Range support (seeking). A few MB → fetch the whole
-/// blob and slice for Range.
+const AUDIO_CACHE_CONTROL: &str = "public, max-age=3600";
+
+/// Serve canonical stored audio straight from the blob store, reading only the
+/// requested range so a seek does not load the whole chapter.
+async fn serve_stored_audio(state: &AppState, key: &str, headers: &HeaderMap) -> Response {
+    stored_blob_response(state, key, headers, AUDIO_VARIANT.mime, AUDIO_CACHE_CONTROL)
+        .await
+        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response())
+}
+
+/// Chapter narration audio from rustfs, with `Content-Length` + HTTP Range
+/// support (seeking). Canonical audio is read per range; derived variants
+/// (book-end tail, legacy transcode) load the whole blob and slice.
 async fn api_audio(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
@@ -2716,24 +2756,26 @@ async fn api_audio(
     // unchanged.
     if query.rendition.as_deref() == Some("text") {
         return match ensure_text_audio(&state, &query).await {
-            Ok((audio_hash, _)) => match state.obj.get(&audio_hash).await {
-                Ok(data) => {
-                    let mime = state
-                        .store
-                        .get_asset(&audio_hash)
-                        .await
-                        .ok()
-                        .flatten()
-                        .map(|a| a.mime);
-                    if mime.as_deref() == Some(AUDIO_VARIANT.mime) {
-                        serve_audio_range(data, &headers, AUDIO_VARIANT.mime)
-                    } else {
-                        let (b, mime) = compressed_audio(&state, &audio_hash, data).await;
-                        serve_audio_range(b, &headers, mime)
+            Ok((audio_hash, _)) => {
+                let mime = state
+                    .store
+                    .get_asset(&audio_hash)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|a| a.mime);
+                if mime.as_deref() == Some(AUDIO_VARIANT.mime) {
+                    serve_stored_audio(&state, &audio_hash, &headers).await
+                } else {
+                    match state.obj.get(&audio_hash).await {
+                        Ok(data) => {
+                            let (b, mime) = compressed_audio(&state, &audio_hash, data).await;
+                            serve_audio_range(b, &headers, mime)
+                        }
+                        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response(),
                     }
                 }
-                Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response(),
-            },
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "text read-aloud synth failed");
                 (StatusCode::INTERNAL_SERVER_ERROR, "audio synth").into_response()
@@ -2754,9 +2796,6 @@ async fn api_audio(
             tracing::warn!(error = %e, "on-demand audio synth failed");
             return (StatusCode::INTERNAL_SERVER_ERROR, "audio synth").into_response();
         }
-    };
-    let Ok(data) = state.obj.get(&hash).await else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response();
     };
     // A book's last chapter may carry an operator-configured spoken tail (the
     // client sends `tail=bookend` only for that chapter). Bake it into the served bytes so it
@@ -2779,10 +2818,21 @@ async fn api_audio(
             // configuration change can never replay an older deployment's cue.
             let phrase_hash = blake3::hash(phrase.as_bytes()).to_hex();
             let tail_key = format!("{hash}.tail.{}.{phrase_hash}", AUDIO_VARIANT.tag);
-            if let Ok(tail) = state.obj.get(&tail_key).await {
-                return serve_audio_range(tail, &headers, AUDIO_VARIANT.mime);
+            if let Ok(tail) = stored_blob_response(
+                &state,
+                &tail_key,
+                &headers,
+                AUDIO_VARIANT.mime,
+                AUDIO_CACHE_CONTROL,
+            )
+            .await
+            {
+                return tail;
             }
             if let Some(cue) = book_end_cue(&state, &row).await {
+                let Ok(data) = state.obj.get(&hash).await else {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response();
+                };
                 match transcode_audio_with_tail(&data, &cue).await {
                     Ok(tail) => {
                         if let Err(error) = state
@@ -2800,12 +2850,14 @@ async fn api_audio(
                 }
             }
         }
-        return serve_audio_range(data, &headers, AUDIO_VARIANT.mime);
+        return serve_stored_audio(&state, &hash, &headers).await;
     }
 
     // Backward-compatible legacy path while an interrupted migration still has
     // MP3 chapter pointers.
-    let mut data = data;
+    let Ok(mut data) = state.obj.get(&hash).await else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "read audio").into_response();
+    };
     if is_bookend && let Some(cue) = book_end_cue(&state, &row).await {
         data.extend_from_slice(&cue);
     }

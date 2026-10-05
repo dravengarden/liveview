@@ -100,6 +100,52 @@ async fn blob_keeps_length_and_ranges_when_client_accepts_gzip() {
     assert_eq!(body_bytes(partial).await, vec![7u8; 10]);
 }
 
+/// A blob store that refuses whole-object reads, proving a ranged request is
+/// served by a ranged read rather than loading and slicing the full blob.
+struct RangeOnlyBlobs(Vec<u8>);
+
+#[async_trait::async_trait]
+impl BlobStore for RangeOnlyBlobs {
+    async fn get(&self, key: &str) -> Result<Vec<u8>, String> {
+        Err(format!("unexpected full read of {key}"))
+    }
+    async fn put_if_absent(&self, _: &str, _: Vec<u8>, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn get_range(&self, _: &str, range: RangeSpec) -> Result<RangedBlob, String> {
+        Ok(RangedBlob::from_full(self.0.clone(), range))
+    }
+}
+
+#[tokio::test]
+async fn blob_range_requests_read_only_the_range() {
+    let fs = Arc::new(FsStore::new(Vec::new()));
+    let payload: Vec<u8> = (0..=255).collect();
+    let state = state_over(
+        fs,
+        Arc::new(RangeOnlyBlobs(payload.clone())),
+        Catalog::default(),
+        None,
+    );
+    let app = app(state);
+
+    let partial = get(&app, "/api/blob/h", &[(header::RANGE, "bytes=250-999")]).await;
+    assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        partial.headers()[header::CONTENT_RANGE],
+        "bytes 250-255/256"
+    );
+    assert_eq!(partial.headers()[header::CONTENT_LENGTH], "6");
+    assert_eq!(body_bytes(partial).await, payload[250..].to_vec());
+
+    let unsatisfiable = get(&app, "/api/blob/h", &[(header::RANGE, "bytes=300-")]).await;
+    assert_eq!(unsatisfiable.status(), StatusCode::OK);
+    assert_eq!(body_bytes(unsatisfiable).await, payload);
+
+    let full = get(&app, "/api/blob/h", &[]).await;
+    assert_eq!(full.status(), StatusCode::NOT_FOUND);
+}
+
 #[test]
 fn only_textual_api_bodies_are_compressible() {
     let with_type = |content_type: &str| {
@@ -254,6 +300,9 @@ impl ContentStore for FailingStore {
         down()
     }
     async fn audio_task_rollup(&self) -> Result<Vec<AudioTaskRollup>, String> {
+        down()
+    }
+    async fn manifest_root(&self) -> Result<Option<String>, String> {
         down()
     }
     async fn manifest_books(&self) -> Result<(Option<String>, Vec<(String, String)>), String> {

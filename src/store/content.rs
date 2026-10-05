@@ -18,6 +18,7 @@ use crate::store::model::{
     AssetRecord, AudioBake, AudioTaskRollup, BookRecord, ChapterRecord, DagArtwork, DagChapter,
     EditionRecord, ManifestChapter, ProgressEntry, RenditionRecord,
 };
+use crate::store::range::{RangeSpec, RangedBlob};
 
 /// Catalog structure + chapter/asset access the reader needs. The deployed
 /// backend serves rows pre-rendered at `sync` time; the filesystem backend
@@ -122,6 +123,10 @@ pub trait ContentStore: Send + Sync {
     /// sheet). The filesystem `preview` backend has no queue → empty.
     async fn audio_task_rollup(&self) -> Result<Vec<AudioTaskRollup>, String>;
 
+    /// The epoch-qualified deploy root alone (no per-book children) — the cheap
+    /// change token. `None` before the first sync / on the preview backend.
+    async fn manifest_root(&self) -> Result<Option<String>, String>;
+
     /// Manifest top level: deploy root + per-book subtree hashes (the SW diffs
     /// this). Empty before the first sync / on the preview backend.
     async fn manifest_books(&self) -> Result<(Option<String>, Vec<(String, String)>), String>;
@@ -145,6 +150,13 @@ pub trait ContentStore: Send + Sync {
 pub trait BlobStore: Send + Sync {
     async fn get(&self, key: &str) -> Result<Vec<u8>, String>;
     async fn put_if_absent(&self, key: &str, bytes: Vec<u8>, mime: &str) -> Result<(), String>;
+
+    /// Read one byte range of `key`. Backends with native range reads override
+    /// this so a seek does not load the whole object; the default slices a
+    /// full read.
+    async fn get_range(&self, key: &str, range: RangeSpec) -> Result<RangedBlob, String> {
+        Ok(RangedBlob::from_full(self.get(key).await?, range))
+    }
 }
 
 // ── Adapter: postgres `PgStore` → ContentStore ───────────────────────────────
@@ -253,6 +265,11 @@ impl ContentStore for PgStore {
             .await
             .map_err(|e| e.to_string())
     }
+    async fn manifest_root(&self) -> Result<Option<String>, String> {
+        PgStore::manifest_root(self)
+            .await
+            .map_err(|e| e.to_string())
+    }
     async fn manifest_books(&self) -> Result<(Option<String>, Vec<(String, String)>), String> {
         PgStore::manifest_books(self)
             .await
@@ -280,5 +297,8 @@ impl BlobStore for ObjStore {
         ObjStore::put_if_absent(self, key, bytes, mime)
             .await
             .map_err(|e| e.to_string())
+    }
+    async fn get_range(&self, key: &str, range: RangeSpec) -> Result<RangedBlob, String> {
+        ObjStore::get_range(self, key, range).await
     }
 }

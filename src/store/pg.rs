@@ -1066,19 +1066,34 @@ impl PgStore {
 
     // ── Merkle manifest (exposed DAG for the SW) ──────────────────────────────
 
+    /// The bare Merkle deploy root and its content epoch, or `None` before the
+    /// first sync. One single-row read.
+    async fn deploy_root_row(&self) -> Result<Option<(String, i64)>, sqlx::Error> {
+        let row: Option<(Option<String>, i64)> =
+            sqlx::query_as("SELECT root_hash, content_epoch FROM deploy_root WHERE id = 1")
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.and_then(|(root, epoch)| root.map(|root| (root, epoch))))
+    }
+
+    /// The epoch-qualified manifest root alone — the cheap "did anything
+    /// change?" token behind `/api/root` and the manifest ETags, without
+    /// loading the root Merkle node's per-book children.
+    pub async fn manifest_root(&self) -> Result<Option<String>, sqlx::Error> {
+        Ok(self
+            .deploy_root_row()
+            .await?
+            .map(|(root, epoch)| manifest_root(&root, epoch)))
+    }
+
     /// The deploy root + its per-book child subtree hashes — the top-level
     /// manifest the SW diffs (root unchanged ⇒ nothing to sync; a changed book
     /// subtree ⇒ fetch that book's sub-manifest). Empty before the first sync.
     pub async fn manifest_books(
         &self,
     ) -> Result<(Option<String>, Vec<(String, String)>), sqlx::Error> {
-        let row: Option<(Option<String>, i64)> =
-            sqlx::query_as("SELECT root_hash, content_epoch FROM deploy_root WHERE id = 1")
-                .fetch_optional(&self.pool)
-                .await?;
-        let (root, epoch) = match row {
-            Some((Some(root), epoch)) => (root, epoch),
-            _ => return Ok((None, Vec::new())),
+        let Some((root, epoch)) = self.deploy_root_row().await? else {
+            return Ok((None, Vec::new()));
         };
         let children = match self.get_merkle_node(&root).await? {
             Some(n) if n.kind == "tree" => {
@@ -1114,11 +1129,13 @@ impl PgStore {
 
     /// Every chapter in the corpus (all books) with content/audio/marks/asset
     /// hashes + sizes — the rows behind `/api/dag`, the client's full manifest.
+    /// `html_bytes` is the UTF-8 byte size (`octet_length`), not the character
+    /// count, so CJK text is not under-reported in offline byte accounting.
     pub async fn dag_chapters(&self) -> Result<Vec<DagChapter>, sqlx::Error> {
         sqlx::query_as::<_, DagChapter>(
             "SELECT c.book_slug, c.rendition, c.lang, c.rel_path,
                     c.content_hash, c.file_type,
-                    length(c.html)::bigint AS html_bytes,
+                    octet_length(c.html)::bigint AS html_bytes,
                     c.audio_hash, aa.size AS audio_size, aa.mime AS audio_mime,
                     c.marks_hash, am.size AS marks_size,
                     c.asset_hash, ab.size AS asset_size
@@ -1457,6 +1474,26 @@ mod tests {
         assert!(s.get_asset("habc").await.unwrap().is_none());
     }
 
+    #[tokio::test]
+    async fn dag_chapters_report_utf8_html_bytes() {
+        let Some(s) = store().await else { return };
+        let html = "<p>中文</p>";
+        let mut c = chapter("t-dag-bytes", "00.md", "h-dag-bytes");
+        c.html = Some(html.into());
+        s.upsert_chapter(&c).await.unwrap();
+        let row = s
+            .dag_chapters()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|row| row.book_slug == "t-dag-bytes")
+            .expect("dag row");
+        assert_eq!(row.html_bytes, Some(html.len() as i64));
+        s.delete_chapter("t-dag-bytes", "audio", "en", "00.md")
+            .await
+            .unwrap();
+    }
+
     fn chapter(slug: &str, rel: &str, content: &str) -> ChapterRecord {
         ChapterRecord {
             book_slug: slug.into(),
@@ -1729,9 +1766,14 @@ mod tests {
         s.upsert_chapter(&chapter(slug, "00.spoken.md", "h"))
             .await
             .unwrap();
-        let root = || async { s.manifest_books().await.unwrap().0.unwrap() };
+        let root = || async { s.manifest_root().await.unwrap().unwrap() };
         let before = root().await;
         assert!(before.contains('.'), "deploys qualify the root: {before}");
+        assert_eq!(
+            s.manifest_books().await.unwrap().0.as_deref(),
+            Some(before.as_str()),
+            "the cheap root and the manifest root agree"
+        );
         assert!(
             s.set_chapter_audio(&bake(slug, "h", "v", "a"))
                 .await
