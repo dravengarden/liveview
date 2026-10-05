@@ -130,7 +130,7 @@ function mermaidConfig(isDark: boolean): Record<string, unknown> {
       useMaxWidth: true,
       // The wrap width (px) for auto-wrapped labels. 220 fills the ~358px mobile
       // column without pushing multi-node (LR) rows past it. Verified headless:
-      // a plain CJK label wraps to fill this, fewer/​fuller lines than hand-broken.
+      // a plain CJK label wraps to fill this, fewer/fuller lines than hand-broken.
       wrappingWidth: 220,
       nodeSpacing: 55,
       rankSpacing: 60,

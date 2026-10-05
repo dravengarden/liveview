@@ -69,6 +69,7 @@ check: shell website-check
   CARGO_TARGET_DIR={{native-target-dir}} cargo clippy --locked --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings
   nixfmt --check flake.nix
   cd web && deno task typecheck
+  cd web && deno lint
 
 # Audit each independently locked Rust workspace that can be resolved on Linux.
 dependencies:

@@ -36,7 +36,7 @@ test("native waiting is observable, cancellable, and bounded", async () => {
   assert.match(swift, /private static let maxRecoveryAttempts = 2/);
   assert.match(swift, /guard recoveryAttempts < Self\.maxRecoveryAttempts/);
   const play = swift.match(
-    /private func play\(\) \{[\s\S]*?\n  \}\n\n  private func pause/,
+    /private func play\(\) \{[\s\S]*?\n {2}\}\n\n {2}private func pause/,
   )?.[0];
   assert.ok(play, "native play function exists");
   assert.doesNotMatch(play, /emit\("\{type:'playing'\}"\)/);

@@ -27,7 +27,7 @@ export function SpatialPlaybackPreview({
   onStartCurrent,
 }: {
   readonly onStartCurrent: () => void;
-}): React.JSX.Element {
+}): React.JSX.Element | null {
   const { t } = useI18n();
   const { nowPlaying, playing, buffering, loading, togglePlay } =
     useAudioPlayer();
@@ -43,7 +43,7 @@ export function SpatialPlaybackPreview({
   // transport. Keep this control only as its idle-state launcher there, then
   // yield as soon as that transport mounts. Phones always need the compact
   // stationary control because only a 48-64 px rail remains visible.
-  if (wideRail && loaded) return <></>;
+  if (wideRail && loaded) return null;
 
   return (
     <Box

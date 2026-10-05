@@ -487,7 +487,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     spatialPlayback,
-    /const wideRail = useMediaQuery\(theme\.breakpoints\.up\("sm"\)\)[\s\S]{0,500}if \(wideRail && loaded\) return <><\/>/,
+    /const wideRail = useMediaQuery\(theme\.breakpoints\.up\("sm"\)\)[\s\S]{0,500}if \(wideRail && loaded\) return null;/,
     "the compact playback control must yield to the complete transport on tablet widths",
   );
   assertAbsent(
