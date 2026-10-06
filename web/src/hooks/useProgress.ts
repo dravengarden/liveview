@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef } from "react";
-import { mirroredStore, type MirroredStore } from "@/_sync/mod.ts";
+import { type MirroredStore, mirroredStore } from "@/_sync/mod.ts";
 import { progressBackend } from "@/syncBackends";
 import { contentFetch } from "@/native-sync";
 import type { ProgressEntry } from "@/types";
+import { seedScrollCache } from "@/scrollCache";
 
 const SAVE_DEBOUNCE_MS = 800;
 
@@ -38,6 +39,8 @@ export interface UseProgress {
  */
 export function useProgress(): UseProgress {
   const ratios = useRef<Map<string, number>>(new Map());
+  // Wall-clock ms of this device's last write per path (see seedScrollCache).
+  const writtenAt = useRef<Map<string, number>>(new Map());
   // One mirrored store per open doc path, created on first write.
   const stores = useRef<Map<string, MirroredStore<number>>>(new Map());
 
@@ -68,7 +71,7 @@ export function useProgress(): UseProgress {
         );
         if (!res.ok) return [];
         const rows = (await res.json()) as ProgressEntry[];
-        for (const r of rows) ratios.current.set(r.path, r.scroll);
+        seedScrollCache(ratios.current, writtenAt.current, rows);
         return rows; // backend orders newest-first
       } catch {
         return [];
@@ -92,31 +95,44 @@ export function useProgress(): UseProgress {
       const res = await contentFetch("/api/progress/recent", { fresh: true });
       if (!res.ok) return [];
       const rows = (await res.json()) as ProgressEntry[];
-      for (const r of rows) ratios.current.set(r.path, r.scroll);
+      seedScrollCache(ratios.current, writtenAt.current, rows);
       return rows;
     } catch {
       return [];
     }
   }, []);
 
-  const savedScroll = useCallback((path: string): number | undefined => ratios.current.get(path), []);
+  const savedScroll = useCallback(
+    (path: string): number | undefined => ratios.current.get(path),
+    [],
+  );
 
   const save = useCallback((path: string, scroll: number) => {
     // Instant local cache (drives savedScroll's synchronous read) + the doc's
     // mirrored store (debounced server push).
     ratios.current.set(path, scroll);
+    writtenAt.current.set(path, Date.now());
     storeFor(path).set(scroll);
   }, [storeFor]);
 
   // Flush every open doc's debounced progress write before the page is hidden,
-  // so a backgrounded/closing tab doesn't drop the last scroll position.
+  // so a backgrounded/closing tab doesn't drop the last scroll position. iOS
+  // backgrounds the native shell and home-screen PWAs without `pagehide`, so
+  // also flush when the document becomes hidden.
   useEffect(() => {
     const storeMap = stores.current;
-    const onPageHide = (): void => {
+    const flushAll = (): void => {
       for (const s of storeMap.values()) void s.flush();
     };
-    window.addEventListener("pagehide", onPageHide);
-    return () => window.removeEventListener("pagehide", onPageHide);
+    const onVisibility = (): void => {
+      if (document.visibilityState === "hidden") flushAll();
+    };
+    window.addEventListener("pagehide", flushAll);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", flushAll);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, []);
 
   return { loadBook, loadBookRows, loadRecent, savedScroll, save };

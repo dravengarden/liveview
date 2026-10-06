@@ -310,14 +310,26 @@ mod tests {
     struct FakeTts(std::path::PathBuf);
     impl FakeTts {
         fn new(name: &str, body: &str) -> Self {
-            use std::os::unix::fs::PermissionsExt;
             let path = std::env::temp_dir().join(format!(
                 "lv-fake-tts-{name}-{}-{}",
                 std::process::id(),
                 SEQ_TEST.fetch_add(1, Ordering::Relaxed)
             ));
-            std::fs::write(&path, format!("#!/bin/sh\nout=\"$6\"\n{body}\n")).unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            // Write the script from a child process. If this multi-threaded test
+            // binary held the write descriptor itself, a concurrent test's fork
+            // could inherit it until exec, and executing the script would then
+            // fail with ETXTBSY ("Text file busy").
+            let status = std::process::Command::new("sh")
+                .args([
+                    "-c",
+                    "printf '%s' \"$1\" > \"$2\" && chmod 755 \"$2\"",
+                    "sh",
+                ])
+                .arg(format!("#!/bin/sh\nout=\"$6\"\n{body}\n"))
+                .arg(&path)
+                .status()
+                .unwrap();
+            assert!(status.success(), "write fake tts script");
             Self(path)
         }
         fn cmd(&self) -> &str {

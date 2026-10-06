@@ -1152,14 +1152,16 @@ impl PgStore {
 
     // ── Reading progress + settings (ported 1:1 from the SQLite store) ────────
 
+    /// One book's rows. A literal prefix match: `LIKE` would treat `_` / `%` in a
+    /// slug as wildcards and leak a sibling book's progress.
     pub async fn progress_for_book(&self, slug: &str) -> Result<Vec<ProgressEntry>, sqlx::Error> {
         sqlx::query_as::<_, ProgressEntry>(
             "SELECT path, scroll, updated_at FROM progress
-             WHERE path = $1 OR path LIKE $2
+             WHERE path = $1 OR starts_with(path, $2)
              ORDER BY updated_at DESC",
         )
         .bind(slug)
-        .bind(format!("{slug}/%"))
+        .bind(format!("{slug}/"))
         .fetch_all(&self.pool)
         .await
     }
@@ -1852,6 +1854,9 @@ mod tests {
             rows.iter()
                 .any(|r| r.path == "bk/01" && (r.scroll - 0.55).abs() < 1e-9)
         );
+        // `_` is a literal slug character, never a wildcard.
+        s.progress_upsert("aXb/01", 0.5, None).await.unwrap();
+        assert!(s.progress_for_book("a_b").await.unwrap().is_empty());
         // A text + audio chapter for the same book must BOTH survive the
         // per-rendition dedup (the shelf shows reading and listening progress
         // side by side), while two text chapters collapse to the newest.

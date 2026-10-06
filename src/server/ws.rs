@@ -45,6 +45,12 @@ async fn current_tree_message(state: &SharedState) -> Option<String> {
     serde_json::to_string(&WsMessage::TreeUpdate { tree }).ok()
 }
 
+/// The current library revision as a `LibraryUpdate` frame, if available.
+async fn current_library_message(state: &SharedState) -> Option<String> {
+    let revision = state.store.library_get().await.ok()?.revision;
+    serde_json::to_string(&WsMessage::LibraryUpdate { revision }).ok()
+}
+
 async fn handle_ws(socket: WebSocket, state: SharedState) {
     let (mut sender, mut receiver) = socket.split();
     let mut rx = state.tx.subscribe();
@@ -65,9 +71,14 @@ async fn handle_ws(socket: WebSocket, state: SharedState) {
                 Forward::Send(msg) => msg,
                 // A slow client that lagged must not become a zombie socket that
                 // silently receives nothing: skip the dropped backlog and push
-                // the current tree so the sidebar converges again.
+                // the current tree and library revision so both converge again.
                 Forward::Resync => {
-                    tracing::debug!("websocket subscriber lagged; resyncing tree");
+                    tracing::debug!("websocket subscriber lagged; resyncing");
+                    if let Some(msg) = current_library_message(&state).await
+                        && sender.send(Message::Text(msg.into())).await.is_err()
+                    {
+                        break;
+                    }
                     match current_tree_message(&state).await {
                         Some(msg) => msg,
                         None => continue,
