@@ -257,7 +257,7 @@ Deno.test("matches that hide behind the title explain themselves", () => {
     ["coastal"],
   );
   const tags = matchContext(wetlands, matchOf(wetlands, "ecology"));
-  assertEquals(tags, { kind: "tags", text: "#Ecology", ranges: [] });
+  assertEquals(tags, { kind: "tags", text: "#ecology", ranges: [] });
   assertEquals(matchContext(wetlands, matchOf(wetlands, "wetlands")), null);
 
   const long = makeBook("long", {

@@ -129,11 +129,11 @@ Deno.test("catalog tags derive generic facets without aliases or collection infe
   assertEquals(
     taxonomy.tags.map((tag) => [tag.id, tag.facet, tag.label]),
     [
-      ["beginner", "tags", "Beginner"],
-      ["format.field-guide", "format", "Field Guide"],
-      ["format.reference", "format", "Reference"],
-      ["subject.botany", "subject", "Botany"],
-      ["subject.ecology", "subject", "Ecology"],
+      ["beginner", "tags", "beginner"],
+      ["format.field-guide", "format", "field guide"],
+      ["format.reference", "format", "reference"],
+      ["subject.botany", "subject", "botany"],
+      ["subject.ecology", "subject", "ecology"],
     ],
   );
   assertEquals(
@@ -151,12 +151,12 @@ Deno.test("server-accepted tags derive an intact facet and label", () => {
     return [tag.facet, tag.label];
   };
   const accepted: [string, string, string][] = [
-    ["beginner", "tags", "Beginner"],
-    ["subject.history", "subject", "History"],
-    ["format.field-guide", "format", "Field Guide"],
+    ["beginner", "tags", "beginner"],
+    ["subject.history", "subject", "history"],
+    ["format.field-guide", "format", "field guide"],
     ["主题.生态学", "主题", "生态学"],
-    ["a.b.c", "a", "B C"],
-    ["x_y", "tags", "X Y"],
+    ["a.b.c", "a", "b c"],
+    ["x_y", "tags", "x y"],
     ["2024", "tags", "2024"],
   ];
   for (const [id, facet, label] of accepted) {
@@ -167,11 +167,11 @@ Deno.test("server-accepted tags derive an intact facet and label", () => {
   const rejected: [string, string, string][] = [
     [".", "tags", ""],
     ["-", "tags", ""],
-    ["a.", "tags", "A"],
-    [".a", "tags", "A"],
-    ["a..b", "a", "B"],
+    ["a.", "tags", "a"],
+    [".a", "tags", "a"],
+    ["a..b", "a", "b"],
     ["a.-", "a", ""],
-    ["Subject.history", "Subject", "History"],
+    ["Subject.history", "Subject", "history"],
     ["École", "tags", "École"],
   ];
   for (const [id, facet, label] of rejected) {

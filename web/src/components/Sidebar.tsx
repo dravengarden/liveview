@@ -30,9 +30,10 @@ import { type Language, useI18n } from "@/i18n";
 import { localeDescriptor } from "@/locales/registry";
 import { centerWithin } from "@/scrollWithin";
 
-/** A single-line label that reveals its full text in a tooltip only when it is
- *  actually truncated (ellipsized). Re-measures on container resize, so it
- *  reacts to the draggable sidebar width. */
+/** A chapter label clamped to two lines, so long titles stay readable without
+ *  hover, revealing its full text in a tooltip only when still clipped.
+ *  Re-measures on container resize, so it reacts to the draggable sidebar
+ *  width. */
 function TruncatedLabel({ text }: { text: string }): React.JSX.Element {
   const ref = useRef<HTMLSpanElement>(null);
   const [overflowed, setOverflowed] = useState(false);
@@ -40,7 +41,8 @@ function TruncatedLabel({ text }: { text: string }): React.JSX.Element {
   useEffect(() => {
     const el = ref.current;
     if (!el) return undefined;
-    const measure = (): void => setOverflowed(el.scrollWidth > el.clientWidth);
+    const measure = (): void =>
+      setOverflowed(el.scrollHeight > el.clientHeight + 1);
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(el);
@@ -51,8 +53,14 @@ function TruncatedLabel({ text }: { text: string }): React.JSX.Element {
     <Typography
       ref={ref}
       variant="body2"
-      noWrap
-      sx={{ display: "block", minWidth: 0 }}
+      sx={{
+        display: "-webkit-box",
+        WebkitLineClamp: 2,
+        WebkitBoxOrient: "vertical",
+        overflow: "hidden",
+        overflowWrap: "anywhere",
+        minWidth: 0,
+      }}
     >
       {text}
     </Typography>

@@ -1031,6 +1031,13 @@ export function MarkdownViewer({
               "&:hover": {
                 bgcolor: "action.selected",
               },
+              // Touch screens have no hover to reveal it: keep it visible and
+              // give it a tappable height instead of an invisible hit area.
+              "@media (hover: none)": {
+                opacity: 1,
+                minHeight: 32,
+                px: 1.25,
+              },
             },
             "& pre:hover .copy-btn": {
               opacity: 1,

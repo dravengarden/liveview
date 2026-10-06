@@ -1450,9 +1450,11 @@ export function Landing({
                       data-lv-directory-id={directory.id}
                       onClick={() => navigate(directory.id)}
                       sx={{
-                        minHeight: 84,
+                        // One title line plus one preview line: 24 folders
+                        // stay scannable instead of filling three screens.
+                        minHeight: 64,
                         px: 1.5,
-                        py: 1.25,
+                        py: 1,
                         gap: 1.5,
                         border: 1,
                         borderColor: "divider",
@@ -1470,54 +1472,49 @@ export function Landing({
                         sx={{
                           color: "primary.main",
                           flexShrink: 0,
-                          fontSize: rem(28),
+                          fontSize: rem(26),
                         }}
                       />
                       <Box sx={{ minWidth: 0, flex: 1 }}>
-                        <Stack direction="row" alignItems="baseline" gap={1}>
-                          <Typography
-                            component="span"
-                            fontWeight={700}
-                            sx={{ flex: 1, overflowWrap: "anywhere" }}
-                          >
-                            {query.trim()
-                              ? (
-                                <Highlighted
-                                  text={directory.path}
-                                  ranges={directoryHighlights.get(directory.id)}
-                                />
-                              )
-                              : directory.name}
-                          </Typography>
-                          <Typography
-                            component="span"
-                            variant="caption"
-                            color="text.secondary"
-                          >
-                            {directory.books.length}
-                          </Typography>
-                        </Stack>
+                        <Typography
+                          component="span"
+                          fontWeight={700}
+                          sx={{ display: "block", overflowWrap: "anywhere" }}
+                        >
+                          {query.trim()
+                            ? (
+                              <Highlighted
+                                text={directory.path}
+                                ranges={directoryHighlights.get(directory.id)}
+                              />
+                            )
+                            : directory.name}
+                        </Typography>
                         <Typography
                           component="span"
                           variant="body2"
                           color="text.secondary"
-                          sx={{
-                            display: "-webkit-box",
-                            WebkitLineClamp: 2,
-                            WebkitBoxOrient: "vertical",
-                            overflow: "hidden",
-                            mt: 0.5,
-                          }}
+                          noWrap
+                          sx={{ display: "block", mt: 0.25 }}
                         >
                           {directory.books.slice(0, 3).map((book) => book.label)
                             .join(" · ")}
                         </Typography>
                       </Box>
+                      <Typography
+                        component="span"
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ flexShrink: 0, fontVariantNumeric: "tabular-nums" }}
+                      >
+                        {directory.books.length}
+                      </Typography>
                       <NextIcon
                         sx={{
                           color: "text.secondary",
                           fontSize: rem(20),
                           flexShrink: 0,
+                          ml: -0.75,
                         }}
                       />
                     </Button>

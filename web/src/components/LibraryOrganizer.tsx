@@ -315,6 +315,9 @@ export function LibraryOrganizer(
         startIcon={<FolderIcon fontSize="small" />}
         sx={{
           minHeight: 44,
+          // Neutral like Sort & Filter: the toolbar reserves the accent for
+          // active state, so an always-accented action read as "selected".
+          color: "text.secondary",
           textTransform: "none",
           whiteSpace: "nowrap",
           flex: { xs: 1, sm: "0 0 auto" },

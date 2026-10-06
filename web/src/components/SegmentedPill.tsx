@@ -94,6 +94,8 @@ export function SegmentedPill<T extends string>({
               // app-wide font-size setting, like every other UI surface.
               px: rem(14),
               py: 0.5,
+              // A segment is a primary touch target (design-system: 40–44 px).
+              minHeight: 40,
               borderRadius: 999,
               fontSize: rem(13.5),
               fontWeight: 600,

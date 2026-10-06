@@ -25,17 +25,22 @@ function tagParts(id: string): { facet: string; value: string } {
     : { facet: DEFAULT_TAG_FACET_ID, value: id };
 }
 
+/** A tag value's words as authored. Tags are lowercase keywords full of
+ *  acronyms and identifiers (`llm-agent`, `abi-stability`, `erc-4626`), so
+ *  title-casing would print "Llm Agent"; LiveView keeps the author's casing. */
 export function tagLabel(id: string): string {
-  const { value } = tagParts(id);
-  return value
-    .split(/[._-]+/)
-    .filter(Boolean)
-    .map((word) => word[0]!.toLocaleUpperCase() + word.slice(1))
-    .join(" ");
+  return words(tagParts(id).value).join(" ");
 }
 
+function words(value: string): string[] {
+  return value.split(/[._-]+/).filter(Boolean);
+}
+
+/** A facet heading (`subject` → "Subject"): one sentence-cased phrase. */
 function facetLabel(id: string): string {
-  return id === DEFAULT_TAG_FACET_ID ? "Tags" : tagLabel(id);
+  if (id === DEFAULT_TAG_FACET_ID) return "Tags";
+  const label = words(id).join(" ");
+  return label.charAt(0).toLocaleUpperCase() + label.slice(1);
 }
 
 /** Derive the available filters from author-owned catalog tags. A tag named

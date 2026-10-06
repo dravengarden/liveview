@@ -21,7 +21,6 @@ import {
   ThemeProvider,
   Typography,
 } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import {
   Close as CloseIcon,
   Headphones as AudiobookIcon,
@@ -1587,7 +1586,8 @@ export function App(): React.JSX.Element {
               height: "env(safe-area-inset-top, 0px)",
               zIndex: (t) => t.zIndex.appBar,
               pointerEvents: "none",
-              // Near-opaque and deliberately unblurred. A fixed backdrop-filter
+              // Opaque and deliberately unblurred (a 6% tint still let shelf
+              // titles ghost behind the clock). A fixed backdrop-filter
               // forces WKWebView to re-rasterize every frame of the scroller
               // underneath it, even though the result is barely visible.
               // The spatial Contents rail extends behind this fixed strip. A
@@ -1599,7 +1599,7 @@ export function App(): React.JSX.Element {
               // the original near-opaque reading material while scrolling.
               bgcolor: (t) =>
                 `var(--lv-safe-area-bg, ${
-                  alpha(t.palette.background.default, 0.94)
+                  t.palette.background.default
                 })`,
               "html[data-lv-spatial-drawer-open] &": {
                 display: "none",

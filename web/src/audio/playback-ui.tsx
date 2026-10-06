@@ -10,7 +10,7 @@
 
 import { rem } from "@/px";
 import { useCallback, useState } from "react";
-import { MenuItem, Select, Typography } from "@mui/material";
+import { Box, MenuItem, Select, Typography } from "@mui/material";
 import type { SxProps, Theme } from "@mui/material/styles";
 import { Bedtime } from "@mui/icons-material";
 import { useAudioPlayer } from "@/audio/player";
@@ -153,19 +153,31 @@ export function SleepChip(
       onChange={(e) => setSleepTimer(Number(e.target.value))}
       inputProps={{ "aria-label": t("audiobook.sleepTimer") }}
       renderValue={() =>
-        // Off → just the moon. Armed → only the remaining time (no moon), so the
-        // longest label (e.g. "1h30m") fits without the icon crowding it.
+        // Off → just the moon. Armed → a small moon stacked over the remaining
+        // time: a bare "1h15m" beside the transport read as chapter time, and
+        // stacking keeps the longest label ("1h30m") within the ear.
         sleepActive
           ? (
-            <Typography
+            <Box
               component="span"
-              variant="body2"
-              fontWeight={700}
-              color="primary"
-              sx={{ fontVariantNumeric: "tabular-nums" }}
+              sx={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                lineHeight: 1,
+                color: "primary.main",
+              }}
             >
-              {fmtSleep(sleepRemainingMin)}
-            </Typography>
+              <Bedtime sx={{ fontSize: rem(14) }} />
+              <Typography
+                component="span"
+                variant="caption"
+                fontWeight={700}
+                sx={{ fontVariantNumeric: "tabular-nums", lineHeight: 1.2 }}
+              >
+                {fmtSleep(sleepRemainingMin)}
+              </Typography>
+            </Box>
           )
           : <Bedtime sx={{ fontSize: rem(22), color: "text.secondary" }} />}
       sx={[chipSelectSx, ...(Array.isArray(sx) ? sx : [sx])]}

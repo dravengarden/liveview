@@ -550,16 +550,14 @@ export function NavShell(props: NavShellProps): ReactNode {
                   // the blurred result is invisible anyway (the ~0.95 tint covers
                   // it), so it was pure wasted per-frame GPU work that dropped
                   // frames while scrolling. The opaque tint alone hides the page;
-                  // the blur bought nothing. (Genuinely translucent chrome — the
-                  // status-bar strip, small glass pucks — still needs its blur.)
-                  bgcolor: (t) =>
-                    alpha(
-                      t.palette.background.default,
-                      t.palette.mode === "dark" ? 0.94 : 0.96,
-                    ),
+                  // the blur bought nothing. Fully opaque: even a 4% tint left
+                  // scrolling text ghosting under the chapter title, and an
+                  // opaque layer is also the cheapest to composite.
+                  bgcolor: "background.default",
+                  ...(bottom ? { borderTop: 1, borderColor: "divider" } : {}),
                 }),
                 // Top bar keeps its downward elevation shadow to mark the edge; a
-                // bottom bar stays flat + borderless (the glass tint is the edge).
+                // bottom bar stays flat with a hairline edge.
                 boxShadow: bottom ? "none" : 3,
               }
               : {

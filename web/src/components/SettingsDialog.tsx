@@ -214,7 +214,7 @@ export function SettingsButton({
             value={seg}
             onChange={setSeg}
             options={[
-              { value: "settings", label: t("settings.title") },
+              { value: "settings", label: t("settings.preferences") },
               { value: "downloads", label: t("offline.downloads") },
             ]}
             sx={{ alignSelf: "center" }}

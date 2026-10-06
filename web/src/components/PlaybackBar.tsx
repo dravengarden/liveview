@@ -7,7 +7,6 @@ import {
   Slider,
   Typography,
 } from "@mui/material";
-import { alpha } from "@mui/material/styles";
 import {
   MyLocation,
   Pause,
@@ -283,12 +282,9 @@ export function PlaybackBar(
           // trap — as the reader scrolls under it, the blur re-rasterizes the
           // moving content every frame, and at ~0.95 opacity the blurred result
           // is invisible anyway (the tint covers it), so it just dropped frames
-          // for nothing. The opaque tint alone hides the page.
-          bgcolor: (t) =>
-            alpha(
-              t.palette.background.default,
-              t.palette.mode === "dark" ? 0.94 : 0.96,
-            ),
+          // for nothing. Fully opaque: a 4% tint still let the read-along text
+          // ghost behind the scrubber and buttons.
+          bgcolor: "background.default",
           pointerEvents: "none",
         }}
       />
