@@ -64,7 +64,7 @@ export function spawnReplicaWorker(init: {
   remoteBase: string;
   origins: readonly string[];
 }): Worker | null {
-  // Dedicated workers need a window document; Deno tests have Worker but no UI.
+  // Dedicated workers need a window document; unit tests have Worker but no UI.
   if (typeof Worker === "undefined" || typeof document === "undefined") {
     return null;
   }

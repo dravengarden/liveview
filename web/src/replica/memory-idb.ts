@@ -1,4 +1,4 @@
-// In-memory IndexedDB used by Deno tests. Deno has no IDB, and this is not
+// In-memory IndexedDB used by unit tests. Bun has no IDB, and this is not
 // the production blob engine.
 
 type Key = IDBValidKey;
