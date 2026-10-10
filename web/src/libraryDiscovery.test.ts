@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import {
   buildLibraryTaxonomy,
   countTagFacetMatches,
@@ -9,10 +10,6 @@ import {
   sortCollectionNames,
 } from "./libraryDiscovery.ts";
 import type { Book } from "@/types";
-
-declare const Deno: {
-  test(name: string, body: () => void): void;
-};
 
 function assertEquals<T>(actual: T, expected: T): void {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -42,7 +39,7 @@ const book: Book = {
   updated_at: 0,
 };
 
-Deno.test("facet preview counts preserve OR-within and AND-across semantics", () => {
+test("facet preview counts preserve OR-within and AND-across semantics", () => {
   const books = [
     book,
     {
@@ -77,7 +74,7 @@ Deno.test("facet preview counts preserve OR-within and AND-across semantics", ()
   }
 });
 
-Deno.test("large sparse facet counts read each book's tags once", () => {
+test("large sparse facet counts read each book's tags once", () => {
   let tagReads = 0;
   const tags = Array.from({ length: 1_533 }, (_, i) => `tag-${i}`);
   const books = Array.from({ length: 150 }, (_, i) => {
@@ -98,7 +95,7 @@ Deno.test("large sparse facet counts read each book's tags once", () => {
   assertEquals(counts.size, tags.length);
 });
 
-Deno.test("tag matching is OR within facets and AND across facets", () => {
+test("tag matching is OR within facets and AND across facets", () => {
   assertEquals(
     matchesTagFacets(book, new Set(["subject.ecology", "subject.botany"])),
     true,
@@ -113,7 +110,7 @@ Deno.test("tag matching is OR within facets and AND across facets", () => {
   );
 });
 
-Deno.test("catalog tags derive generic facets without aliases or collection inference", () => {
+test("catalog tags derive generic facets without aliases or collection inference", () => {
   const taxonomy = buildLibraryTaxonomy([
     book,
     {
@@ -145,7 +142,7 @@ Deno.test("catalog tags derive generic facets without aliases or collection infe
 // Shared with `tag_fixtures_match_web_facet_derivation` in `src/tags.rs` —
 // keep both lists aligned. The server accepts exactly the tags whose derived
 // facet and label survive intact here.
-Deno.test("server-accepted tags derive an intact facet and label", () => {
+test("server-accepted tags derive an intact facet and label", () => {
   const derive = (id: string): [string, string] => {
     const tag = buildLibraryTaxonomy([{ ...book, tags: [id] }]).tags[0]!;
     return [tag.facet, tag.label];
@@ -179,14 +176,14 @@ Deno.test("server-accepted tags derive an intact facet and label", () => {
   }
 });
 
-Deno.test("collection ordering is locale-aware and has no curated priorities", () => {
+test("collection ordering is locale-aware and has no curated priorities", () => {
   assertEquals(
     sortCollectionNames(["Zoology", "Architecture", "Botany"], "en"),
     ["Architecture", "Botany", "Zoology"],
   );
 });
 
-Deno.test("reading state uses the furthest rendition", () => {
+test("reading state uses the furthest rendition", () => {
   assertEquals(readingState(undefined), "unread");
   assertEquals(
     readingState({
@@ -214,7 +211,7 @@ Deno.test("reading state uses the furthest rendition", () => {
   );
 });
 
-Deno.test("only large facets start folded in the filter sheet", () => {
+test("only large facets start folded in the filter sheet", () => {
   assertEquals(facetStartsFolded(0), false);
   assertEquals(facetStartsFolded(FACET_FOLD_THRESHOLD), false);
   assertEquals(facetStartsFolded(FACET_FOLD_THRESHOLD + 1), true);

@@ -1,7 +1,7 @@
 //! The KaTeX math validator.
 //!
 //! Runs the **real** KaTeX (the bundled `katex.min.js`, executed in an
-//! in-process quick-js engine — not deno, no DOM) over every math node, with
+//! in-process quick-js engine — no external JS runtime, no DOM) over every math node, with
 //! `throwOnError` on. A formula that KaTeX rejects here is exactly one the
 //! reader's KaTeX would render as a red error, so "checked clean" provably
 //! renders. We tried a pure-Rust LaTeX parser (`pulldown-latex`) first; it

@@ -1,8 +1,5 @@
+import { test } from "bun:test";
 import { localeDescriptor, resolveLocale } from "./registry.ts";
-
-declare const Deno: {
-  test(name: string, body: () => void): void;
-};
 
 function assertEquals<T>(actual: T, expected: T): void {
   if (actual !== expected) {
@@ -10,7 +7,7 @@ function assertEquals<T>(actual: T, expected: T): void {
   }
 }
 
-Deno.test("locale registry resolves exact and regional language tags", () => {
+test("locale registry resolves exact and regional language tags", () => {
   assertEquals(resolveLocale("en-US"), "en");
   assertEquals(resolveLocale("ZH-Hans"), "zh");
   assertEquals(resolveLocale("fr"), undefined);

@@ -1,7 +1,7 @@
+import { test } from "bun:test";
 import { libraryDirectories } from "./libraryDirectories.ts";
 import type { Book } from "./types/index.ts";
 
-declare const Deno: { test(name: string, body: () => void): void };
 const book = (slug: string, collection: string): Book => ({
   slug,
   label: slug,
@@ -28,7 +28,7 @@ function equal(actual: unknown, expected: unknown): void {
     );
   }
 }
-Deno.test("directories use authored names and keep root titles out of named folders", () => {
+test("directories use authored names and keep root titles out of named folders", () => {
   const books = [
     book("loose", ""),
     book("one", " Other "),
@@ -46,7 +46,7 @@ Deno.test("directories use authored names and keep root titles out of named fold
   );
   equal(JSON.stringify(books), before);
 });
-Deno.test("directory counts include the whole catalog before content pagination", () => {
+test("directory counts include the whole catalog before content pagination", () => {
   const books = Array.from(
     { length: 81 },
     (_, i) => book(String(i), i < 80 ? "A" : "Z"),

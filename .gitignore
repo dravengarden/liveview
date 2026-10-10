@@ -41,3 +41,6 @@ app/src-tauri/gen/apple/*.xcodeproj/project.xcworkspace/xcuserdata/
 # Without this the consolidated layout shipped a blank home-screen icon.
 !app/src-tauri/icons/*.png
 !app/src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/*.png
+
+# Tool dependencies
+/tools/node_modules

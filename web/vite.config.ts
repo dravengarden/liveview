@@ -25,7 +25,7 @@ const ReactCompilerConfig = {
 // alias. Note we do NOT need to dedupe @mui/material itself — the ThemeContext
 // lives in these lower-level packages, so two @mui/material copies both read the
 // shared context once these are singletons. (resolve.dedupe of @mui/* is NOT usable
-// here: under deno's nested node_modules/.deno layout it breaks @mui/material's
+// here: under a nested node_modules layout it breaks @mui/material's
 // internal sibling imports and fails the build — see the git history.)
 //
 // THE POKA-YOKE: assertSingletons() (below) FAILS THE BUILD if any of these ends
@@ -61,7 +61,7 @@ const SINGLETONS = [
 // resolver) rather than a path alias on purpose: these packages use package.json
 // `exports` for deep subpaths (e.g. @mui/system/createBreakpoints,
 // @mui/utils/composeClasses), so a raw directory alias — and resolve.dedupe — both
-// FAIL to resolve those subpaths under deno's nested node_modules layout. Resolving
+// FAIL to resolve those subpaths under a nested node_modules layout. Resolving
 // from a fixed app-root importer keeps exports semantics AND pins the copy.
 const APP_ROOT = resolve(import.meta.dirname, "src/main.tsx");
 const isSingleton = (id: string): boolean =>

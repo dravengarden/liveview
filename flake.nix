@@ -1,15 +1,15 @@
 # liveview flake — pure-Nix build of the `liveview` binary: the React/MUI SPA
-# (deno + vite) and the axum daemon that embeds it via include_dir!.
+# (bun + vite) and the axum daemon that embeds it via include_dir!.
 #
-# `nix build` produces a binary equivalent to `deno task build` followed by
+# `nix build` produces a binary equivalent to `bun run build` followed by
 # `cargo build --release --features embedded`, with no external build
 # orchestration (no docker compile sandbox). The SPA uses a dependencies-only
 # fixed-output cache plus an offline, content-addressed Vite build.
 {
   description = "liveview — book reader (axum + embedded React SPA, pg + rustfs backed)";
 
-  # Match the NixOS release used by the production host. The frontend's Deno
-  # dependency cache is produced through nixpkgs, so the standalone and host
+  # Match the NixOS release used by the production host. The frontend's
+  # dependency tree is produced through nixpkgs, so the standalone and host
   # builds must use the same release generation for depsHash to stay valid.
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
   inputs.rust-overlay = {
@@ -82,25 +82,16 @@
       };
 
       # Keep the web toolchain self-contained so an anonymous clone has no
-      # private flake inputs. Remove this pin once nixpkgs carries the same Deno.
-      deno = pkgs.stdenvNoCC.mkDerivation rec {
-        pname = "deno";
-        version = "2.8.1";
+      # private flake inputs. nixpkgs trails the upstream Bun release, so pin
+      # the official binary through nixpkgs' own packaging; remove this once
+      # nixpkgs carries the same Bun.
+      bun = pkgs.bun.overrideAttrs (_: rec {
+        version = "1.4.3";
         src = pkgs.fetchurl {
-          url = "https://github.com/denoland/deno/releases/download/v${version}/deno-x86_64-unknown-linux-gnu.zip";
-          hash = "sha256-LXu2GVImrIMuC/cQmhFfCvZe5prHl6S73lsnoGzCQtk=";
+          url = "https://github.com/oven-sh/bun/releases/download/bun-v${version}/bun-linux-x64-baseline.zip";
+          hash = "sha256-H8LtrIQxApCeOhvh2NmALMYHHPB05n6IIx9P/g+LOXs=";
         };
-        nativeBuildInputs = [
-          pkgs.unzip
-          pkgs.autoPatchelfHook
-        ];
-        buildInputs = [
-          pkgs.stdenv.cc.cc.lib
-          pkgs.zlib
-        ];
-        unpackPhase = "unzip $src";
-        installPhase = "install -Dm755 deno $out/bin/deno";
-      };
+      });
 
       # edge-tts remains an optional reference speech adapter. The default
       # package does not depend on it; deployments may select the adapter bundle.
@@ -114,52 +105,52 @@
         inherit version;
         src = pkgs.runCommandLocal "liveview-web-deps-src" { } ''
           mkdir -p $out
-          for f in deno.json deno.jsonc deno.lock package.json; do
+          for f in package.json bun.lock bunfig.toml; do
             if [ -e "${webBuildSrc}/web/$f" ]; then cp "${webBuildSrc}/web/$f" "$out/$f"; fi
           done
         '';
-        nativeBuildInputs = [
-          deno
-          pkgs.nodejs_24
-        ];
+        nativeBuildInputs = [ bun ];
         dontUnpack = true;
         dontConfigure = true;
         buildPhase = ''
           export HOME=$TMPDIR
-          export DENO_DIR=$out
+          export BUN_INSTALL_CACHE_DIR=$TMPDIR/bun-cache
           export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
           cp -RL $src/. .
           chmod -R u+w .
-          deno install --frozen --allow-scripts
-          # Deno's CommonJS analysis cache is a SQLite database whose WAL/SHM
-          # bytes differ between identical installs. It is regenerated on
-          # demand, so drop it to keep this fixed-output hash reproducible.
-          rm -f "$out"/node_analysis_cache_v*
+          # Lifecycle scripts stay off: their output is not part of the
+          # lockfile's identity. The hoisted linker and plain copies keep the
+          # tree free of cache hardlinks and store references.
+          bun install --frozen-lockfile --ignore-scripts --linker=hoisted --backend=copyfile --no-progress
+          mkdir -p $out
+          cp -R node_modules $out/node_modules
         '';
         dontInstall = true;
         dontFixup = true;
         outputHashMode = "recursive";
         outputHashAlgo = "sha256";
-        outputHash = "sha256-vyjGtUo+lX2EoZ3M/s278UPbUqgn4ZyzaKnOtek67ig=";
+        outputHash = "sha256-0Z3BamxPJ/nntveGc6Eupwo+JynN0iJladzGYa3NSdE=";
       };
 
       liveview-web = pkgs.stdenvNoCC.mkDerivation {
         pname = "liveview-web";
         inherit version;
         src = webBuildSrc;
-        nativeBuildInputs = [
-          deno
-          pkgs.nodejs_24
-        ];
+        nativeBuildInputs = [ bun ];
         dontConfigure = true;
         buildPhase = ''
           export HOME=$TMPDIR
-          export DENO_DIR=$TMPDIR/deno-cache
-          cp -R ${webDeps} $DENO_DIR
-          chmod -R u+w $DENO_DIR
           cd web
-          deno install --frozen --allow-scripts
-          deno task build
+          cp -R ${webDeps}/node_modules node_modules
+          chmod -R u+w node_modules
+          # Package bins carry a `/usr/bin/env node` shebang, and the sandbox
+          # has neither /usr/bin/env nor node. Point them at the pinned Bun
+          # under node's name, which is how Bun selects its node mode.
+          mkdir -p $TMPDIR/bin
+          ln -s ${bun}/bin/bun $TMPDIR/bin/node
+          export PATH=$TMPDIR/bin:$PATH
+          patchShebangs node_modules
+          bun run build
         '';
         installPhase = "cp -R dist $out";
         dontFixup = true;
@@ -255,8 +246,7 @@
           pkgs.just
           pkgs.jq
           pkgs.nixfmt
-          deno
-          pkgs.nodejs_24
+          bun
           pkgs.ffmpeg
           pkgs.imagemagick
           pkgs.libicns

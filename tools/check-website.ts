@@ -1,10 +1,12 @@
+import { readFile, stat } from "node:fs/promises";
+
 const root = new URL("../website/", import.meta.url);
 const repositoryRoot = new URL("../", import.meta.url);
-const page = await Deno.readTextFile(new URL("index.html", root));
+const page = await readFile(new URL("index.html", root), "utf8");
 
 function fail(message: string): never {
   console.error(`website check failed: ${message}`);
-  Deno.exit(1);
+  process.exit(1);
 }
 
 for (
@@ -30,10 +32,10 @@ for (const match of page.matchAll(/(?:href|src)="([^"]+)"/g)) {
   if (/^(?:https?:|#|mailto:)/.test(reference)) continue;
   const [path] = reference.split("#", 1);
   try {
-    const info = await Deno.stat(new URL(path, root));
-    if (!info.isFile) fail(`${reference} is not a file`);
+    const info = await stat(new URL(path, root));
+    if (!info.isFile()) fail(`${reference} is not a file`);
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
+    if ((error as { code?: string }).code === "ENOENT") {
       fail(`missing local asset ${reference}`);
     }
     throw error;
@@ -64,8 +66,8 @@ for (
     ["assets/liveview-hero.png", "docs/assets/liveview-hero.png"],
   ]
 ) {
-  const websiteBytes = await Deno.readFile(new URL(siteAsset, root));
-  const canonicalBytes = await Deno.readFile(
+  const websiteBytes = await readFile(new URL(siteAsset, root));
+  const canonicalBytes = await readFile(
     new URL(canonicalAsset, repositoryRoot),
   );
   if (
@@ -77,7 +79,7 @@ for (
 }
 
 for (const discoveryFile of ["robots.txt"]) {
-  const text = await Deno.readTextFile(new URL(discoveryFile, root));
+  const text = await readFile(new URL(discoveryFile, root), "utf8");
   if (text.trim().length === 0) fail(`${discoveryFile} is empty`);
 }
 

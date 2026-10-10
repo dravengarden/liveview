@@ -1,5 +1,6 @@
-#!/usr/bin/env -S deno run -A
+#!/usr/bin/env bun
 
+import { readdir, stat } from "node:fs/promises";
 import { extname, join } from "node:path";
 
 const web = new URL("../web/", import.meta.url).pathname;
@@ -10,15 +11,15 @@ type Totals = { total: number; javascript: number; fonts: number };
 async function measure(dir: string, skip?: string): Promise<Totals> {
   const totals: Totals = { total: 0, javascript: 0, fonts: 0 };
   async function walk(current: string): Promise<void> {
-    for await (const entry of Deno.readDir(current)) {
-      if (entry.isDirectory && entry.name === skip) continue;
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name === skip) continue;
       const path = join(current, entry.name);
-      if (entry.isDirectory) {
+      if (entry.isDirectory()) {
         await walk(path);
         continue;
       }
-      if (!entry.isFile) continue;
-      const bytes = (await Deno.stat(path)).size;
+      if (!entry.isFile()) continue;
+      const bytes = (await stat(path)).size;
       totals.total += bytes;
       const extension = extname(entry.name);
       if (extension === ".js") totals.javascript += bytes;
@@ -60,4 +61,4 @@ for (const [name, totals] of targets) {
   }
 }
 
-if (failed) Deno.exit(1);
+if (failed) process.exit(1);

@@ -1,7 +1,7 @@
+import { test } from "bun:test";
 import { recentLibraryBooks, resumableLibraryBooks } from "./libraryHome.ts";
 import type { Book, ReadingProgress } from "./types/index.ts";
 
-declare const Deno: { test(name: string, body: () => void): void };
 const book = (slug: string, created_at = 0, updated_at = 0): Book => ({
   slug,
   label: slug,
@@ -33,7 +33,7 @@ function equal(actual: Book[], expected: string[]): void {
     throw new Error(`Unexpected titles: ${actual.map((book) => book.slug)}`);
   }
 }
-Deno.test("Home resumes each latest unfinished rendition and excludes unopened and removed titles", () => {
+test("Home resumes each latest unfinished rendition and excludes unopened and removed titles", () => {
   const books = [book("text"), book("audio"), book("finished"), book("new")];
   const progress = {
     text: { text: track(20, 0.3), audio: track(10, 1) },
@@ -49,14 +49,14 @@ Deno.test("Home resumes each latest unfinished rendition and excludes unopened a
   equal(resumableLibraryBooks(books, progress, 1), ["audio"]);
   equal(books, ["text", "audio", "finished", "new"]);
 });
-Deno.test("recent content uses change time with creation fallback without mutating the catalog", () => {
+test("recent content uses change time with creation fallback without mutating the catalog", () => {
   const books = [book("old", 10), book("edited", 5, 40), book("added", 30)];
   equal(recentLibraryBooks(books, 2), ["edited", "added"]);
   equal(books, ["old", "edited", "added"]);
   equal(recentLibraryBooks([], 8), []);
 });
 
-Deno.test("documents remain resumable at the end of a document collection", () => {
+test("documents remain resumable at the end of a document collection", () => {
   const docs = { ...book("docs"), manifest: false };
   equal(resumableLibraryBooks([docs], { docs: { text: track(80, 1) } }, 4), [
     "docs",

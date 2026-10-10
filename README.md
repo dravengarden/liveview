@@ -15,7 +15,7 @@
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2563eb.svg" alt="MIT License"></a>
   <img src="https://img.shields.io/badge/Rust-1.95-dea584.svg" alt="Rust 1.95">
-  <img src="https://img.shields.io/badge/Deno-2.x-70ffaf.svg" alt="Deno 2.x">
+  <img src="https://img.shields.io/badge/Bun-1.4-f9f1e1.svg" alt="Bun 1.4">
   <img src="https://img.shields.io/badge/Web%20%2B%20Tauri-24c8db.svg" alt="Web and Tauri">
 </p>
 

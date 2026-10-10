@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run -A
+#!/usr/bin/env bun
 // mermaid-lint — validate every ```mermaid block by running the REAL mermaid
 // parser, at the EXACT version the reader bundles. This is the only way to be
 // 100% faithful ("checker == renderer"): a Rust/heuristic check can only guess at
@@ -6,18 +6,45 @@
 // in text" (mermaid 11.12.3). mermaid.parse() validates syntax without rendering,
 // and runs headlessly under jsdom.
 //
-// Version sync: the npm version is read FROM the vendored web/public/mermaid.min.js
-// (`version:"X"`), so upgrading the reader's bundle automatically moves the
-// checker too — they can never silently diverge.
+// Version sync: tools/package.json pins the npm release, and this tool refuses
+// to run unless that release equals the one read FROM the vendored
+// web/public/mermaid.min.js (`version:"X"`) — upgrading the reader's bundle
+// without the checker fails loudly, so they can never silently diverge.
 //
 // Usage:
-//   deno run -A tools/mermaid-lint.ts <file-or-dir> [...]        # recursive human report
-//   deno run -A tools/mermaid-lint.ts --json <file-or-dir> [...] # machine report for chart-review
-//   deno run -A tools/mermaid-lint.ts --json < stdin             # batch [{id,text}] → failures
+//   bun tools/mermaid-lint.ts <file-or-dir> [...]        # recursive human report
+//   bun tools/mermaid-lint.ts --json <file-or-dir> [...] # machine report for chart-review
+//   bun tools/mermaid-lint.ts --json < stdin             # batch [{id,text}] → failures
 //
 // Output (human): one line per bad block: "<file>:<line>: <message>"; silent + exit 0 when all clean.
 
-import { JSDOM } from "npm:jsdom@24";
+import { existsSync, readFileSync, type Stats } from "node:fs";
+import { readdir, readFile, stat as statPath } from "node:fs/promises";
+
+// ── Dependencies ────────────────────────────────────────────────────────────
+// tools/package.json + tools/bun.lock pin jsdom and mermaid. Install them on
+// first use so the tool stays a single command; stdout stays clean for --json.
+// The resolver has already recorded the missing directory for this process,
+// so the freshly installed tree is used by running the tool again.
+const toolsDir = import.meta.dir;
+const mermaidManifest = `${toolsDir}/node_modules/mermaid/package.json`;
+if (!existsSync(mermaidManifest)) {
+  const install = Bun.spawnSync({
+    cmd: [process.execPath, "install", "--frozen-lockfile"],
+    cwd: toolsDir,
+    stdout: "ignore",
+    stderr: "inherit",
+  });
+  if (!install.success) process.exit(2);
+  const rerun = Bun.spawnSync({
+    cmd: [process.execPath, ...process.argv.slice(1)],
+    stdin: "inherit",
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  process.exit(rerun.exitCode ?? 2);
+}
+const { JSDOM } = await import("jsdom");
 
 // ── Resolve the reader's mermaid version from the vendored bundle ────────────
 function vendoredVersion(): string {
@@ -29,7 +56,7 @@ function vendoredVersion(): string {
     ]
   ) {
     try {
-      const head = Deno.readTextFileSync(p);
+      const head = readFileSync(p, "utf8");
       const m = head.match(/version:"(\d+\.\d+\.\d+)"/);
       if (m) return m[1];
     } catch { /* try next */ }
@@ -47,9 +74,17 @@ Object.assign(globalThis, {
   navigator: dom.window.navigator,
 });
 const ver = vendoredVersion();
-// deno caches the npm graph after the first run; mermaid loads its diagram
-// grammars lazily via dynamic import (works under deno).
-const mermaid = (await import(`npm:mermaid@${ver}`)).default;
+const pinned = (JSON.parse(readFileSync(mermaidManifest, "utf8")) as {
+  version: string;
+}).version;
+if (pinned !== ver) {
+  console.error(
+    `mermaid-lint: tools/package.json installs mermaid ${pinned} but the reader bundles ${ver}; pin ${ver} in tools/package.json and refresh tools/bun.lock`,
+  );
+  process.exit(2);
+}
+// mermaid loads its diagram grammars lazily via dynamic import.
+const mermaid = (await import("mermaid")).default;
 mermaid.initialize({ startOnLoad: false, securityLevel: "loose" });
 
 /** Validate one diagram. Returns null when valid, else the first error line. */
@@ -91,11 +126,12 @@ function mermaidBlocks(md: string): { text: string; line: number }[] {
 }
 
 // ── JSON batch mode (for the Rust checker to shell out to) ───────────────────
-const json = Deno.args.includes("--json");
-const targets = Deno.args.filter((arg) => !arg.startsWith("--"));
+const args = process.argv.slice(2);
+const json = args.includes("--json");
+const targets = args.filter((arg) => !arg.startsWith("--"));
 if (json && targets.length === 0) {
   const input = JSON.parse(
-    await new Response(Deno.stdin.readable).text(),
+    await Bun.stdin.text(),
   ) as {
     id: string;
     text: string;
@@ -106,13 +142,13 @@ if (json && targets.length === 0) {
     if (parsed.error) results.push({ id, error: parsed.error });
   }
   console.log(JSON.stringify({ version: ver, results }));
-  Deno.exit(0);
+  process.exit(0);
 }
 
 // ── Path mode: recursively lint Markdown files ───────────────────────────────
 if (targets.length === 0) {
   console.error("usage: mermaid-lint [--json] <file-or-dir> [...]");
-  Deno.exit(2);
+  process.exit(2);
 }
 
 type PathResult = {
@@ -129,7 +165,7 @@ const results: PathResult[] = [];
 for (const file of await markdownFiles(targets)) {
   let md: string;
   try {
-    md = await Deno.readTextFile(file);
+    md = await readFile(file, "utf8");
   } catch {
     continue;
   }
@@ -165,20 +201,20 @@ if (json) {
     }/${results.length} block(s) clean (mermaid ${ver})`,
   );
 }
-Deno.exit(failures.length > 0 ? 1 : 0);
+process.exit(failures.length > 0 ? 1 : 0);
 
 async function markdownFiles(inputs: string[]): Promise<string[]> {
   const files: string[] = [];
   for (const input of inputs) {
-    let stat: Deno.FileInfo;
+    let stat: Stats;
     try {
-      stat = await Deno.stat(input);
+      stat = await statPath(input);
     } catch {
       continue;
     }
-    if (stat.isFile && /\.(md|markdown)$/i.test(input)) {
+    if (stat.isFile() && /\.(md|markdown)$/i.test(input)) {
       files.push(input);
-    } else if (stat.isDirectory) {
+    } else if (stat.isDirectory()) {
       const tracked = await gitMarkdownFiles(input);
       if (tracked === null) await walkMarkdown(input, files);
       else files.push(...tracked);
@@ -193,8 +229,9 @@ async function markdownFiles(inputs: string[]): Promise<string[]> {
  *  authoring work that is not ignored. Non-git directories fall back to walking. */
 async function gitMarkdownFiles(dir: string): Promise<string[] | null> {
   try {
-    const output = await new Deno.Command("git", {
-      args: [
+    const output = Bun.spawnSync({
+      cmd: [
+        "git",
         "-C",
         dir,
         "ls-files",
@@ -206,9 +243,9 @@ async function gitMarkdownFiles(dir: string): Promise<string[] | null> {
         "*.md",
         "*.markdown",
       ],
-      stdout: "piped",
-      stderr: "null",
-    }).output();
+      stdout: "pipe",
+      stderr: "ignore",
+    });
     if (!output.success) return null;
     const base = dir.replace(/\/$/, "");
     return new TextDecoder().decode(output.stdout).split("\0")
@@ -220,7 +257,7 @@ async function gitMarkdownFiles(dir: string): Promise<string[] | null> {
 }
 
 async function walkMarkdown(dir: string, files: string[]): Promise<void> {
-  for await (const entry of Deno.readDir(dir)) {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
     if (
       entry.name.startsWith(".") ||
       ["node_modules", "target"].includes(entry.name)
@@ -228,8 +265,8 @@ async function walkMarkdown(dir: string, files: string[]): Promise<void> {
       continue;
     }
     const path = `${dir.replace(/\/$/, "")}/${entry.name}`;
-    if (entry.isDirectory) await walkMarkdown(path, files);
-    else if (entry.isFile && /\.(md|markdown)$/i.test(entry.name)) {
+    if (entry.isDirectory()) await walkMarkdown(path, files);
+    else if (entry.isFile() && /\.(md|markdown)$/i.test(entry.name)) {
       files.push(path);
     }
   }

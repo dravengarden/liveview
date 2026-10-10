@@ -123,7 +123,7 @@ From [docs/core-requirements.md](../core-requirements.md) and `CLAUDE.md` / `AGE
 - Native owns background audio and lock-screen. A PWA lifecycle is not equivalent.
 - Protocol additions are backward compatible; bump `MANIFEST_PROTOCOL_VERSION` (currently `1` in `lv-sync/src/lib.rs` and `src/main.rs`) before an incompatible change.
 - Keep origin selection aligned between `web/src/apiBase.ts` and whatever remains of native config.
-- Deno 2.x; `nix develop -c just verify` before commit.
+- Bun; `nix develop -c just verify` before commit.
 
 ---
 
@@ -464,7 +464,7 @@ Worker contract:
 - `webkit.messageHandlers.lvNativeAudio` is **not** available in workers. `media-bridge.ts` runs on the **window** thread; the worker `postMessage`s `{ hash, url }` and the window enqueues `cacheFromUrl`.
 - `pinAudio` looks up `hash → absolute url` from the in-memory path index, writes `pinned=1`, enqueues `cacheFromUrl`. Native cannot download from a hash alone.
 - If `new Worker` or worker IDB (`versionchange` / blocked) throws, **fall back to main-thread batched puts** with a 16 ms time budget per turn rather than hanging fill.
-- Prototype Worker + IDB-in-worker on **iOS Simulator WKWebView in PR 2**, not only Deno.
+- Prototype Worker + IDB-in-worker on **iOS Simulator WKWebView in PR 2**, not only Bun.
 
 `contentFetch` becomes:
 
@@ -915,7 +915,7 @@ Feature flag: `localStorage lv.replica = "idb" | "native"` (origin-scoped on `lv
 Staged:
 
 1. **PR 1** — Freeze host TypeScript types; **freeze document origin as `lvsync://localhost`**. No behavior change.
-2. **PR 2** — IDB replica + Deno tests + **iOS Simulator IDB/quota/worker/600-frame spike**. Flag off on native.
+2. **PR 2** — IDB replica + Bun tests + **iOS Simulator IDB/quota/worker/600-frame spike**. Flag off on native.
 3. **PR 3** — Switch `contentFetch` onto IDB (flag); **macOS wry resolve smoke**; keep scheme content routes as fallback. Do **not** cut overlay or delete the plugin.
 4. **PR 4 (one SideStore IPA)** — Bounded mediaCache queue + `putFromUrl` appshell + delete `lv-sync` / plugin / `LvStore` / native APM. Same scheme. **Do not wipe sqlite.**
 5. **PR 5** — Docs. Wipe of sqlite is **not** this PR; TS may `POST /legacy-wipe` only after one stable release + gates in §6.
@@ -1013,10 +1013,10 @@ Incremental, independently reviewable PRs. Each keeps `just verify` green. **Doc
 - **Dependencies:** none
 - **Description:** Introduce the stable TypeScript facade wrapping **existing** scheme routes. Zero native behavior change. `tauri.conf.json` URL stays `lvsync://localhost/app/index.html`. Capabilities origin stays. This is the frozen protocol the rest of the series retargets — not a scheme rename in a later PR.
 
-### PR 2 — IndexedDB replica + Deno tests + iOS Simulator IDB/quota/worker spike
+### PR 2 — IndexedDB replica + Bun tests + iOS Simulator IDB/quota/worker spike
 
 - **Title:** `web: add IDB Merkle replica with O(1) agg; prove it on Simulator`
-- **Files/components:** `web/src/replica/**`; Deno tests for put/get/gc (today's LRU+pin, **not** frecency as default)/agg/`present`/protocol-version reject-newer/worklist replay; flag `lv.replica`; **do not** switch `contentFetch` yet.
+- **Files/components:** `web/src/replica/**`; Bun tests for put/get/gc (today's LRU+pin, **not** frecency as default)/agg/`present`/protocol-version reject-newer/worklist replay; flag `lv.replica`; **do not** switch `contentFetch` yet.
 - **Dependencies:** PR 1
 - **Description:** Blob+manifest+agg+apm+worklist schema. Worker-backed writes with **absolute URL** constructor args and main-thread 16 ms fallback. Explicitly does **not** store audio bodies. PWA can opt in via flag for lazy fills alongside SW.
 - **Acceptance (required, not optional):** On iOS Simulator WKWebView with a production-sized `/api/dag`: insert text/units/spoken/marks + **compact card-backdrops**; record `navigator.storage.estimate()`, `persist()` granted/denied on `lvsync://`; run the 600-frame scroll gate **during worker fill**; LRU eviction uses `openCursor` + batch cap. If quota cannot also hold full-size cover/backdrop bodies, **do not persist those bodies** (lazy + remote first-paint). Never artwork→`cacheFromUrl`. Deno-only is **not** sufficient (`docs/core-requirements.md`).
@@ -1062,4 +1062,4 @@ Incremental, independently reviewable PRs. Each keeps `just verify` green. **Doc
 - **Dependencies:** PR 4
 - **Description:** Do not silently ignore prior constraints: SW-on-iOS stays rejected; O(1) stats stay required; covers stay DAG resources; background audio stays native; scheme name stays. Only storage **ownership** is restated. Sqlite wipe remains a gated follow-up, not this PR.
 
-Each PR adds tests for the layer it moves (Deno for replica/OTA URL/protocol version/`applyDag` present-merge; Rust for path-only `putFromUrl`, `index.html&v=` layout, `activate` incomplete-set refusal, `activate_embedded_upgrade`, debug `web_get`; Swift/simulator smoke for play-from-cache, 6-wide queue, and `cacheCount` hash-set). Run `nix develop -c just verify` before merge. Exercise the iOS Simulator WKWebView production-sized library gate on **PRs 2, 3, and 4** (`docs/core-requirements.md` performance acceptance).
+Each PR adds tests for the layer it moves (Bun for replica/OTA URL/protocol version/`applyDag` present-merge; Rust for path-only `putFromUrl`, `index.html&v=` layout, `activate` incomplete-set refusal, `activate_embedded_upgrade`, debug `web_get`; Swift/simulator smoke for play-from-cache, 6-wide queue, and `cacheCount` hash-set). Run `nix develop -c just verify` before merge. Exercise the iOS Simulator WKWebView production-sized library gate on **PRs 2, 3, and 4** (`docs/core-requirements.md` performance acceptance).

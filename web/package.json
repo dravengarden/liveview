@@ -5,16 +5,18 @@
   "private": true,
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
-    "build:app": "tsc && vite build --mode app",
+    "build": "vite build && vite build --mode app && bun ../tools/stage-app-bundle.ts && bun ../tools/check-bundle-budget.ts",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src",
+    "test": "bun test src"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "babel-plugin-react-compiler": "^1.0.0",
+    "oxlint": "^1",
     "typescript": "^5.9.3"
   },
   "dependencies": {
@@ -36,5 +38,6 @@
     "react-dom": "^19.2.4",
     "recharts": "^3.2.1",
     "vite": "^8.2.1"
-  }
+  },
+  "packageManager": "bun@1.4.3"
 }

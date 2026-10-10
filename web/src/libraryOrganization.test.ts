@@ -1,10 +1,10 @@
+import { test } from "bun:test";
 import {
   directoryAncestors,
   directoryPath,
   directoryTree,
   type UserLibrary,
 } from "./libraryOrganization.ts";
-declare const Deno: { test(name: string, body: () => void): void };
 const library: UserLibrary = {
   revision: 4,
   placements: { book: "b" },
@@ -14,7 +14,7 @@ const library: UserLibrary = {
     { id: "a", name: "Learning", parent: null },
   ],
 };
-Deno.test("hierarchy keeps nested siblings together and breadcrumb IDs stable after rename", () => {
+test("hierarchy keeps nested siblings together and breadcrumb IDs stable after rename", () => {
   const actual = directoryTree(library, "en").map((
     { id, depth },
   ) => [id, depth]);
@@ -34,7 +34,7 @@ Deno.test("hierarchy keeps nested siblings together and breadcrumb IDs stable af
     throw new Error("Rename changed membership");
   }
 });
-Deno.test("cached malformed ancestors terminate instead of trapping navigation", () => {
+test("cached malformed ancestors terminate instead of trapping navigation", () => {
   const cyclic = {
     ...library,
     directories: [{ id: "a", name: "A", parent: "b" }, {

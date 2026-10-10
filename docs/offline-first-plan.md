@@ -3,7 +3,7 @@
 Companion to [offline-first.md](offline-first.md) (the design). Sequenced so the
 **#1 requirement (offline ≈ online) lands earliest**, each phase independently
 deployable, legacy path endpoints kept as shims until the end. Verify gate every
-phase: `deno task typecheck` (web) + `cargo build` (server) + `nixos-rebuild
+phase: `bun run typecheck` (web) + `cargo build` (server) + `nixos-rebuild
 build` + manual offline smoke-test, then deploy.
 
 Task IDs reference the session task list.

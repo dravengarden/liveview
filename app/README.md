@@ -14,7 +14,7 @@ app/
 │   ├── capabilities/         Tauri ACL for the bundled and OTA app origins
 │   └── icons/                app icons (incl. android/)
 
-../web/                       the shared SPA — `deno task build:app` → web/dist-app,
+../web/                       the shared SPA — `bun run build` → web/dist-app,
                               bundled here as frontendDist. NO service worker.
                               Content replica lives in TypeScript IndexedDB.
 ../tools/lvbuild*.sh          device + simulator build/install scripts

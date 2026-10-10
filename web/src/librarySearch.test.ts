@@ -1,3 +1,4 @@
+import { test } from "bun:test";
 import {
   type BookSearchMatch,
   buildBookSearchIndex,
@@ -11,10 +12,6 @@ import {
   splitHighlight,
 } from "./librarySearch.ts";
 import type { Book } from "@/types";
-
-declare const Deno: {
-  test(name: string, body: () => void): void;
-};
 
 function assertEquals<T>(actual: T, expected: T): void {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -77,7 +74,7 @@ function matchOf(book: Book, query: string): BookSearchMatch {
   return match;
 }
 
-Deno.test("search covers title, tags, folder, series, author, description, and slug", () => {
+test("search covers title, tags, folder, series, author, description, and slug", () => {
   for (
     const query of [
       "wetlands",
@@ -91,13 +88,13 @@ Deno.test("search covers title, tags, folder, series, author, description, and s
   assertEquals(searchBook(wetlands, "astronomy"), null);
 });
 
-Deno.test("an empty query matches everything without narrowing", () => {
+test("an empty query matches everything without narrowing", () => {
   const match = matchOf(wetlands, "   ");
   assertEquals(match.rank, []);
   assertEquals(match.highlights, {});
 });
 
-Deno.test("title matches outrank the same word in a description", () => {
+test("title matches outrank the same word in a description", () => {
   const inTitle = makeBook("a", { label: "Rust Programming" });
   const inDescription = makeBook("b", {
     label: "Systems",
@@ -106,7 +103,7 @@ Deno.test("title matches outrank the same word in a description", () => {
   assertEquals(rank([inDescription, inTitle], "rust"), ["a", "b"]);
 });
 
-Deno.test("exact and prefix matches outrank substrings inside a word", () => {
+test("exact and prefix matches outrank substrings inside a word", () => {
   const books = [
     makeBook("inner", { label: "Algorithms" }),
     makeBook("word", { label: "Graph Go Patterns" }),
@@ -116,7 +113,7 @@ Deno.test("exact and prefix matches outrank substrings inside a word", () => {
   assertEquals(rank(books, "go"), ["exact", "prefix", "word", "inner"]);
 });
 
-Deno.test("an in-order phrase beats the same words scattered", () => {
+test("an in-order phrase beats the same words scattered", () => {
   const books = [
     makeBook("scattered", { label: "Learning Machine Design" }),
     makeBook("phrase", { label: "Machine Learning Design" }),
@@ -124,7 +121,7 @@ Deno.test("an in-order phrase beats the same words scattered", () => {
   assertEquals(rank(books, "machine learning"), ["phrase", "scattered"]);
 });
 
-Deno.test("typos still find the title", () => {
+test("typos still find the title", () => {
   const books = [wetlands, makeBook("other", { label: "Compilers" })];
   for (const query of ["wetlnds", "wetalnds", "wetlandz", "wetlnd"]) {
     assertEquals(rank(books, query), ["wetlands-field-guide"]);
@@ -145,7 +142,7 @@ Deno.test("typos still find the title", () => {
   );
 });
 
-Deno.test("initials find a title", () => {
+test("initials find a title", () => {
   const books = [
     makeBook("systems", { label: "Machine Learning Systems" }),
     makeBook("other", { label: "Compilers" }),
@@ -157,7 +154,7 @@ Deno.test("initials find a title", () => {
   ]);
 });
 
-Deno.test("diacritics, width, and case fold away", () => {
+test("diacritics, width, and case fold away", () => {
   const books = [
     makeBook("cafe", { label: "Café Society" }),
     makeBook("wide", { label: "ＡＢＣ Primer" }),
@@ -171,7 +168,7 @@ Deno.test("diacritics, width, and case fold away", () => {
   ]);
 });
 
-Deno.test("CJK matches contiguously and by character pairs", () => {
+test("CJK matches contiguously and by character pairs", () => {
   const books = [
     makeBook("llm", { label: "大模型推理:第一性原理、前沿与未来" }),
     makeBook("other", { label: "编译原理" }),
@@ -184,12 +181,12 @@ Deno.test("CJK matches contiguously and by character pairs", () => {
   assertEquals(rank(books, "天文"), []);
 });
 
-Deno.test("every plain token is required, in any order", () => {
+test("every plain token is required, in any order", () => {
   assertEquals(rank([wetlands], "guide wetlands"), ["wetlands-field-guide"]);
   assertEquals(rank([wetlands], "wetlands astronomy"), []);
 });
 
-Deno.test("quoted phrases, exclusions, and field scopes", () => {
+test("quoted phrases, exclusions, and field scopes", () => {
   const books = [
     wetlands,
     makeBook("swamp", {
@@ -208,7 +205,7 @@ Deno.test("quoted phrases, exclusions, and field scopes", () => {
   assertEquals(rank(books, "subject:ecology"), []);
 });
 
-Deno.test("a folder name finds the books filed in it", () => {
+test("a folder name finds the books filed in it", () => {
   const filed = buildBookSearchIndex(wetlands, "Reading List / Biology");
   const parsed = parseSearchQuery("biology");
   assertEquals(matchBookSearch(filed, parsed) != null, true);
@@ -230,7 +227,7 @@ Deno.test("a folder name finds the books filed in it", () => {
   );
 });
 
-Deno.test("highlights cover every visible field that matched", () => {
+test("highlights cover every visible field that matched", () => {
   const match = matchOf(wetlands, "wetlands reader restored");
   assertEquals(match.highlights.label, [{ start: 0, end: 8 }]);
   assertEquals(match.highlights.author, [{ start: 3, end: 9 }]);
@@ -247,7 +244,7 @@ Deno.test("highlights cover every visible field that matched", () => {
   ]);
 });
 
-Deno.test("matches that hide behind the title explain themselves", () => {
+test("matches that hide behind the title explain themselves", () => {
   const description = matchContext(wetlands, matchOf(wetlands, "coastal"));
   assertEquals(description?.kind, "description");
   assertEquals(
@@ -272,7 +269,7 @@ Deno.test("matches that hide behind the title explain themselves", () => {
   );
 });
 
-Deno.test("close matches yield once exact results are plentiful", () => {
+test("close matches yield once exact results are plentiful", () => {
   const exact = (approximate: boolean): BookSearchMatch => ({
     rank: [approximate ? 1 : 0],
     approximate,
@@ -297,7 +294,7 @@ Deno.test("close matches yield once exact results are plentiful", () => {
   assertEquals(plenty.get("a")?.approximate, false);
 });
 
-Deno.test("typos rank below every exact match, whatever the field", () => {
+test("typos rank below every exact match, whatever the field", () => {
   const books = [
     makeBook("typo-title", { label: "Grape Notes" }),
     makeBook("exact-description", {
@@ -308,7 +305,7 @@ Deno.test("typos rank below every exact match, whatever the field", () => {
   assertEquals(rank(books, "graph"), ["exact-description", "typo-title"]);
 });
 
-Deno.test("a word start outranks a word infix even in a stronger field", () => {
+test("a word start outranks a word infix even in a stronger field", () => {
   const books = [
     makeBook("infix-title", { label: "Algorithms" }),
     makeBook("word-author", { label: "Notes", author: "Gorithm Smith" }),

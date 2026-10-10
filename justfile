@@ -15,7 +15,7 @@ shell:
 
 # Verify the standalone product website's metadata, anchors, and local assets.
 website-check:
-  deno run --allow-read tools/check-website.ts
+  bun tools/check-website.ts
 
 # Start the frontend and backend development servers.
 dev: shell
@@ -33,7 +33,7 @@ dev: shell
 
 # Start only the frontend development server.
 dev-web:
-  cd web && deno task dev
+  cd web && bun install --frozen-lockfile && bun run dev
 
 # Start only the backend development server.
 dev-server:
@@ -41,7 +41,7 @@ dev-server:
 
 # Build the frontend SPA and native bundle.
 build-web: shell
-  cd web && deno install --frozen --allow-scripts && deno task build
+  cd web && bun install --frozen-lockfile && bun run build
 
 # Build the release binary with the embedded SPA.
 build: build-web
@@ -68,8 +68,8 @@ check: shell website-check
   cargo fmt --manifest-path app/src-tauri/Cargo.toml --check
   CARGO_TARGET_DIR={{native-target-dir}} cargo clippy --locked --manifest-path app/src-tauri/Cargo.toml --all-targets -- -D warnings
   nixfmt --check flake.nix
-  cd web && deno task typecheck
-  cd web && deno lint --rules-exclude=no-sloppy-imports,no-window,no-window-prefix,require-await src
+  cd web && bun install --frozen-lockfile && bun run typecheck
+  cd web && bun run lint
 
 # Audit each independently locked Rust workspace that can be resolved on Linux.
 dependencies:
@@ -82,7 +82,7 @@ dependencies:
 test:
   cargo test --locked --all-targets
   CARGO_TARGET_DIR={{native-target-dir}} cargo test --locked --manifest-path app/src-tauri/Cargo.toml --all-targets
-  cd web && deno task test
+  cd web && bun install --frozen-lockfile && bun run test
 
 # Check the native dependency graph without requiring an Apple toolchain.
 native-metadata:

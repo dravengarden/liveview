@@ -2,11 +2,11 @@
 
 ## Toolchain
 
-- Use Deno 2.x for JavaScript and TypeScript work.
-- The pinned Nix development shell owns Rust, Deno, and native build tools.
+- Use Bun for JavaScript and TypeScript work.
+- The pinned Nix development shell owns Rust, Bun, and native build tools.
   Run project commands from the repository root through it, for example
   `nix develop -c just verify`; do not probe host tools first.
-- Keep Rust, Deno, and native dependency lockfiles checked in.
+- Keep Rust, Bun, and native dependency lockfiles checked in.
 - Write code, comments, documentation, and commit messages in English.
 
 ## Common commands

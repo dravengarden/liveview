@@ -1,8 +1,5 @@
+import { test } from "bun:test";
 import { readableMermaidLabelColor } from "./mermaid-contrast.ts";
-
-declare const Deno: {
-  test(name: string, body: () => void): void;
-};
 
 function assertEquals<T>(actual: T, expected: T): void {
   if (actual !== expected) {
@@ -10,7 +7,7 @@ function assertEquals<T>(actual: T, expected: T): void {
   }
 }
 
-Deno.test("Mermaid labels repair light-on-light semantic nodes", () => {
+test("Mermaid labels repair light-on-light semantic nodes", () => {
   for (
     const background of [
       "rgb(253, 230, 138)",
@@ -25,7 +22,7 @@ Deno.test("Mermaid labels repair light-on-light semantic nodes", () => {
   }
 });
 
-Deno.test("Mermaid labels preserve colours that already have enough contrast", () => {
+test("Mermaid labels preserve colours that already have enough contrast", () => {
   assertEquals(
     readableMermaidLabelColor("rgb(31, 32, 32)", "rgb(204, 204, 204)"),
     null,
@@ -36,7 +33,7 @@ Deno.test("Mermaid labels preserve colours that already have enough contrast", (
   );
 });
 
-Deno.test("Mermaid labels do not guess across gradients or translucent fills", () => {
+test("Mermaid labels do not guess across gradients or translucent fills", () => {
   assertEquals(
     readableMermaidLabelColor(
       'url("#semantic-gradient")',
