@@ -25,6 +25,7 @@ import {
 import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
 import { SpeechSettings } from "./SpeechSettings";
+import { PlaybackPreparation } from "./PlaybackPreparation";
 
 // The ONE portable playback panel. Whatever is playing — read-aloud of a text
 // chapter or a pre-generated audiobook — this is the single surface that holds
@@ -140,6 +141,7 @@ export function PlaybackSheet({
 
         {/* Scrubber */}
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
+          <PlaybackPreparation active={open}>
           <Typography
             variant="caption"
             color="text.secondary"
@@ -168,6 +170,7 @@ export function PlaybackSheet({
           >
             {fmtTime(duration)}
           </Typography>
+          </PlaybackPreparation>
         </Box>
 
         {/* Transport */}

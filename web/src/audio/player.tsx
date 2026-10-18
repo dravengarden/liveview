@@ -38,7 +38,7 @@ import {
   type NativePositionSample,
 } from "./native-playback-truth";
 import { activeMarkIndex } from "./mark-index";
-import { chapterVoices, preferredVoice, prepareVoice, saveVoicePreference, sentencePosition, voiceMarks, type VoiceChoice } from "./speech";
+import { chapterVoices, preferredVoice, prepareVoice, saveVoicePreference, sentencePosition, voiceMarks, type SpeechPreparation, type VoiceChoice } from "./speech";
 import {
   type AudioPos,
   audioStores,
@@ -280,6 +280,9 @@ function playAudio(
 
 const Ctx = createContext<AudioPlayer | null>(null);
 const ReadAlongCtx = createContext<AudioReadAlong | null>(null);
+// Preparation changes independently from the transport and never ticks the
+// app-wide player context. Only the status surfaces subscribe to it.
+const PreparationCtx = createContext<SpeechPreparation | null>(null);
 interface AudioTimeStore {
   getSnapshot: () => AudioTime;
   subscribe: (listener: () => void) => () => void;
@@ -304,6 +307,7 @@ export function AudioPlayerProvider(
   const [voices, setVoices] = useState<VoiceChoice[]>([]);
   const [voiceBusy, setVoiceBusy] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [preparation, setPreparation] = useState<SpeechPreparation | null>(null);
   const voiceSeq = useRef(0);
   const [rate, setRateState] = useState<number>(() => {
     const v = Number(localStorage.getItem(RATE_KEY) ?? "1");
@@ -473,6 +477,7 @@ export function AudioPlayerProvider(
       voiceSeq.current++;
       setVoiceBusy(false);
       setVoiceError(null);
+      setPreparation(null);
       if (!ready) setVoices([]);
       prefetchedFrom.current = null;
       resetNativePlaybackProof();
@@ -544,10 +549,11 @@ export function AudioPlayerProvider(
             if (chapter) {
               setVoices(chapter.voices);
               const preferred = await preferredVoice(np, chapter);
-              if (preferred) selected = await prepareVoice(np, preferred, () => loadSeq.current === seq);
+              if (preferred) selected = await prepareVoice(np, preferred, () => loadSeq.current === seq, setPreparation);
             }
           }
           if (loadSeq.current !== seq) return;
+          setPreparation(null);
           if (selected) {
             selectedMarks ??= await voiceMarks(selected);
             if (loadSeq.current !== seq) return;
@@ -576,6 +582,7 @@ export function AudioPlayerProvider(
           }
         } catch (error) {
           if (loadSeq.current === seq) {
+            setPreparation(previous => previous ? { ...previous, phase: "failed" } : null);
             setLoading(false);
             setBuffering(false);
             sourcePendingRef.current = false;
@@ -1550,6 +1557,7 @@ export function AudioPlayerProvider(
     const current = (): boolean => voiceSeq.current === token && loadSeq.current === seq;
     setVoiceBusy(true);
     setVoiceError(null);
+    setPreparation({ phase: "checking", voice, label: voices.find(v => v.id === voice)?.label ?? "", startedAt: Date.now() });
     // Keep the current source playing while the alternative is prepared. The
     // position is captured only at the actual switch, after both blobs exist.
     void (async () => {
@@ -1574,7 +1582,9 @@ export function AudioPlayerProvider(
           choice = chapter.voices.find(v => v.id === voice);
         }
         if (!choice) throw new Error("This voice is no longer available");
-        const ready = await prepareVoice(np, choice, current);
+        const ready = await prepareVoice(np, choice, current, setPreparation);
+        if (!current()) return;
+        setPreparation(previous => previous ? { ...previous, phase: "loading" } : null);
         const marks = await voiceMarks(ready);
         if (!current()) return;
         const unit = activeMarkIndex(marksRef.current, currentTimeRef.current * 1000);
@@ -1583,9 +1593,15 @@ export function AudioPlayerProvider(
         setVoices(previous => previous.map(v => v.id === voice ? ready : v));
         loadTrack({ ...np, voice }, queueRef.current, queueIndexRef.current, autoplay, { voice: ready, marks, unit });
       } catch (error) {
-        if (current()) setVoiceError(error instanceof Error ? error.message : String(error));
+        if (current()) {
+          setPreparation(previous => previous ? { ...previous, phase: "failed" } : null);
+          setVoiceError(error instanceof Error ? error.message : String(error));
+        }
       } finally {
-        if (current()) setVoiceBusy(false);
+        if (current()) {
+          setVoiceBusy(false);
+          setPreparation(previous => previous?.phase === "failed" ? previous : null);
+        }
       }
     })();
   }, [voices, loadTrack, persistSession]);
@@ -1703,6 +1719,9 @@ export function AudioPlayerProvider(
       a.load();
     }
     loadSeq.current++;
+    setPreparation(null);
+    setVoiceBusy(false);
+    setVoiceError(null);
     setNowPlaying(null);
     nowPlayingRef.current = null;
     setSentences([]);
@@ -1819,12 +1838,14 @@ export function AudioPlayerProvider(
     <Ctx.Provider value={value}>
       <ReadAlongCtx.Provider value={readAlong}>
         <TimeCtx.Provider value={timeStore}>
-          {children}
-          {
-            /* The single, always-mounted narration element — never unmounts, so
-              playback survives every in-app navigation. */
-          }
-          <audio ref={audioRef} preload="metadata" hidden />
+          <PreparationCtx.Provider value={preparation}>
+            {children}
+            {
+              /* The single, always-mounted narration element — never unmounts, so
+                playback survives every in-app navigation. */
+            }
+            <audio ref={audioRef} preload="metadata" hidden />
+          </PreparationCtx.Provider>
         </TimeCtx.Provider>
       </ReadAlongCtx.Provider>
     </Ctx.Provider>
@@ -1839,6 +1860,10 @@ export function useAudioPlayer(): AudioPlayer {
     );
   }
   return ctx;
+}
+
+export function useAudioPreparation(): SpeechPreparation | null {
+  return useContext(PreparationCtx);
 }
 
 /** Read-along state (sentences + the spoken index). Changes once per sentence,

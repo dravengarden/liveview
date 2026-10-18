@@ -24,6 +24,7 @@ import {
 } from "@/audio/playback-ui";
 import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
+import { PlaybackPreparation } from "./PlaybackPreparation";
 
 /** Read-along follow control for the host reader (audiobook page OR the in-place
  *  text read-aloud). The bar renders the toggle; the host owns the scroll. */
@@ -335,9 +336,7 @@ export function PlaybackBar(
             >
               <Box sx={earSx}>{followBtn}</Box>
               {mainCluster}
-              {timeStart}
-              {scrubber}
-              {timeEnd}
+              <PlaybackPreparation>{timeStart}{scrubber}{timeEnd}</PlaybackPreparation>
               <Box sx={earSx}>
                 <SpeedChip />
               </Box>
@@ -351,9 +350,7 @@ export function PlaybackBar(
             <>
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <Box sx={earSx}>{followBtn}</Box>
-                {timeStart}
-                {scrubber}
-                {timeEnd}
+                <PlaybackPreparation>{timeStart}{scrubber}{timeEnd}</PlaybackPreparation>
                 <Box sx={earSx}>{controlsBtn}</Box>
               </Box>
               <Box

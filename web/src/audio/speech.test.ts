@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { speechCatalog } from "./speech";
+import { prepareVoice, speechCatalog, type SpeechPreparation, type VoiceChoice } from "./speech";
 import type { NowPlaying } from "./player";
 import { sentencePosition, voicePreferenceKey } from "./voice-model";
 import { parseMediaResource } from "@/audioMediaIndex";
@@ -44,4 +44,66 @@ test("fresh speech settings bypass the immutable offline DAG snapshot", async ()
   } finally {
     globalThis.fetch = previous;
   }
+});
+
+test("preparation exposes server stages, survives a disconnect, and never resubmits while polling", async () => {
+  const fetch = globalThis.fetch;
+  const timeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => timeout(args[0], args[1] === 2000 ? 0 : args[1], ...args.slice(2))) as typeof setTimeout;
+  const np = { bookSlug: "english", chapterPath: "english/01.md", rendition: "text", lang: "en" } as NowPlaying;
+  const choice: VoiceChoice = { id: "kokoro:af_heart", label: "Heart", status: "available", audio_hash: null, marks_hash: null, bytes: null };
+  const stages: (VoiceChoice["status"] | "offline")[] = ["queued", "queued", "running", "offline", "running", "ready"];
+  let submissions = 0;
+  globalThis.fetch = async (_input, options) => {
+    if (options?.method === "POST") { submissions++; return Response.json({ status: "queued" }, { status: 202 }); }
+    const status = stages.shift();
+    if (status === "offline") throw new TypeError("Network connection lost");
+    assert.ok(status, "polling stops when the audio is ready");
+    return Response.json({ chapters: [{ id: "text/en/01.md", voices: [{ ...choice, status, audio_hash: status === "ready" ? "audio" : null, marks_hash: status === "ready" ? "marks" : null }] }] });
+  };
+  const progress: SpeechPreparation[] = [];
+  try {
+    const result = await prepareVoice(np, choice, () => true, value => progress.push(value));
+    assert.equal(result.audio_hash, "audio");
+    assert.equal(submissions, 1);
+    assert.deepEqual(progress.map(p => p.phase), ["checking", "queued", "generating", "reconnecting", "generating", "loading"]);
+    assert.equal(new Set(progress.map(p => p.startedAt)).size, 1, "reconnection preserves the waiting clock");
+    assert.ok(progress.every(p => p.voice === choice.id));
+  } finally {
+    globalThis.fetch = fetch;
+    globalThis.setTimeout = timeout;
+  }
+});
+
+test("a cancelled chapter cannot report readiness or overwrite the next chapter's preparation", async () => {
+  const fetch = globalThis.fetch;
+  let current = true;
+  const phases: string[] = [];
+  globalThis.fetch = async (_input, options) => {
+    if (options?.method === "POST") return Response.json({ status: "queued" }, { status: 202 });
+    current = false;
+    return Response.json({ chapters: [{ id: "text/en/01.md", voices: [{ id: "heart", status: "ready", audio_hash: "audio", marks_hash: "marks" }] }] });
+  };
+  try {
+    await assert.rejects(prepareVoice(
+      { bookSlug: "english", chapterPath: "english/01.md", rendition: "text", lang: "en" } as NowPlaying,
+      { id: "heart", label: "Heart", status: "queued", audio_hash: null, marks_hash: null, bytes: null },
+      () => current, p => phases.push(p.phase),
+    ), /Cancelled/);
+    assert.deepEqual(phases, ["checking", "queued"]);
+  } finally { globalThis.fetch = fetch; }
+});
+
+test("a failed server job exits preparation with a retryable error", async () => {
+  const fetch = globalThis.fetch;
+  globalThis.fetch = async (_input, options) => options?.method === "POST"
+    ? Response.json({ status: "queued" }, { status: 202 })
+    : Response.json({ chapters: [{ id: "text/en/01.md", voices: [{ id: "heart", status: "failed" }] }] });
+  try {
+    await assert.rejects(prepareVoice(
+      { bookSlug: "english", chapterPath: "english/01.md", rendition: "text", lang: "en" } as NowPlaying,
+      { id: "heart", label: "Heart", status: "available", audio_hash: null, marks_hash: null, bytes: null },
+      () => true,
+    ), /generation failed/);
+  } finally { globalThis.fetch = fetch; }
 });

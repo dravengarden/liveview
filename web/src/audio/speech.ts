@@ -14,6 +14,14 @@ export interface VoiceChoice {
   marks_hash: string | null;
   bytes: number | null;
 }
+
+export interface SpeechPreparation {
+  phase: "checking" | "queued" | "generating" | "reconnecting" | "loading" | "failed";
+  voice: string;
+  label: string;
+  /** Time this device started waiting, not an estimate of server work. */
+  startedAt: number;
+}
 export interface ChapterVoices {
   id: string;
   default_voice: string;
@@ -88,9 +96,22 @@ export async function preferredVoice(np: NowPlaying, chapter: ChapterVoices): Pr
   return chapter.voices.find(v => v.id === id) ?? chapter.voices.find(v => v.id === chapter.default_voice);
 }
 
-export async function prepareVoice(np: NowPlaying, choice: VoiceChoice, current: () => boolean): Promise<VoiceChoice> {
+export async function prepareVoice(
+  np: NowPlaying,
+  choice: VoiceChoice,
+  current: () => boolean,
+  onProgress?: (progress: SpeechPreparation) => void,
+): Promise<VoiceChoice> {
   if (!current()) throw new Error("Cancelled");
   if (choice.status === "ready" && choice.audio_hash && choice.marks_hash) return choice;
+  const startedAt = Date.now();
+  let previousPhase: SpeechPreparation["phase"] | undefined;
+  const report = (phase: SpeechPreparation["phase"]): void => {
+    if (!current() || phase === previousPhase) return;
+    previousPhase = phase;
+    onProgress?.({ phase, voice: choice.id, label: choice.label, startedAt });
+  };
+  report("checking");
   const query = new URLSearchParams({ path: np.chapterPath, lang: np.lang, rendition: np.rendition });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);
@@ -103,14 +124,30 @@ export async function prepareVoice(np: NowPlaying, choice: VoiceChoice, current:
   } finally {
     clearTimeout(timer);
   }
+  report(choice.status === "running" ? "generating" : "queued");
   for (let attempt = 0; attempt < 300 && current(); attempt++) {
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 2000));
     if (!current()) throw new Error("Cancelled");
-    const chapter = await chapterVoices(np, true);
+    let chapter: ChapterVoices | null;
+    try {
+      chapter = await chapterVoices(np, true);
+    } catch {
+      // A transient disconnect must not turn a server-side job into a failed
+      // job. Keep observing it without submitting duplicate generation work.
+      report("reconnecting");
+      continue;
+    }
+    if (!current()) throw new Error("Cancelled");
     const ready = chapter?.voices.find(v => v.id === choice.id);
-    if (ready?.status === "ready" && ready.audio_hash && ready.marks_hash) return ready;
+    if (chapter && !ready) throw new Error("Voice settings changed. Please choose a voice again.");
+    if (ready?.status === "ready" && ready.audio_hash && ready.marks_hash) {
+      report("loading");
+      return ready;
+    }
     if (ready?.status === "failed") throw new Error("Voice generation failed. Please retry.");
+    report(!chapter ? "reconnecting" : ready?.status === "running" ? "generating" : ready?.status === "queued" ? "queued" : "checking");
   }
+  if (!current()) throw new Error("Cancelled");
   throw new Error("Voice is still preparing. You can retry later.");
 }
 
