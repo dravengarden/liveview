@@ -1,4 +1,5 @@
 import { rem } from "@/px";
+import { loadContentsTree } from "@/audio/contents";
 import { nativeNavPop, nativeNavPush, nativeNavReady } from "@/native-nav";
 import { remoteUrl } from "@/apiBase";
 import { nativeWidgetPublish } from "@/native-audio";
@@ -597,7 +598,11 @@ export function App(): React.JSX.Element {
     // Live tree updates carry the default (text) spine. Don't let one clobber a
     // non-text spine the user is currently browsing.
     if (renditionRef.current === "text") {
-      setTree(newTree);
+      const path = currentPathRef.current;
+      if (!path) setTree(newTree);
+      else void loadContentsTree(path.split("/")[0] ?? "", "text", true).then(next => {
+        if (currentPathRef.current === path && renditionRef.current === "text") setTree(next);
+      }).catch(() => undefined);
     }
     // A TreeUpdate is the server's post-`sync` broadcast — the corpus just changed
     // (new or edited book). This is the PRIMARY live-refresh path: refresh the
@@ -817,8 +822,7 @@ export function App(): React.JSX.Element {
       }
       void (async () => {
         try {
-          const res = await contentFetch(`/api/tree?rendition=audio`);
-          const spine = (await res.json()) as TreeNode[];
+          const spine = await loadContentsTree(slug, "audio");
           const root = spine.find((n) => n.path === slug);
           const scope = root ? [root] : spine;
           let target = chapterPath && hasFilePath(scope, chapterPath)
@@ -912,6 +916,7 @@ export function App(): React.JSX.Element {
         (e) => e.path.startsWith(`${slug}/`) && !e.path.includes(".spoken"),
       )?.path;
       renditionRef.current = r.kind;
+      setTree([]);
       void openFile(
         resume ?? `${slug}/README.md`,
         initialLang,
@@ -923,11 +928,8 @@ export function App(): React.JSX.Element {
       // warms both spines on load; this just refreshes the in-state tree on entry.
       void (async () => {
         try {
-          const res = await contentFetch(
-            `/api/tree?rendition=${encodeURIComponent(r.kind)}`,
-          );
-          const spine = (await res.json()) as TreeNode[];
-          if (spine.some((n) => n.path === slug)) setTree(spine);
+          const spine = await loadContentsTree(slug, r.kind);
+          if (currentPathRef.current?.startsWith(`${slug}/`) && renditionRef.current === r.kind && spine.some((n) => n.path === slug)) setTree(spine);
         } catch {
           // offline + uncached spine — the reader still works from the entry above.
         }
@@ -1135,10 +1137,7 @@ export function App(): React.JSX.Element {
       try {
         // Cache-first (offline-safe), same as enterBook — never a raw network
         // fetch that fails offline / skips the cache.
-        const res = await contentFetch(
-          `/api/tree?rendition=${encodeURIComponent(kind)}`,
-        );
-        const nextTree = (await res.json()) as TreeNode[];
+        const nextTree = await loadContentsTree(path.split("/")[0] ?? "", kind);
         if (seq !== fileLoadSeq.current) return;
         setTree(nextTree);
       } catch (e) {

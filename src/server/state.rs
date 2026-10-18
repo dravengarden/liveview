@@ -41,6 +41,8 @@ pub struct AppState {
     /// content store reports a new root.
     pub dag_cache: Mutex<Option<CachedJson>>,
     pub sizes_cache: Mutex<Option<CachedJson>>,
+    /// Bounded immutable timing summaries for the book contents response.
+    pub contents_durations: Mutex<HashMap<String, f64>>,
     /// Optional reference speech adapter + fallback voice for on-demand audio.
     /// Both are operator configuration; the core reader performs no network TTS
     /// when the command is absent, and books may declare their own voice.

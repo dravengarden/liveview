@@ -26,6 +26,7 @@ fn state_over(
         catalog: RwLock::new(catalog),
         dag_cache: Default::default(),
         sizes_cache: Default::default(),
+        contents_durations: Default::default(),
         tts_cmd: None,
         tts_voice: None,
         book_end_phrases: HashMap::new(),
@@ -372,6 +373,7 @@ async fn store_errors_surface_as_service_unavailable() {
     for uri in [
         "/api/tree",
         "/api/tree?rendition=audio",
+        "/api/contents/book?rendition=text",
         "/api/settings",
         "/api/blob/somehash",
         "/api/spoken?path=book/01.md",

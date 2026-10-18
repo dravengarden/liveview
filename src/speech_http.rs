@@ -41,7 +41,7 @@ pub(crate) async fn api_speech_book(
     }
 }
 
-async fn speech_book(state: &AppState, slug: &str) -> Result<serde_json::Value, String> {
+pub(crate) async fn speech_book(state: &AppState, slug: &str) -> Result<serde_json::Value, String> {
     let sources = state.store.speech_sources(slug).await?;
     let assets = state.store.speech_assets(Some(slug)).await?;
     let assets: HashMap<_, _> = assets

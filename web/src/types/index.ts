@@ -7,6 +7,8 @@ export interface TreeNode {
    *  chapters whose H1 differs by edition. The sidebar shows
    *  `titles[currentLang] ?? name`. Absent for plain file-tree nodes. */
   titles?: Record<string, string> | null;
+  /** Voice summaries loaded atomically with titles, keyed by edition language. */
+  audio?: Record<string, import("@/audio/speech").ChapterVoices>;
 }
 
 export type FileType =

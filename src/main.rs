@@ -4,6 +4,7 @@ mod audio_optimize;
 mod check;
 mod cli;
 mod config;
+mod contents_http;
 #[cfg(test)]
 mod http_tests;
 mod interactive_view;
@@ -756,6 +757,7 @@ async fn run(cli: Cli, server: config::ServerCfg) {
         catalog: RwLock::new(catalog),
         dag_cache: Default::default(),
         sizes_cache: Default::default(),
+        contents_durations: Default::default(),
         tts_cmd,
         tts_voice,
         book_end_phrases,
@@ -805,6 +807,7 @@ async fn run_preview(args: cli::PreviewArgs) -> Result<(), String> {
         catalog: RwLock::new(catalog),
         dag_cache: Default::default(),
         sizes_cache: Default::default(),
+        contents_durations: Default::default(),
         tts_cmd: env("LIVEVIEW_EDGE_TTS_CMD"),
         tts_voice: env("LIVEVIEW_TTS_VOICE"),
         book_end_phrases: load_book_end_phrases(),
@@ -1021,6 +1024,13 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
     }
     let slugs: std::collections::BTreeSet<_> = chapters.iter().map(|c| &c.book_slug).collect();
     for slug in slugs {
+        for rendition in ["text", "audio"] {
+            let url = format!(
+                "/api/contents/{}?rendition={rendition}",
+                encode_query_value(slug)
+            );
+            resources.push(serde_json::json!({"path":url,"hash":format!("{root}:{url}"),"kind":"list","bytes":0,"url":url}));
+        }
         let url = format!("/api/speech/{}", encode_query_value(slug));
         resources.push(serde_json::json!({"path":url,"hash":format!("{root}:{url}"),"kind":"list","bytes":0,"url":url}));
     }
@@ -1483,6 +1493,7 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
         .route("/api/card-backdrop", get(api_card_backdrop))
         .route("/api/artwork", get(api_artwork))
         .route("/api/tree", get(api_tree))
+        .route("/api/contents/{slug}", get(contents_http::api_contents))
         .route("/api/file", get(api_file))
         .route("/api/raw", get(api_raw))
         .route("/api/spoken", get(api_spoken))
@@ -2663,6 +2674,7 @@ mod apm_tests {
             catalog: RwLock::new(catalog),
             dag_cache: Default::default(),
             sizes_cache: Default::default(),
+            contents_durations: Default::default(),
             tts_cmd: Some("edge-tts".into()),
             tts_voice: Some("x".into()),
             book_end_phrases: HashMap::new(),

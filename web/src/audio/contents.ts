@@ -1,102 +1,75 @@
-import { useEffect, useState } from "react";
+import { selectPreferredVoice, voicePreferenceKey, type VoiceChoice } from "./speech";
+import type { TreeNode } from "@/types";
 import { contentFetch } from "@/native-sync";
-import { preferredVoice, selectPreferredVoice, speechCatalog, voicePreferenceKey, type VoiceChoice } from "./speech";
-import type { NowPlaying } from "./player";
-import type { Mark } from "@/types";
+import { remoteUrl } from "@/apiBase";
+import { useEffect, useState } from "react";
 
 export interface ChapterAudioInfo {
   voice: VoiceChoice;
   seconds?: number;
 }
 
-export function markDuration(data: unknown): number | undefined {
-  if (!Array.isArray(data) || data.length === 0) return undefined;
-  const end = (data[data.length - 1] as Mark | undefined)?.end_ms;
-  return typeof end === "number" && Number.isFinite(end) && end > 0 ? end / 1000 : undefined;
+/** Titles and audio metadata have the same load and offline-cache lifecycle. */
+export async function loadContentsTree(book: string, rendition: string, fresh = false): Promise<TreeNode[]> {
+  const path = `/api/contents/${encodeURIComponent(book)}?rendition=${encodeURIComponent(rendition)}`;
+  const response = await (fresh
+    ? fetch(remoteUrl(path), { cache: "no-store", signal: AbortSignal.timeout(5000) })
+    : contentFetch(path)).catch(() => null);
+  if (response?.ok) return await response.json() as TreeNode[];
+  if (fresh) throw new Error("Contents refresh unavailable");
+  // Old servers and offline replicas may only have the legacy title spine.
+  const legacy = await contentFetch(`/api/tree?rendition=${encodeURIComponent(rendition)}`);
+  if (!legacy.ok) throw new Error("Contents unavailable");
+  return await legacy.json() as TreeNode[];
 }
 
-/** One book snapshot, two bounded timing reads at a time, no synthesis side effects.
- * Hidden contents and background pages never keep polling. Hash-keyed timings
- * are already stored by the content replica, not a second URL cache. */
-export function useContentsAudio(
-  book: string | undefined,
-  rendition: string,
-  lang: string | undefined,
-  visible: boolean,
-  selectedVoice: string | undefined,
-  playingPath: string | undefined,
-): ReadonlyMap<string, ChapterAudioInfo> {
-  const [rows, setRows] = useState<ReadonlyMap<string, ChapterAudioInfo>>(new Map());
+/** Only unfinished synthesis needs refreshes; the first render uses its title snapshot. */
+export function useContentsSnapshot(initial: TreeNode[], book: string | undefined, rendition: string, visible: boolean): TreeNode[] {
+  const [updated, setUpdated] = useState<{ source: TreeNode[]; tree: TreeNode[] }>();
+  const tree = updated?.source === initial ? updated.tree : initial;
   useEffect(() => {
-    setRows(new Map());
-  }, [book, rendition, lang, selectedVoice, playingPath]);
-  useEffect(() => {
-    if (!book || !lang || !visible) return;
+    if (!book || !visible) return;
+    const pending = (nodes: TreeNode[]): boolean => nodes.some(node =>
+      Object.values(node.audio ?? {}).some(chapter => chapter.voices.some(voice => voice.status === "queued" || voice.status === "running")) || pending(node.children));
+    if (!pending(tree)) return;
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let busy = false;
-    let previous = "";
-    const durations = new Map<string, number>();
-    const base: NowPlaying = { bookSlug: book, bookLabel: "", chapterPath: "", chapterLabel: "", cover: false, rendition, lang };
+    let timer: ReturnType<typeof setTimeout>;
     const refresh = async (): Promise<void> => {
-      if (busy || cancelled || document.hidden) return;
-      busy = true;
       try {
-        const catalog = await speechCatalog(base, true).catch(() => null)
-          ?? await speechCatalog(base);
-        if (!catalog || cancelled || document.hidden) return;
-        const prefix = `${rendition}/${lang}/`;
-        const chapters = catalog.chapters.filter(c => c.id.startsWith(prefix));
-        // Resolve the shared server preference once, not one request per row.
-        if (chapters[0]) await preferredVoice(base, chapters[0]);
-        const preference = localStorage.getItem(voicePreferenceKey(base));
-        const result = new Map<string, ChapterAudioInfo>();
-        let cursor = 0;
-        const worker = async (): Promise<void> => {
-          while (cursor < chapters.length && !cancelled && !document.hidden) {
-            const chapter = chapters[cursor++];
-            if (!chapter) break;
-            const path = `${book}/${chapter.id.slice(prefix.length)}`;
-            const voice = selectPreferredVoice(chapter, preference, path === playingPath ? selectedVoice : undefined);
-            if (!voice || cancelled) continue;
-            let seconds = voice.marks_hash ? durations.get(voice.marks_hash) : undefined;
-            if (voice.status === "ready" && voice.marks_hash && seconds === undefined) {
-              try {
-                const response = await contentFetch(`/api/blob/${voice.marks_hash}`, { cacheFirst: true, connectMs: 2000 });
-                seconds = response.ok ? markDuration(await response.json()) : undefined;
-                if (seconds !== undefined) durations.set(voice.marks_hash, seconds);
-              } catch { /* A timing miss must not hide a known generation state. */ }
-            }
-            result.set(path, { voice, ...(seconds !== undefined ? { seconds } : {}) });
-          }
-        };
-        await Promise.all([worker(), worker()]);
-        if (!cancelled && !document.hidden) {
-          const signature = JSON.stringify([...result].sort(([a], [b]) => a.localeCompare(b)));
-          if (signature !== previous) {
-            previous = signature;
-            setRows(old => JSON.stringify([...old].sort(([a], [b]) => a.localeCompare(b))) === signature ? old : result);
-          }
+        if (!document.hidden) {
+          const next = await loadContentsTree(book, rendition, true);
+          if (!cancelled) { setUpdated({ source: initial, tree: next }); return; }
         }
-      } catch { /* Keep the last observed state during a transient disconnect. */ }
-      finally {
-        busy = false;
-        if (!cancelled && !document.hidden) timer = setTimeout(() => void refresh(), 5000);
-      }
+      } catch { /* Keep the complete snapshot during disconnects. */ }
+      if (!cancelled) timer = setTimeout(() => void refresh(), 5000);
     };
-    const visibility = (): void => {
-      clearTimeout(timer);
-      if (!document.hidden) void refresh();
-    };
-    document.addEventListener("visibilitychange", visibility);
-    // Leave the drawer's opening frames for presentation; retained rows remain
-    // readable while the next snapshot is fetched.
-    timer = setTimeout(() => void refresh(), 400);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-      document.removeEventListener("visibilitychange", visibility);
-    };
-  }, [book, rendition, lang, visible, selectedVoice, playingPath]);
+    timer = setTimeout(() => void refresh(), 5000);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [initial, tree, book, rendition, visible]);
+  return tree;
+}
+
+/** Synchronous projection: opening contents never fetches or clears row details. */
+export function contentsAudio(
+  tree: TreeNode[],
+  lang: string | undefined,
+  preference: string | null,
+  selectedVoice?: string,
+  playingPath?: string,
+): ReadonlyMap<string, ChapterAudioInfo> {
+  const rows = new Map<string, ChapterAudioInfo>();
+  const visit = (nodes: TreeNode[]): void => {
+    for (const node of nodes) {
+      const chapter = lang ? node.audio?.[lang] : undefined;
+      const voice = chapter && selectPreferredVoice(chapter, preference, node.path === playingPath ? selectedVoice : undefined);
+      if (voice) rows.set(node.path, { voice, ...(voice.seconds !== undefined ? { seconds: voice.seconds } : {}) });
+      visit(node.children);
+    }
+  };
+  visit(tree);
   return rows;
+}
+
+export function contentsPreference(bookSlug: string | undefined, rendition: string, lang: string | undefined): string | null {
+  return bookSlug && lang ? localStorage.getItem(voicePreferenceKey({ bookSlug, rendition, lang, bookLabel: "", cover: false, chapterPath: "", chapterLabel: "" })) : null;
 }

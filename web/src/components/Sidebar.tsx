@@ -29,7 +29,7 @@ import { LIVEVIEW_RADII } from "@/brand";
 import { type Language, useI18n } from "@/i18n";
 import { localeDescriptor } from "@/locales/registry";
 import { centerWithin } from "@/scrollWithin";
-import { useContentsAudio, type ChapterAudioInfo } from "@/audio/contents";
+import { contentsAudio, contentsPreference, useContentsSnapshot, type ChapterAudioInfo } from "@/audio/contents";
 import { useAudioPlayer, useAudioTime } from "@/audio/player";
 
 function audioTime(seconds: number): string {
@@ -350,7 +350,7 @@ export function Sidebar({
   bookSlug,
   rendition = "text",
   visible = true,
-  tree,
+  tree: initialTree,
   currentPath,
   playingPath = null,
   bookMode = false,
@@ -363,9 +363,11 @@ export function Sidebar({
   updatedAt,
 }: SidebarProps): React.JSX.Element {
   const { t, lang } = useI18n();
+  const tree = useContentsSnapshot(initialTree, bookSlug, rendition, visible);
   const { nowPlaying } = useAudioPlayer();
   const matchingAudio = nowPlaying !== null && nowPlaying.bookSlug === bookSlug && nowPlaying.rendition === rendition && nowPlaying.lang === currentLang;
-  const audioRows = useContentsAudio(bookSlug, rendition, currentLang, visible, matchingAudio ? nowPlaying?.voice : undefined, matchingAudio ? nowPlaying?.chapterPath : undefined);
+  const preference = contentsPreference(bookSlug, rendition, currentLang);
+  const audioRows = useMemo(() => contentsAudio(tree, currentLang, preference, matchingAudio ? nowPlaying?.voice : undefined, matchingAudio ? nowPlaying?.chapterPath : undefined), [tree, currentLang, preference, matchingAudio, nowPlaying?.voice, nowPlaying?.chapterPath]);
   const audioPath = matchingAudio ? nowPlaying.chapterPath : null;
   const selectRef = useRef(onSelect);
   selectRef.current = onSelect;

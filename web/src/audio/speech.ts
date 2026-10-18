@@ -13,6 +13,7 @@ export interface VoiceChoice {
   audio_hash: string | null;
   marks_hash: string | null;
   bytes: number | null;
+  seconds?: number;
 }
 
 export interface SpeechPreparation {
