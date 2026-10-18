@@ -436,15 +436,15 @@ export function useTheme(): UseThemeResult {
         },
         MuiSelect: {
           styleOverrides: {
-            select: ({ ownerState }) => ({
+            select: {
               "@media (pointer: coarse)": {
                 minHeight: 44,
                 boxSizing: "border-box",
-                ...(ownerState.size === "small"
-                  ? { paddingBlock: "max(8.5px, calc((44px - 1lh) / 2))" }
-                  : {}),
+                ".MuiInputBase-sizeSmall &": {
+                  paddingBlock: "max(8.5px, calc((44px - 1lh) / 2))",
+                },
               },
-            }),
+            },
           },
         },
         MuiCard: {
