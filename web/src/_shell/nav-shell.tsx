@@ -233,14 +233,11 @@ export function NavShell(props: NavShellProps): ReactNode {
   useEffect(() => {
     const root = document.documentElement;
     if (spatial && mobileOpen) {
-      root.style.setProperty("--lv-safe-area-bg", "var(--lv-nav-bg)");
       root.setAttribute("data-lv-spatial-drawer-open", "");
     } else {
-      root.style.removeProperty("--lv-safe-area-bg");
       root.removeAttribute("data-lv-spatial-drawer-open");
     }
     return () => {
-      root.style.removeProperty("--lv-safe-area-bg");
       root.removeAttribute("data-lv-spatial-drawer-open");
     };
   }, [mobileOpen, spatial]);
@@ -697,8 +694,9 @@ export function NavShell(props: NavShellProps): ReactNode {
               position: "absolute",
               inset: 0,
               zIndex: (t) => t.zIndex.modal - 1,
-              pointerEvents: mobileOpen ? "auto" : "none",
-              cursor: mobileOpen ? "pointer" : "default",
+              pointerEvents: "none",
+              cursor: "default",
+              '&[aria-hidden="false"]': { pointerEvents: "auto", cursor: "pointer" },
               // Cowboy keeps the trailing workspace legible as spatial context,
               // but subdued enough that the revealed rail is unquestionably the
               // active plane. Keep the tint stable and let the spatial compositor
@@ -734,10 +732,15 @@ export function NavShell(props: NavShellProps): ReactNode {
             left: { xs: SPATIAL_PHONE_WIDTH, sm: SPATIAL_TABLET_WIDTH },
             right: 0,
             bottom: "calc(var(--shell-bar-h, 0px) + 12px)",
-            display: mobileOpen ? "flex" : "none",
+            // Keep this bounded control laid out before the first reveal. A
+            // display:none -> flex flip otherwise performs its cold layout in
+            // the same frame that starts translating the full reader.
+            display: "flex",
+            visibility: "hidden",
+            '&[aria-hidden="false"]': { visibility: "visible", pointerEvents: "auto" },
             justifyContent: "center",
             alignItems: "center",
-            pointerEvents: mobileOpen ? "auto" : "none",
+            pointerEvents: "none",
           }}
         >
           {spatialAccessory}

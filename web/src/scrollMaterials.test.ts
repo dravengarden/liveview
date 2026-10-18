@@ -87,9 +87,10 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     themeHook,
-    /backgroundColor\s*=\s*`var\(--lv-safe-area-bg, \$\{c\.bgDefault\}\)`/,
-    "the document safe area must accept a temporary shell-owned surface",
+    /backgroundColor\s*=\s*c\.bgDefault/,
+    "the document safe area must retain the current theme's base surface",
   );
+  assertPresent(mobileStyles, /html\[data-lv-spatial-drawer-open\]\s*\{\s*background-color:\s*var\(--lv-nav-bg\) !important/, "contents must override only the root background without an inherited property write");
   assertPresent(
     themeHook,
     /setProperty\("--lv-nav-bg", c\.bgPaper\)[\s\S]{0,300}setProperty\(\s*"--lv-nav-fg", c\.textPrimary\)/,
@@ -282,7 +283,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     navShell,
-    /spatial && mobileOpen[\s\S]{0,120}setProperty\("--lv-safe-area-bg", "var\(--lv-nav-bg\)"\)[\s\S]{0,120}setAttribute\("data-lv-spatial-drawer-open", ""\)[\s\S]{0,240}removeAttribute\("data-lv-spatial-drawer-open"\)/,
+    /spatial && mobileOpen[\s\S]{0,120}setAttribute\("data-lv-spatial-drawer-open", ""\)[\s\S]{0,240}removeAttribute\("data-lv-spatial-drawer-open"\)/,
     "an open spatial drawer must publish both its safe-area surface and a physical repaint boundary",
   );
   assertPresent(
@@ -527,9 +528,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     navShell,
-    /data-lv-spatial-accessory[\s\S]{0,1200}display: mobileOpen \? "flex" : "none"[\s\S]{0,300}pointerEvents: mobileOpen \? "auto" : "none"/,
+    /aria-hidden=\{!mobileOpen\}[\s\S]{0,120}data-lv-spatial-accessory[\s\S]{0,1700}display: "flex"[\s\S]{0,80}visibility: "hidden"[\s\S]{0,80}aria-hidden="false"[\s\S]{0,80}visibility: "visible", pointerEvents: "auto"/,
     "the compact playback entry must appear only after the spatial drawer settles open",
   );
+  assertAbsent(navShell, /(?:display|pointerEvents|cursor): mobileOpen \?/, "opening contents must use installed state selectors instead of inserting new Emotion rules");
+  assertAbsent(navShell, /setProperty\("--lv-safe-area-bg"/, "opening contents must not invalidate inherited styles throughout the article");
   assertPresent(
     detentSheet,
     /pendingYRef\.current = y;/,

@@ -1593,10 +1593,7 @@ export function App(): React.JSX.Element {
               // drawer is open so the drawer and translated reader each paint
               // their own part of the safe area. Recreate it on close to retain
               // the original near-opaque reading material while scrolling.
-              bgcolor: (t) =>
-                `var(--lv-safe-area-bg, ${
-                  t.palette.background.default
-                })`,
+              bgcolor: "background.default",
               "html[data-lv-spatial-drawer-open] &": {
                 display: "none",
               },
