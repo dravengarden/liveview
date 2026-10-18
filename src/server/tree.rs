@@ -367,6 +367,7 @@ mod tests {
             backdrop: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![RenditionState {
+                speech: Default::default(),
                 kind: RenditionKind::Text,
                 label: "text".to_string(),
                 default_lang: "default".to_string(),
@@ -487,6 +488,7 @@ mod tests {
             backdrop: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![RenditionState {
+                speech: Default::default(),
                 kind: RenditionKind::Text,
                 label: "text".to_string(),
                 default_lang: "zh".to_string(),
@@ -666,6 +668,7 @@ mod tests {
             default_rendition: RenditionKind::Text,
             renditions: vec![
                 RenditionState {
+                    speech: Default::default(),
                     kind: RenditionKind::Text,
                     label: "阅读".to_string(),
                     default_lang: "zh".to_string(),
@@ -675,6 +678,7 @@ mod tests {
                     editions: vec![mk_ed("zh", text_dir.path())],
                 },
                 RenditionState {
+                    speech: Default::default(),
                     kind: RenditionKind::Audio,
                     label: "听书".to_string(),
                     default_lang: "zh".to_string(),

@@ -10,6 +10,8 @@ mod interactive_view;
 mod library;
 mod server;
 mod shared;
+mod speech;
+mod speech_http;
 mod store;
 mod sync;
 mod tags;
@@ -729,15 +731,22 @@ async fn run(cli: Cli, server: config::ServerCfg) {
 
     let (tx, _rx) = broadcast::channel::<String>(64);
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-    let tts_cmd = env("LIVEVIEW_EDGE_TTS_CMD");
+    let tts_cmd = env("LIVEVIEW_EDGE_TTS_CMD")
+        .or_else(|| env("LIVEVIEW_KOKORO_TTS_CMD").map(|_| String::new()));
     let tts_voice = env("LIVEVIEW_TTS_VOICE");
     let book_end_phrases = load_book_end_phrases();
 
     // Drain the audio task queue only when an operator enabled a speech adapter.
     if let Some(command) = tts_cmd.clone() {
+        crate::server::speech_worker::spawn(
+            worker_pg.clone(),
+            worker_obj.clone(),
+            command.clone(),
+            tx.clone(),
+        );
         crate::server::audio_worker::spawn(worker_pg, worker_obj, command, tx.clone());
     } else {
-        tracing::info!("speech synthesis disabled (LIVEVIEW_EDGE_TTS_CMD is unset)");
+        tracing::info!("speech synthesis disabled (no adapter is configured)");
     }
 
     let state: SharedState = Arc::new(AppState {
@@ -990,6 +999,31 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
         Err(error) => return store_unavailable("dag_artwork", error),
     };
     let mut resources: Vec<serde_json::Value> = Vec::new();
+    let speech_assets = match state.store.speech_assets(None).await {
+        Ok(value) => value,
+        Err(error) => return store_unavailable("speech_assets", error),
+    };
+    for asset in speech_assets.iter().filter(|a| a.status == "ready") {
+        // Older bundles strip fragments when indexing default audio. A separate
+        // synthetic path also protects those installed readers from collisions.
+        let doc = format!(
+            "{}/{}/{}/@speech/{}/{}",
+            asset.book_slug, asset.rendition, asset.lang, asset.profile, asset.rel_path
+        );
+        for (kind, hash, bytes) in [
+            ("audio", &asset.audio_hash, asset.audio_size),
+            ("marks", &asset.marks_hash, asset.marks_size),
+        ] {
+            if let Some(hash) = hash {
+                resources.push(serde_json::json!({"path":format!("{doc}#{kind}@{}",asset.profile),"hash":hash,"kind":kind,"bytes":bytes.unwrap_or(0),"url":format!("/api/blob/{hash}")}));
+            }
+        }
+    }
+    let slugs: std::collections::BTreeSet<_> = chapters.iter().map(|c| &c.book_slug).collect();
+    for slug in slugs {
+        let url = format!("/api/speech/{}", encode_query_value(slug));
+        resources.push(serde_json::json!({"path":url,"hash":format!("{root}:{url}"),"kind":"list","bytes":0,"url":url}));
+    }
     for book in &artwork {
         if let Some(hash) = &book.cover_hash {
             resources.push(artwork_resource(
@@ -1190,6 +1224,18 @@ async fn api_sizes(State(state): State<SharedState>, headers: HeaderMap) -> Resp
             total.audio_bytes += b;
             total.audio_count += 1;
         }
+    }
+    let speech_assets = match state.store.speech_assets(None).await {
+        Ok(value) => value,
+        Err(error) => return store_unavailable("speech_assets", error),
+    };
+    for asset in speech_assets.iter().filter(|a| a.status == "ready") {
+        let bytes = asset.audio_size.unwrap_or(0);
+        let entry = books.entry(asset.book_slug.clone()).or_default();
+        entry.audio_bytes += bytes;
+        entry.audio_count += 1;
+        total.audio_bytes += bytes;
+        total.audio_count += 1;
     }
     let books_json: Vec<serde_json::Value> = books
         .into_iter()
@@ -1443,6 +1489,11 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
         .route("/api/units", get(api_units))
         .route("/api/audio", get(api_audio))
         .route("/api/marks", get(api_marks))
+        .route(
+            "/api/speech/{slug}",
+            get(speech_http::api_speech_book).put(speech_http::api_set_speech),
+        )
+        .route("/api/speech", post(speech_http::api_request_speech))
         .route("/api/progress", get(api_progress_get).put(api_progress_put))
         .route("/api/progress/recent", get(api_progress_recent))
         .route("/api/settings", get(api_settings_get).put(api_settings_put))

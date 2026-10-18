@@ -12,3 +12,4 @@ pub mod fs;
 pub mod model;
 pub mod pg;
 pub mod range;
+pub mod speech;

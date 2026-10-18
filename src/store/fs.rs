@@ -122,6 +122,16 @@ impl FsStore {
 
 #[async_trait]
 impl ContentStore for FsStore {
+    async fn speech_config(
+        &self,
+        book: &str,
+        rendition: &str,
+    ) -> Result<crate::speech::SpeechConfig, String> {
+        Ok(RenditionKind::parse(rendition)
+            .and_then(|kind| self.book(book).and_then(|b| b.rendition(kind)))
+            .map(|r| r.speech.clone())
+            .unwrap_or_default())
+    }
     async fn list_books(&self) -> Result<Vec<BookRecord>, String> {
         Ok(self
             .books

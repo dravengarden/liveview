@@ -244,6 +244,55 @@ creates a named facet (for example, `format.guide`), while an unnamespaced value
 such as `replication` appears under the generic Tags facet. Collections group
 books independently and never imply tags or priority.
 
+### Reading voices
+
+Both text read-aloud and audiobook renditions accept an optional speech policy:
+
+```toml
+[renditions.text.speech]
+voices = ["kokoro:af_heart", "kokoro:af_bella"]
+default_voice = "kokoro:af_heart"
+omit_speakers = ["Lin", "Anna"]
+
+[renditions.text.speech.languages]
+en = "kokoro:af_heart"
+
+[renditions.text.speech.chapters]
+"22-practice-dialogues.md" = "kokoro:af_heart"
+
+[renditions.text.speech.pronunciations]
+API = "A P I"
+CSV = "C S V"
+```
+
+Defaults resolve by chapter, language, rendition default, then a voice matching
+the language. Every explicit default must be in `voices`. A reader's selection
+overrides the author default and is saved per book, rendition, and language in
+server settings. The playback sheet switches at the current sentence and can
+replay that sentence. Playback speed preserves pitch.
+
+Policies can also be persisted directly with `PUT /api/speech/<slug>` and a
+JSON body `{ "rendition": "text", "speech": { "voices": [...],
+"default_voice": "kokoro:af_heart" } }`. `GET` returns the policies and each
+chapter's available voices. An omitted manifest policy preserves this server
+configuration during content sync; a declared manifest policy takes precedence
+at sync. An empty `speech` object through `PUT` clears the server policy.
+
+Speaker omissions and pronunciation substitutions affect speech only. Source
+text and highlight indices remain unchanged. Text and audio renditions have
+separate policies; use `[renditions.audio.speech]` for audiobook scripts. Edge
+voice names remain supported, including the legacy rendition `voice` field.
+
+Kokoro runs locally without an account or per-character charges. The optional
+`.#liveview-with-speech` package includes pinned English Heart and Bella models
+and the tokenizer; inference is offline and bounded to one CPU job at a time.
+It retains 96 kbps MP3 in the native-compatible CAF container. Each recipe
+(voice, model revision, pronunciations, omissions) has separate audio and timing
+assets, advertised through the ordinary offline DAG. Extra voices generate on
+first selection; failed generation is visible and retryable. Source or policy
+edits invalidate obsolete variants, and expired worker leases recover after a
+restart. Choosing a voice never changes another device's live playback.
+
 ## Validate content
 
 LiveView validates content using renderer-compatible parsers. This catches
@@ -315,6 +364,7 @@ liveview --config liveview.toml --host 0.0.0.0 --port 4160
 | `LIVEVIEW_S3_ACCESS_KEY[_FILE]` | Access key or path to a file containing it |
 | `LIVEVIEW_S3_SECRET_KEY[_FILE]` | Secret key or path to a file containing it |
 | `LIVEVIEW_EDGE_TTS_CMD` | Optional Edge TTS adapter command; unset disables network speech synthesis |
+| `LIVEVIEW_KOKORO_TTS_CMD` | Offline Kokoro adapter, set automatically by `.#liveview-with-speech` |
 | `LIVEVIEW_TTS_VOICE` | Optional fallback voice when a book rendition does not declare one |
 | `LIVEVIEW_BOOK_END_PHRASES` | Optional JSON map of language tags to spoken end cues, for example `{"en":"The end."}` |
 | `LIVEVIEW_APM_VL_URL` | Optional VictoriaLogs-compatible APM ingest URL |

@@ -458,7 +458,7 @@ export function useInPlaceHighlight(
   const active = nowPlaying?.rendition === "text" &&
     nowPlaying.chapterPath === currentPath;
   const readAlongKey = active && nowPlaying
-    ? `${nowPlaying.chapterPath}\u0000${nowPlaying.lang}`
+    ? `${nowPlaying.chapterPath}\u0000${nowPlaying.lang}\u0000${nowPlaying.voice ?? ""}\u0000${nowPlaying.marksHash ?? ""}`
     : "";
   // A background audiobook still ticks ~4 times per second. Do not make an
   // unrelated text chapter re-render its entire markdown tree for that clock.
@@ -604,7 +604,7 @@ export function useInPlaceHighlight(
       void Promise.all([
         contentFetch(`/api/units?${q}`).then((r) => (r.ok ? r.json() : null))
           .catch(() => null),
-        contentFetch(`/api/marks?${q}`).then((r) => (r.ok ? r.json() : null))
+        contentFetch(nowPlaying.marksHash ? `/api/blob/${nowPlaying.marksHash}` : `/api/marks?${q}`).then((r) => (r.ok ? r.json() : null))
           .catch(() => null),
       ]).then(([u, m]: [SpokenUnits | null, Mark[] | null]) => {
         if (cancelled) return;
@@ -642,7 +642,7 @@ export function useInPlaceHighlight(
       cancelled = true;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [active, nowPlaying?.chapterPath, nowPlaying?.lang, readAlongKey]);
+  }, [active, nowPlaying?.chapterPath, nowPlaying?.lang, nowPlaying?.marksHash, readAlongKey]);
 
   // A fresh chapter should auto-follow from the top again.
   useEffect(() => {

@@ -184,6 +184,12 @@ fn catalog_hash(
         field(&mut hasher, &rendition.label);
         field(&mut hasher, &rendition.default_lang);
         optional(&mut hasher, rendition.voice.as_deref());
+        if rendition.speech != crate::speech::SpeechConfig::default() {
+            field(
+                &mut hasher,
+                &serde_json::to_string(&rendition.speech).expect("speech config"),
+            );
+        }
         field(
             &mut hasher,
             if rendition.manifest {
@@ -247,12 +253,6 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
             .find(|r| r.kind == RenditionKind::Audio)
             .and_then(|r| r.voice.clone())
             .or_else(|| cfg.tts_voice.clone());
-        if cfg.text_audio && text_voice_for_book.is_none() {
-            return Err(format!(
-                "book {:?}: text-audio generation requires a rendition voice or --tts-voice",
-                book.slug
-            ));
-        }
 
         // Cover → rustfs (content-addressed). Referenced by books.cover_hash, so
         // the orphan GC spares it (see orphan_asset_hashes).
@@ -319,6 +319,16 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 )
                 .await
                 .map_err(|e| format!("upsert rendition {}/{r_kind}: {e}", book.slug))?;
+            // A declared policy is author-owned. With no manifest policy, keep
+            // the reader's durable server configuration across content syncs.
+            let speech = if rend.speech != crate::speech::SpeechConfig::default() {
+                store
+                    .set_speech_config(&book.slug, r_kind, &rend.speech)
+                    .await?;
+                rend.speech.clone()
+            } else {
+                store.speech_config(&book.slug, r_kind).await?
+            };
 
             let desired_editions: Vec<String> = rend
                 .editions
@@ -392,17 +402,11 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                     }
                     let is_audio = rend.kind == RenditionKind::Audio && rel.ends_with(".spoken.md");
                     let voice = if is_audio {
-                        Some(
-                            rend.voice
-                                .clone()
-                                .or_else(|| cfg.tts_voice.clone())
-                                .ok_or_else(|| {
-                                    format!(
-                                        "book {:?} audio rendition requires a voice or --tts-voice",
-                                        book.slug
-                                    )
-                                })?,
-                        )
+                        Some(speech.resolve(
+                            &ed.lang,
+                            &rel,
+                            rend.voice.as_deref().or(cfg.tts_voice.as_deref()),
+                        ))
                     } else {
                         None
                     };
@@ -412,8 +416,13 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                     let text_voice = (cfg.text_audio
                         && rend.kind == RenditionKind::Text
                         && matches!(&ft, FileType::Markdown))
-                    .then(|| text_voice_for_book.clone())
-                    .flatten();
+                    .then(|| {
+                        speech.resolve(
+                            &ed.lang,
+                            &rel,
+                            rend.voice.as_deref().or(text_voice_for_book.as_deref()),
+                        )
+                    });
 
                     // Leaf kind folds the transform + version so a renderer or
                     // voice change re-applies the leaf even with identical source.
@@ -1149,6 +1158,7 @@ mod tests {
             backdrop: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![RenditionState {
+                speech: Default::default(),
                 kind: RenditionKind::Text,
                 label: "Read".into(),
                 default_lang: "en".into(),

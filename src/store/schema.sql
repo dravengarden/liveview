@@ -195,6 +195,36 @@ CREATE INDEX IF NOT EXISTS audio_tasks_claim
     ON audio_tasks (priority DESC, enqueued_at ASC)
     WHERE status = 'queued';
 
+-- Author policy and independently cached speech recipes. Existing chapter
+-- audio remains the default representation for older installed readers.
+CREATE TABLE IF NOT EXISTS speech_configs (
+    book_slug TEXT NOT NULL,
+    rendition TEXT NOT NULL,
+    config TEXT NOT NULL,
+    PRIMARY KEY (book_slug, rendition),
+    FOREIGN KEY (book_slug, rendition) REFERENCES renditions(book_slug, kind) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS speech_audio (
+    book_slug TEXT NOT NULL,
+    rendition TEXT NOT NULL,
+    lang TEXT NOT NULL,
+    rel_path TEXT NOT NULL,
+    profile TEXT NOT NULL,
+    recipe TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','running','ready','failed')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    lease_until TIMESTAMPTZ,
+    error TEXT,
+    audio_hash TEXT,
+    marks_hash TEXT,
+    PRIMARY KEY (book_slug, rendition, lang, rel_path, profile),
+    FOREIGN KEY (book_slug, rendition, lang, rel_path)
+        REFERENCES chapters(book_slug, rendition, lang, rel_path) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS speech_audio_queue ON speech_audio(status, lease_until)
+    WHERE status IN ('queued','running');
+
 -- Pre-built sidebar forest per rendition (`text` / `audio`), as the JSON the
 -- server returns verbatim from /api/tree. `liveview sync` computes it once (it
 -- has the filesystem context + H1 titles + layout ordering); the thin server

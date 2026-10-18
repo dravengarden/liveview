@@ -5,6 +5,7 @@ pub mod catalog;
 pub mod narration;
 pub mod renderer;
 pub mod speakable;
+pub mod speech_worker;
 pub mod spoken;
 pub mod state;
 pub mod tree;

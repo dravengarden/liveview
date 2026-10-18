@@ -5,6 +5,10 @@ import {
   Button,
   CircularProgress,
   IconButton,
+  FormControl,
+  InputLabel,
+  MenuItem,
+  Select,
   Slider,
   Typography,
 } from "@mui/material";
@@ -56,6 +60,7 @@ export function PlaybackSheet({
     prevChapter,
     nextChapter,
     stop,
+    voices, voiceBusy, voiceError, chooseVoice, replaySentence,
   } = useAudioPlayer();
   // The closed sheet renders nothing that moves, so it stays off the ~4 Hz clock.
   const { currentTime, duration } = useAudioTime(open);
@@ -237,6 +242,28 @@ export function PlaybackSheet({
           {labelled(t("audiobook.speed"), <SpeedChip sx={chipSx} />)}
           {labelled(t("audiobook.sleepTimer"), <SleepChip sx={chipSx} />)}
         </Box>
+
+        {voices.length > 0 && (
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            <FormControl fullWidth size="small">
+              <InputLabel id="playback-voice-label">{t("audiobook.voice")}</InputLabel>
+              <Select
+                labelId="playback-voice-label"
+                label={t("audiobook.voice")}
+                value={nowPlaying.voice ?? ""}
+                disabled={loading || voiceBusy}
+                onChange={event => chooseVoice(event.target.value)}
+                data-testid="playback-voice"
+              >
+                {voices.map(voice => <MenuItem key={voice.id} value={voice.id}>{voice.label}</MenuItem>)}
+              </Select>
+            </FormControl>
+            <Typography variant="caption" color={voiceError ? "error" : "text.secondary"} role="status">
+              {voiceError ?? (voiceBusy ? t("audiobook.voicePreparing") : t("audiobook.voiceHint"))}
+            </Typography>
+            <Button onClick={replaySentence} disabled={loading} data-testid="replay-sentence">{t("audiobook.replaySentence")}</Button>
+          </Box>
+        )}
 
         {/* Footer: jump-to-current (when away) + stop (inline confirm). */}
         <Box

@@ -242,6 +242,8 @@ pub struct BookManifest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RenditionManifest {
+    #[serde(default)]
+    pub speech: crate::speech::SpeechConfig,
     /// Display name of the mode toggle ("阅读" / "听书"). Defaults to the kind.
     pub label: Option<String>,
     /// Languages this rendition offers. Defaults to the book's top-level
@@ -322,6 +324,7 @@ pub struct EditionState {
 /// text reads `<book>/<lang>/`, audio reads `<book>/audio/<lang>/`).
 #[derive(Clone)]
 pub struct RenditionState {
+    pub speech: crate::speech::SpeechConfig,
     pub kind: RenditionKind,
     /// Mode-toggle label ("阅读" / "听书").
     pub label: String,
@@ -647,6 +650,7 @@ impl Config {
                 backdrop,
                 default_rendition: RenditionKind::Text,
                 renditions: vec![RenditionState {
+                    speech: Default::default(),
                     kind: RenditionKind::Text,
                     label: RenditionKind::Text.as_str().to_string(),
                     default_lang,
@@ -900,6 +904,7 @@ fn load_doc_manifest(
         backdrop,
         default_rendition: RenditionKind::Text,
         renditions: vec![RenditionState {
+            speech: Default::default(),
             kind: RenditionKind::Text,
             label: "text".to_string(),
             default_lang,
@@ -1007,6 +1012,7 @@ fn load_book_manifest(
         specs.push((
             RenditionKind::Text,
             RenditionManifest {
+                speech: Default::default(),
                 label: None,
                 langs: None,
                 default_lang: Some(manifest.default_lang.clone()),
@@ -1086,7 +1092,11 @@ fn load_book_manifest(
             editions[0].lang.clone()
         };
 
+        rm.speech
+            .validate()
+            .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
         renditions.push(RenditionState {
+            speech: rm.speech,
             kind,
             label: rm.label.unwrap_or_else(|| kind.as_str().to_string()),
             default_lang,
@@ -1260,6 +1270,7 @@ pub fn implicit_resolved(dir: &Path) -> Result<Resolved, String> {
             backdrop: None,
             default_rendition: RenditionKind::Text,
             renditions: vec![RenditionState {
+                speech: Default::default(),
                 kind: RenditionKind::Text,
                 label: RenditionKind::Text.as_str().to_string(),
                 default_lang: "default".to_string(),

@@ -39,6 +39,10 @@ pub(crate) fn manifest_root(root: &str, epoch: i64) -> String {
 /// registered since `$1` (the GC grace cutoff, unix ms).
 const ORPHAN_ASSET: &str = "a.touched_at < $1
      AND NOT EXISTS (
+         SELECT 1 FROM speech_audio s JOIN chapters c USING(book_slug,rendition,lang,rel_path)
+         WHERE c.content_hash=s.content_hash AND (s.audio_hash = a.content_hash OR s.marks_hash = a.content_hash)
+     )
+     AND NOT EXISTS (
          SELECT 1 FROM chapters c
          WHERE c.asset_hash = a.content_hash
             OR c.audio_hash = a.content_hash
@@ -53,7 +57,7 @@ const ORPHAN_ASSET: &str = "a.touched_at < $1
 
 #[derive(Clone)]
 pub struct PgStore {
-    pool: PgPool,
+    pub(super) pool: PgPool,
 }
 
 impl PgStore {
@@ -362,7 +366,7 @@ impl PgStore {
 
     pub async fn upsert_chapter(&self, c: &ChapterRecord) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO chapters
+            "WITH updated AS (INSERT INTO chapters
                  (book_slug, rendition, lang, rel_path, file_type,
                   html, markdown, asset_hash, audio_hash, marks_hash,
                   content_hash, render_version)
@@ -401,7 +405,12 @@ impl PgStore {
                      ELSE chapters.audio_voice
                  END,
                  content_hash = EXCLUDED.content_hash,
-                 render_version = EXCLUDED.render_version",
+                 render_version = EXCLUDED.render_version
+             RETURNING book_slug,rendition,lang,rel_path,content_hash)
+             DELETE FROM speech_audio s USING updated c
+             WHERE s.book_slug=c.book_slug AND s.rendition=c.rendition
+               AND s.lang=c.lang AND s.rel_path=c.rel_path
+               AND s.content_hash<>c.content_hash",
         )
         .bind(&c.book_slug)
         .bind(&c.rendition)

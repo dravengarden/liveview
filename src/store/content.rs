@@ -25,6 +25,40 @@ use crate::store::range::{RangeSpec, RangedBlob};
 /// renders on demand. Object-safe (`Arc<dyn ContentStore>`).
 #[async_trait]
 pub trait ContentStore: Send + Sync {
+    async fn set_speech_config(
+        &self,
+        _book: &str,
+        _rendition: &str,
+        _config: &crate::speech::SpeechConfig,
+    ) -> Result<(), String> {
+        Err("Speech policy changes are unavailable in preview".into())
+    }
+    async fn speech_config(
+        &self,
+        _book: &str,
+        _rendition: &str,
+    ) -> Result<crate::speech::SpeechConfig, String> {
+        Ok(Default::default())
+    }
+    async fn speech_sources(
+        &self,
+        _book: &str,
+    ) -> Result<Vec<super::speech::SpeechSource>, String> {
+        Ok(Vec::new())
+    }
+    async fn speech_assets(
+        &self,
+        _book: Option<&str>,
+    ) -> Result<Vec<super::speech::SpeechAsset>, String> {
+        Ok(Vec::new())
+    }
+    async fn queue_speech(
+        &self,
+        _row: &ChapterRecord,
+        _recipe: &crate::speech::Recipe,
+    ) -> Result<(), String> {
+        Err("Voice generation is unavailable in preview".into())
+    }
     async fn library_get(&self) -> Result<crate::library::Library, String> {
         Ok(crate::library::Library::default())
     }
@@ -162,6 +196,37 @@ use crate::sync::objstore::ObjStore;
 
 #[async_trait]
 impl ContentStore for PgStore {
+    async fn set_speech_config(
+        &self,
+        book: &str,
+        rendition: &str,
+        config: &crate::speech::SpeechConfig,
+    ) -> Result<(), String> {
+        PgStore::set_speech_config(self, book, rendition, config).await
+    }
+    async fn speech_config(
+        &self,
+        book: &str,
+        rendition: &str,
+    ) -> Result<crate::speech::SpeechConfig, String> {
+        PgStore::speech_config(self, book, rendition).await
+    }
+    async fn speech_sources(&self, book: &str) -> Result<Vec<super::speech::SpeechSource>, String> {
+        PgStore::speech_sources(self, book).await
+    }
+    async fn speech_assets(
+        &self,
+        book: Option<&str>,
+    ) -> Result<Vec<super::speech::SpeechAsset>, String> {
+        PgStore::speech_assets(self, book).await
+    }
+    async fn queue_speech(
+        &self,
+        row: &ChapterRecord,
+        recipe: &crate::speech::Recipe,
+    ) -> Result<(), String> {
+        PgStore::queue_speech(self, row, recipe).await
+    }
     async fn library_get(&self) -> Result<crate::library::Library, String> {
         self.user_library(None).await
     }

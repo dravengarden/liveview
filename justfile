@@ -80,6 +80,7 @@ dependencies:
 
 # Run all Rust and web tests.
 test:
+  python3 -B tools/test_kokoro_timing.py
   cargo test --locked --all-targets
   CARGO_TARGET_DIR={{native-target-dir}} cargo test --locked --manifest-path app/src-tauri/Cargo.toml --all-targets
   cd web && bun install --frozen-lockfile && bun run test

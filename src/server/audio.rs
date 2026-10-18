@@ -18,10 +18,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Per-sentence time range into the concatenated chapter audio.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Mark {
     /// Matches the sentence index in `/api/spoken` and the `data-sent` anchor.
     pub idx: usize,
@@ -244,6 +244,15 @@ pub(crate) async fn synthesize(
     if sentences.is_empty() {
         return Err("no speakable sentences".to_owned());
     }
+    let recipe = crate::speech::Recipe::decode(voice)?;
+    let sentences: Vec<String> = sentences.iter().map(|s| recipe.prepare(s)).collect();
+    if let Some(voice) = recipe.voice.strip_prefix("kokoro:") {
+        return synthesize_kokoro(voice, &sentences).await;
+    }
+    if cmd.is_empty() {
+        return Err("Edge speech synthesis is not configured".into());
+    }
+    let voice = recipe.voice.strip_prefix("edge:").unwrap_or(&recipe.voice);
     // Sequential synth of a 200+-sentence chapter runs for minutes; buffered(N)
     // overlaps the edge-tts round-trips while preserving sentence order.
     const SYNTH_CONCURRENCY: usize = 6;
@@ -257,9 +266,98 @@ pub(crate) async fn synthesize(
     Ok(assemble(&clips))
 }
 
+/// One bounded CPU job across interactive requests and all background workers.
+/// The adapter emits unit indices from the same tokens it synthesized.
+async fn synthesize_kokoro(
+    voice: &str,
+    sentences: &[String],
+) -> Result<(Vec<u8>, Vec<Mark>), String> {
+    static CPU: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    let _permit = CPU.acquire().await.map_err(|e| e.to_string())?;
+    let cmd = std::env::var("LIVEVIEW_KOKORO_TTS_CMD")
+        .map_err(|_| "Kokoro is not installed on this server".to_string())?;
+    let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let input = dir.path().join("input.json");
+    let audio = dir.path().join("audio.mp3");
+    let marks = dir.path().join("marks.json");
+    tokio::fs::write(
+        &input,
+        serde_json::to_vec(sentences).map_err(|e| e.to_string())?,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    let output = tokio::time::timeout(
+        Duration::from_secs(1800),
+        tokio::process::Command::new(cmd)
+            .args(["--voice", voice, "--input"])
+            .arg(&input)
+            .arg("--audio")
+            .arg(&audio)
+            .arg("--marks")
+            .arg(&marks)
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "Kokoro synthesis timed out".to_string())?
+    .map_err(|e| format!("start Kokoro: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Kokoro: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let audio = tokio::fs::read(audio).await.map_err(|e| e.to_string())?;
+    let marks: Vec<Mark> =
+        serde_json::from_slice(&tokio::fs::read(marks).await.map_err(|e| e.to_string())?)
+            .map_err(|e| format!("Kokoro marks: {e}"))?;
+    validate_marks(&marks, sentences.len(), mp3_duration_ms(&audio))?;
+    Ok((audio, marks))
+}
+
+fn validate_marks(marks: &[Mark], count: usize, duration: u64) -> Result<(), String> {
+    if duration == 0
+        || marks.len() != count
+        || marks.iter().enumerate().any(|(i, m)| {
+            m.idx != i
+                || m.start_ms > m.end_ms
+                || m.end_ms > duration + 100
+                || (i > 0 && marks[i - 1].end_ms != m.start_ms)
+        })
+    {
+        return Err("synthesis returned incomplete or invalid unit timings".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_alignment_rejects_missing_reordered_and_overlapping_units() {
+        let marks = vec![
+            Mark {
+                idx: 0,
+                start_ms: 0,
+                end_ms: 1000,
+            },
+            Mark {
+                idx: 1,
+                start_ms: 1000,
+                end_ms: 2000,
+            },
+        ];
+        assert!(validate_marks(&marks, 2, 2050).is_ok());
+        assert!(validate_marks(&marks, 3, 2050).is_err());
+        assert!(validate_marks(&marks, 2, 500).is_err());
+        let mut wrong = marks.clone();
+        wrong[1].idx = 0;
+        assert!(validate_marks(&wrong, 2, 2050).is_err());
+        wrong[1].idx = 1;
+        wrong[1].start_ms = 500;
+        assert!(validate_marks(&wrong, 2, 2050).is_err());
+    }
 
     /// `n` real 24 ms edge-tts-format frames (24 kHz / 48 kbit/s mono L3).
     fn frames(n: usize) -> Vec<u8> {

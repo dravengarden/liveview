@@ -96,6 +96,7 @@
       # edge-tts remains an optional reference speech adapter. The default
       # package does not depend on it; deployments may select the adapter bundle.
       edgeTts = pkgs.python3Packages.edge-tts;
+      kokoroTts = import ./nix/kokoro.nix { inherit pkgs; };
 
       # Vendor only npm dependencies in the fixed-output derivation. Application
       # source is compiled later in a normal derivation, so source changes can
@@ -222,11 +223,29 @@
           description = "LiveView with the optional edge-tts speech adapter";
         };
       };
+      liveviewWithSpeech = pkgs.symlinkJoin {
+        name = "liveview-with-speech-${version}";
+        paths = [ liveview ];
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+        postBuild = ''
+          wrapProgram $out/bin/liveview \
+            --prefix PATH : ${
+              lib.makeBinPath [
+                edgeTts
+                kokoroTts
+              ]
+            } \
+            --set-default LIVEVIEW_KOKORO_TTS_CMD ${kokoroTts}/bin/liveview-kokoro-tts
+        '';
+        meta = liveview.meta;
+      };
     in
     {
       packages.${system} = {
         inherit liveview liveview-web;
         liveview-with-edge-tts = liveviewWithEdgeTts;
+        liveview-with-speech = liveviewWithSpeech;
+        kokoro-tts = kokoroTts;
         default = liveview;
       };
 

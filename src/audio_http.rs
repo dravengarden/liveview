@@ -29,6 +29,20 @@ pub const AUDIO_ENCODING_VERSION: &str = "caf-mp324-v1";
 /// Transcode an MP3 (`src`) per `AUDIO_VARIANT`. ffmpeg reads stdin and writes a
 /// temp file (CAF/MP4 muxers need seekable output), which we read back + delete.
 pub async fn transcode_audio(src: Vec<u8>) -> Result<Vec<u8>, String> {
+    encode_audio(src, AUDIO_VARIANT.args).await
+}
+
+/// Explicit speech recipes retain the source MP3 quality. Their recipe ID
+/// distinguishes these assets from the legacy compact-audio representation.
+pub(crate) async fn encode_speech_audio(src: Vec<u8>, voice: &str) -> Result<Vec<u8>, String> {
+    if voice.starts_with("speech-v1:") || voice.starts_with("kokoro:") {
+        encode_audio(src, &["-c:a", "copy"]).await
+    } else {
+        transcode_audio(src).await
+    }
+}
+
+async fn encode_audio(src: Vec<u8>, args: &[&str]) -> Result<Vec<u8>, String> {
     use tokio::io::AsyncWriteExt;
     let mut tmp = std::env::temp_dir();
     let nanos = std::time::SystemTime::now()
@@ -42,7 +56,7 @@ pub async fn transcode_audio(src: Vec<u8>) -> Result<Vec<u8>, String> {
     ));
     let mut cmd = tokio::process::Command::new("ffmpeg");
     cmd.arg("-v").arg("error").arg("-y").arg("-i").arg("pipe:0");
-    for a in AUDIO_VARIANT.args {
+    for a in args {
         cmd.arg(a);
     }
     cmd.arg(&tmp)
@@ -339,33 +353,30 @@ async fn ensure_chapter_audio(
     state: &AppState,
     row: &ChapterRecord,
 ) -> Result<(String, String), String> {
-    if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash) {
+    let voice = crate::speech_http::default_voice(state, row).await?;
+    if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash)
+        && row.audio_voice.as_deref() == Some(&voice)
+    {
         return Ok((a.clone(), m.clone()));
     }
     let lock = audio_synth_lock(state, row).await;
     let _guard = lock.lock().await;
     // Re-check after acquiring: a prior holder may have just filled the hashes.
     let row = reload_chapter(state, row).await?;
-    if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash) {
+    if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash)
+        && row.audio_voice.as_deref() == Some(&voice)
+    {
         return Ok((a.clone(), m.clone()));
     }
     let md = row.markdown.clone().unwrap_or_default();
     let sentences = server::spoken::spoken_sentences(&md);
-    let voice = {
-        let cat = state.catalog.read().await;
-        cat.book(&row.book_slug)
-            .and_then(|b| b.rendition(RenditionKind::Audio))
-            .and_then(|r| r.voice.clone())
-            .or_else(|| state.tts_voice.clone())
-            .ok_or("speech voice is not configured")?
-    };
     let command = state
         .tts_cmd
         .as_deref()
         .ok_or("speech synthesis is not configured")?;
     let (mp3, marks) = server::audio::synthesize(command, &voice, &sentences).await?;
     let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
-    let caf = transcode_audio(mp3).await?;
+    let caf = encode_speech_audio(mp3, &voice).await?;
     let audio_hash = store_blob(state, caf, AUDIO_VARIANT.mime).await?;
     let marks_hash = store_blob(state, marks_json, "application/json").await?;
     record_chapter_audio(state, &row, &voice, audio_hash, marks_hash).await
@@ -400,7 +411,10 @@ async fn ensure_text_audio(
         .ok()
         .flatten()
         .ok_or("chapter not found")?;
-    if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash) {
+    let voice = crate::speech_http::default_voice(state, &row).await?;
+    if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash)
+        && row.audio_voice.as_deref() == Some(&voice)
+    {
         return Ok((a.clone(), m.clone()));
     }
     // Single-flight: serialize synth per chapter so a double-tap / second client
@@ -409,7 +423,9 @@ async fn ensure_text_audio(
     let _guard = lock.lock().await;
     // Re-check after acquiring: a prior holder may have just filled the hashes.
     let row = reload_chapter(state, &row).await?;
-    if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash) {
+    if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash)
+        && row.audio_voice.as_deref() == Some(&voice)
+    {
         return Ok((a.clone(), m.clone()));
     }
     let md = row.markdown.clone().unwrap_or_default();
@@ -432,21 +448,13 @@ async fn ensure_text_audio(
         .iter()
         .map(|u| server::speakable::unit_speech(u, &served, &store))
         .collect();
-    let voice = {
-        let cat = state.catalog.read().await;
-        cat.book(&row.book_slug)
-            .and_then(|b| b.rendition(RenditionKind::Audio))
-            .and_then(|r| r.voice.clone())
-            .or_else(|| state.tts_voice.clone())
-            .ok_or("speech voice is not configured")?
-    };
     let command = state
         .tts_cmd
         .as_deref()
         .ok_or("speech synthesis is not configured")?;
     let (mp3, marks) = server::audio::synthesize(command, &voice, &texts).await?;
     let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
-    let caf = transcode_audio(mp3).await?;
+    let caf = encode_speech_audio(mp3, &voice).await?;
     let audio_hash = store_blob(state, caf, AUDIO_VARIANT.mime).await?;
     let marks_hash = store_blob(state, marks_json, "application/json").await?;
     record_chapter_audio(state, &row, &voice, audio_hash, marks_hash).await

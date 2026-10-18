@@ -52,6 +52,8 @@ export function parseMediaResource(
 ): ParsedMediaResource | undefined {
   if (resource.kind !== "audio" && resource.kind !== "marks") return undefined;
   const hashIdx = resource.path.lastIndexOf("#");
+  // Voice variants must not replace the canonical chapter's media hashes.
+  if (hashIdx >= 0 && resource.path.slice(hashIdx).includes("@")) return undefined;
   const body = hashIdx >= 0 ? resource.path.slice(0, hashIdx) : resource.path;
   const parts = body.split("/");
   if (parts.length < 4) return undefined;

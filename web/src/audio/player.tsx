@@ -38,6 +38,7 @@ import {
   type NativePositionSample,
 } from "./native-playback-truth";
 import { activeMarkIndex } from "./mark-index";
+import { chapterVoices, preferredVoice, prepareVoice, saveVoicePreference, sentencePosition, voiceMarks, type VoiceChoice } from "./speech";
 import {
   type AudioPos,
   audioStores,
@@ -78,6 +79,8 @@ export interface NowPlaying {
   chapterLabel: string;
   lang: string;
   rendition: string;
+  voice?: string | undefined;
+  marksHash?: string | undefined;
 }
 
 /** Read-along state of the playing chapter. Split OUT of `AudioPlayer` because
@@ -95,6 +98,11 @@ export interface AudioReadAlong {
 }
 
 export interface AudioPlayer {
+  voices: VoiceChoice[];
+  voiceBusy: boolean;
+  voiceError: string | null;
+  chooseVoice: (voice: string) => void;
+  replaySentence: () => void;
   nowPlaying: NowPlaying | null;
   playing: boolean;
   /** Native AVPlayer has play intent but is waiting for data/decoder readiness. */
@@ -163,8 +171,8 @@ export interface AudioTime {
 // mirror moved into `sessionStore` (IDB), so it has no localStorage key anymore.
 const RATE_KEY = "lv-audio-rate";
 /** Per-chapter resume position (audio seconds); local sync-seed only. */
-const posKey = (path: string, lang: string): string =>
-  `lv-audio-pos:${path}:${lang}`;
+const posKey = (path: string, lang: string, voice?: string): string =>
+  `lv-audio-pos:${path}:${lang}${voice ? `:${voice}` : ""}`;
 
 /** Warm the next chapter's synthesis this many seconds before the current ends,
  *  so auto-advance doesn't stall on a cold edge-tts cache. */
@@ -292,6 +300,10 @@ export function AudioPlayerProvider(
   const [buffering, setBuffering] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [voices, setVoices] = useState<VoiceChoice[]>([]);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const voiceSeq = useRef(0);
   const [rate, setRateState] = useState<number>(() => {
     const v = Number(localStorage.getItem(RATE_KEY) ?? "1");
     return Number.isFinite(v) && v > 0 ? v : 1;
@@ -343,6 +355,7 @@ export function AudioPlayerProvider(
   // must never be credited to (persisted as, or auto-advanced from) the chapter
   // that `nowPlayingRef` already names.
   const sourcePendingRef = useRef(false);
+  const pendingPlayIntent = useRef(false);
   // Chapter path we've already warmed the *next* synth for, so we prefetch once.
   const prefetchedFrom = useRef<string | null>(null);
   // Throttle the SYNCHRONOUS localStorage resume-seed write (see handlePosition):
@@ -435,7 +448,7 @@ export function AudioPlayerProvider(
   // tier). The synchronous local fast-path (posKey localStorage) is written
   // separately per-tick in the timeupdate handler.
   const persistPos = useCallback((path: string, t: number) => {
-    posStore.set({ path, t });
+    posStore.set({ path, t, voice: nowPlayingRef.current?.voice });
   }, []);
 
   // Load a chapter for playback. STORAGE-FIRST + AUDIO-FIRST: resolve the content
@@ -451,10 +464,14 @@ export function AudioPlayerProvider(
   // loading" / 0:00. Marks are now resolved by their HASH → /api/blob/<hash>, the
   // form that's actually cached.)
   const loadTrack = useCallback(
-    (np: NowPlaying, q: Track[], qi: number, autoplay: boolean) => {
+    (np: NowPlaying, q: Track[], qi: number, autoplay: boolean, ready?: { voice: VoiceChoice; marks: Mark[]; unit: number }) => {
       const audio = audioRef.current;
       const native = nativeAudioAvailable();
       const seq = ++loadSeq.current;
+      voiceSeq.current++;
+      setVoiceBusy(false);
+      setVoiceError(null);
+      if (!ready) setVoices([]);
       prefetchedFrom.current = null;
       resetNativePlaybackProof();
       // Silence the previous chapter before `nowPlayingRef` names the new one.
@@ -462,7 +479,11 @@ export function AudioPlayerProvider(
       // item on `nativeAudioLoad` (an explicit pause would race the new play
       // intent across the bridge), so its stale events are dropped by the gate.
       sourcePendingRef.current = true;
-      if (!native) audio?.pause();
+      pendingPlayIntent.current = autoplay;
+      // A cold voice can take minutes. Silence the previous native source
+      // before awaiting it; WKScriptMessageHandler preserves command order.
+      if (native) nativeAudioPause();
+      else audio?.pause();
 
       setNowPlaying(np);
       nowPlayingRef.current = np;
@@ -490,9 +511,9 @@ export function AudioPlayerProvider(
       // Only the audio src carries the flag — read-along data stays clean.
       const isBookEnd = qi === q.length - 1;
       const saved = Number(
-        localStorage.getItem(posKey(np.chapterPath, np.lang)) ?? "",
+        localStorage.getItem(posKey(np.chapterPath, np.lang, np.voice)) ?? "",
       );
-      const position = Number.isFinite(saved) && saved > 0 ? saved : 0;
+      let position = Number.isFinite(saved) && saved > 0 ? saved : 0;
       currentTimeRef.current = position;
       durationRef.current = 0;
       if (native && autoplay) {
@@ -510,7 +531,49 @@ export function AudioPlayerProvider(
         // chapterMedia is cache-first + never throws (empty on miss). One manifest
         // read yields BOTH the audio hash (offline cache key) and the marks blob
         // hash (read-along timings).
-        const media = await chapterMedia(np.bookSlug, np.chapterPath, np.lang);
+        let media = await chapterMedia(np.bookSlug, np.chapterPath, np.lang);
+        let selected = ready?.voice;
+        let selectedMarks = ready?.marks;
+        try {
+          if (!ready) {
+            const chapter = await chapterVoices(np).catch(() => null);
+            if (loadSeq.current !== seq) return;
+            if (!chapter && np.voice) throw new Error("Voice choices are unavailable. Reconnect to load this voice.");
+            if (chapter) {
+              setVoices(chapter.voices);
+              const preferred = await preferredVoice(np, chapter);
+              if (preferred) selected = await prepareVoice(np, preferred, () => loadSeq.current === seq);
+            }
+          }
+          if (loadSeq.current !== seq) return;
+          if (selected) {
+            selectedMarks ??= await voiceMarks(selected);
+            if (loadSeq.current !== seq) return;
+            media = {
+              ...(selected.audio_hash ? { audioHash: selected.audio_hash } : {}),
+              ...(selected.marks_hash ? { marksHash: selected.marks_hash } : {}),
+              ...(selected.bytes ? { audioBytes: selected.bytes } : {}),
+            };
+            const updated = { ...np, voice: selected.id, marksHash: selected.marks_hash ?? undefined };
+            nowPlayingRef.current = updated;
+            setNowPlaying(updated);
+            persistSession(updated, q, qi);
+            const savedVoice = Number(localStorage.getItem(posKey(np.chapterPath, np.lang, selected.id)) ?? "0");
+            position = ready ? sentencePosition(selectedMarks, ready.unit) : Number.isFinite(savedVoice) ? savedVoice : 0;
+            currentTimeRef.current = position;
+            setCurrentTime(position);
+            marksRef.current = selectedMarks;
+            setCurrentIdx(activeMarkIndex(selectedMarks, position * 1000));
+          }
+        } catch (error) {
+          if (loadSeq.current === seq) {
+            setLoading(false);
+            setBuffering(false);
+            sourcePendingRef.current = false;
+            setError(error instanceof Error ? error.message : String(error));
+          }
+          return;
+        }
         if (loadSeq.current !== seq) return;
 
         // ── 1) AUDIO — play from local cache immediately. ────────────────────
@@ -522,11 +585,9 @@ export function AudioPlayerProvider(
             // compressed Opus variant, matching the download → one shared key.
             const origin = REMOTE;
             nativeAudioLoad({
-              url: `${origin}/api/audio?${q1}${
-                isBookEnd ? "&tail=bookend" : ""
-              }`,
+              url: media.audioHash ? `${origin}/api/blob/${media.audioHash}` : `${origin}/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`,
               ...(media.audioHash ? { hash: media.audioHash } : {}),
-              ...(!isBookEnd && media.audioBytes
+              ...(media.audioBytes
                 ? { bytes: media.audioBytes }
                 : {}),
               position,
@@ -539,7 +600,7 @@ export function AudioPlayerProvider(
               }`,
             });
             sourcePendingRef.current = false;
-            if (autoplay) {
+            if (pendingPlayIntent.current) {
               expectNativePlayback(true);
               nativeAudioPlay();
             }
@@ -552,11 +613,12 @@ export function AudioPlayerProvider(
               ? `/api/blob/${ah}`
               : `/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`;
             audio.defaultPlaybackRate = rateRef.current;
+            audio.preservesPitch = true;
             audio.playbackRate = rateRef.current;
             audio.load();
             if (position > 0) audio.currentTime = position;
             sourcePendingRef.current = false;
-            if (autoplay) {
+            if (pendingPlayIntent.current) {
               playAudio(
                 audio,
                 (e) => setError(e instanceof Error ? e.message : String(e)),
@@ -578,7 +640,7 @@ export function AudioPlayerProvider(
         // Audio is dispatched — the UI is no longer "loading" regardless of the
         // read-along fetches below (the native engine reports its own buffering via
         // the waiting/canplay events).
-        if (loadSeq.current === seq && !(native && autoplay)) {
+        if (loadSeq.current === seq && !(native && pendingPlayIntent.current)) {
           setLoading(false);
         }
 
@@ -626,7 +688,7 @@ export function AudioPlayerProvider(
                 await contentFetch(`/api/blob/${media.marksHash}`),
               );
             }
-            if (!mdata) {
+            if (!mdata && !selected) {
               mdata = await readMarks(
                 await contentFetch(`/api/marks?${q1}`, { cacheFirst: true }),
               );
@@ -660,7 +722,7 @@ export function AudioPlayerProvider(
       const base = nowPlayingRef.current;
       if (!track || !base) return;
       loadTrack(
-        { ...base, chapterPath: track.path, chapterLabel: track.label },
+        { ...base, voice: undefined, marksHash: undefined, chapterPath: track.path, chapterLabel: track.label },
         q,
         qi,
         autoplay,
@@ -740,7 +802,7 @@ export function AudioPlayerProvider(
       const now = Date.now();
       if (now - lastPosWriteRef.current > 4000) {
         lastPosWriteRef.current = now;
-        localStorage.setItem(posKey(np.chapterPath, np.lang), String(pos));
+        localStorage.setItem(posKey(np.chapterPath, np.lang, np.voice), String(pos));
       }
       persistPos(np.chapterPath, pos);
     }
@@ -819,7 +881,7 @@ export function AudioPlayerProvider(
     const np = nowPlayingRef.current;
     if (np) {
       logEvent("audio_ended", { book: np.bookSlug, chapter: np.chapterPath });
-      localStorage.removeItem(posKey(np.chapterPath, np.lang));
+      localStorage.removeItem(posKey(np.chapterPath, np.lang, np.voice));
       persistPos(np.chapterPath, 0);
       void posStore.flush();
     }
@@ -1166,17 +1228,18 @@ export function AudioPlayerProvider(
           cur.chapterPath !== serverSession.nowPlaying.chapterPath ||
           cur.bookSlug !== serverSession.nowPlaying.bookSlug;
         const serverT = serverPos &&
-            serverPos.path === serverSession.nowPlaying.chapterPath
+            serverPos.path === serverSession.nowPlaying.chapterPath && serverPos.voice === serverSession.nowPlaying.voice
           ? serverPos.t
           : 0;
         const localPos = cur
           ? Number(
-            localStorage.getItem(posKey(cur.chapterPath, cur.lang)) ?? "0",
+            localStorage.getItem(posKey(cur.chapterPath, cur.lang, cur.voice)) ?? "0",
           )
           : 0;
         // Same chapter on both devices, but the server (another device) is
         // further along → adopt its position. The lead matches posStore.reconcile.
         const posAhead = !chapterDiffers &&
+          cur?.voice === serverSession.nowPlaying.voice &&
           serverT > localPos + SYNC_POS_LEAD_S;
         if (chapterDiffers || posAhead) {
           if (serverT > 0) {
@@ -1186,6 +1249,7 @@ export function AudioPlayerProvider(
               posKey(
                 serverSession.nowPlaying.chapterPath,
                 serverSession.nowPlaying.lang,
+                serverSession.nowPlaying.voice,
               ),
               String(serverT),
             );
@@ -1372,6 +1436,16 @@ export function AudioPlayerProvider(
 
   const togglePlay = useCallback(() => {
     const np = nowPlayingRef.current;
+    if (sourcePendingRef.current) {
+      pendingPlayIntent.current = !pendingPlayIntent.current;
+      bufferingRef.current = pendingPlayIntent.current;
+      setBuffering(pendingPlayIntent.current);
+      return;
+    }
+    if (error && np) {
+      loadTrack(np, queueRef.current, queueIndexRef.current, true);
+      return;
+    }
     if (nativeAudioAvailable()) {
       const active = playingRef.current || bufferingRef.current;
       const willPlay = !active;
@@ -1402,7 +1476,7 @@ export function AudioPlayerProvider(
     if (a.paused) {
       playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
     } else a.pause();
-  }, [expectNativePlayback, resetNativePlaybackProof]);
+  }, [expectNativePlayback, resetNativePlaybackProof, error, loadTrack]);
 
   const seek = useCallback((sec: number) => {
     if (nativeAudioAvailable()) {
@@ -1449,6 +1523,40 @@ export function AudioPlayerProvider(
     a.currentTime = m.start_ms / 1000;
     playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
   }, []);
+  const replaySentence = useCallback(() => {
+    const index = activeMarkIndex(marksRef.current, currentTimeRef.current * 1000);
+    seekToSentence(Math.max(0, index));
+  }, [seekToSentence]);
+
+  const chooseVoice = useCallback((voice: string) => {
+    const np = nowPlayingRef.current;
+    const choice = voices.find(v => v.id === voice);
+    if (!np || !choice || voice === np.voice) return;
+    const token = ++voiceSeq.current;
+    const seq = loadSeq.current;
+    const current = (): boolean => voiceSeq.current === token && loadSeq.current === seq;
+    setVoiceBusy(true);
+    setVoiceError(null);
+    // Keep the current source playing while the alternative is prepared. The
+    // position is captured only at the actual switch, after both blobs exist.
+    void (async () => {
+      try {
+        const ready = await prepareVoice(np, choice, current);
+        const marks = await voiceMarks(ready);
+        if (!current()) return;
+        const unit = activeMarkIndex(marksRef.current, currentTimeRef.current * 1000);
+        const autoplay = playingRef.current || bufferingRef.current;
+        saveVoicePreference(np, voice);
+        setVoices(previous => previous.map(v => v.id === voice ? ready : v));
+        loadTrack({ ...np, voice }, queueRef.current, queueIndexRef.current, autoplay, { voice: ready, marks, unit });
+      } catch (error) {
+        if (current()) setVoiceError(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (current()) setVoiceBusy(false);
+      }
+    })();
+  }, [voices, loadTrack]);
+
   const setRate = useCallback((r: number) => {
     logEvent("rate_change", { rate: r });
     setRateState(r);
@@ -1604,6 +1712,7 @@ export function AudioPlayerProvider(
 
   const value = useMemo<AudioPlayer>(
     () => ({
+      voices, voiceBusy, voiceError, chooseVoice, replaySentence,
       nowPlaying,
       playing,
       buffering,
@@ -1630,6 +1739,7 @@ export function AudioPlayerProvider(
       syncNotice,
     }),
     [
+      voices, voiceBusy, voiceError, chooseVoice, replaySentence,
       nowPlaying,
       playing,
       buffering,
