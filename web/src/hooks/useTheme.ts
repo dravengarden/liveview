@@ -422,13 +422,29 @@ export function useTheme(): UseThemeResult {
         },
         // iOS WebKit zooms the whole page when a text field with a computed
         // font-size under 16px gains focus, and never zooms back out. The
-        // app-wide font scale can take rem below that, so never let a field
-        // on a touch device drop under 16px.
+        // app-wide font scale can take rem below that. Only editable inputs
+        // need this floor: MUI also uses the input slot for a non-editable
+        // Select div, whose value should keep following the app's font scale.
         MuiInputBase: {
           styleOverrides: {
             input: {
-              "@media (pointer: coarse)": { fontSize: "max(16px, 1rem)" },
+              "@media (pointer: coarse)": {
+                "&:is(input, textarea)": { fontSize: "max(16px, 1rem)" },
+              },
             },
+          },
+        },
+        MuiSelect: {
+          styleOverrides: {
+            select: ({ ownerState }) => ({
+              "@media (pointer: coarse)": {
+                minHeight: 44,
+                boxSizing: "border-box",
+                ...(ownerState.size === "small"
+                  ? { paddingBlock: "max(8.5px, calc((44px - 1lh) / 2))" }
+                  : {}),
+              },
+            }),
           },
         },
         MuiCard: {
