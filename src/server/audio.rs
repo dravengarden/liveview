@@ -157,7 +157,9 @@ async fn try_synth_once(cmd: &str, voice: &str, text: &str, speed: u16) -> Resul
 
     let run = tokio::process::Command::new(cmd)
         .arg(format!("--rate={:+}%", i32::from(speed) - 100))
-        .args(["--voice", voice, "--text", text, "--write-media"])
+        .args(["--voice", voice])
+        .arg(format!("--text={text}"))
+        .arg("--write-media")
         .arg(&tmp)
         // Kill the child when the future drops (i.e. on timeout), so a stalled
         // edge-tts doesn't linger.
@@ -448,7 +450,7 @@ mod tests {
                     "printf '%s' \"$1\" > \"$2\" && chmod 755 \"$2\"",
                     "sh",
                 ])
-                .arg(format!("#!/bin/sh\nout=''\nrate=''\nwhile [ \"$#\" -gt 0 ]; do\ncase \"$1\" in\n--rate=*) rate=${{1#*=}} ;;\n--write-media) shift; out=$1 ;;\nesac\nshift\ndone\n{body}\n"))
+                .arg(format!("#!/bin/sh\nout=''\nrate=''\ntext=''\nwhile [ \"$#\" -gt 0 ]; do\ncase \"$1\" in\n--rate=*) rate=${{1#*=}} ;;\n--text=*) text=${{1#*=}} ;;\n--write-media) shift; out=$1 ;;\nesac\nshift\ndone\n{body}\n"))
                 .arg(&path)
                 .status()
                 .unwrap();
@@ -504,6 +506,16 @@ mod tests {
 
     #[tokio::test]
     async fn successful_tts_returns_the_clip() {
+        let hyphen = FakeTts::new(
+            "hyphen",
+            "[ \"$text\" = '-example --voice nope' ] || exit 2; printf 'mp3' > \"$out\"",
+        );
+        assert_eq!(
+            synth_sentence(hyphen.cmd(), "v", "-example --voice nope")
+                .await
+                .unwrap(),
+            b"mp3"
+        );
         let tts = FakeTts::new("ok", "printf 'mp3' > \"$out\"");
         assert_eq!(synth_sentence(tts.cmd(), "v", "hi").await.unwrap(), b"mp3");
         let paced = FakeTts::new(
