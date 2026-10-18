@@ -15,6 +15,13 @@
 set -euo pipefail
 export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
 export LIVEVIEW_WIDGET_SERVER_URL="${LIVEVIEW_WIDGET_SERVER_URL:-}"
+if ! xcodebuild -checkFirstLaunchStatus; then
+  echo "FATAL: Xcode first-launch setup is incomplete; an administrator must run sudo xcodebuild -runFirstLaunch" >&2
+  exit 69
+fi
+# Fail before the export fallback below can pick an older .app when SDK setup
+# is incomplete. A successful simulator launch is not proof of a fresh build.
+xcrun --sdk iphonesimulator --show-sdk-path >/dev/null
 if [[ -z "${LIVEVIEW_REMOTE_ORIGINS:-}" || "${LIVEVIEW_REMOTE_ORIGINS}" == *127.0.0.1* ]]; then
   echo "WARN: LIVEVIEW_REMOTE_ORIGINS is unset or loopback; the Simulator cannot reach the Mac/hawk 127.0.0.1" >&2
 fi

@@ -44,6 +44,20 @@ pub(crate) async fn api_speech_book(
 async fn speech_book(state: &AppState, slug: &str) -> Result<serde_json::Value, String> {
     let sources = state.store.speech_sources(slug).await?;
     let assets = state.store.speech_assets(Some(slug)).await?;
+    let assets: HashMap<_, _> = assets
+        .iter()
+        .map(|asset| {
+            (
+                (
+                    asset.rendition.as_str(),
+                    asset.lang.as_str(),
+                    asset.rel_path.as_str(),
+                    asset.profile.as_str(),
+                ),
+                asset,
+            )
+        })
+        .collect();
     let mut chapters = Vec::new();
     let mut policies = serde_json::Map::new();
     for rendition in ["text", "audio"] {
@@ -56,18 +70,25 @@ async fn speech_book(state: &AppState, slug: &str) -> Result<serde_json::Value, 
             continue;
         }
         let legacy = legacy_voice(state, slug, rendition).await;
+        let recipes: Vec<_> = config
+            .voices
+            .iter()
+            .map(|voice| {
+                let recipe = config.recipe(voice);
+                (voice, recipe.encode(), recipe.id(), speech::label(voice))
+            })
+            .collect();
         for source in sources.iter().filter(|s| s.rendition == rendition) {
             let default = config.default_for(&source.lang, &source.rel_path, legacy.as_deref());
-            let choices: Vec<_> = config.voices.iter().map(|voice| {
-                let recipe = config.recipe(voice);
-                let asset = assets.iter().find(|a|a.rendition==rendition && a.lang==source.lang && a.rel_path==source.rel_path && a.profile==recipe.id());
-                let is_baked_default = source.audio_voice.as_deref()==Some(&recipe.encode()) && source.audio_hash.is_some() && source.marks_hash.is_some();
+            let choices: Vec<_> = recipes.iter().map(|(voice, recipe, profile, label)| {
+                let asset = assets.get(&(rendition,source.lang.as_str(),source.rel_path.as_str(),profile.as_str()));
+                let is_baked_default = source.audio_voice.as_deref()==Some(recipe) && source.audio_hash.is_some() && source.marks_hash.is_some();
                 let (status,audio,marks,bytes) = if is_baked_default {
                     ("ready",source.audio_hash.as_ref(),source.marks_hash.as_ref(),source.audio_size)
                 } else if let Some(asset) = asset {
                     (asset.status.as_str(),asset.audio_hash.as_ref(),asset.marks_hash.as_ref(),asset.audio_size)
                 } else { ("available",None,None,None) };
-                serde_json::json!({"id":voice,"label":speech::label(voice),"status":status,"audio_hash":audio,"marks_hash":marks,"bytes":bytes})
+                serde_json::json!({"id":voice,"label":label,"status":status,"audio_hash":audio,"marks_hash":marks,"bytes":bytes})
             }).collect();
             chapters.push(serde_json::json!({"id":format!("{rendition}/{}/{}",source.lang,source.rel_path),"default_voice":default,"voices":choices}));
         }

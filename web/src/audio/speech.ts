@@ -54,11 +54,17 @@ export async function prepareVoice(np: NowPlaying, choice: VoiceChoice, current:
   if (!current()) throw new Error("Cancelled");
   if (choice.status === "ready" && choice.audio_hash && choice.marks_hash) return choice;
   const query = new URLSearchParams({ path: np.chapterPath, lang: np.lang, rendition: np.rendition });
-  const response = await fetch(`${BUNDLED ? REMOTE : ""}/api/speech?${query}`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ voice: choice.id }), signal: AbortSignal.timeout(10000),
-  });
-  if (!response.ok) throw new Error(await response.text());
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(`${BUNDLED ? REMOTE : ""}/api/speech?${query}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ voice: choice.id }), signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(await response.text());
+  } finally {
+    clearTimeout(timer);
+  }
   for (let attempt = 0; attempt < 300 && current(); attempt++) {
     await new Promise(resolve => setTimeout(resolve, 2000));
     if (!current()) throw new Error("Cancelled");
