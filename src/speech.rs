@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 #[serde(default, deny_unknown_fields)]
 pub struct SpeechOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation: Option<Generation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub voices: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_voice: Option<String>,
@@ -17,6 +19,13 @@ pub struct SpeechOptions {
     pub pronunciations: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub omit_speakers: Option<Vec<String>>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Generation {
+    All,
+    OnDemand,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -63,6 +72,12 @@ pub struct EffectiveSpeech {
 }
 
 impl SpeechOptions {
+    /// Scheduling never changes the audio recipe or legacy encoding.
+    pub fn has_audio_options(&self) -> bool {
+        let mut audio = self.clone();
+        audio.generation = None;
+        audio != Self::default()
+    }
     fn overlay(&mut self, child: &Self, source: &str, sources: &mut BTreeMap<String, String>) {
         macro_rules! field {
             ($name:ident) => {
@@ -73,6 +88,7 @@ impl SpeechOptions {
             };
         }
         field!(voices);
+        field!(generation);
         field!(default_voice);
         field!(bitrate_kbps);
         field!(speed_percent);
@@ -124,7 +140,7 @@ impl SpeechOptions {
         Ok(())
     }
     pub fn default_for(&self, lang: &str, legacy: Option<&str>) -> String {
-        if self == &Self::default()
+        if !self.has_audio_options()
             && let Some(voice) = legacy
         {
             return voice.into();
@@ -170,7 +186,7 @@ impl SpeechOptions {
         }
     }
     pub fn resolve(&self, lang: &str, legacy: Option<&str>) -> String {
-        if self == &Self::default() {
+        if !self.has_audio_options() {
             return legacy
                 .map(str::to_owned)
                 .unwrap_or_else(|| language_default(lang, None));

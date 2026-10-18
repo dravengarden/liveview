@@ -951,11 +951,23 @@ impl PgStore {
     /// slots claim distinct rows without racing. Returns `None` when the queue is
     /// drained.
     pub async fn claim_audio_task(&self) -> Result<Option<AudioTask>, sqlx::Error> {
-        sqlx::query_as::<_, AudioTask>(
+        self.claim_audio_task_slot(false).await
+    }
+    pub async fn claim_audio_task_slot(
+        &self,
+        interactive: bool,
+    ) -> Result<Option<AudioTask>, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT id FROM speech_defaults WHERE id=true FOR SHARE")
+            .execute(&mut *tx)
+            .await?;
+        let job=sqlx::query_as::<_, AudioTask>(
             "UPDATE audio_tasks SET status = 'running', started_at = $1, attempts = attempts + 1
              WHERE (book_slug, rendition, lang, rel_path) = (
                  SELECT book_slug, rendition, lang, rel_path FROM audio_tasks
                  WHERE status = 'queued'
+                   AND (NOT $2 OR priority>=100)
+                   AND (priority>=100 OR NOT (SELECT paused FROM speech_preparation_control WHERE id=true))
                  ORDER BY priority DESC, enqueued_at ASC
                  FOR UPDATE SKIP LOCKED
                  LIMIT 1
@@ -965,8 +977,36 @@ impl PgStore {
                        enqueued_at, started_at, finished_at",
         )
         .bind(now_millis())
-        .fetch_optional(&self.pool)
-        .await
+        .bind(interactive)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(job) = &job
+            && job.priority < 100
+        {
+            let automatic:bool=sqlx::query_scalar("SELECT automatic FROM audio_tasks WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4").bind(&job.book_slug).bind(&job.rendition).bind(&job.lang).bind(&job.rel_path).fetch_one(&mut *tx).await?;
+            {
+                let options = super::speech::read_policy(&mut tx, &job.book_slug, &job.rendition)
+                    .await
+                    .map_err(sqlx::Error::Protocol)?
+                    .effective(&job.lang, &job.rel_path)
+                    .options;
+                let legacy =
+                    super::speech::read_legacy_voice(&mut tx, &job.book_slug, &job.rendition)
+                        .await
+                        .map_err(sqlx::Error::Protocol)?;
+                if options.generation == Some(crate::speech::Generation::OnDemand)
+                    || (automatic
+                        && (options.generation != Some(crate::speech::Generation::All)
+                            || options.resolve(&job.lang, legacy.as_deref()) != job.voice))
+                {
+                    sqlx::query("DELETE FROM audio_tasks WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4").bind(&job.book_slug).bind(&job.rendition).bind(&job.lang).bind(&job.rel_path).execute(&mut *tx).await?;
+                    tx.commit().await?;
+                    return Ok(None);
+                }
+            }
+        }
+        tx.commit().await?;
+        Ok(job)
     }
 
     /// Mark a claimed task done — only if it is still the task that was claimed

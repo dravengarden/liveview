@@ -11,5 +11,6 @@ pub mod content;
 pub mod fs;
 pub mod model;
 pub mod pg;
+pub mod preparation;
 pub mod range;
 pub mod speech;

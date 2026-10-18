@@ -80,6 +80,9 @@ export function SpeechSettings({ np, onSaved }: { np: NowPlaying; onSaved: () =>
       {(["chapter", "rendition", "book", "global"] as Scope[]).map(s => <MenuItem key={s} value={s}>{t(s === "rendition" && np.rendition === "audio" ? "speech.audiobook" : `speech.${s}`)}</MenuItem>)}
     </Select></FormControl>
     <Typography variant="caption" color="text.secondary">{t("speech.inheritanceHint")}</Typography>
+    <FormControl fullWidth size="small"><InputLabel shrink id="speech-generation-label">{t("speech.automatic")}</InputLabel><Select displayEmpty labelId="speech-generation-label" label={t("speech.automatic")} value={draft.generation ?? ""} onChange={e => field("generation", e.target.value || undefined)} disabled={busy || !catalog} data-testid="speech-generation">
+      <MenuItem value="">{t("speech.inherit")}</MenuItem><MenuItem value="all">{t("speech.all")}</MenuItem><MenuItem value="on_demand">{t("speech.onDemand")}</MenuItem>
+    </Select></FormControl>
     <FormControl fullWidth size="small"><InputLabel shrink id="speech-default-label">{t("speech.defaultVoice")}</InputLabel><Select displayEmpty labelId="speech-default-label" label={t("speech.defaultVoice")} value={draft.default_voice ?? ""} onChange={e => field("default_voice", e.target.value || undefined)} disabled={busy || !catalog} data-testid="speech-default-voice">
       <MenuItem value="">{t("speech.inherit")}</MenuItem>{voices.map(v => <MenuItem key={v} value={v}>{labelVoice(v)}</MenuItem>)}
     </Select></FormControl>

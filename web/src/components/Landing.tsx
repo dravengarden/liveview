@@ -72,6 +72,7 @@ import {
 import { LibraryOrganizer } from "./LibraryOrganizer";
 import { DirectoryLocation } from "./DirectoryLocation";
 import { BrandMark } from "./BrandMark";
+import { AudioPreparation } from "./AudioPreparation";
 import { ScrollToTopButton } from "./ScrollToTopButton";
 import { Highlighted } from "./SearchHighlight";
 import { ShelfCard, shelfEntries, type ShelfEntry } from "./ShelfCard";
@@ -1370,6 +1371,7 @@ export function Landing({
               </Stack>
             )}
 
+            {atRoot && <AudioPreparation />}
             {atRoot && continueBooks.length > 0 && (
               <Box
                 component="section"

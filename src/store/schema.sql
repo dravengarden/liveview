@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS audio_tasks (
 CREATE INDEX IF NOT EXISTS audio_tasks_claim
     ON audio_tasks (priority DESC, enqueued_at ASC)
     WHERE status = 'queued';
+ALTER TABLE audio_tasks ADD COLUMN IF NOT EXISTS automatic BOOLEAN NOT NULL DEFAULT false;
 
 -- Author policy and independently cached speech recipes. Existing chapter
 -- audio remains the default representation for older installed readers.
@@ -234,6 +235,24 @@ CREATE TABLE IF NOT EXISTS speech_audio (
 );
 CREATE INDEX IF NOT EXISTS speech_audio_queue ON speech_audio(status, lease_until)
     WHERE status IN ('queued','running');
+ALTER TABLE speech_audio ADD COLUMN IF NOT EXISTS priority INTEGER NOT NULL DEFAULT 100;
+CREATE TABLE IF NOT EXISTS speech_preparation_control (
+    id BOOLEAN PRIMARY KEY DEFAULT true CHECK(id),
+    paused BOOLEAN NOT NULL DEFAULT false
+);
+INSERT INTO speech_preparation_control(id) VALUES(true) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS speech_preparation (
+    book_slug TEXT NOT NULL,
+    rendition TEXT NOT NULL,
+    lang TEXT NOT NULL,
+    rel_path TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    profile TEXT NOT NULL,
+    ready BOOLEAN NOT NULL,
+    PRIMARY KEY(book_slug,rendition,lang,rel_path),
+    FOREIGN KEY(book_slug,rendition,lang,rel_path)
+        REFERENCES chapters(book_slug,rendition,lang,rel_path) ON DELETE CASCADE
+);
 
 -- Pre-built sidebar forest per rendition (`text` / `audio`), as the JSON the
 -- server returns verbatim from /api/tree. `liveview sync` computes it once (it

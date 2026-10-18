@@ -6,7 +6,7 @@ use sqlx::FromRow;
 use super::{model::ChapterRecord, pg::PgStore};
 use crate::speech::{Recipe, SpeechConfig, SpeechOverride, SpeechPolicy};
 
-async fn read_legacy_voice(
+pub(super) async fn read_legacy_voice(
     connection: &mut sqlx::PgConnection,
     book: &str,
     rendition: &str,
@@ -41,6 +41,7 @@ pub struct SpeechAsset {
     pub recipe: String,
     pub content_hash: String,
     pub status: String,
+    pub priority: i32,
     pub attempts: i32,
     pub audio_hash: Option<String>,
     pub marks_hash: Option<String>,
@@ -57,6 +58,8 @@ pub struct SpeechSource {
     pub audio_hash: Option<String>,
     pub marks_hash: Option<String>,
     pub audio_size: Option<i64>,
+    pub task_voice: Option<String>,
+    pub task_status: Option<String>,
 }
 
 impl PgStore {
@@ -201,7 +204,7 @@ impl PgStore {
     }
 
     pub async fn speech_sources(&self, book: &str) -> Result<Vec<SpeechSource>, String> {
-        sqlx::query_as("SELECT c.rendition,c.lang,c.rel_path,c.audio_voice,c.audio_hash,c.marks_hash,a.size AS audio_size FROM chapters c LEFT JOIN assets a ON a.content_hash=c.audio_hash WHERE c.book_slug=$1 AND c.file_type='markdown'")
+        sqlx::query_as("SELECT c.rendition,c.lang,c.rel_path,c.audio_voice,c.audio_hash,c.marks_hash,a.size AS audio_size,t.voice AS task_voice,t.status AS task_status FROM chapters c LEFT JOIN assets a ON a.content_hash=c.audio_hash LEFT JOIN audio_tasks t ON t.book_slug=c.book_slug AND t.rendition=c.rendition AND t.lang=c.lang AND t.rel_path=c.rel_path AND t.content_hash=c.content_hash WHERE c.book_slug=$1 AND c.file_type='markdown'")
             .bind(book).fetch_all(&self.pool).await.map_err(|e| e.to_string())
     }
 
@@ -211,6 +214,15 @@ impl PgStore {
     }
 
     pub async fn queue_speech(&self, row: &ChapterRecord, recipe: &Recipe) -> Result<(), String> {
+        self.queue_speech_priority(row, recipe, 100).await
+    }
+
+    pub async fn queue_speech_priority(
+        &self,
+        row: &ChapterRecord,
+        recipe: &Recipe,
+        priority: i32,
+    ) -> Result<(), String> {
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         // Serializes against policy changes; do not let an HTTP request that
         // read the previous config resurrect a removed recipe after pruning.
@@ -223,6 +235,9 @@ impl PgStore {
             .effective(&row.lang, &row.rel_path)
             .options;
         let legacy = read_legacy_voice(&mut tx, &row.book_slug, &row.rendition).await?;
+        if priority < 100 && config.generation != Some(crate::speech::Generation::All) {
+            return Ok(());
+        }
         if !config
             .available_voices(&row.lang, legacy.as_deref())
             .contains(&recipe.voice)
@@ -230,23 +245,67 @@ impl PgStore {
         {
             return Err("Voice policy changed; reload this book".into());
         }
+        let baked: Option<(Option<String>,bool)> = sqlx::query_as("SELECT audio_voice,audio_hash IS NOT NULL AND marks_hash IS NOT NULL FROM chapters WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4 AND content_hash=$5 FOR SHARE")
+            .bind(&row.book_slug).bind(&row.rendition).bind(&row.lang).bind(&row.rel_path).bind(&row.content_hash).fetch_optional(&mut *tx).await.map_err(|e|e.to_string())?;
+        if baked.is_some_and(|(voice, ready)| ready && voice.as_deref() == Some(&recipe.encode())) {
+            return Ok(());
+        }
+        if priority < 100 {
+            let exists: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM audio_tasks WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4 AND content_hash=$5 AND voice=$6)")
+                .bind(&row.book_slug).bind(&row.rendition).bind(&row.lang).bind(&row.rel_path).bind(&row.content_hash).bind(recipe.encode()).fetch_one(&mut *tx).await.map_err(|e|e.to_string())?;
+            if exists {
+                return Ok(());
+            }
+        }
         // Reuse an in-flight default instead of generating the same recipe twice.
-        let promoted = sqlx::query("UPDATE audio_tasks SET priority=100 WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4 AND content_hash=$5 AND voice=$6 AND status IN ('queued','running')")
+        let promoted = config.recipe(&config.default_for(&row.lang, legacy.as_deref())) == *recipe && sqlx::query("UPDATE audio_tasks SET priority=GREATEST(priority,$7) WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4 AND content_hash=$5 AND voice=$6 AND status IN ('queued','running')")
             .bind(&row.book_slug).bind(&row.rendition).bind(&row.lang).bind(&row.rel_path)
-            .bind(&row.content_hash).bind(recipe.encode()).execute(&mut *tx).await.map_err(|e| e.to_string())?.rows_affected()>0;
+            .bind(&row.content_hash).bind(recipe.encode()).bind(priority).execute(&mut *tx).await.map_err(|e| e.to_string())?.rows_affected()>0;
         if promoted {
             return tx.commit().await.map_err(|e| e.to_string());
         }
-        sqlx::query("INSERT INTO speech_audio(book_slug,rendition,lang,rel_path,profile,recipe,content_hash) SELECT book_slug,rendition,lang,rel_path,$5,$6,content_hash FROM chapters WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4 AND content_hash=$7 ON CONFLICT(book_slug,rendition,lang,rel_path,profile) DO UPDATE SET content_hash=EXCLUDED.content_hash,status='queued',attempts=speech_audio.attempts+1,lease_until=NULL,error=NULL,audio_hash=NULL,marks_hash=NULL WHERE speech_audio.content_hash<>EXCLUDED.content_hash OR speech_audio.status='failed'")
+        sqlx::query("INSERT INTO speech_audio(book_slug,rendition,lang,rel_path,profile,recipe,content_hash,priority) SELECT book_slug,rendition,lang,rel_path,$5,$6,content_hash,$8 FROM chapters WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4 AND content_hash=$7 ON CONFLICT(book_slug,rendition,lang,rel_path,profile) DO UPDATE SET content_hash=EXCLUDED.content_hash,status='queued',attempts=speech_audio.attempts+1,lease_until=NULL,error=NULL,audio_hash=NULL,marks_hash=NULL,priority=EXCLUDED.priority WHERE speech_audio.content_hash<>EXCLUDED.content_hash OR (speech_audio.status='failed' AND $8>=100)")
             .bind(&row.book_slug).bind(&row.rendition).bind(&row.lang).bind(&row.rel_path)
-            .bind(recipe.id()).bind(recipe.encode()).bind(&row.content_hash)
+            .bind(recipe.id()).bind(recipe.encode()).bind(&row.content_hash).bind(priority)
             .execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        if priority >= 100 {
+            sqlx::query("WITH unlocked AS (SELECT ctid FROM speech_audio WHERE book_slug=$1 AND status='queued' ORDER BY rendition,lang,rel_path,profile FOR UPDATE SKIP LOCKED) UPDATE speech_audio s SET priority=GREATEST(priority,CASE WHEN (rel_path,rendition,lang,profile)=($2,$3,$4,$5) THEN 100 ELSE 50 END) FROM unlocked u WHERE s.ctid=u.ctid")
+                .bind(&row.book_slug).bind(&row.rel_path).bind(&row.rendition).bind(&row.lang).bind(recipe.id()).execute(&mut *tx).await.map_err(|e|e.to_string())?;
+        }
         tx.commit().await.map_err(|e| e.to_string())
     }
 
     pub async fn claim_speech(&self) -> Result<Option<SpeechAsset>, String> {
-        sqlx::query_as("WITH next AS (SELECT s.ctid FROM speech_audio s JOIN chapters c USING(book_slug,rendition,lang,rel_path) WHERE s.content_hash=c.content_hash AND (s.status='queued' OR (s.status='running' AND s.lease_until<now())) ORDER BY s.attempts,s.book_slug,s.rel_path FOR UPDATE OF s SKIP LOCKED LIMIT 1) UPDATE speech_audio s SET status='running',attempts=s.attempts+1,lease_until=now()+interval '2 minutes' FROM next WHERE s.ctid=next.ctid RETURNING s.*,NULL::bigint AS audio_size,NULL::bigint AS marks_size")
-            .fetch_optional(&self.pool).await.map_err(|e| e.to_string())
+        self.claim_speech_slot(false).await
+    }
+
+    pub async fn claim_speech_slot(
+        &self,
+        interactive: bool,
+    ) -> Result<Option<SpeechAsset>, String> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        sqlx::query("SELECT id FROM speech_defaults WHERE id=true FOR SHARE")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        let job: Option<SpeechAsset> = sqlx::query_as("WITH next AS (SELECT s.ctid FROM speech_audio s JOIN chapters c USING(book_slug,rendition,lang,rel_path) WHERE s.content_hash=c.content_hash AND (NOT $1 OR s.priority>=100) AND (s.priority>=100 OR NOT (SELECT paused FROM speech_preparation_control WHERE id=true)) AND (s.status='queued' OR (s.status='running' AND s.lease_until<now())) ORDER BY s.priority DESC,s.attempts,s.book_slug,s.rel_path FOR UPDATE OF s SKIP LOCKED LIMIT 1) UPDATE speech_audio s SET status='running',attempts=s.attempts+1,lease_until=now()+interval '2 minutes' FROM next WHERE s.ctid=next.ctid RETURNING s.*,NULL::bigint AS audio_size,NULL::bigint AS marks_size")
+            .bind(interactive)
+            .fetch_optional(&mut *tx).await.map_err(|e| e.to_string())?;
+        if let Some(job) = &job
+            && job.priority < 100
+            && read_policy(&mut tx, &job.book_slug, &job.rendition)
+                .await?
+                .effective(&job.lang, &job.rel_path)
+                .options
+                .generation
+                != Some(crate::speech::Generation::All)
+        {
+            sqlx::query("DELETE FROM speech_audio WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4 AND profile=$5").bind(&job.book_slug).bind(&job.rendition).bind(&job.lang).bind(&job.rel_path).bind(&job.profile).execute(&mut *tx).await.map_err(|e|e.to_string())?;
+            tx.commit().await.map_err(|e| e.to_string())?;
+            return Ok(None);
+        }
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(job)
     }
 
     pub async fn renew_speech(&self, job: &SpeechAsset) -> Result<(), String> {
@@ -272,8 +331,8 @@ impl PgStore {
             .map_err(|e| e.to_string())?;
         let config = read_policy(&mut tx, &job.book_slug, &job.rendition).await?;
         let legacy = read_legacy_voice(&mut tx, &job.book_slug, &job.rendition).await?;
-        let publish_default = error.is_none()
-            && config.resolve(&job.lang, &job.rel_path, legacy.as_deref()) == job.recipe;
+        let default_recipe = config.resolve(&job.lang, &job.rel_path, legacy.as_deref());
+        let publish_default = error.is_none() && default_recipe == job.recipe;
         // Match sync's chapter → variant lock order and recheck the source
         // after waiting. A source edit atomically prunes its old variants.
         let source: Option<String> = sqlx::query_scalar("SELECT content_hash FROM chapters WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4 FOR UPDATE")
@@ -289,8 +348,8 @@ impl PgStore {
             if publish_default {
                 // Keep the canonical representation usable by installed older
                 // readers. Personal alternative choices never enter this path.
-                sqlx::query("UPDATE chapters c SET audio_hash=s.audio_hash,marks_hash=s.marks_hash,audio_voice=s.recipe FROM speech_audio s WHERE s.book_slug=$1 AND s.rendition=$2 AND s.lang=$3 AND s.rel_path=$4 AND s.profile=$5 AND c.book_slug=s.book_slug AND c.rendition=s.rendition AND c.lang=s.lang AND c.rel_path=s.rel_path AND c.content_hash=s.content_hash")
-                    .bind(&job.book_slug).bind(&job.rendition).bind(&job.lang).bind(&job.rel_path).bind(&job.profile)
+                sqlx::query("UPDATE chapters c SET audio_hash=s.audio_hash,marks_hash=s.marks_hash,audio_voice=$6 FROM speech_audio s WHERE s.book_slug=$1 AND s.rendition=$2 AND s.lang=$3 AND s.rel_path=$4 AND s.profile=$5 AND c.book_slug=s.book_slug AND c.rendition=s.rendition AND c.lang=s.lang AND c.rel_path=s.rel_path AND c.content_hash=s.content_hash")
+                    .bind(&job.book_slug).bind(&job.rendition).bind(&job.lang).bind(&job.rel_path).bind(&job.profile).bind(&default_recipe)
                     .execute(&mut *tx).await.map_err(|e|e.to_string())?;
                 // Invalidate any older default task's publication token.
                 sqlx::query("UPDATE audio_tasks SET voice=$6,status='done',error=NULL WHERE book_slug=$1 AND rendition=$2 AND lang=$3 AND rel_path=$4 AND content_hash=$5")
@@ -543,6 +602,103 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(pg.speech_assets(Some(slug)).await.unwrap().len(), 1);
+        // Background preparation is durable, deduplicated, pausable, and does
+        // not turn a failed synthesis into an unbounded retry loop.
+        pg.delete_book(slug).await.unwrap();
+        pg.upsert_book(&BookUpsert {
+            slug,
+            label: "Automatic",
+            description: None,
+            tags: &[],
+            collection: None,
+            author: None,
+            cover_hash: None,
+            backdrop_hash: None,
+            card_backdrop_hash: None,
+            default_rendition: "text",
+        })
+        .await
+        .unwrap();
+        pg.upsert_rendition(slug, "text", "Read", "en", None, true, 0)
+            .await
+            .unwrap();
+        pg.upsert_edition(slug, "text", "en", "English", 0)
+            .await
+            .unwrap();
+        row.audio_hash = None;
+        row.marks_hash = None;
+        row.audio_voice = None;
+        pg.upsert_chapter(&row).await.unwrap();
+        let automatic = SpeechConfig {
+            options: crate::speech::SpeechOptions {
+                generation: Some(crate::speech::Generation::All),
+                default_voice: Some("kokoro:af_heart".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        pg.set_speech_config(slug, "text", &automatic)
+            .await
+            .unwrap();
+        let mut cursor = Default::default();
+        while !pg.prepare_speech_page(&mut cursor).await.unwrap() {}
+        assert_eq!(pg.preparation_status(None).await.unwrap()["total"], 1);
+        assert!(pg.claim_speech_slot(true).await.unwrap().is_none());
+        pg.preparation_status(Some(true)).await.unwrap();
+        assert!(pg.claim_speech().await.unwrap().is_none());
+        let recipe = automatic.options.recipe("kokoro:af_heart");
+        pg.queue_speech(&row, &recipe).await.unwrap();
+        let job = pg.claim_speech_slot(true).await.unwrap().unwrap();
+        pg.finish_speech(&job, Err("test failure".into()))
+            .await
+            .unwrap();
+        pg.preparation_status(Some(false)).await.unwrap();
+        while !pg.prepare_speech_page(&mut cursor).await.unwrap() {}
+        assert!(pg.claim_speech().await.unwrap().is_none());
+        pg.queue_speech(&row, &recipe).await.unwrap();
+        let job = pg.claim_speech().await.unwrap().unwrap();
+        pg.finish_speech(&job, Ok(("speech-audio".into(), "speech-marks".into())))
+            .await
+            .unwrap();
+        while !pg.prepare_speech_page(&mut cursor).await.unwrap() {}
+        assert_eq!(pg.preparation_status(None).await.unwrap()["ready"], 1);
+        assert!(pg.claim_speech().await.unwrap().is_none());
+        // An inherited exclusion stops already queued automatic work.
+        row.content_hash = "auto-edited".into();
+        pg.upsert_chapter(&row).await.unwrap();
+        while !pg.prepare_speech_page(&mut cursor).await.unwrap() {}
+        let mut excluded = automatic.clone();
+        excluded.options.generation = Some(crate::speech::Generation::OnDemand);
+        pg.set_speech_config(slug, "text", &excluded).await.unwrap();
+        assert!(pg.claim_speech().await.unwrap().is_none());
+        let legacy_policy = SpeechConfig {
+            options: crate::speech::SpeechOptions {
+                generation: Some(crate::speech::Generation::All),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        pg.set_speech_config(slug, "text", &legacy_policy)
+            .await
+            .unwrap();
+        while !pg.prepare_speech_page(&mut cursor).await.unwrap() {}
+        assert!(pg.claim_speech().await.unwrap().is_none());
+        let legacy_job = pg.claim_audio_task().await.unwrap().unwrap();
+        assert!(!legacy_job.voice.starts_with("speech-v1:"));
+        assert_eq!(legacy_job.voice, legacy_policy.options.resolve("en", None));
+        pg.fail_audio_task(&legacy_job, "terminal", 1)
+            .await
+            .unwrap();
+        while !pg.prepare_speech_page(&mut cursor).await.unwrap() {}
+        assert!(pg.claim_audio_task().await.unwrap().is_none());
+        assert!(pg.claim_speech().await.unwrap().is_none());
+        row.content_hash = "legacy-edited".into();
+        pg.upsert_chapter(&row).await.unwrap();
+        while !pg.prepare_speech_page(&mut cursor).await.unwrap() {}
+        pg.set_speech_config(slug, "text", &SpeechConfig::default())
+            .await
+            .unwrap();
+        assert!(pg.claim_audio_task().await.unwrap().is_none());
         pg.delete_book(slug).await.unwrap();
     }
 }

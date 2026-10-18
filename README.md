@@ -294,6 +294,22 @@ JSON body `{ "rendition": "text", "speech": { "voices": [...],
 "default_voice": "kokoro:af_heart" } }`. Omit `rendition` for book defaults;
 add `chapter: "en/22-practice-dialogues.md"` for an article override. Library
 defaults use `GET/PUT /api/speech-defaults` with the policy itself as the body.
+Set `generation = "all"` at any speech scope to prepare its current default
+voice automatically, including newly synced chapters. `"on_demand"` excludes
+that scope from automatic preparation; omitting the field inherits. Scheduling
+does not change the audio recipe. The server scans 32 chapters at a time,
+reuses existing audio, and persists work across restarts. Failed variant jobs
+remain failed until explicitly retried from playback, rather than being
+resubmitted on every scan. A dedicated slot serves interactive requests, and
+opening a chapter raises its book's queued variant priority.
+
+The Library audio summary reports discovered chapters, ready audio, active work,
+waiting work, and failures. Its counts converge as the bounded scan runs.
+`GET /api/speech-preparation` returns this compact summary; `PUT` with
+`{"paused":true}` pauses new background claims (current work finishes and
+interactive requests still run). Resume with `false`. Generation stores audio
+on the server; it does not download the library to a reader's device.
+
 `GET /api/speech/<slug>` returns all raw layers, each article's effective settings
 and field sources, and available voices. An omitted manifest policy preserves this server
 configuration during content sync; a declared manifest policy takes precedence

@@ -71,7 +71,7 @@ async fn speech_book(state: &AppState, slug: &str) -> Result<serde_json::Value, 
             let effective = config.effective(&source.lang, &source.rel_path);
             let options = &effective.options;
             let default = options.default_for(&source.lang, legacy.as_deref());
-            let available = if options == &speech::SpeechOptions::default() {
+            let available = if !options.has_audio_options() {
                 Vec::new()
             } else {
                 options.available_voices(&source.lang, legacy.as_deref())
@@ -86,15 +86,17 @@ async fn speech_book(state: &AppState, slug: &str) -> Result<serde_json::Value, 
                 .collect();
             let choices: Vec<_> = recipes.iter().map(|(voice, recipe, profile, label)| {
                 let asset = assets.get(&(rendition,source.lang.as_str(),source.rel_path.as_str(),profile.as_str()));
-                let is_baked_default = (source.audio_voice.as_deref()==Some(recipe) || (options==&speech::SpeechOptions::default() && source.audio_voice.as_deref()==Some(voice))) && source.audio_hash.is_some() && source.marks_hash.is_some();
+                let is_baked_default = (source.audio_voice.as_deref()==Some(recipe) || (!options.has_audio_options() && source.audio_voice.as_deref().is_none_or(|v|v==voice))) && source.audio_hash.is_some() && source.marks_hash.is_some();
                 let (status,audio,marks,bytes) = if is_baked_default {
                     ("ready",source.audio_hash.as_ref(),source.marks_hash.as_ref(),source.audio_size)
                 } else if let Some(asset) = asset {
                     (asset.status.as_str(),asset.audio_hash.as_ref(),asset.marks_hash.as_ref(),asset.audio_size)
+                } else if source.task_voice.as_deref().and_then(|v|speech::Recipe::decode(v).ok()) == speech::Recipe::decode(recipe).ok() && source.task_status.as_deref().is_some_and(|s|matches!(s,"queued"|"running"|"failed")) {
+                    (source.task_status.as_deref().unwrap_or("available"),None,None,None)
                 } else { ("available",None,None,None) };
                 serde_json::json!({"id":voice,"label":label,"status":status,"audio_hash":audio,"marks_hash":marks,"bytes":bytes})
             }).collect();
-            let bitrate = if options == &speech::SpeechOptions::default() {
+            let bitrate = if !options.has_audio_options() {
                 24
             } else {
                 options.bitrate_kbps.unwrap_or(96)
@@ -124,6 +126,27 @@ pub(crate) async fn api_speech_defaults(State(state): State<SharedState>) -> Res
     match state.store.speech_policy("", "").await {
         Ok(policy) => Json(policy.global).into_response(),
         Err(error) => store_unavailable("speech defaults", error),
+    }
+}
+
+pub(crate) async fn api_preparation(State(state): State<SharedState>) -> Response {
+    match state.store.preparation_status(None).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => store_unavailable("audio preparation", error),
+    }
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PreparationRequest {
+    paused: bool,
+}
+pub(crate) async fn api_set_preparation(
+    State(state): State<SharedState>,
+    Json(request): Json<PreparationRequest>,
+) -> Response {
+    match state.store.preparation_status(Some(request.paused)).await {
+        Ok(value) => Json(value).into_response(),
+        Err(error) => store_unavailable("audio preparation", error),
     }
 }
 pub(crate) async fn api_set_speech_defaults(

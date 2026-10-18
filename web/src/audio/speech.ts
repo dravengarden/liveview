@@ -31,6 +31,7 @@ export interface ChapterVoices {
 }
 
 export interface SpeechOptions {
+  generation?: "all" | "on_demand";
   voices?: string[];
   default_voice?: string;
   bitrate_kbps?: number;

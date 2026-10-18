@@ -56,7 +56,7 @@ async fn run_loop(
 ) {
     tracing::debug!(slot, "audio worker slot started");
     loop {
-        let claim = pg.claim_audio_task().await;
+        let claim = pg.claim_audio_task_slot(slot == 0).await;
         match claim {
             Ok(Some(task)) => process(&pg, &obj, &tts_cmd, &tx, task).await,
             // Queue drained — poll. (A NOTIFY-driven wake is a later optimization;

@@ -1503,6 +1503,10 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
         .route("/api/settings", get(api_settings_get).put(api_settings_put))
         // Audio-generation status (per-book + global) for the Sync sheet.
         .route("/api/tasks", get(api_tasks))
+        .route(
+            "/api/speech-preparation",
+            get(speech_http::api_preparation).put(speech_http::api_set_preparation),
+        )
         // Content-addressed immutable blob (audio / marks / images) for the SW's
         // offline cache (Lane B), + the Merkle manifest the SW diffs.
         .route("/api/blob/{hash}", get(api_blob))

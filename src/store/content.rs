@@ -25,6 +25,9 @@ use crate::store::range::{RangeSpec, RangedBlob};
 /// renders on demand. Object-safe (`Arc<dyn ContentStore>`).
 #[async_trait]
 pub trait ContentStore: Send + Sync {
+    async fn preparation_status(&self, _paused: Option<bool>) -> Result<serde_json::Value, String> {
+        Err("Automatic preparation is unavailable in preview".into())
+    }
     async fn speech_policy(
         &self,
         book: &str,
@@ -215,6 +218,9 @@ use crate::sync::objstore::ObjStore;
 
 #[async_trait]
 impl ContentStore for PgStore {
+    async fn preparation_status(&self, paused: Option<bool>) -> Result<serde_json::Value, String> {
+        PgStore::preparation_status(self, paused).await
+    }
     async fn speech_policy(
         &self,
         book: &str,
