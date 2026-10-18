@@ -19,8 +19,7 @@ if ! xcodebuild -checkFirstLaunchStatus; then
   echo "FATAL: Xcode first-launch setup is incomplete; an administrator must run sudo xcodebuild -runFirstLaunch" >&2
   exit 69
 fi
-# Fail before the export fallback below can pick an older .app when SDK setup
-# is incomplete. A successful simulator launch is not proof of a fresh build.
+# Fail before building when Xcode's SDK setup is incomplete.
 xcrun --sdk iphonesimulator --show-sdk-path >/dev/null
 if [[ -z "${LIVEVIEW_REMOTE_ORIGINS:-}" || "${LIVEVIEW_REMOTE_ORIGINS}" == *127.0.0.1* ]]; then
   echo "WARN: LIVEVIEW_REMOTE_ORIGINS is unset or loopback; the Simulator cannot reach the Mac/hawk 127.0.0.1" >&2
@@ -50,8 +49,8 @@ BUILD_INPUT_HASH="$({
 PREVIOUS_BUILD_INPUT_HASH="$(cat "$BUNDLE_STAMP" 2>/dev/null || true)"
 if [ "$BUILD_INPUT_HASH" != "$PREVIOUS_BUILD_INPUT_HASH" ]; then
   echo "embedded frontend or icon changed; invalidating Tauri iOS Externals"
-  rm -rf gen/apple/Externals gen/apple/build target/aarch64-apple-ios-sim/debug
-  printf '%s\n' "$BUILD_INPUT_HASH" > "$BUNDLE_STAMP"
+  rm -rf gen/apple/Externals gen/apple/build
+  cargo clean --target aarch64-apple-ios-sim --package liveview-app
 fi
 
 # project.yml lists gen/apple/assets (where the build stages the frontend); it's
@@ -63,13 +62,33 @@ mkdir -p gen/apple/assets
 # xcodeproj on its own — a newly added controller would compile-skip silently).
 ( cd gen/apple && xcodegen generate )
 
-# Simulator build: no signing, no IPA export. Tolerate a non-zero exit (the IPA
-# export step has nothing to export for a sim) and locate the .app ourselves.
-cargo tauri ios build --debug --target aarch64-sim --ci \
-  || echo "note: cargo tauri ios build returned non-zero (sim has no IPA export; using the .app)"
-
-APP="$(ls -dt "$HOME"/Library/Developer/Xcode/DerivedData/liveview-app-*/Build/Products/*-iphonesimulator/LiveView.app 2>/dev/null | head -1)"
-if [ -z "$APP" ]; then echo "FATAL: no simulator .app found in DerivedData" >&2; exit 1; fi
+# Keep Tauri's supported Xcode options server alive while Xcode targets the
+# installed simulator. This also supports a simulator runtime older than the
+# SDK when Xcode lists it as a valid destination. Embed the SPA, not a dev URL.
+# Use a dedicated output and require build success; never launch a stale app
+# from an unrelated DerivedData directory after a compiler or setup failure.
+BUILD_DIR="$HOME/liveview/.simulator-build"
+OPTIONS_LOG="$HOME/liveview/.simulator-options.log"
+cargo tauri ios dev --open --no-dev-server --no-dev-server-wait --no-watch \
+  --config '{"build":{"devUrl":null}}' >"$OPTIONS_LOG" 2>&1 &
+OPTIONS_PID=$!
+stop_options() {
+  kill "$OPTIONS_PID" 2>/dev/null || true
+  wait "$OPTIONS_PID" 2>/dev/null || true
+}
+trap stop_options EXIT
+sleep 3
+if ! kill -0 "$OPTIONS_PID" 2>/dev/null; then
+  cat "$OPTIONS_LOG" >&2
+  echo "FATAL: Tauri Xcode options server did not start" >&2
+  exit 1
+fi
+xcodebuild -project gen/apple/liveview-app.xcodeproj -scheme liveview-app_iOS \
+  -configuration debug -sdk iphonesimulator -destination "id=$SIM" \
+  -derivedDataPath "$BUILD_DIR" CODE_SIGNING_ALLOWED=NO build
+APP="$BUILD_DIR/Build/Products/debug-iphonesimulator/LiveView.app"
+if [ ! -f "$APP/LiveView" ]; then echo "FATAL: simulator build did not produce $APP" >&2; exit 1; fi
+printf '%s\n' "$BUILD_INPUT_HASH" > "$BUNDLE_STAMP"
 echo "APP=$APP"
 
 xcrun simctl boot "$SIM" 2>/dev/null || true   # idempotent; already-booted is fine
