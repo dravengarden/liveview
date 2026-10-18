@@ -1720,6 +1720,9 @@ export function App(): React.JSX.Element {
               nav={(api) => (
                 <Sidebar
                   tree={activeTree}
+                  bookSlug={activeSlug ?? undefined}
+                  rendition={rendition}
+                  visible={api.visible}
                   currentPath={currentPath}
                   playingPath={playingPath}
                   bookMode={bookMode}

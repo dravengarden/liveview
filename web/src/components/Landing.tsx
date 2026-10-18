@@ -957,6 +957,11 @@ export function Landing({
                   flexGrow: 1,
                   minWidth: 0,
                   flexBasis: { xs: "calc(100% - 56px)", sm: 0 },
+                  "& input::placeholder": {
+                    fontSize: "0.875rem",
+                    opacity: 0.65,
+                    color: "text.secondary",
+                  },
                 }}
               />
             </>

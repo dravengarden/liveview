@@ -78,6 +78,7 @@ export interface NavShellApi {
   readonly closeMobile: () => void;
   /** True while the viewport uses temporary mobile navigation. */
   readonly isMobile: boolean;
+  readonly visible: boolean;
 }
 
 export interface NavShellProps {
@@ -335,8 +336,8 @@ export function NavShell(props: NavShellProps): ReactNode {
 
   // Opening the frame must not reconcile every chapter row again.
   const navBody = useMemo(
-    () => nav({ closeMobile, isMobile }),
-    [nav, closeMobile, isMobile],
+    () => nav({ closeMobile, isMobile, visible: isMobile ? mobileOpen : !collapsed }),
+    [nav, closeMobile, isMobile, mobileOpen, collapsed],
   );
   const temporaryNavBody = (
     <TemporaryNav

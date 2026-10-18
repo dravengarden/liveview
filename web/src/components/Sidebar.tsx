@@ -29,6 +29,37 @@ import { LIVEVIEW_RADII } from "@/brand";
 import { type Language, useI18n } from "@/i18n";
 import { localeDescriptor } from "@/locales/registry";
 import { centerWithin } from "@/scrollWithin";
+import { useContentsAudio, type ChapterAudioInfo } from "@/audio/contents";
+import { useAudioPlayer, useAudioTime } from "@/audio/player";
+
+function audioTime(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function CurrentAudioTime(): React.JSX.Element | null {
+  const { currentTime, duration } = useAudioTime();
+  const { playing, loading, rate } = useAudioPlayer();
+  const { t } = useI18n();
+  if (!duration || loading) return null;
+  return <>{t(playing ? "sidebar.playing" : "sidebar.paused")} · {audioTime(currentTime)} / {audioTime(duration)} · {t("sidebar.remaining", { time: audioTime((duration - currentTime) / rate), rate: String(rate) })}</>;
+}
+
+function AudioMetadata({ info, current }: { info: ChapterAudioInfo | undefined; current: boolean }): React.JSX.Element | null {
+  const { t } = useI18n();
+  if (!info && !current) return null;
+  const key = info?.voice.status === "ready" ? "sidebar.audioReady"
+    : info?.voice.status === "running" ? "sidebar.generating"
+    : info?.voice.status === "queued" ? "sidebar.queued"
+    : info?.voice.status === "failed" ? "sidebar.failed" : "sidebar.notGenerated";
+  return (
+    <Typography component="span" variant="caption" sx={{ display: "block", mt: 0.25, color: info?.voice.status === "failed" ? "error.main" : "text.secondary", fontVariantNumeric: "tabular-nums", "&&": { fontWeight: 400 } }}>
+      {current && <CurrentAudioTime />}
+      {!current && info && <>{info.seconds !== undefined ? audioTime(info.seconds) : t(key)} · {info.voice.label}</>}
+      {current && info && info.voice.status !== "ready" && <>{t(key)} · {info.voice.label}</>}
+    </Typography>
+  );
+}
 
 /** A chapter label clamped to two lines, so long titles stay readable without
  *  hover, revealing its full text in a tooltip only when still clipped.
@@ -90,6 +121,8 @@ interface TreeItemProps {
   expandedPaths: Set<string>;
   onSelect: (path: string) => void;
   onToggle: (path: string) => void;
+  audioRows: ReadonlyMap<string, ChapterAudioInfo>;
+  audioPath: string | null;
 }
 
 function TreeItem({
@@ -102,6 +135,8 @@ function TreeItem({
   expandedPaths,
   onSelect,
   onToggle,
+  audioRows,
+  audioPath,
 }: TreeItemProps): React.JSX.Element {
   const isExpanded = expandedPaths.has(node.path);
   const isPlaying = playingPath === node.path;
@@ -190,6 +225,7 @@ function TreeItem({
         <ListItemText
           disableTypography
           primary={<TruncatedLabel text={label} />}
+          secondary={!node.is_dir && <AudioMetadata info={audioRows.get(node.path)} current={audioPath === node.path} />}
         />
         {
           /* Now-playing marker: the audiobook reader is a window onto the engine,
@@ -217,6 +253,8 @@ function TreeItem({
                 expandedPaths={expandedPaths}
                 onSelect={onSelect}
                 onToggle={onToggle}
+                audioRows={audioRows}
+                audioPath={audioPath}
               />
             ))}
           </List>
@@ -266,6 +304,9 @@ function findParentPaths(nodes: TreeNode[], targetPath: string): string[] {
 }
 
 interface SidebarProps {
+  bookSlug?: string | undefined;
+  rendition?: string;
+  visible?: boolean;
   tree: TreeNode[];
   currentPath: string | null;
   /** The chapter the audio engine is playing in the open book (null when none).
@@ -304,6 +345,9 @@ function fmtDate(ms: number | undefined, lang: Language): string | null {
 }
 
 export function Sidebar({
+  bookSlug,
+  rendition = "text",
+  visible = true,
   tree,
   currentPath,
   playingPath = null,
@@ -317,6 +361,10 @@ export function Sidebar({
   updatedAt,
 }: SidebarProps): React.JSX.Element {
   const { t, lang } = useI18n();
+  const { nowPlaying } = useAudioPlayer();
+  const matchingAudio = nowPlaying !== null && nowPlaying.bookSlug === bookSlug && nowPlaying.rendition === rendition && nowPlaying.lang === currentLang;
+  const audioRows = useContentsAudio(bookSlug, rendition, currentLang, visible, matchingAudio ? nowPlaying?.voice : undefined, matchingAudio ? nowPlaying?.chapterPath : undefined);
+  const audioPath = visible && matchingAudio ? nowPlaying.chapterPath : null;
   const allDirPaths = useMemo(() => collectAllDirPaths(tree), [tree]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() =>
     new Set()
@@ -540,6 +588,8 @@ export function Sidebar({
               expandedPaths={expandedPaths}
               onSelect={onSelect}
               onToggle={handleToggle}
+              audioRows={audioRows}
+              audioPath={audioPath}
             />
           ))}
         </List>

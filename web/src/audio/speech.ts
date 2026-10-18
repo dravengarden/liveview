@@ -91,8 +91,12 @@ export async function preferredVoice(np: NowPlaying, chapter: ChapterVoices): Pr
     new Promise<null>(resolve => setTimeout(() => resolve(null), 500)),
   ]);
   if (remote !== null) localStorage.setItem(key, remote);
+  return selectPreferredVoice(chapter, remote ?? local, np.voice);
+}
+
+export function selectPreferredVoice(chapter: ChapterVoices, preference: string | null, explicit?: string): VoiceChoice | undefined {
   const articleDefault = chapter.effective?.sources["default_voice"]?.includes("chapter") ? chapter.default_voice : undefined;
-  const id = np.voice ?? articleDefault ?? remote ?? local ?? chapter.default_voice;
+  const id = explicit ?? articleDefault ?? preference ?? chapter.default_voice;
   return chapter.voices.find(v => v.id === id) ?? chapter.voices.find(v => v.id === chapter.default_voice);
 }
 
