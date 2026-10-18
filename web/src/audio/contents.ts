@@ -9,6 +9,13 @@ export interface ChapterAudioInfo {
   seconds?: number;
 }
 
+/** Book mode hides the book root; docs mode retains it across refreshes. */
+export function contentsSnapshotScope(initial: TreeNode[], next: TreeNode[], book: string): TreeNode[] {
+  const root = next.find(node => node.path === book);
+  if (!root) return initial;
+  return initial.some(node => node.path === book) ? [root] : root.children;
+}
+
 /** Titles and audio metadata have the same load and offline-cache lifecycle. */
 export async function loadContentsTree(book: string, rendition: string, fresh = false): Promise<TreeNode[]> {
   const path = `/api/contents/${encodeURIComponent(book)}?rendition=${encodeURIComponent(rendition)}`;
@@ -38,7 +45,7 @@ export function useContentsSnapshot(initial: TreeNode[], book: string | undefine
       try {
         if (!document.hidden) {
           const next = await loadContentsTree(book, rendition, true);
-          if (!cancelled) { setUpdated({ source: initial, tree: next }); return; }
+          if (!cancelled) { setUpdated({ source: initial, tree: contentsSnapshotScope(initial, next, book) }); return; }
         }
       } catch { /* Keep the complete snapshot during disconnects. */ }
       if (!cancelled) timer = setTimeout(() => void refresh(), 5000);

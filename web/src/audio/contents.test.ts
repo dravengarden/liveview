@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { contentsAudio, loadContentsTree } from "./contents";
+import { contentsAudio, contentsSnapshotScope, loadContentsTree } from "./contents";
 import type { TreeNode } from "@/types";
 import { selectPreferredVoice, type ChapterVoices } from "./speech";
+
+test("background status refresh preserves book and documentation directory depth", () => {
+  const chapter: TreeNode = { name: "One", path: "book/one.md", is_dir: false, children: [] };
+  const root: TreeNode = { name: "Book", path: "book", is_dir: true, children: [chapter] };
+  assert.deepEqual(contentsSnapshotScope([chapter], [root], "book"), [chapter]);
+  assert.deepEqual(contentsSnapshotScope([root], [root], "book"), [root]);
+  assert.deepEqual(contentsSnapshotScope([chapter], [], "book"), [chapter]);
+});
 
 test("contents returns titles and metadata with one request and keeps refresh failures explicit", async () => {
   const original = globalThis.fetch;
