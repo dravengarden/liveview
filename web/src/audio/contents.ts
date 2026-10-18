@@ -29,6 +29,8 @@ export function useContentsAudio(
   const [rows, setRows] = useState<ReadonlyMap<string, ChapterAudioInfo>>(new Map());
   useEffect(() => {
     setRows(new Map());
+  }, [book, rendition, lang, selectedVoice, playingPath]);
+  useEffect(() => {
     if (!book || !lang || !visible) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -73,7 +75,7 @@ export function useContentsAudio(
           const signature = JSON.stringify([...result].sort(([a], [b]) => a.localeCompare(b)));
           if (signature !== previous) {
             previous = signature;
-            setRows(result);
+            setRows(old => JSON.stringify([...old].sort(([a], [b]) => a.localeCompare(b))) === signature ? old : result);
           }
         }
       } catch { /* Keep the last observed state during a transient disconnect. */ }
@@ -87,7 +89,9 @@ export function useContentsAudio(
       if (!document.hidden) void refresh();
     };
     document.addEventListener("visibilitychange", visibility);
-    void refresh();
+    // Leave the drawer's opening frames for presentation; retained rows remain
+    // readable while the next snapshot is fetched.
+    timer = setTimeout(() => void refresh(), 400);
     return () => {
       cancelled = true;
       clearTimeout(timer);

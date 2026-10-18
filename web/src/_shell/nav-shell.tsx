@@ -334,7 +334,8 @@ export function NavShell(props: NavShellProps): ReactNode {
     });
   }, [appKey, isMobile]);
 
-  // Opening the frame must not reconcile every chapter row again.
+  // The body receives visibility so its background work can pause with the pane.
+  // Sidebar memoizes the individual chapter rows across visibility changes.
   const navBody = useMemo(
     () => nav({ closeMobile, isMobile, visible: isMobile ? mobileOpen : !collapsed }),
     [nav, closeMobile, isMobile, mobileOpen, collapsed],

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
   alpha,
   Box,
@@ -37,8 +37,10 @@ function audioTime(seconds: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
+const ContentsVisible = createContext(true);
+
 function CurrentAudioTime(): React.JSX.Element | null {
-  const { currentTime, duration } = useAudioTime();
+  const { currentTime, duration } = useAudioTime(useContext(ContentsVisible));
   const { playing, loading, rate } = useAudioPlayer();
   const { t } = useI18n();
   if (!duration || loading) return null;
@@ -125,7 +127,7 @@ interface TreeItemProps {
   audioPath: string | null;
 }
 
-function TreeItem({
+const TreeItem = memo(function TreeItemRow({
   node,
   level,
   bookMode,
@@ -262,7 +264,7 @@ function TreeItem({
       )}
     </>
   );
-}
+});
 
 function collectAllDirPaths(nodes: TreeNode[]): string[] {
   const paths: string[] = [];
@@ -364,7 +366,10 @@ export function Sidebar({
   const { nowPlaying } = useAudioPlayer();
   const matchingAudio = nowPlaying !== null && nowPlaying.bookSlug === bookSlug && nowPlaying.rendition === rendition && nowPlaying.lang === currentLang;
   const audioRows = useContentsAudio(bookSlug, rendition, currentLang, visible, matchingAudio ? nowPlaying?.voice : undefined, matchingAudio ? nowPlaying?.chapterPath : undefined);
-  const audioPath = visible && matchingAudio ? nowPlaying.chapterPath : null;
+  const audioPath = matchingAudio ? nowPlaying.chapterPath : null;
+  const selectRef = useRef(onSelect);
+  selectRef.current = onSelect;
+  const select = useCallback((path: string) => selectRef.current(path), []);
   const allDirPaths = useMemo(() => collectAllDirPaths(tree), [tree]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() =>
     new Set()
@@ -446,6 +451,7 @@ export function Sidebar({
   }, [focusPath, tree]);
 
   return (
+    <ContentsVisible.Provider value={visible}>
     <Box
       sx={{
         width: "100%",
@@ -586,7 +592,7 @@ export function Sidebar({
               playingPath={playingPath}
               currentLang={currentLang}
               expandedPaths={expandedPaths}
-              onSelect={onSelect}
+              onSelect={select}
               onToggle={handleToggle}
               audioRows={audioRows}
               audioPath={audioPath}
@@ -640,5 +646,6 @@ export function Sidebar({
           : null;
       })()}
     </Box>
+    </ContentsVisible.Provider>
   );
 }
