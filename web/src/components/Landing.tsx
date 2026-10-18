@@ -92,6 +92,7 @@ interface LandingProps {
   /** On the mobile tier with the "bottom" navbar preference, the bookshelf bar
    *  drops below the shelf (mobile-browser style), matching the in-book bar. */
   navbarAtBottom: boolean;
+  isVisible: boolean;
 }
 
 /** The shelf kind filter — a SINGLE choice. "book" covers everything readable or
@@ -115,6 +116,7 @@ export function Landing({
   onOpen,
   settingsSlot,
   navbarAtBottom,
+  isVisible,
 }: LandingProps): React.JSX.Element {
   const { t, lang } = useI18n();
   const theme = useTheme();
@@ -1371,7 +1373,7 @@ export function Landing({
               </Stack>
             )}
 
-            {atRoot && <AudioPreparation />}
+            {atRoot && isVisible && <AudioPreparation />}
             {atRoot && continueBooks.length > 0 && (
               <Box
                 component="section"

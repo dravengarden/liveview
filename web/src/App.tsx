@@ -1634,6 +1634,7 @@ export function App(): React.JSX.Element {
             }}
           >
             <Landing
+              isVisible={activeSlug === null}
               books={books}
               progress={progressBySlug}
               onOpen={enterBook}
