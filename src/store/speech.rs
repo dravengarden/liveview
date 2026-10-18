@@ -686,6 +686,10 @@ mod tests {
         let legacy_job = pg.claim_audio_task().await.unwrap().unwrap();
         assert!(!legacy_job.voice.starts_with("speech-v1:"));
         assert_eq!(legacy_job.voice, legacy_policy.options.resolve("en", None));
+        // Recover historical done rows without audio, but preserve failures.
+        pg.finish_audio_task(&legacy_job).await.unwrap();
+        while !pg.prepare_speech_page(&mut cursor).await.unwrap() {}
+        let legacy_job = pg.claim_audio_task().await.unwrap().unwrap();
         pg.fail_audio_task(&legacy_job, "terminal", 1)
             .await
             .unwrap();

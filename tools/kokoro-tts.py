@@ -37,6 +37,33 @@ def unit_marks(starts, duration_ms):
     ]
 
 
+def bounded_token_chunks(tokens, limit=510):
+    """Bound the exact phoneme stream, preserving every token and its owner.
+
+    Kokoro's waterfall chunker can undercount retained whitespace at a split.
+    Recheck its output before inference instead of accepting its truncation.
+    """
+    def length(items):
+        return len("".join((t.phonemes or "") + (" " if t.whitespace else "") for t in items).strip())
+
+    chunk = []
+    for token in tokens:
+        if length([token]) > limit:
+            raise ValueError("A pronunciation token exceeds the model limit")
+        if chunk and length([*chunk, token]) > limit:
+            yield chunk
+            chunk = []
+        chunk.append(token)
+    if chunk:
+        yield chunk
+
+
+def aligned_results(pipeline, tokens, voice, speed):
+    for _, _, chunk in pipeline.en_tokenize(tokens):
+        for bounded in bounded_token_chunks(chunk):
+            yield from pipeline.generate_from_tokens(bounded, voice=voice, speed=speed)
+
+
 def synthesize(texts, voice, audio_path, marks_path, bitrate=96, speed=100):
     import numpy as np
     import soundfile as sf
@@ -75,7 +102,7 @@ def synthesize(texts, voice, audio_path, marks_path, bitrate=96, speed=100):
     starts = [None] * len(texts)
     pieces = []
     elapsed_samples = 0
-    for result in pipeline.generate_from_tokens(tokens, voice=str(voice_path), speed=speed / 100):
+    for result in aligned_results(pipeline, tokens, str(voice_path), speed / 100):
         samples = result.audio.detach().cpu().numpy()
         # Map the exact phoneme stream accepted by KModel to source units.
         # Punctuation-only units and unsupported phonemes must not shift the

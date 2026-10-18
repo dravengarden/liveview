@@ -94,6 +94,14 @@ async fn process(
 ) {
     match generate(pg, obj, tts_cmd, &task).await {
         Ok(outcome) => {
+            if outcome == Outcome::Silent {
+                // Do not report absent audio as completed: automatic repair
+                // would otherwise enqueue this chapter on every scan.
+                let _ = pg
+                    .fail_audio_task(&task, "No speakable text in this chapter", 1)
+                    .await;
+                return;
+            }
             if outcome == Outcome::Stale {
                 tracing::info!(
                     book = %task.book_slug, rel = %task.rel_path,

@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from types import SimpleNamespace
 
 spec = importlib.util.spec_from_file_location("kokoro_adapter", Path(__file__).with_name("kokoro-tts.py"))
 adapter = importlib.util.module_from_spec(spec)
@@ -9,6 +10,16 @@ spec.loader.exec_module(adapter)
 
 
 class TimingTest(unittest.TestCase):
+    def test_chunk_limit_keeps_every_source_token(self):
+        tokens = [SimpleNamespace(phonemes="a" * 50, whitespace=" ") for _ in range(21)]
+        chunks = list(adapter.bounded_token_chunks(tokens))
+        self.assertEqual([id(t) for chunk in chunks for t in chunk], [id(t) for t in tokens])
+        self.assertTrue(all(sum(len(t.phonemes) + bool(t.whitespace) for t in chunk) <= 510 for chunk in chunks))
+        with self.assertRaises(ValueError):
+            list(adapter.bounded_token_chunks([SimpleNamespace(phonemes="a" * 511, whitespace="")]))
+        boundary = SimpleNamespace(phonemes="a" * 510, whitespace=" ")
+        self.assertEqual(list(adapter.bounded_token_chunks([boundary])), [[boundary]])
+
     def test_silent_divider_does_not_steal_sentence_duration(self):
         marks = adapter.unit_marks([0.2, None, 3.0, None], 5000)
         self.assertEqual(marks, [
