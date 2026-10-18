@@ -1,5 +1,5 @@
 import { rem, tap } from "@/px";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Box,
   Button,
@@ -24,6 +24,7 @@ import {
 } from "@/audio/playback-ui";
 import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
+import { SpeechSettings } from "./SpeechSettings";
 
 // The ONE portable playback panel. Whatever is playing — read-aloud of a text
 // chapter or a pre-generated audiobook — this is the single surface that holds
@@ -35,16 +36,21 @@ import { useI18n } from "@/i18n";
 // inline transport (it IS the expanded view); this sheet is for everywhere else.
 
 export function PlaybackSheet({
-  open,
-  onClose,
   onGoToNowPlaying,
 }: {
-  open: boolean;
-  onClose: () => void;
   /** Navigate to the currently-playing chapter (audio page or the text chapter),
    *  decided by the host. Null hides the "go to" action (already there). */
   onGoToNowPlaying?: (() => void) | undefined;
 }): React.JSX.Element | null {
+  // Keep presentation state local. Opening controls must not re-render the
+  // entire library and rich-text reader through App's state.
+  const [open, setOpen] = useState(false);
+  const onClose = useCallback(() => setOpen(false), []);
+  useEffect(() => {
+    const show = (): void => setOpen(true);
+    window.addEventListener("lv-open-playback-controls", show);
+    return () => window.removeEventListener("lv-open-playback-controls", show);
+  }, []);
   const { t } = useI18n();
   const {
     nowPlaying,
@@ -69,10 +75,11 @@ export function PlaybackSheet({
   // mid-listen shouldn't wipe progress). Inline two-step, no nested sheet. The
   // pending confirmation belongs to one presentation: reopening starts clean.
   const [confirmStop, setConfirmStop] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [wasOpen, setWasOpen] = useState(open);
   if (wasOpen !== open) {
     setWasOpen(open);
-    if (!open) setConfirmStop(false);
+    if (!open) { setConfirmStop(false); setSettingsOpen(false); }
   }
 
   // Keep the sheet mounted but inert when nothing plays (it can't open then).
@@ -107,7 +114,7 @@ export function PlaybackSheet({
   );
 
   return (
-    <BottomSheet open={open} onClose={onClose} title={t("audiobook.playback")}>
+    <BottomSheet open={open} onClose={onClose} title={t("audiobook.playback")} keepMounted>
       <Box sx={{ display: "flex", flexDirection: "column", gap: 2.5, pb: 1 }}>
         {/* Cover + what's playing */}
         <Box sx={{ display: "flex", gap: 1.5, alignItems: "center" }}>
@@ -264,6 +271,9 @@ export function PlaybackSheet({
             <Button onClick={replaySentence} disabled={loading} data-testid="replay-sentence">{t("audiobook.replaySentence")}</Button>
           </Box>
         )}
+
+        <Button onClick={() => setSettingsOpen(value => !value)} data-testid="speech-settings-toggle">{t("speech.title")}</Button>
+        {settingsOpen && <SpeechSettings key={`${nowPlaying.chapterPath}:${nowPlaying.rendition}:${nowPlaying.lang}`} np={nowPlaying} onSaved={() => chooseVoice("", true)} />}
 
         {/* Footer: jump-to-current (when away) + stop (inline confirm). */}
         <Box

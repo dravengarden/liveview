@@ -459,9 +459,25 @@ impl PgStore {
     /// first (the caller should serve that pair, so audio and marks stay
     /// consistent across requests).
     pub async fn set_chapter_audio(&self, bake: &AudioBake<'_>) -> Result<bool, sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT id FROM speech_defaults WHERE id=true FOR SHARE")
+            .execute(&mut *tx)
+            .await?;
+        let policy = super::speech::read_policy(&mut tx, bake.book_slug, bake.rendition)
+            .await
+            .map_err(sqlx::Error::Protocol)?;
+        let options = policy.effective(bake.lang, bake.rel_path).options;
+        if bake.voice.starts_with("speech-v1:") || options != Default::default() {
+            let legacy:Option<String>=sqlx::query_scalar("SELECT COALESCE(r.voice,a.voice) FROM renditions r LEFT JOIN renditions a ON a.book_slug=r.book_slug AND a.kind='audio' WHERE r.book_slug=$1 AND r.kind=$2")
+                .bind(bake.book_slug).bind(bake.rendition).fetch_optional(&mut *tx).await?.flatten();
+            let legacy = legacy.or_else(|| std::env::var("LIVEVIEW_TTS_VOICE").ok());
+            if options.resolve(bake.lang, legacy.as_deref()) != bake.voice {
+                return Ok(false);
+            }
+        }
         // A recorded bake changes what /api/dag serves without moving the
         // Merkle root, so it bumps the content epoch in the same statement.
-        sqlx::query_scalar::<_, i64>(&format!(
+        let count = sqlx::query_scalar::<_, i64>(&format!(
             "WITH baked AS (
                  UPDATE chapters SET audio_hash = $7, marks_hash = $8, audio_voice = $6
                  WHERE book_slug = $1 AND rendition = $2 AND lang = $3 AND rel_path = $4
@@ -481,9 +497,10 @@ impl PgStore {
         .bind(bake.voice)
         .bind(bake.audio_hash)
         .bind(bake.marks_hash)
-        .fetch_one(&self.pool)
-        .await
-        .map(|n| n > 0)
+        .fetch_one(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(count > 0)
     }
 
     /// Record the voice a legacy bake (audio present, voice unknown) was made

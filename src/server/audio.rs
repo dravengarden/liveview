@@ -150,12 +150,13 @@ fn assemble(clips: &[Vec<u8>]) -> (Vec<u8>, Vec<Mark>) {
 const SYNTH_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Synthesize one sentence to MP3 bytes via the `edge-tts` CLI (one attempt).
-async fn try_synth_once(cmd: &str, voice: &str, text: &str) -> Result<Vec<u8>, String> {
+async fn try_synth_once(cmd: &str, voice: &str, text: &str, speed: u16) -> Result<Vec<u8>, String> {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let n = SEQ.fetch_add(1, Ordering::Relaxed);
     let tmp = std::env::temp_dir().join(format!("lv-tts-{}-{n}.mp3", std::process::id()));
 
     let run = tokio::process::Command::new(cmd)
+        .arg(format!("--rate={:+}%", i32::from(speed) - 100))
         .args(["--voice", voice, "--text", text, "--write-media"])
         .arg(&tmp)
         // Kill the child when the future drops (i.e. on timeout), so a stalled
@@ -197,6 +198,15 @@ const SYNTH_ATTEMPTS: u32 = 3;
 ///   (and so the chapter), leaving the task to be retried rather than baking a
 ///   silent gap into audio that would then count as done.
 async fn synth_sentence(cmd: &str, voice: &str, text: &str) -> Result<Vec<u8>, String> {
+    synth_sentence_at_speed(cmd, voice, text, 100).await
+}
+
+async fn synth_sentence_at_speed(
+    cmd: &str,
+    voice: &str,
+    text: &str,
+    speed: u16,
+) -> Result<Vec<u8>, String> {
     // A non-prose unit with no narration (or a lone-punctuation segment) has
     // nothing to voice — emit silence directly instead of a wasted edge-tts
     // round-trip (which would `NoAudioReceived` anyway). `assemble` then gives it
@@ -206,7 +216,7 @@ async fn synth_sentence(cmd: &str, voice: &str, text: &str) -> Result<Vec<u8>, S
     }
     let mut last_error = None;
     for _ in 0..SYNTH_ATTEMPTS {
-        match try_synth_once(cmd, voice, text).await {
+        match try_synth_once(cmd, voice, text, speed).await {
             Ok(bytes) if !bytes.is_empty() => return Ok(bytes),
             // The adapter succeeded but produced nothing: like NoAudioReceived,
             // an answer about the text, not a transport failure. Retry in case
@@ -247,7 +257,8 @@ pub(crate) async fn synthesize(
     let recipe = crate::speech::Recipe::decode(voice)?;
     let sentences: Vec<String> = sentences.iter().map(|s| recipe.prepare(s)).collect();
     if let Some(voice) = recipe.voice.strip_prefix("kokoro:") {
-        return synthesize_kokoro(voice, &sentences).await;
+        return synthesize_kokoro(voice, &sentences, recipe.bitrate_kbps, recipe.speed_percent)
+            .await;
     }
     if cmd.is_empty() {
         return Err("Edge speech synthesis is not configured".into());
@@ -257,7 +268,13 @@ pub(crate) async fn synthesize(
     // overlaps the edge-tts round-trips while preserving sentence order.
     const SYNTH_CONCURRENCY: usize = 6;
     let clips: Vec<Vec<u8>> = futures_util::stream::iter(sentences.iter().cloned())
-        .map(|text| async move { synth_sentence(cmd, voice, &text).await })
+        .map(|text| async move {
+            if recipe.speed_percent == 100 {
+                synth_sentence(cmd, voice, &text).await
+            } else {
+                synth_sentence_at_speed(cmd, voice, &text, recipe.speed_percent).await
+            }
+        })
         .buffered(SYNTH_CONCURRENCY)
         .collect::<Vec<Result<Vec<u8>, String>>>()
         .await
@@ -271,6 +288,8 @@ pub(crate) async fn synthesize(
 async fn synthesize_kokoro(
     voice: &str,
     sentences: &[String],
+    bitrate: u16,
+    speed: u16,
 ) -> Result<(Vec<u8>, Vec<Mark>), String> {
     static CPU: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
     let _permit = CPU.acquire().await.map_err(|e| e.to_string())?;
@@ -289,6 +308,12 @@ async fn synthesize_kokoro(
     let output = tokio::time::timeout(
         Duration::from_secs(1800),
         tokio::process::Command::new(cmd)
+            .args([
+                "--bitrate",
+                &bitrate.to_string(),
+                "--speed",
+                &speed.to_string(),
+            ])
             .args(["--voice", voice, "--input"])
             .arg(&input)
             .arg("--audio")
@@ -423,7 +448,7 @@ mod tests {
                     "printf '%s' \"$1\" > \"$2\" && chmod 755 \"$2\"",
                     "sh",
                 ])
-                .arg(format!("#!/bin/sh\nout=\"$6\"\n{body}\n"))
+                .arg(format!("#!/bin/sh\nout=''\nrate=''\nwhile [ \"$#\" -gt 0 ]; do\ncase \"$1\" in\n--rate=*) rate=${{1#*=}} ;;\n--write-media) shift; out=$1 ;;\nesac\nshift\ndone\n{body}\n"))
                 .arg(&path)
                 .status()
                 .unwrap();
@@ -481,6 +506,16 @@ mod tests {
     async fn successful_tts_returns_the_clip() {
         let tts = FakeTts::new("ok", "printf 'mp3' > \"$out\"");
         assert_eq!(synth_sentence(tts.cmd(), "v", "hi").await.unwrap(), b"mp3");
+        let paced = FakeTts::new(
+            "paced",
+            "[ \"$rate\" = '+25%' ] || exit 2; printf 'paced' > \"$out\"",
+        );
+        assert_eq!(
+            synth_sentence_at_speed(paced.cmd(), "v", "hi", 125)
+                .await
+                .unwrap(),
+            b"paced"
+        );
     }
 
     #[test]

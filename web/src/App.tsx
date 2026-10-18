@@ -140,10 +140,6 @@ export function App(): React.JSX.Element {
   // renditions (no card/button), so this only fires on a race (content removed
   // after the book list loaded) — never a silent dead tap.
   const [notice, setNotice] = useState<string | null>(null);
-  // The unified playback-control sheet (transport + speed + sleep). Opened from
-  // the navbar listen control (while reading text) and the floating bubble (while
-  // browsing away) — one panel, one place for these controls.
-  const [playbackSheetOpen, setPlaybackSheetOpen] = useState(false);
   const initializedRef = useRef(false);
   // Refs for matching live WebSocket updates against what's currently shown
   // (the shown edition may differ from `lang` when falling back).
@@ -1823,7 +1819,7 @@ export function App(): React.JSX.Element {
       <FloatingBubble
         onPlayingPage={onPlayingPage}
         suppressed={readingThisInPlace}
-        onOpenControls={() => setPlaybackSheetOpen(true)}
+        onOpenControls={() => window.dispatchEvent(new Event("lv-open-playback-controls"))}
       />
       {
         /* Ambient background-work indicator (audio generation + offline prefetch)
@@ -1837,8 +1833,6 @@ export function App(): React.JSX.Element {
       }
       <ShortcutsDialog open={helpOpen} onClose={closeHelp} />
       <PlaybackSheet
-        open={playbackSheetOpen}
-        onClose={() => setPlaybackSheetOpen(false)}
         onGoToNowPlaying={nowPlaying &&
             (currentPath !== nowPlaying.chapterPath ||
               rendition !== nowPlaying.rendition)

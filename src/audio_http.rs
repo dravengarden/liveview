@@ -36,7 +36,25 @@ pub async fn transcode_audio(src: Vec<u8>) -> Result<Vec<u8>, String> {
 /// distinguishes these assets from the legacy compact-audio representation.
 pub(crate) async fn encode_speech_audio(src: Vec<u8>, voice: &str) -> Result<Vec<u8>, String> {
     if voice.starts_with("speech-v1:") || voice.starts_with("kokoro:") {
-        encode_audio(src, &["-c:a", "copy"]).await
+        let recipe = crate::speech::Recipe::decode(voice)?;
+        if recipe.voice.starts_with("kokoro:") {
+            encode_audio(src, &["-c:a", "copy"]).await
+        } else {
+            encode_audio(
+                src,
+                &[
+                    "-c:a",
+                    "libmp3lame",
+                    "-b:a",
+                    &format!("{}k", recipe.bitrate_kbps),
+                    "-ar",
+                    "24000",
+                    "-ac",
+                    "1",
+                ],
+            )
+            .await
+        }
     } else {
         transcode_audio(src).await
     }

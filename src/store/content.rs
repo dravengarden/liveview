@@ -25,6 +25,25 @@ use crate::store::range::{RangeSpec, RangedBlob};
 /// renders on demand. Object-safe (`Arc<dyn ContentStore>`).
 #[async_trait]
 pub trait ContentStore: Send + Sync {
+    async fn speech_policy(
+        &self,
+        book: &str,
+        rendition: &str,
+    ) -> Result<crate::speech::SpeechPolicy, String> {
+        Ok(crate::speech::SpeechPolicy {
+            rendition: self.speech_config(book, rendition).await?,
+            ..Default::default()
+        })
+    }
+    async fn set_speech_scope(
+        &self,
+        _book: Option<&str>,
+        _rendition: Option<&str>,
+        _chapter: Option<&str>,
+        _config: &crate::speech::SpeechConfig,
+    ) -> Result<(), String> {
+        Err("Speech policy changes are unavailable in preview".into())
+    }
     async fn set_speech_config(
         &self,
         _book: &str,
@@ -196,6 +215,22 @@ use crate::sync::objstore::ObjStore;
 
 #[async_trait]
 impl ContentStore for PgStore {
+    async fn speech_policy(
+        &self,
+        book: &str,
+        rendition: &str,
+    ) -> Result<crate::speech::SpeechPolicy, String> {
+        PgStore::speech_policy(self, book, rendition).await
+    }
+    async fn set_speech_scope(
+        &self,
+        book: Option<&str>,
+        rendition: Option<&str>,
+        chapter: Option<&str>,
+        config: &crate::speech::SpeechConfig,
+    ) -> Result<(), String> {
+        PgStore::set_speech_scope(self, book, rendition, chapter, config).await
+    }
     async fn set_speech_config(
         &self,
         book: &str,

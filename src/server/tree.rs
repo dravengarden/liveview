@@ -357,6 +357,7 @@ mod tests {
     /// A single-`text`-rendition book over `source` (the `[[mount]]` shape).
     fn mk_mount(label: &str, slug: &str, source: &Path, layout: Option<Layout>) -> BookState {
         BookState {
+            speech: Default::default(),
             label: label.to_string(),
             slug: slug.to_string(),
             description: None,
@@ -478,6 +479,7 @@ mod tests {
         // 02-types.md intentionally absent in `en` (untranslated chapter).
 
         let book = BookState {
+            speech: Default::default(),
             label: "Book".to_string(),
             slug: "book".to_string(),
             description: None,
@@ -657,6 +659,7 @@ mod tests {
             exclude_set: build_globset(&["**/.git/**".to_string()]).unwrap(),
         };
         let book = BookState {
+            speech: Default::default(),
             label: "Eth".to_string(),
             slug: "eth".to_string(),
             description: None,

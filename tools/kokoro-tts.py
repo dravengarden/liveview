@@ -37,7 +37,7 @@ def unit_marks(starts, duration_ms):
     ]
 
 
-def synthesize(texts, voice, audio_path, marks_path):
+def synthesize(texts, voice, audio_path, marks_path, bitrate=96, speed=100):
     import numpy as np
     import soundfile as sf
     import torch
@@ -75,7 +75,7 @@ def synthesize(texts, voice, audio_path, marks_path):
     starts = [None] * len(texts)
     pieces = []
     elapsed_samples = 0
-    for result in pipeline.generate_from_tokens(tokens, voice=str(voice_path)):
+    for result in pipeline.generate_from_tokens(tokens, voice=str(voice_path), speed=speed / 100):
         samples = result.audio.detach().cpu().numpy()
         # Map the exact phoneme stream accepted by KModel to source units.
         # Punctuation-only units and unsupported phonemes must not shift the
@@ -112,7 +112,7 @@ def synthesize(texts, voice, audio_path, marks_path):
         wav = Path(temp) / "chapter.wav"
         sf.write(wav, samples, 24000, subtype="PCM_16")
         subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-y", "-i", str(wav),
-                        "-c:a", "libmp3lame", "-b:a", "96k", "-ac", "1",
+                        "-c:a", "libmp3lame", "-b:a", f"{bitrate}k", "-ac", "1",
                         str(audio_path)], check=True, timeout=120)
     marks_path.write_text(json.dumps(unit_marks(starts, round(len(samples) / 24))),
                           encoding="utf-8")
@@ -121,16 +121,20 @@ def synthesize(texts, voice, audio_path, marks_path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--voice", required=True)
+    parser.add_argument("--bitrate", type=int, choices=[32,48,64,96,128,160], default=96)
+    parser.add_argument("--speed", type=int, default=100)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--audio", type=Path, required=True)
     parser.add_argument("--marks", type=Path, required=True)
     args = parser.parse_args()
+    if not 50 <= args.speed <= 150:
+        parser.error("speed must be between 50 and 150 percent")
     texts = json.loads(args.input.read_text(encoding="utf-8"))
     if not isinstance(texts, list) or not texts or not all(isinstance(t, str) for t in texts):
         parser.error("input must be a nonempty JSON array of strings")
     if len(texts) > 10000 or sum(map(len, texts)) > 500000:
         parser.error("chapter exceeds synthesis limits")
-    synthesize(texts, args.voice, args.audio, args.marks)
+    synthesize(texts, args.voice, args.audio, args.marks, args.bitrate, args.speed)
 
 
 if __name__ == "__main__":

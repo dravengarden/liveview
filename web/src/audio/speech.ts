@@ -18,6 +18,46 @@ export interface ChapterVoices {
   id: string;
   default_voice: string;
   voices: VoiceChoice[];
+  effective?: SpeechOptions & { sources: Record<string, string> };
+  encoding?: { bitrate_kbps: number; speed_percent: number };
+}
+
+export interface SpeechOptions {
+  voices?: string[];
+  default_voice?: string;
+  bitrate_kbps?: number;
+  speed_percent?: number;
+  pronunciations?: Record<string, string>;
+  omit_speakers?: string[];
+}
+export interface SpeechConfig extends SpeechOptions {
+  languages?: Record<string, string | SpeechOptions>;
+  chapters?: Record<string, string | SpeechOptions>;
+}
+export interface SpeechCatalog {
+  chapters: ChapterVoices[];
+  policies: Record<string, { global: SpeechConfig; book: SpeechConfig; rendition: SpeechConfig }>;
+  installed_voices: string[];
+  bitrates_kbps: number[];
+}
+
+export async function speechCatalog(np: NowPlaying, fresh = false): Promise<SpeechCatalog | null> {
+  const path = `/api/speech/${encodeURIComponent(np.bookSlug)}`;
+  if (!fresh) {
+    const response = await contentFetch(path, { cacheFirst: true, connectMs: 2000 });
+    return response.ok ? await response.json() as SpeechCatalog : null;
+  }
+  // The offline catalog is a hashed DAG resource: even a network-first replica
+  // read returns that immutable version until its manifest advances. Settings
+  // read-after-write and synthesis polling need the current server snapshot.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(`${BUNDLED ? REMOTE : ""}${path}`, { cache: "no-store", signal: controller.signal });
+    return response.ok ? await response.json() as SpeechCatalog : null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function saveVoicePreference(np: NowPlaying, voice: string): void {
@@ -27,11 +67,8 @@ export function saveVoicePreference(np: NowPlaying, voice: string): void {
 }
 
 export async function chapterVoices(np: NowPlaying, fresh = false): Promise<ChapterVoices | null> {
-  const response = await contentFetch(`/api/speech/${encodeURIComponent(np.bookSlug)}`, {
-    cacheFirst: !fresh, fresh, connectMs: 2000,
-  });
-  if (!response.ok) return null; // Older servers have no optional voice API.
-  const data = await response.json() as { chapters: ChapterVoices[] };
+  const data = await speechCatalog(np, fresh);
+  if (!data) return null; // Older servers have no optional voice API.
   const rel = np.chapterPath.startsWith(`${np.bookSlug}/`) ? np.chapterPath.slice(np.bookSlug.length + 1) : np.chapterPath;
   return data.chapters.find(c => c.id === `${np.rendition}/${np.lang}/${rel}`) ?? null;
 }
@@ -46,7 +83,8 @@ export async function preferredVoice(np: NowPlaying, chapter: ChapterVoices): Pr
     new Promise<null>(resolve => setTimeout(() => resolve(null), 500)),
   ]);
   if (remote !== null) localStorage.setItem(key, remote);
-  const id = np.voice ?? remote ?? local ?? chapter.default_voice;
+  const articleDefault = chapter.effective?.sources["default_voice"]?.includes("chapter") ? chapter.default_voice : undefined;
+  const id = np.voice ?? articleDefault ?? remote ?? local ?? chapter.default_voice;
   return chapter.voices.find(v => v.id === id) ?? chapter.voices.find(v => v.id === chapter.default_voice);
 }
 

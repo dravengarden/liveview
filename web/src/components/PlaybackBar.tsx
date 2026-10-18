@@ -13,6 +13,7 @@ import {
   PlayArrow,
   SkipNext,
   SkipPrevious,
+  Tune,
 } from "@mui/icons-material";
 import { Forward15Icon, Replay15Icon } from "./Skip15Icons";
 import {
@@ -79,7 +80,7 @@ export function PlaybackBar(
     const el = transportRef.current;
     const host = el?.offsetParent as HTMLElement | null;
     if (!el || !host) return;
-    const ONE_ROW_MIN = 600; // px of bar width that comfortably fits one row
+    const ONE_ROW_MIN = 680; // px of bar width that comfortably fits one row
     const publish = (): void => {
       const h = `${el.offsetHeight}px`;
       host.style.setProperty("--lv-transport-h", h);
@@ -137,6 +138,13 @@ export function PlaybackBar(
       </IconButton>
     )
     : <Box sx={{ width: tap(44), height: tap(44) }} />; // keep the ear slot
+
+  const controlsBtn = (
+    <IconButton aria-label={t("audiobook.playback")} onClick={() => window.dispatchEvent(new Event("lv-open-playback-controls"))}
+      sx={{ width: tap(44), height: tap(44) }} data-testid="playback-controls">
+      <Tune />
+    </IconButton>
+  );
 
   const mainCluster = (
     <Box
@@ -336,6 +344,7 @@ export function PlaybackBar(
               <Box sx={earSx}>
                 <SleepChip />
               </Box>
+              <Box sx={earSx}>{controlsBtn}</Box>
             </Box>
           )
           : (
@@ -345,6 +354,7 @@ export function PlaybackBar(
                 {timeStart}
                 {scrubber}
                 {timeEnd}
+                <Box sx={earSx}>{controlsBtn}</Box>
               </Box>
               <Box
                 sx={{

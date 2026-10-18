@@ -101,7 +101,7 @@ export interface AudioPlayer {
   voices: VoiceChoice[];
   voiceBusy: boolean;
   voiceError: string | null;
-  chooseVoice: (voice: string) => void;
+  chooseVoice: (voice: string, refresh?: boolean) => void;
   replaySentence: () => void;
   nowPlaying: NowPlaying | null;
   playing: boolean;
@@ -171,8 +171,9 @@ export interface AudioTime {
 // mirror moved into `sessionStore` (IDB), so it has no localStorage key anymore.
 const RATE_KEY = "lv-audio-rate";
 /** Per-chapter resume position (audio seconds); local sync-seed only. */
-const posKey = (path: string, lang: string, voice?: string): string =>
-  `lv-audio-pos:${path}:${lang}${voice ? `:${voice}` : ""}`;
+const posKey = (path: string, lang: string, voice?: string, marksHash?: string): string =>
+  `lv-audio-pos:${path}:${lang}${voice ? `:${voice}` : ""}${marksHash ? `:${marksHash}` : ""}`;
+const unitKey = (np: NowPlaying): string => `lv-audio-unit:${np.chapterPath}:${np.rendition}:${np.lang}`;
 
 /** Warm the next chapter's synthesis this many seconds before the current ends,
  *  so auto-advance doesn't stall on a cold edge-tts cache. */
@@ -448,7 +449,8 @@ export function AudioPlayerProvider(
   // tier). The synchronous local fast-path (posKey localStorage) is written
   // separately per-tick in the timeupdate handler.
   const persistPos = useCallback((path: string, t: number) => {
-    posStore.set({ path, t, voice: nowPlayingRef.current?.voice });
+    const np=nowPlayingRef.current;
+    posStore.set({ path, t, voice: np?.voice, marksHash:np?.marksHash, unit:activeMarkIndex(marksRef.current,t*1000) });
   }, []);
 
   // Load a chapter for playback. STORAGE-FIRST + AUDIO-FIRST: resolve the content
@@ -511,7 +513,7 @@ export function AudioPlayerProvider(
       // Only the audio src carries the flag — read-along data stays clean.
       const isBookEnd = qi === q.length - 1;
       const saved = Number(
-        localStorage.getItem(posKey(np.chapterPath, np.lang, np.voice)) ?? "",
+        localStorage.getItem(posKey(np.chapterPath, np.lang, np.voice,np.marksHash)) ?? "",
       );
       let position = Number.isFinite(saved) && saved > 0 ? saved : 0;
       currentTimeRef.current = position;
@@ -558,8 +560,15 @@ export function AudioPlayerProvider(
             nowPlayingRef.current = updated;
             setNowPlaying(updated);
             persistSession(updated, q, qi);
-            const savedVoice = Number(localStorage.getItem(posKey(np.chapterPath, np.lang, selected.id)) ?? "0");
+            const stored=localStorage.getItem(posKey(np.chapterPath,np.lang,selected.id,selected.marks_hash ?? undefined));
+            const savedVoice=Number(stored ?? (np.marksHash===selected.marks_hash ? localStorage.getItem(posKey(np.chapterPath,np.lang,selected.id)) : "0"));
             position = ready ? sentencePosition(selectedMarks, ready.unit) : Number.isFinite(savedVoice) ? savedVoice : 0;
+            if (!ready && stored===null) {
+              try {
+                const last=JSON.parse(localStorage.getItem(unitKey(np)) ?? "null") as {unit?:number;marksHash?:string}|null;
+                if (last && Number.isInteger(last.unit) && (last.unit ?? -1)>=0 && last.marksHash!==selected.marks_hash) position=sentencePosition(selectedMarks,last.unit!);
+              } catch { /* An invalid resume hint must not block playback. */ }
+            }
             currentTimeRef.current = position;
             setCurrentTime(position);
             marksRef.current = selectedMarks;
@@ -802,7 +811,8 @@ export function AudioPlayerProvider(
       const now = Date.now();
       if (now - lastPosWriteRef.current > 4000) {
         lastPosWriteRef.current = now;
-        localStorage.setItem(posKey(np.chapterPath, np.lang, np.voice), String(pos));
+        localStorage.setItem(posKey(np.chapterPath, np.lang, np.voice,np.marksHash), String(pos));
+        localStorage.setItem(unitKey(np),JSON.stringify({unit:activeMarkIndex(marksRef.current,pos*1000),marksHash:np.marksHash}));
       }
       persistPos(np.chapterPath, pos);
     }
@@ -881,7 +891,8 @@ export function AudioPlayerProvider(
     const np = nowPlayingRef.current;
     if (np) {
       logEvent("audio_ended", { book: np.bookSlug, chapter: np.chapterPath });
-      localStorage.removeItem(posKey(np.chapterPath, np.lang, np.voice));
+      localStorage.removeItem(posKey(np.chapterPath, np.lang, np.voice,np.marksHash));
+      localStorage.removeItem(unitKey(np));
       persistPos(np.chapterPath, 0);
       void posStore.flush();
     }
@@ -1228,18 +1239,19 @@ export function AudioPlayerProvider(
           cur.chapterPath !== serverSession.nowPlaying.chapterPath ||
           cur.bookSlug !== serverSession.nowPlaying.bookSlug;
         const serverT = serverPos &&
-            serverPos.path === serverSession.nowPlaying.chapterPath && serverPos.voice === serverSession.nowPlaying.voice
+            serverPos.path === serverSession.nowPlaying.chapterPath && serverPos.voice === serverSession.nowPlaying.voice && serverPos.marksHash===serverSession.nowPlaying.marksHash
           ? serverPos.t
           : 0;
         const localPos = cur
           ? Number(
-            localStorage.getItem(posKey(cur.chapterPath, cur.lang, cur.voice)) ?? "0",
+            localStorage.getItem(posKey(cur.chapterPath, cur.lang, cur.voice,cur.marksHash)) ?? "0",
           )
           : 0;
         // Same chapter on both devices, but the server (another device) is
         // further along → adopt its position. The lead matches posStore.reconcile.
         const posAhead = !chapterDiffers &&
           cur?.voice === serverSession.nowPlaying.voice &&
+          cur?.marksHash === serverSession.nowPlaying.marksHash &&
           serverT > localPos + SYNC_POS_LEAD_S;
         if (chapterDiffers || posAhead) {
           if (serverT > 0) {
@@ -1250,9 +1262,11 @@ export function AudioPlayerProvider(
                 serverSession.nowPlaying.chapterPath,
                 serverSession.nowPlaying.lang,
                 serverSession.nowPlaying.voice,
+                serverSession.nowPlaying.marksHash,
               ),
               String(serverT),
             );
+            if (Number.isInteger(serverPos?.unit)) localStorage.setItem(unitKey(serverSession.nowPlaying),JSON.stringify({unit:serverPos?.unit,marksHash:serverPos?.marksHash}));
           }
           loadTrack(
             serverSession.nowPlaying,
@@ -1528,10 +1542,9 @@ export function AudioPlayerProvider(
     seekToSentence(Math.max(0, index));
   }, [seekToSentence]);
 
-  const chooseVoice = useCallback((voice: string) => {
+  const chooseVoice = useCallback((voice: string, refresh = false) => {
     const np = nowPlayingRef.current;
-    const choice = voices.find(v => v.id === voice);
-    if (!np || !choice || voice === np.voice) return;
+    if (!np || (!refresh && voice === np.voice)) return;
     const token = ++voiceSeq.current;
     const seq = loadSeq.current;
     const current = (): boolean => voiceSeq.current === token && loadSeq.current === seq;
@@ -1541,12 +1554,32 @@ export function AudioPlayerProvider(
     // position is captured only at the actual switch, after both blobs exist.
     void (async () => {
       try {
+        let choice = voices.find(v => v.id === voice);
+        if (refresh) {
+          const chapter = await chapterVoices(np, true);
+          if (!current()) return;
+          if (!chapter) throw new Error("Voice settings are unavailable");
+          setVoices(chapter.voices);
+          // Restoring an entirely unconfigured policy returns to the legacy
+          // playback path. Keep the current track uninterrupted; the next load
+          // resolves the inherited source without a stale voice selection.
+          if (chapter.voices.length === 0) {
+            const updated = { ...np, voice: undefined };
+            nowPlayingRef.current = updated;
+            setNowPlaying(updated);
+            persistSession(updated, queueRef.current, queueIndexRef.current);
+            return;
+          }
+          voice ||= chapter.default_voice;
+          choice = chapter.voices.find(v => v.id === voice);
+        }
+        if (!choice) throw new Error("This voice is no longer available");
         const ready = await prepareVoice(np, choice, current);
         const marks = await voiceMarks(ready);
         if (!current()) return;
         const unit = activeMarkIndex(marksRef.current, currentTimeRef.current * 1000);
         const autoplay = playingRef.current || bufferingRef.current;
-        saveVoicePreference(np, voice);
+        if (!refresh) saveVoicePreference(np, voice);
         setVoices(previous => previous.map(v => v.id === voice ? ready : v));
         loadTrack({ ...np, voice }, queueRef.current, queueIndexRef.current, autoplay, { voice: ready, marks, unit });
       } catch (error) {
@@ -1555,7 +1588,7 @@ export function AudioPlayerProvider(
         if (current()) setVoiceBusy(false);
       }
     })();
-  }, [voices, loadTrack]);
+  }, [voices, loadTrack, persistSession]);
 
   const setRate = useCallback((r: number) => {
     logEvent("rate_change", { rate: r });

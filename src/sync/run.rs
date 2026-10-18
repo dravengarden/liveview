@@ -179,6 +179,12 @@ fn catalog_hash(
     optional(&mut hasher, backdrop_hash);
     optional(&mut hasher, card_backdrop_hash);
     field(&mut hasher, book.default_rendition.as_str());
+    if book.speech != Default::default() {
+        field(
+            &mut hasher,
+            &serde_json::to_string(&book.speech).expect("speech config"),
+        );
+    }
     for rendition in &book.renditions {
         field(&mut hasher, rendition.kind.as_str());
         field(&mut hasher, &rendition.label);
@@ -299,6 +305,11 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
             .iter()
             .map(|rendition| rendition.kind.as_str().to_string())
             .collect();
+        if book.speech != Default::default() {
+            store
+                .set_speech_scope(Some(&book.slug), None, None, &book.speech)
+                .await?;
+        }
         store
             .retain_renditions(&book.slug, &desired_renditions)
             .await
@@ -321,14 +332,12 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 .map_err(|e| format!("upsert rendition {}/{r_kind}: {e}", book.slug))?;
             // A declared policy is author-owned. With no manifest policy, keep
             // the reader's durable server configuration across content syncs.
-            let speech = if rend.speech != crate::speech::SpeechConfig::default() {
+            if rend.speech != crate::speech::SpeechConfig::default() {
                 store
                     .set_speech_config(&book.slug, r_kind, &rend.speech)
                     .await?;
-                rend.speech.clone()
-            } else {
-                store.speech_config(&book.slug, r_kind).await?
-            };
+            }
+            let speech = store.speech_policy(&book.slug, r_kind).await?;
 
             let desired_editions: Vec<String> = rend
                 .editions
@@ -1148,6 +1157,7 @@ mod tests {
     fn catalog_test_book() -> BookState {
         let empty_globs = || GlobSetBuilder::new().build().unwrap();
         BookState {
+            speech: Default::default(),
             label: "Book".into(),
             slug: "book".into(),
             description: Some("Description".into()),

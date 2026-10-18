@@ -1494,6 +1494,10 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
             get(speech_http::api_speech_book).put(speech_http::api_set_speech),
         )
         .route("/api/speech", post(speech_http::api_request_speech))
+        .route(
+            "/api/speech-defaults",
+            get(speech_http::api_speech_defaults).put(speech_http::api_set_speech_defaults),
+        )
         .route("/api/progress", get(api_progress_get).put(api_progress_put))
         .route("/api/progress/recent", get(api_progress_recent))
         .route("/api/settings", get(api_settings_get).put(api_settings_put))

@@ -59,6 +59,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -194,8 +195,9 @@ function dimHex(base: string, dim: number): string {
 }
 
 // The single document-level write this overlay permits (see header): repaint the
-// standalone status bar. REPLACE the <meta name="theme-color"> node rather than
-// mutate its `content`: iOS standalone PWAs frequently ignore an in-place
+// standalone status bar. Native WKWebView accepts an in-place update; removing
+// and reinserting the node there stalls sheet transitions with repeated theme
+// invalidation. Standalone PWAs still replace it: they frequently ignore an in-place
 // attribute change (the bar keeps the colour it read at launch) but re-read a
 // freshly-inserted node. This matches each app's own theme-color writer (e.g.
 // liveview's useTheme), so a sheet's dim/restore and a runtime theme switch
@@ -205,6 +207,11 @@ function dimHex(base: string, dim: number): string {
 function setStatusBarColor(color: string): void {
   const { head } = globalThis.document;
   if (!head) {
+    return;
+  }
+  const current = head.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (current && "__TAURI_INTERNALS__" in globalThis) {
+    if (current.content !== color) current.content = color;
     return;
   }
   for (const m of head.querySelectorAll('meta[name="theme-color"]')) {
@@ -440,8 +447,10 @@ export function DetentSheet(
     return geomRef.current;
   }, [peekDetent, isCover, sign]);
 
-  // (Re)compute geometry against the rendered content on open, then animate in.
-  useEffect(() => {
+  // Seed the closed transform before paint. A retained sheet still has its
+  // previous open transform; a passive effect briefly paints that whole surface
+  // before moving it offscreen, doubling first-frame rasterization on WebKit.
+  useLayoutEffect(() => {
     if (!open) {
       animatedRef.current = false;
       cancelPendingDismiss();

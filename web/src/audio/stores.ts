@@ -87,6 +87,8 @@ export interface AudioPos {
   path: string;
   t: number;
   voice?: string | undefined;
+  marksHash?: string | undefined;
+  unit?: number | undefined;
 }
 
 const SYNC_POS_LEAD_S = 8;
@@ -106,7 +108,7 @@ export const posStore = mirroredStore<AudioPos>({
   initial: { path: "", t: 0 },
   remote: settingBackend("audio.pos", posCodec),
   reconcile: (local, remote) =>
-    remote.path === local.path && remote.voice === local.voice && remote.t > local.t + SYNC_POS_LEAD_S
+    remote.path === local.path && remote.voice === local.voice && remote.marksHash === local.marksHash && remote.t > local.t + SYNC_POS_LEAD_S
       ? remote
       : local,
   push: { throttleMs: 5000 },

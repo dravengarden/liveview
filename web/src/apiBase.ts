@@ -25,6 +25,15 @@ const CONFIGURED_REMOTES = (
 const DEFAULT_REMOTE = CONFIGURED_REMOTES[0] ?? "http://127.0.0.1:4160";
 const REMOTE_KEY = "lv.remote.origin";
 
+/** A server-delivered SPA must not add its own build-time fallback to the
+ * installed shell's deployment endpoints. Otherwise a faster unrelated local
+ * service can receive settings writes while content comes from the replica. */
+export function configuredRemotes(native: readonly string[], fallback: readonly string[], previous?: string | null): string[] {
+  // Older shells have no origin bridge. Preserve their last working route
+  // across OTA builds, while newer shells admit only their declared endpoints.
+  return [...new Set(native.length > 0 ? native : [...fallback, ...(previous ? [previous] : [])])];
+}
+
 function normalizeOrigins(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((candidate) => {
@@ -130,12 +139,8 @@ export async function selectRemote(): Promise<string> {
   } catch {
     // Storage is an optimization only.
   }
-  const configured = [
-    ...new Set([...(await nativeOrigins()), ...CONFIGURED_REMOTES]),
-  ];
-  const candidates = [
-    ...new Set([...configured, previous].filter(Boolean)),
-  ] as string[];
+  const configured = configuredRemotes(await nativeOrigins(), CONFIGURED_REMOTES, previous);
+  const candidates = configured;
   if (previous && configured.includes(previous)) {
     REMOTE = previous;
     void probeRemotes(candidates).then((winner) => {
@@ -149,7 +154,9 @@ export async function selectRemote(): Promise<string> {
   } else {
     // Every route is unavailable: keep the prior/default origin and let the
     // replica provide the offline experience.
-    REMOTE = previous ?? DEFAULT_REMOTE;
+    REMOTE = previous && configured.includes(previous)
+      ? previous
+      : configured[0] ?? DEFAULT_REMOTE;
   }
   return REMOTE;
 }

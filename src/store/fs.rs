@@ -122,6 +122,20 @@ impl FsStore {
 
 #[async_trait]
 impl ContentStore for FsStore {
+    async fn speech_policy(
+        &self,
+        book: &str,
+        rendition: &str,
+    ) -> Result<crate::speech::SpeechPolicy, String> {
+        Ok(crate::speech::SpeechPolicy {
+            book: self
+                .book(book)
+                .map(|b| b.speech.clone())
+                .unwrap_or_default(),
+            rendition: self.speech_config(book, rendition).await?,
+            ..Default::default()
+        })
+    }
     async fn speech_config(
         &self,
         book: &str,

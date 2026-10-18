@@ -20,7 +20,7 @@ async fn legacy_voice(state: &AppState, book: &str, rendition: &str) -> Option<S
 pub(crate) async fn default_voice(state: &AppState, row: &ChapterRecord) -> Result<String, String> {
     let config = state
         .store
-        .speech_config(&row.book_slug, &row.rendition)
+        .speech_policy(&row.book_slug, &row.rendition)
         .await?;
     Ok(config.resolve(
         &row.lang,
@@ -61,28 +61,32 @@ async fn speech_book(state: &AppState, slug: &str) -> Result<serde_json::Value, 
     let mut chapters = Vec::new();
     let mut policies = serde_json::Map::new();
     for rendition in ["text", "audio"] {
-        let config = state.store.speech_config(slug, rendition).await?;
+        let config = state.store.speech_policy(slug, rendition).await?;
         policies.insert(
             rendition.into(),
             serde_json::to_value(&config).map_err(|e| e.to_string())?,
         );
-        if config.voices.is_empty() {
-            continue;
-        }
         let legacy = legacy_voice(state, slug, rendition).await;
-        let recipes: Vec<_> = config
-            .voices
-            .iter()
-            .map(|voice| {
-                let recipe = config.recipe(voice);
-                (voice, recipe.encode(), recipe.id(), speech::label(voice))
-            })
-            .collect();
         for source in sources.iter().filter(|s| s.rendition == rendition) {
-            let default = config.default_for(&source.lang, &source.rel_path, legacy.as_deref());
+            let effective = config.effective(&source.lang, &source.rel_path);
+            let options = &effective.options;
+            let default = options.default_for(&source.lang, legacy.as_deref());
+            let available = if options == &speech::SpeechOptions::default() {
+                Vec::new()
+            } else {
+                options.available_voices(&source.lang, legacy.as_deref())
+            };
+            let recipes: Vec<_> = available
+                .into_iter()
+                .map(|voice| {
+                    let recipe = options.recipe(&voice);
+                    let label = speech::label(&voice);
+                    (voice, recipe.encode(), recipe.id(), label)
+                })
+                .collect();
             let choices: Vec<_> = recipes.iter().map(|(voice, recipe, profile, label)| {
                 let asset = assets.get(&(rendition,source.lang.as_str(),source.rel_path.as_str(),profile.as_str()));
-                let is_baked_default = source.audio_voice.as_deref()==Some(recipe) && source.audio_hash.is_some() && source.marks_hash.is_some();
+                let is_baked_default = (source.audio_voice.as_deref()==Some(recipe) || (options==&speech::SpeechOptions::default() && source.audio_voice.as_deref()==Some(voice))) && source.audio_hash.is_some() && source.marks_hash.is_some();
                 let (status,audio,marks,bytes) = if is_baked_default {
                     ("ready",source.audio_hash.as_ref(),source.marks_hash.as_ref(),source.audio_size)
                 } else if let Some(asset) = asset {
@@ -90,16 +94,53 @@ async fn speech_book(state: &AppState, slug: &str) -> Result<serde_json::Value, 
                 } else { ("available",None,None,None) };
                 serde_json::json!({"id":voice,"label":label,"status":status,"audio_hash":audio,"marks_hash":marks,"bytes":bytes})
             }).collect();
-            chapters.push(serde_json::json!({"id":format!("{rendition}/{}/{}",source.lang,source.rel_path),"default_voice":default,"voices":choices}));
+            let bitrate = if options == &speech::SpeechOptions::default() {
+                24
+            } else {
+                options.bitrate_kbps.unwrap_or(96)
+            };
+            chapters.push(serde_json::json!({"id":format!("{rendition}/{}/{}",source.lang,source.rel_path),"default_voice":default,"voices":choices,"effective":{"default_voice":default,"bitrate_kbps":bitrate,"speed_percent":options.speed_percent.unwrap_or(100),"sources":effective.sources},"encoding":{"container":"caf","codec":"mp3","sample_rate_hz":24000,"channels":1,"bitrate_kbps":bitrate,"speed_percent":options.speed_percent.unwrap_or(100)}}));
         }
     }
-    Ok(serde_json::json!({"chapters":chapters,"policies":policies}))
+    let mut installed = Vec::new();
+    if std::env::var_os("LIVEVIEW_KOKORO_TTS_CMD").is_some() {
+        installed.extend(["kokoro:af_heart", "kokoro:af_bella"]);
+    }
+    Ok(
+        serde_json::json!({"chapters":chapters,"policies":policies,"installed_voices":installed,"bitrates_kbps":[32,48,64,96,128,160]}),
+    )
 }
 
 #[derive(serde::Deserialize)]
 pub(crate) struct PolicyRequest {
-    rendition: String,
+    #[serde(default)]
+    rendition: Option<String>,
+    #[serde(default)]
+    chapter: Option<String>,
     speech: speech::SpeechConfig,
+}
+
+pub(crate) async fn api_speech_defaults(State(state): State<SharedState>) -> Response {
+    match state.store.speech_policy("", "").await {
+        Ok(policy) => Json(policy.global).into_response(),
+        Err(error) => store_unavailable("speech defaults", error),
+    }
+}
+pub(crate) async fn api_set_speech_defaults(
+    State(state): State<SharedState>,
+    Json(config): Json<speech::SpeechConfig>,
+) -> Response {
+    if let Err(error) = config.validate() {
+        return (StatusCode::BAD_REQUEST, error).into_response();
+    }
+    match state
+        .store
+        .set_speech_scope(None, None, None, &config)
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => store_unavailable("speech defaults", error),
+    }
 }
 
 pub(crate) async fn api_set_speech(
@@ -111,16 +152,24 @@ pub(crate) async fn api_set_speech(
         return (StatusCode::BAD_REQUEST, error).into_response();
     }
     let cat = state.catalog.read().await;
-    let exists = RenditionKind::parse(&request.rendition)
-        .and_then(|kind| cat.book(&slug).and_then(|b| b.rendition(kind)))
-        .is_some();
+    let exists = match &request.rendition {
+        Some(rendition) => RenditionKind::parse(rendition)
+            .and_then(|kind| cat.book(&slug).and_then(|b| b.rendition(kind)))
+            .is_some(),
+        None => cat.book(&slug).is_some() && request.chapter.is_none(),
+    };
     drop(cat);
     if !exists {
         return StatusCode::NOT_FOUND.into_response();
     }
     match state
         .store
-        .set_speech_config(&slug, &request.rendition, &request.speech)
+        .set_speech_scope(
+            Some(&slug),
+            request.rendition.as_deref(),
+            request.chapter.as_deref(),
+            &request.speech,
+        )
         .await
     {
         Ok(()) => {
@@ -158,9 +207,18 @@ pub(crate) async fn api_request_speech(
             .ok_or("Chapter not found")?;
         let config = state
             .store
-            .speech_config(&row.book_slug, &row.rendition)
+            .speech_policy(&row.book_slug, &row.rendition)
             .await?;
-        if !config.voices.contains(&request.voice) {
+        let config = config.effective(&row.lang, &row.rel_path).options;
+        if !config
+            .available_voices(
+                &row.lang,
+                legacy_voice(&state, &row.book_slug, &row.rendition)
+                    .await
+                    .as_deref(),
+            )
+            .contains(&request.voice)
+        {
             return Err("This voice is not allowed for this book".to_string());
         }
         if state.tts_cmd.is_none()

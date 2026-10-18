@@ -37,6 +37,9 @@ let hashIndex = new Map<string, PathRecord>();
 
 /** Percent-decode so encodeURIComponent reads match DAG URLs. */
 export function percentDecode(url: string): string {
+  // Blob URLs dominate a production DAG and contain no escapes. Avoid
+  // rebuilding every hash URL character by character when adopting an index.
+  if (!url.includes("%")) return url;
   let out = "";
   for (let i = 0; i < url.length; i++) {
     const ch = url[i];

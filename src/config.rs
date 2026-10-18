@@ -205,6 +205,8 @@ struct DocManifest {
 ///     rendition picks its own langs and (for `audio`) voice.
 #[derive(Debug, Deserialize)]
 pub struct BookManifest {
+    #[serde(default)]
+    pub speech: crate::speech::SpeechConfig,
     /// Defaults to the directory name when omitted.
     pub slug: Option<String>,
     pub title: String,
@@ -360,6 +362,7 @@ impl RenditionState {
 /// Resolved book — metadata plus one or more renditions.
 #[derive(Clone)]
 pub struct BookState {
+    pub speech: crate::speech::SpeechConfig,
     pub label: String,
     pub slug: String,
     pub description: Option<String>,
@@ -640,6 +643,7 @@ impl Config {
             // A `[[book]]`/`[[mount]]` is a single `text` rendition over the
             // filesystem tree — no audio, no manifest spine.
             books.push(BookState {
+                speech: Default::default(),
                 label: b.label,
                 slug,
                 description: b.description,
@@ -895,6 +899,7 @@ fn load_doc_manifest(
     Ok(BookState {
         label: manifest.title,
         slug: manifest.slug,
+        speech: Default::default(),
         description: manifest.description,
         tags: crate::tags::normalize_tags(manifest.tags)
             .map_err(|e| format!("{}: {e}", manifest_path.display()))?,
@@ -1124,10 +1129,15 @@ fn load_book_manifest(
 
     let cover = resolve_cover(book_dir, manifest.cover.as_deref());
     let backdrop = resolve_backdrop(book_dir, manifest.backdrop.as_deref());
+    manifest
+        .speech
+        .validate()
+        .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
 
     Ok(BookState {
         label: manifest.title,
         slug,
+        speech: manifest.speech.clone(),
         description: None,
         tags: crate::tags::normalize_tags(manifest.tags.clone())
             .map_err(|e| format!("{}: {e}", manifest_path.display()))?,
@@ -1260,6 +1270,7 @@ pub fn implicit_resolved(dir: &Path) -> Result<Resolved, String> {
         debounce_ms: default_debounce(),
         open: false,
         books: vec![BookState {
+            speech: Default::default(),
             label,
             slug,
             description: None,

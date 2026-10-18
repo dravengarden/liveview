@@ -204,6 +204,16 @@ CREATE TABLE IF NOT EXISTS speech_configs (
     PRIMARY KEY (book_slug, rendition),
     FOREIGN KEY (book_slug, rendition) REFERENCES renditions(book_slug, kind) ON DELETE CASCADE
 );
+-- The singleton also serializes policy edits against worker publication.
+CREATE TABLE IF NOT EXISTS speech_defaults (
+    id BOOLEAN PRIMARY KEY CHECK (id),
+    config TEXT NOT NULL
+);
+INSERT INTO speech_defaults VALUES (true, '{}') ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS book_speech_configs (
+    book_slug TEXT PRIMARY KEY REFERENCES books(slug) ON DELETE CASCADE,
+    config TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS speech_audio (
     book_slug TEXT NOT NULL,
     rendition TEXT NOT NULL,
