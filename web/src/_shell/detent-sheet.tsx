@@ -195,23 +195,20 @@ function dimHex(base: string, dim: number): string {
 }
 
 // The single document-level write this overlay permits (see header): repaint the
-// standalone status bar. Native WKWebView accepts an in-place update; removing
-// and reinserting the node there stalls sheet transitions with repeated theme
-// invalidation. Standalone PWAs still replace it: they frequently ignore an in-place
-// attribute change (the bar keeps the colour it read at launch) but re-read a
+// standalone status bar. The native shell draws this scrim beneath its
+// transparent status bar already; changing theme-color there additionally
+// invalidates WebKit's native surface during the transition. Permanent theme
+// changes remain owned by useTheme. Standalone PWAs replace the node: they
+// frequently ignore an in-place attribute change but re-read a
 // freshly-inserted node. This matches each app's own theme-color writer (e.g.
 // liveview's useTheme), so a sheet's dim/restore and a runtime theme switch
 // agree on the mechanism — the sheet's restore-on-close (the page surface) then
 // reliably lands the post-switch colour instead of leaving it stuck. No-op-safe
 // when no meta exists (we just append one).
 function setStatusBarColor(color: string): void {
+  if ("__TAURI_INTERNALS__" in globalThis) return;
   const { head } = globalThis.document;
   if (!head) {
-    return;
-  }
-  const current = head.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-  if (current && "__TAURI_INTERNALS__" in globalThis) {
-    if (current.content !== color) current.content = color;
     return;
   }
   for (const m of head.querySelectorAll('meta[name="theme-color"]')) {
