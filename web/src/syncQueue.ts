@@ -177,3 +177,9 @@ function ensureStarted(): void {
 /** Public start hook — call once from main.tsx AFTER installApiShim() so a cold
  *  launch drains writes left pending from a prior (offline) session. Idempotent. */
 export const startSyncQueue = ensureStarted;
+
+/** An undelivered preference is newer than a cached startup settings map. The
+ * queue is restored by startSyncQueue before React mounts. */
+export function pendingSettingValue(key: string): string | null {
+  return pending.get(`setting:${key}`)?.value ?? null;
+}

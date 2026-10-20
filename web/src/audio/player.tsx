@@ -50,6 +50,8 @@ import { activeMarkIndex } from "./mark-index";
 import { chapterVoices, preferredVoice, prepareVoice, saveVoicePreference, sentencePosition, speechCatalog, voiceMarks, voicePreferenceKey, type SpeechCatalog, type SpeechPreparation, type VoiceChoice } from "./speech";
 import { NATIVE_QUEUE_BATCH, nativeEventMatches, nativeNowPlaying, nativeSessionQueue, nativeTrack, queuedNativeTrack } from "./native-queue";
 import { loadContentsTree } from "./contents";
+import { sleepDefault } from "./sleep-default";
+import { ListeningSleepTimer, SLEEP_MINUTES } from "./sleep-timer";
 import {
   type AudioPos,
   audioStores,
@@ -356,6 +358,7 @@ export function AudioPlayerProvider(
   const [sleepRemainingMin, setSleepRemainingMin] = useState(0);
   const sleepRemainingRef = useRef(0); // live seconds remaining
   const lastSleepTickRef = useRef(0); // Date.now() of last decrement; 0 = reseed, don't count
+  const sleepSessionRef = useRef(new ListeningSleepTimer());
 
   // Refs the once-attached <audio> listeners read without re-subscribing.
   const marksRef = useRef<Mark[]>([]);
@@ -403,6 +406,30 @@ export function AudioPlayerProvider(
   bufferingRef.current = buffering;
 
   rateRef.current = rate;
+
+  // A per-listen choice never edits the saved default. Both engines count only
+  // listening time, so pause/resume and chapter navigation preserve this timer.
+  const setSleepTimer = useCallback((minutes: number) => {
+    sleepSessionRef.current.choose(minutes * 60);
+    setSleepMinutes(minutes);
+    sleepMinutesStore.set(minutes);
+    localStorage.setItem("audio.sleepChoice", String(minutes));
+    sleepRemainingRef.current = minutes * 60;
+    setSleepRemainingMin(minutes);
+    lastSleepTickRef.current = 0;
+    sleepRemainingStore.set(minutes * 60);
+    nativeAudioSleep(minutes * 60);
+  }, []);
+
+  const startSleepSession = useCallback(() => {
+    // The first play can race initial settings sync. Do not block playback, and
+    // let an explicit timer choice made during the read take precedence.
+    void sleepDefault.connect().then(() => {
+      if (!nowPlayingRef.current) return;
+      const minutes = sleepSessionRef.current.start(sleepDefault.store.get());
+      if (minutes !== null) setSleepTimer(minutes);
+    });
+  }, [setSleepTimer]);
 
   const clearNativeOptimisticTimer = useCallback(() => {
     if (nativeOptimisticTimerRef.current == null) return;
@@ -587,6 +614,8 @@ export function AudioPlayerProvider(
     setLoading(snapshot.waiting);
     setError(snapshot.error);
     setRateState(snapshot.rate);
+    sleepSessionRef.current.observe(snapshot.sleepRemaining);
+    if (snapshot.ended && snapshot.index === snapshot.count - 1) sleepSessionRef.current.reset();
     sleepRemainingRef.current = snapshot.sleepRemaining;
     lastSleepTickRef.current = 0;
     setSleepRemainingMin(Math.ceil(snapshot.sleepRemaining / 60));
@@ -594,6 +623,10 @@ export function AudioPlayerProvider(
     if (snapshot.sleepRemaining <= 0) {
       setSleepMinutes(0);
       sleepMinutesStore.set(0);
+    } else {
+      const choice = Number(localStorage.getItem("audio.sleepChoice"));
+      setSleepMinutes(SLEEP_MINUTES.includes(choice) && choice * 60 >= snapshot.sleepRemaining
+        ? choice : SLEEP_MINUTES.find(minutes => minutes * 60 >= snapshot.sleepRemaining) ?? 90);
     }
     for (const completed of snapshot.completed) {
       const done = nativeNowPlaying(completed.context);
@@ -873,21 +906,6 @@ export function AudioPlayerProvider(
     [goTo],
   );
 
-  // Sleep timer: arm N minutes of remaining time (0 cancels). The countdown only
-  // advances while playing (driven by the timeupdate handler), so it freezes on
-  // pause — WeChat-Reading style. Pauses (not stops) at zero so the chapter
-  // resumes where it left off. lastSleepTickRef = 0 means "reseed on the next
-  // playing tick", so the paused/armed gap before play isn't counted.
-  const setSleepTimer = useCallback((minutes: number) => {
-    setSleepMinutes(minutes);
-    sleepMinutesStore.set(minutes);
-    sleepRemainingRef.current = minutes * 60;
-    setSleepRemainingMin(minutes);
-    lastSleepTickRef.current = 0;
-    sleepRemainingStore.set(minutes * 60);
-    nativeAudioSleep(minutes * 60);
-  }, []);
-
   // Pause whichever engine owns playback (native AVPlayer or the web <audio>).
   const pauseEngine = useCallback(() => {
     if (nativeAudioAvailable()) nativeAudioPause();
@@ -960,6 +978,7 @@ export function AudioPlayerProvider(
         lastSleepTickRef.current = now;
         const remaining = sleepRemainingRef.current - dt;
         if (remaining <= 0) {
+          sleepSessionRef.current.reset();
           sleepRemainingRef.current = 0;
           lastSleepTickRef.current = 0;
           setSleepRemainingMin(0);
@@ -1016,6 +1035,7 @@ export function AudioPlayerProvider(
     if (queueIndexRef.current < queueRef.current.length - 1) {
       goTo(queueIndexRef.current + 1, true);
     } else {
+      sleepSessionRef.current.reset();
       playingRef.current = false;
       setPlaying(false);
       setCurrentIdx(-1);
@@ -1040,6 +1060,7 @@ export function AudioPlayerProvider(
       updatePositionState(audio);
     };
     const onPlay = (): void => {
+      startSleepSession();
       playingRef.current = true;
       setPlaying(true);
     };
@@ -1106,7 +1127,7 @@ export function AudioPlayerProvider(
       audio.removeEventListener("ended", onEnded);
       for (const ev of SYNC_EVENTS) audio.removeEventListener(ev, syncPlaying);
     };
-  }, [handlePosition, handleEnded]);
+  }, [handlePosition, handleEnded, startSleepSession]);
 
   // Native engine events → the SAME state the <audio> listeners drive, so the
   // read-along + UI track native playback identically. Only wired on the iOS
@@ -1129,6 +1150,7 @@ export function AudioPlayerProvider(
         case "time":
           if (ev.position < ev.duration) nativeEndedRef.current = false;
           if (nativeAudioQueueAvailable() && ev.sleepRemaining !== undefined) {
+            sleepSessionRef.current.observe(ev.sleepRemaining);
             sleepRemainingRef.current = ev.sleepRemaining;
             setSleepRemainingMin(Math.ceil(ev.sleepRemaining / 60));
             if (ev.sleepRemaining <= 0) setSleepMinutes(0);
@@ -1139,6 +1161,7 @@ export function AudioPlayerProvider(
           setDuration(ev.duration);
           break;
         case "playing":
+          startSleepSession();
           if (nativeAudioQueueAvailable()) {
             nativeEndedRef.current = false;
             resetNativePlaybackProof();
@@ -1246,6 +1269,7 @@ export function AudioPlayerProvider(
     persistPos,
     prevChapter,
     resetNativePlaybackProof,
+    startSleepSession,
   ]);
 
   // Re-sync to the native player on mount: a page reload wipes the web's in-memory
@@ -1289,6 +1313,7 @@ export function AudioPlayerProvider(
     // it must never replace a chapter the user has already chosen.
     const mountSeq = loadSeq.current;
     void (async () => {
+      void sleepDefault.connect();
       // 1) Hydrate every store from its local mirror. Only `sessionStore` has one
       //    (IDB), so this restores THIS device's last session for an instant
       //    paused mini-player ("continue listening" without auto-playing).
@@ -1301,6 +1326,12 @@ export function AudioPlayerProvider(
       const allowServerResume = loadSeq.current === mountSeq;
       let restoredNative = false;
       if (nativeState?.queueId && nativeState.context && loadSeq.current === mountSeq) {
+        // A running native listen (including a temporary Off choice) survives a
+        // WebView reload. A paused, expired timer can use the default next play.
+        sleepSessionRef.current.observe(nativeState.sleepRemaining, nativeState.playing || nativeState.waiting);
+        if (nativeState.sleepRemaining === 0 && localStorage.getItem("audio.sleepChoice") === "0") {
+          sleepSessionRef.current.choose(0);
+        }
         const q = nativeSessionQueue(nativeState, localSession);
         queueRef.current = q;
         setQueue(q);
@@ -1366,7 +1397,10 @@ export function AudioPlayerProvider(
       // resumes the countdown), plus the chosen option for the menu highlight.
       const sr = Number(rawSleepRem);
       const smChoice = Number(rawSleepMin);
-      if (!restoredNative && Number.isFinite(sr) && sr > 0) {
+      if (!restoredNative && allowServerResume && loadSeq.current === hydratedSeq &&
+        !sleepSessionRef.current.active && !playingRef.current && !pendingPlayIntent.current &&
+        Number.isFinite(sr) && sr > 0) {
+        sleepSessionRef.current.choose(sr);
         sleepRemainingRef.current = sr;
         setSleepRemainingMin(Math.ceil(sr / 60));
         if (Number.isFinite(smChoice) && smChoice > 0) {
@@ -1874,6 +1908,8 @@ export function AudioPlayerProvider(
   }, [playing, rate, nowPlaying]);
 
   const stop = useCallback(() => {
+    sleepSessionRef.current.reset();
+    localStorage.removeItem("audio.sleepChoice");
     resetNativePlaybackProof();
     queueBuildRef.current++;
     nativeQueueIdRef.current = null;
@@ -1908,6 +1944,7 @@ export function AudioPlayerProvider(
     setSleepRemainingMin(0);
     setSleepMinutes(0);
     sleepRemainingStore.set(0);
+    sleepMinutesStore.set(0);
     // Clear the resume pointer + position so a stopped session doesn't resurrect
     // on this or another device. sessionStore's codec encodes null as "" (the
     // empty value the server treats as "unset"); its IDB local mirror is cleared

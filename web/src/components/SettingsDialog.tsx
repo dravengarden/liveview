@@ -23,6 +23,9 @@ import { UI_LANGUAGES, useI18n } from "@/i18n";
 import { OfflineSection } from "./OfflineSection";
 import { SegmentedPill } from "./SegmentedPill";
 import { offlineDownloadsAvailable } from "@/native-sync";
+import { useStore } from "@/_store/mod.ts";
+import { sleepDefault } from "@/audio/sleep-default";
+import { SLEEP_MINUTES } from "@/audio/sleep-timer";
 
 interface SettingsButtonProps {
   variant: ThemeVariant;
@@ -182,6 +185,7 @@ export function SettingsButton({
   onFontScaleChange,
 }: SettingsButtonProps): React.JSX.Element {
   const { t, lang, setLang } = useI18n();
+  const defaultSleepMinutes = useStore(sleepDefault.store);
   // The font picker is collapsed by default — its 7 preview cards would
   // otherwise dominate the sheet. Collapsed shows just the current face,
   // previewed in itself; expanding drops the full list, and picking a face
@@ -555,6 +559,32 @@ export function SettingsButton({
             own Sort & Filter control — organizing the shelf belongs there, not in
             app preferences. */
             }
+
+            <Stack spacing={1.5}>
+              <Typography variant="overline" color="text.secondary">
+                {t("settings.playback")}
+              </Typography>
+              <Row
+                label={t("settings.sleepDefault")}
+                desc={t("settings.sleepDefaultDesc")}
+                control={
+                  <Select
+                    size="small"
+                    value={defaultSleepMinutes}
+                    onChange={e => sleepDefault.set(Number(e.target.value))}
+                    inputProps={{ "aria-label": t("settings.sleepDefault"), "data-testid": "sleep-default" }}
+                    sx={{ minWidth: 104, flexShrink: 0 }}
+                  >
+                    <MenuItem value={0}>{t("audiobook.sleepOff")}</MenuItem>
+                    {SLEEP_MINUTES.map(minutes => (
+                      <MenuItem key={minutes} value={minutes}>
+                        {t("settings.sleepMinutes", { minutes })}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                }
+              />
+            </Stack>
 
             {/* ── Interface language ─────────────────────────────────────────── */}
             <Stack spacing={1}>

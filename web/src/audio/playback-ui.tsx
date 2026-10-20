@@ -15,6 +15,9 @@ import type { SxProps, Theme } from "@mui/material/styles";
 import { Bedtime } from "@mui/icons-material";
 import { useAudioPlayer } from "@/audio/player";
 import { useI18n } from "@/i18n";
+import { fmtSleep, SLEEP_MINUTES } from "./sleep-timer";
+
+export { fmtSleep, SLEEP_MINUTES } from "./sleep-timer";
 
 export const RATES = [
   0.75,
@@ -31,8 +34,6 @@ export const RATES = [
   3.5,
   3.75,
 ];
-/** Sleep-timer options in minutes (0 = off). Capped at 90. */
-export const SLEEP_MINUTES = [15, 30, 45, 60, 90];
 
 export function fmtTime(sec: number): string {
   if (!Number.isFinite(sec)) return "0:00";
@@ -70,17 +71,6 @@ export function useScrubber(
     [seek],
   );
   return { value: dragValue ?? currentTime, onChange, onChangeCommitted };
-}
-
-/** Compact sleep-timer label: 15m / 60→1h / 90→1h30m. Used for both the menu
- *  options and the live remaining display. */
-export function fmtSleep(min: number): string {
-  if (min >= 60) {
-    const h = Math.floor(min / 60);
-    const m = min % 60;
-    return m === 0 ? `${h}h` : `${h}h${m}m`;
-  }
-  return `${min}m`;
 }
 
 // No underline, no caret, value-centred. Callers can layer on a pill/background
