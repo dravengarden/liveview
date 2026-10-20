@@ -31,6 +31,11 @@ BID="top.thundersparrow.liveview"
 
 cd "$HOME/liveview/app/src-tauri"
 
+# Exercise the transport model on the same Apple toolchain before building.
+xcrun swiftc gen/apple/Sources/liveview-app/NativePlaybackQueue.swift \
+  tests/native-playback.swift -o "$HOME/liveview/.native-playback-test"
+"$HOME/liveview/.native-playback-test"
+
 # Tauri embeds frontendDist in the Rust static library under Externals. Xcode's
 # normal dependency graph does not notice that dist-app changed, so an otherwise
 # successful incremental build can keep serving an older SPA. Invalidate only

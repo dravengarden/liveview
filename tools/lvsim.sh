@@ -58,6 +58,8 @@ case "$cmd" in
   tap)         # pixel tap (fragile — depends on Simulator window placement). Prefer `eval`+click.
                osascript -e "tell application \"System Events\" to click at {$1, $2}"; echo "tap $1 $2" ;;
   ping)        curl -s -m 4 "http://127.0.0.1:$DEVPORT/ping" || echo "(down)" ;;
+  audio)       # native snapshot/transport without evaluating or waking JavaScript
+               curl -fsS -m 6 --data-binary "${1:-}" "http://127.0.0.1:$DEVPORT/audio" ;;
   offline)     # deterministic airplane mode for the Rust content fetcher (DEBUG):
                # `lvsim offline on` / `lvsim offline off`. Forces lvsync:// network
                # misses to fail fast so the offline cache path can be tested. Driven

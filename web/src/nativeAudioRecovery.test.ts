@@ -57,11 +57,13 @@ test("protocol-v1 playing events require advancing media time", async () => {
   const player = await source("audio/player.tsx");
 
   const playing = player.match(
-    /case "playing":[\s\S]*?\n\s*break;/,
+    /case "playing":[\s\S]*?case "paused"/,
   )?.[0];
   assert.ok(playing, "native playing event handler exists");
   assert.match(playing, /expectNativePlayback\(true\)/);
-  assert.doesNotMatch(playing, /setPlaying\(true\)/);
+  const legacy = playing.slice(playing.indexOf("// Installed protocol-v1"));
+  assert.doesNotMatch(legacy, /setPlaying\(true\)/);
+  assert.match(playing, /if \(nativeAudioQueueAvailable\(\)\)/, "only the advertised native capability makes playing authoritative");
   assert.match(
     player,
     /nativePositionConfirmsPlayback\([\s\S]*?setPlaying\(true\)/,

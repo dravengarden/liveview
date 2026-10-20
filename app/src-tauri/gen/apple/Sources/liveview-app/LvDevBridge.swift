@@ -72,6 +72,16 @@ import WebKit
       if path.hasPrefix("/ping") {
         self.respond(conn, "ok"); return
       }
+      if path == "/audio" {
+        let command = body.data(using: .utf8).flatMap {
+          (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any]
+        }
+        DispatchQueue.main.async {
+          guard let wv = self.webView else { self.respond(conn, "ERR: no webview"); return }
+          self.respond(conn, Self.encode(NativeAudioController.debugAudio(wv, command: command)))
+        }
+        return
+      }
       // (Offline airplane-mode testing now lives in the Rust content plugin —
       // `lvsync://localhost/offline?on=1` — since content moved off the Swift
       // LvSyncController, which is retired.)

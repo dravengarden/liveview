@@ -13,20 +13,24 @@
 //
 // Protocol (web ⇄ native):
 //   web → native   (WKScriptMessage "lvNativeAudio"): {kind, data?}
-//       load {url, hash?, bytes?, position, rate, title, artist, album, artworkUrl}
+//       load {url, hash?, bytes?, position, rate, title, artist, album, artworkUrl,
+//             context?, queue?: {id, index, count}}
 //       play | pause | stop | state
 //       seek {position} | rate {rate}
+//       queueTracks {queueId, start, tracks} | queueGo {queueId, index}
+//       queueAck {queueId, through} | sleep {seconds}
 //       cacheFromUrl {url, hash, bytes?} | cacheHas {id, hash} | cacheDelete {hash}
 //       cacheCount {id} | setAllowsCellular {on}
 //   native → web   (CustomEvent "lv-native-audio"): {type, ...}
 //       time {position, duration} | durationchange {duration}
 //       playing | paused | ended | waiting | canplay
-//       next | prev   (remote next/prev track — the WEB owns the queue)
+//       snapshot {queueVersion:1, queueId, index, context, position, ...}
+//       next | prev   (legacy queue / unresolved-track fallback only)
 //       error {message} | network {net} | cacheProgress {hash, ok}
 //
 // Media cache is a generic decode cache + bounded fetch queue, not the store:
 // TS owns pin/LRU/cap/worklist. Native never sees a DAG, book, or Downloads
-// total. Continuation while suspended is NOT available — do not reintroduce
+// total. Bulk download continuation while suspended is NOT available — do not reintroduce
 // `.background(withIdentifier:)`.
 //
 // Lock-screen / AirPods / CarPlay transport runs through MPRemoteCommandCenter +
@@ -53,6 +57,11 @@ import WidgetKit
   private let netMonitor = NWPathMonitor()
   private var netPath: NWPath?
   private let player = AVPlayer()
+  private var playbackQueue = NativePlaybackQueue()
+  private var sleepTimer = NativeSleepTimer()
+  private var playbackError: String?
+  private var queueNeedsAdvance = false
+  private var playbackEnded = false
   private var nowPlayingInfo: [String: Any] = [:]
   private var artworkURL: String?
   private var rate: Double = 1
@@ -366,7 +375,7 @@ import WidgetKit
       DispatchQueue.main.async { [weak self] in
         guard let self else { return }
         self.netPath = p
-        self.emit("{type:'network',net:'\(self.netType())'}")
+        self.emit("{type:'network',net:'\(self.netType())'}", playback: false)
         if p.status == .satisfied { self.startScheduler() }
       }
     }
@@ -389,7 +398,12 @@ import WidgetKit
   // MARK: web → native
 
   public func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
-    guard let body = m.body as? [String: Any], let kind = body["kind"] as? String else { return }
+    guard let body = m.body as? [String: Any] else { return }
+    receive(body)
+  }
+
+  private func receive(_ body: [String: Any]) {
+    guard let kind = body["kind"] as? String else { return }
     let d = body["data"] as? [String: Any]
     switch kind {
     case "load": load(d)
@@ -399,6 +413,26 @@ import WidgetKit
     case "rate": if let r = d?["rate"] as? Double { setRate(r) }
     case "stop": stop()
     case "state": emitState()
+    case "queueTracks":
+      if let id = d?["queueId"] as? String, let start = d?["start"] as? Int,
+         let tracks = d?["tracks"] as? [Any] {
+        playbackQueue.append(id: id, start: start, items: tracks)
+        if queueNeedsAdvance { _ = goToQueuedTrack(playbackQueue.index + 1) }
+      }
+    case "queueGo":
+      if let id = d?["queueId"] as? String, playbackQueue.id == id,
+         let index = d?["index"] as? Int { _ = goToQueuedTrack(index) }
+    case "queueAck":
+      if let id = d?["queueId"] as? String, let through = d?["through"] as? Int {
+        playbackQueue.acknowledge(id: id, through: through)
+        if !playbackQueue.completions.isEmpty { emitSnapshot() }
+      }
+    case "sleep":
+      if let seconds = d?["seconds"] as? Double {
+        sleepTimer.set(seconds)
+        _ = sleepTimer.tick(now: ProcessInfo.processInfo.systemUptime, playing: isPlaying())
+        emitSnapshot()
+      }
     case "cacheFromUrl": cacheFromUrl(d)
     case "cacheHas": cacheHas(d)
     case "cacheDelete": cacheDelete(d)
@@ -685,11 +719,16 @@ import WidgetKit
     return downloadedBytes
   }
 
-  private func load(_ d: [String: Any]?) {
+  private func load(_ d: [String: Any]?, continuing: Bool = false) {
     guard let d, let urlStr = d["url"] as? String, let url = URL(string: urlStr) else { return }
     let position = d["position"] as? Double ?? 0
+    _ = sleepTimer.tick(now: ProcessInfo.processInfo.systemUptime, playing: false)
     wantsToPlay = false
     resumeAfterInterruption = false
+    playbackError = nil
+    queueNeedsAdvance = false
+    playbackEnded = false
+    if !continuing { playbackQueue.reset(d) }
     player.pause()
     rate = d["rate"] as? Double ?? 1
     duration = 0
@@ -723,6 +762,8 @@ import WidgetKit
       let center = MPNowPlayingInfoCenter.default()
       center.nowPlayingInfo = nil
       center.playbackState = .stopped
+      playbackError = "offline-uncached"
+      emitSnapshot()
       emit("{type:'error',message:'offline-uncached'}")
       return
     } else {
@@ -743,9 +784,12 @@ import WidgetKit
     artworkURL = nil
     pushNowPlaying(playing: false, position: position)
     loadArtwork(d["artworkUrl"] as? String)
+    emitSnapshot()
   }
 
   private func play() {
+    if playbackEnded { seek(0) }
+    playbackError = nil
     wantsToPlay = true
     resumeAfterInterruption = false
     activateSession()
@@ -767,12 +811,51 @@ import WidgetKit
   }
 
   private func pause() {
+    queueNeedsAdvance = false
+    _ = sleepTimer.tick(now: ProcessInfo.processInfo.systemUptime, playing: false)
     wantsToPlay = false
     resumeAfterInterruption = false
     cancelStallRecovery()
     player.pause()
     pushNowPlaying(playing: false, position: currentPosition())
     emit("{type:'paused'}")
+    emitSnapshot()
+  }
+
+  /// Runs entirely on the native main runloop, including while WKWebView/IDB is
+  /// suspended. Keep the audio session active across the item replacement.
+  @discardableResult
+  private func goToQueuedTrack(_ index: Int) -> Bool {
+    if !playbackEnded { playbackQueue.rememberPosition(currentPosition()) }
+    guard var track = playbackQueue.select(index) else { return false }
+    track["rate"] = rate
+    load(track, continuing: true)
+    play()
+    emitSnapshot()
+    return true
+  }
+
+  private func snapshot() -> [String: Any] {
+    [
+      "type": "snapshot", "queueVersion": 1,
+      "queueId": playbackQueue.id as Any? ?? NSNull(),
+      "index": playbackQueue.index, "count": playbackQueue.count,
+      "context": playbackQueue.current?["context"] ?? NSNull(),
+      "position": max(pendingSeek, currentPosition()), "duration": duration,
+      "rate": rate, "playing": isPlaying(), "waiting": wantsToPlay && !isPlaying(),
+      "sleepRemaining": sleepTimer.remaining,
+      "needsAdvance": queueNeedsAdvance,
+      "ended": playbackEnded,
+      "error": playbackError as Any? ?? NSNull(),
+      "completed": playbackQueue.completions,
+    ]
+  }
+
+  private func emitSnapshot() {
+    guard !backgrounded else { return }
+    guard let data = try? JSONSerialization.data(withJSONObject: snapshot()),
+          let json = String(data: data, encoding: .utf8) else { return }
+    emit(json, playback: false)
   }
 
   /// Re-emit the CURRENT state on demand. The web loses its in-memory playing/
@@ -781,9 +864,12 @@ import WidgetKit
   /// is actually playing). Also re-pushes `network` so a listener installed after
   /// the first NWPathMonitor fire still gets a snapshot.
   private func emitState() {
+    emitSnapshot()
     let d = duration
     if d > 0 { emit("{type:'durationchange',duration:\(d)}") }
-    emit("{type:'time',position:\(currentPosition()),duration:\(d)}")
+    if !playbackEnded || playbackQueue.id == nil {
+      emit("{type:'time',position:\(currentPosition()),duration:\(d)}")
+    }
     if isPlaying() {
       emit("{type:'playing'}")
     } else if wantsToPlay {
@@ -791,10 +877,11 @@ import WidgetKit
     } else {
       emit("{type:'paused'}")
     }
-    emit("{type:'network',net:'\(netType())'}")
+    emit("{type:'network',net:'\(netType())'}", playback: false)
   }
 
   private func seek(_ p: Double) {
+    if p < duration { playbackEnded = false }
     // Before the item is ready (or with no item at all), a direct seek would be
     // overwritten by the deferred resume seek applied at readyToPlay. Replace
     // that deferred target instead so the user's latest position wins.
@@ -813,8 +900,10 @@ import WidgetKit
       return
     }
     let t = CMTime(seconds: max(0, p), preferredTimescale: 1000)
+    let generation = playbackGeneration
     player.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-      guard let self else { return }
+      guard let self, self.playbackGeneration == generation,
+            self.player.currentItem === item else { return }
       self.pushNowPlaying(playing: self.isPlaying(), position: p)
       self.emit("{type:'time',position:\(p),duration:\(self.duration)}")
     }
@@ -827,6 +916,11 @@ import WidgetKit
   }
 
   private func stop() {
+    playbackQueue.reset()
+    sleepTimer.set(0)
+    playbackError = nil
+    queueNeedsAdvance = false
+    playbackEnded = false
     wantsToPlay = false
     resumeAfterInterruption = false
     cancelStallRecovery()
@@ -843,6 +937,7 @@ import WidgetKit
     center.nowPlayingInfo = nil
     center.playbackState = .stopped
     deactivateSession()
+    emitSnapshot()
   }
 
   // MARK: AVPlayer observation
@@ -852,23 +947,28 @@ import WidgetKit
     // to be invisible. iOS extrapolates the lock-screen scrubber between pushes.
     let interval = CMTime(seconds: 0.25, preferredTimescale: 1000)
     timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) {
-      [weak self] time in
+      [weak self] _ in
       guard let self else { return }
-      let pos = time.seconds
-      guard pos.isFinite else { return }
+      // The callback may have been queued before an item replacement.
+      let pos = self.currentPosition()
+      if self.playbackEnded && self.playbackQueue.id != nil { return }
+      if self.sleepTimer.tick(now: ProcessInfo.processInfo.systemUptime, playing: self.isPlaying()) {
+        self.pause()
+        self.emitSnapshot()
+      }
       // Backgrounded → emit at most ~1 Hz to the web (see `backgrounded`).
       if self.backgrounded {
         let sec = Int(pos)
         if sec == self.lastBgEmitSec { return }
         self.lastBgEmitSec = sec
       }
-      self.emit("{type:'time',position:\(pos),duration:\(self.duration)}")
+      self.emit("{type:'time',position:\(pos),duration:\(self.duration),sleepRemaining:\(self.sleepTimer.remaining)}")
     }
   }
 
   private func observeItem(_ item: AVPlayerItem) {
     statusObs = item.observe(\.status, options: [.new]) { [weak self] it, _ in
-      guard let self else { return }
+      guard let self, self.player.currentItem === it else { return }
       switch it.status {
       case .readyToPlay:
         let d = it.duration.seconds
@@ -898,35 +998,52 @@ import WidgetKit
           if self.wantsToPlay { self.player.rate = Float(self.rate) }
         }
       case .failed:
-        DispatchQueue.main.async { [weak self] in
-          self?.recoverFailedItem()
+        DispatchQueue.main.async { [weak self, weak it] in
+          guard let self, let it, self.player.currentItem === it else { return }
+          self.recoverFailedItem()
         }
       default:
         break
       }
     }
     keepUpObs = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] it, _ in
-      if it.isPlaybackLikelyToKeepUp { self?.emit("{type:'canplay'}") }
+      guard let self, self.player.currentItem === it else { return }
+      if it.isPlaybackLikelyToKeepUp { self.emit("{type:'canplay'}") }
     }
     bufferEmptyObs = item.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self] it, _ in
-      if it.isPlaybackBufferEmpty { self?.handlePlaybackWaiting() }
+      guard let self, self.player.currentItem === it else { return }
+      if it.isPlaybackBufferEmpty { self.handlePlaybackWaiting() }
     }
     playbackStalledObserver = NotificationCenter.default.addObserver(
       forName: .AVPlayerItemPlaybackStalled, object: item, queue: .main
     ) { [weak self] _ in self?.handlePlaybackWaiting() }
     endObserver = NotificationCenter.default.addObserver(
       forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
-    ) { [weak self] _ in
-      guard let self else { return }
+    ) { [weak self, weak item] _ in
+      guard let self, let item, self.player.currentItem === item else { return }
+      let shouldContinue = self.wantsToPlay
+      let expired = self.sleepTimer.tick(now: ProcessInfo.processInfo.systemUptime, playing: false)
+      self.playbackQueue.finishCurrent()
+      self.playbackEnded = true
       self.wantsToPlay = false
       self.cancelStallRecovery()
+      if shouldContinue && !expired && self.goToQueuedTrack(self.playbackQueue.index + 1) { return }
+      self.queueNeedsAdvance = shouldContinue && !expired &&
+        self.playbackQueue.index + 1 < self.playbackQueue.count
+      self.playbackEnded = true
       self.pushNowPlaying(playing: false, position: self.duration)
-      self.emit("{type:'ended'}")
+      self.emitSnapshot()
+      if self.playbackQueue.id == nil { self.emit("{type:'ended'}") }
     }
   }
 
   private func handleTimeControlStatus(_ status: AVPlayer.TimeControlStatus) {
     guard player.currentItem != nil else { return }
+    if sleepTimer.tick(now: ProcessInfo.processInfo.systemUptime, playing: status == .playing) {
+      pause()
+      emitSnapshot()
+      return
+    }
     switch status {
     case .playing:
       cancelStallRecovery()
@@ -1029,12 +1146,14 @@ import WidgetKit
   }
 
   private func failPlayback(_ message: String) {
+    playbackError = message
     wantsToPlay = false
     resumeAfterInterruption = false
     cancelStallRecovery()
     player.pause()
     pushNowPlaying(playing: false, position: currentPosition())
     emit("{type:'error',message:'\(message)'}")
+    emitSnapshot()
   }
 
   private func teardownItem() {
@@ -1125,6 +1244,7 @@ import WidgetKit
   @objc private func appWillForeground() {
     backgrounded = false
     lastBgEmitSec = -1
+    emitState()
   }
 
   // AVAudioSession posts route-change and interruption notifications on an
@@ -1178,8 +1298,16 @@ import WidgetKit
       self.wantsToPlay ? self.pause() : self.play()
       return .success
     }
-    cc.nextTrackCommand.addTarget { [weak self] _ in self?.emit("{type:'next'}"); return .success }
-    cc.previousTrackCommand.addTarget { [weak self] _ in self?.emit("{type:'prev'}"); return .success }
+    cc.nextTrackCommand.addTarget { [weak self] _ in
+      guard let self else { return .commandFailed }
+      if !self.goToQueuedTrack(self.playbackQueue.index + 1) { self.emit("{type:'next'}") }
+      return .success
+    }
+    cc.previousTrackCommand.addTarget { [weak self] _ in
+      guard let self else { return .commandFailed }
+      if !self.goToQueuedTrack(self.playbackQueue.index - 1) { self.emit("{type:'prev'}") }
+      return .success
+    }
     cc.skipForwardCommand.preferredIntervals = [Self.skip]
     cc.skipForwardCommand.addTarget { [weak self] e in
       let s = (e as? MPSkipIntervalCommandEvent)?.interval ?? 15
@@ -1320,16 +1448,36 @@ import WidgetKit
   /// Deliver a state event to the web as a `lv-native-audio` CustomEvent. `detail`
   /// is a JS object literal built from NUMBERS/known types only (never string
   /// interpolation of web-supplied strings).
-  private func emit(_ detail: String) {
-    let js = "window.dispatchEvent(new CustomEvent('lv-native-audio',{detail:\(detail)}))"
+  private func emit(_ detail: String, playback: Bool = true) {
+    // Queued playback never needs JavaScript while hidden. Drop transient
+    // events instead of replaying stale chapter clocks when the page resumes.
+    if playback && backgrounded && playbackQueue.id != nil { return }
+    var identity = "{}"
+    if playback, let id = playbackQueue.id,
+       let bytes = try? JSONSerialization.data(withJSONObject: ["queueId": id, "index": playbackQueue.index]),
+       let json = String(data: bytes, encoding: .utf8) { identity = json }
+    let js = "window.dispatchEvent(new CustomEvent('lv-native-audio',{detail:Object.assign(\(detail),\(identity))}))"
     DispatchQueue.main.async { [weak self] in
       self?.webView?.evaluateJavaScript(js, completionHandler: nil)
     }
   }
 
   private func emitCacheProgress(_ hash: String, _ ok: Bool) {
-    emit("{type:'cacheProgress',hash:'\(hash)',ok:\(ok ? "true" : "false")}")
+    emit("{type:'cacheProgress',hash:'\(hash)',ok:\(ok ? "true" : "false")}", playback: false)
   }
+
+  #if DEBUG
+  /// Simulator acceptance can inspect/drive the real player without waking JS.
+  static func debugAudio(_ webView: WKWebView, command: [String: Any]?) -> [String: Any] {
+    guard let controller = controllers[ObjectIdentifier(webView)] else { return [:] }
+    if let command { controller.receive(command) }
+    var state = controller.snapshot()
+    state["backgrounded"] = controller.backgrounded
+    state["cached"] = controller.playingFromCache
+    state["readyTracks"] = controller.playbackQueue.readyCount
+    return state
+  }
+  #endif
 
   private func reply(_ id: String, _ obj: [String: Any]) {
     let json = (try? JSONSerialization.data(withJSONObject: obj))

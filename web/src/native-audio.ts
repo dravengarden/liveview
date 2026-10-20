@@ -46,6 +46,28 @@ export interface NativeAudioTrack {
   readonly album: string;
   /** Absolute artwork PNG URL (not data:/blob: — iOS needs a real URL). */
   readonly artworkUrl: string;
+  /** Opaque reader identity, echoed when native advances without JavaScript. */
+  readonly context?: string;
+  readonly queue?: { readonly id: string; readonly index: number; readonly count: number };
+}
+
+export interface NativePlaybackSnapshot {
+  readonly type: "snapshot";
+  readonly queueVersion: 1;
+  readonly queueId: string | null;
+  readonly index: number;
+  readonly count: number;
+  readonly context: string | null;
+  readonly position: number;
+  readonly duration: number;
+  readonly rate: number;
+  readonly playing: boolean;
+  readonly waiting: boolean;
+  readonly sleepRemaining: number;
+  readonly needsAdvance: boolean;
+  readonly ended: boolean;
+  readonly error: string | null;
+  readonly completed: readonly { readonly serial: number; readonly context: string }[];
 }
 
 export interface NativeWidgetSnapshot {
@@ -61,11 +83,11 @@ export interface NativeWidgetSnapshot {
 /** A state event the native engine reports back so the web UI + read-along track
  *  it (position drives the karaoke wipe; ended advances the chapter; next/prev
  *  are lock-screen track buttons the web's queue must service). */
-export type NativeAudioEvent =
-  | {
+export type NativeAudioEvent = NativePlaybackSnapshot | ({
     readonly type: "time";
     readonly position: number;
     readonly duration: number;
+    readonly sleepRemaining?: number;
   }
   | { readonly type: "durationchange"; readonly duration: number }
   | { readonly type: "playing" }
@@ -84,7 +106,7 @@ export type NativeAudioEvent =
     readonly type: "cacheProgress";
     readonly hash: string;
     readonly ok: boolean;
-  };
+  }) & { readonly queueId?: string; readonly index?: number };
 
 type OutMsg =
   | { readonly kind: "load"; readonly data: NativeAudioTrack }
@@ -92,6 +114,10 @@ type OutMsg =
   | { readonly kind: "pause" }
   | { readonly kind: "stop" }
   | { readonly kind: "state" }
+  | { readonly kind: "queueTracks"; readonly data: { queueId: string; start: number; tracks: readonly (NativeAudioTrack | null)[] } }
+  | { readonly kind: "queueGo"; readonly data: { queueId: string; index: number } }
+  | { readonly kind: "queueAck"; readonly data: { queueId: string; through: number } }
+  | { readonly kind: "sleep"; readonly data: { seconds: number } }
   | { readonly kind: "seek"; readonly data: { readonly position: number } }
   | { readonly kind: "rate"; readonly data: { readonly rate: number } }
   | { readonly kind: "widgetSnapshot"; readonly data: NativeWidgetSnapshot };
@@ -143,6 +169,47 @@ export function nativeAudioRequestState(): boolean {
   return send({ kind: "state" });
 }
 
+let queueSupported = false;
+
+export function nativeAudioQueueAvailable(): boolean { return queueSupported; }
+
+/** Probe the existing v1 state command. New shells reply with a snapshot first;
+ * legacy shells reply with time/duration events and keep their existing path. */
+export async function nativeAudioProbeState(): Promise<NativePlaybackSnapshot | null> {
+  if (!nativeAudioAvailable()) return null;
+  return new Promise(resolve => {
+    const done = (state: NativePlaybackSnapshot | null): void => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(state);
+    };
+    const unsubscribe = onNativeAudioEvent(event => {
+      if (event.type === "snapshot") done(event);
+      // A running queue can emit its periodic clock before the state reply.
+      // That clock is not a legacy probe response: wait for its native pointer.
+      else if (event.type === "time" && !event.queueId && !queueSupported) done(null);
+    });
+    const timer = setTimeout(() => done(null), 1000);
+    nativeAudioRequestState();
+  });
+}
+
+export function nativeAudioQueueTracks(queueId: string, start: number, tracks: readonly (NativeAudioTrack | null)[]): boolean {
+  return queueSupported && tracks.length <= 16 && send({ kind: "queueTracks", data: { queueId, start, tracks } });
+}
+
+export function nativeAudioQueueGo(queueId: string, index: number): boolean {
+  return queueSupported && send({ kind: "queueGo", data: { queueId, index } });
+}
+
+export function nativeAudioQueueAck(queueId: string, through: number): boolean {
+  return queueSupported && send({ kind: "queueAck", data: { queueId, through } });
+}
+
+export function nativeAudioSleep(seconds: number): boolean {
+  return queueSupported && send({ kind: "sleep", data: { seconds } });
+}
+
 /** Publish a compact, cover-backed reading snapshot for WidgetKit. The native
  * layer writes it to the App Group when that entitlement is available; the
  * widget independently keeps its network fallback for Personal Team builds. */
@@ -161,6 +228,10 @@ export function onNativeAudioEvent(
   const listener = (e: Event): void => {
     const { detail } = e as CustomEvent<NativeAudioEvent>;
     if (detail && typeof detail.type === "string") {
+      if (detail.type === "snapshot") {
+        if (detail.queueVersion !== 1) return;
+        queueSupported = true;
+      }
       handle(detail);
     }
   };

@@ -12,6 +12,8 @@ import type { Mark, SpokenContent } from "@/types";
 import { chapterMedia } from "@/audioHash";
 import { contentFetch } from "@/native-sync";
 import { REMOTE } from "@/apiBase";
+import { onPathIndexAdopted } from "@/replica/manifest";
+import { flattenTracks } from "@/readerTree";
 import {
   nativeMediaAvailable,
   nativeMediaClear,
@@ -24,11 +26,18 @@ import {
   nativeAudioLoad,
   nativeAudioPause,
   nativeAudioPlay,
+  nativeAudioProbeState,
+  nativeAudioQueueAvailable,
+  nativeAudioQueueTracks,
+  nativeAudioQueueGo,
+  nativeAudioQueueAck,
+  nativeAudioSleep,
   nativeAudioRequestState,
   nativeAudioSeek,
   nativeAudioSetRate,
   nativeAudioStop,
   onNativeAudioEvent,
+  type NativePlaybackSnapshot,
 } from "@/native-audio";
 import { useI18n } from "@/i18n";
 import { logEvent } from "@/apm";
@@ -38,7 +47,9 @@ import {
   type NativePositionSample,
 } from "./native-playback-truth";
 import { activeMarkIndex } from "./mark-index";
-import { chapterVoices, preferredVoice, prepareVoice, saveVoicePreference, sentencePosition, voiceMarks, type SpeechPreparation, type VoiceChoice } from "./speech";
+import { chapterVoices, preferredVoice, prepareVoice, saveVoicePreference, sentencePosition, speechCatalog, voiceMarks, voicePreferenceKey, type SpeechCatalog, type SpeechPreparation, type VoiceChoice } from "./speech";
+import { NATIVE_QUEUE_BATCH, nativeEventMatches, nativeNowPlaying, nativeSessionQueue, nativeTrack, queuedNativeTrack } from "./native-queue";
+import { loadContentsTree } from "./contents";
 import {
   type AudioPos,
   audioStores,
@@ -352,6 +363,10 @@ export function AudioPlayerProvider(
   const nowPlayingRef = useRef<NowPlaying | null>(null);
   const queueRef = useRef<Track[]>([]);
   const queueIndexRef = useRef(-1);
+  const nativeQueueIdRef = useRef<string | null>(null);
+  const nativeQueueReadyRef = useRef(new Set<number>());
+  const nativeEndedRef = useRef(false);
+  const queueBuildRef = useRef(0);
   // Monotonic load token: a newer load() invalidates an in-flight older fetch.
   const loadSeq = useRef(0);
   // True from the start of `loadTrack` until the new chapter's source has been
@@ -457,6 +472,162 @@ export function AudioPlayerProvider(
     posStore.set({ path, t, voice: np?.voice, marksHash:np?.marksHash, unit:activeMarkIndex(marksRef.current,t*1000) });
   }, []);
 
+  // Native playback must never wait on these IDB/network reads. On a native
+  // chapter transition only the presentation follows this asynchronous path.
+  const loadReadAlong = useCallback((np: NowPlaying, seq: number, marksHash?: string, selected = false) => {
+    const q1 = query(np.chapterPath, np.lang, np.rendition);
+    void (async () => {
+      try {
+        const response = await contentFetch(`/api/spoken?${q1}`, { cacheFirst: true });
+        if (loadSeq.current !== seq) return;
+        const data = response.ok ? await response.json() as SpokenContent : null;
+        if (loadSeq.current !== seq) return;
+        setSentences(data?.sentences ?? []);
+        setTranscriptUnavailable(!data?.sentences.length);
+      } catch {
+        if (loadSeq.current === seq) setTranscriptUnavailable(true);
+      }
+    })();
+    const loadMarks = async (attempt = 0): Promise<void> => {
+      if (loadSeq.current !== seq) return;
+      let marks: Mark[] | null = null;
+      const read = async (response: Response): Promise<Mark[] | null> => {
+        if (!response.ok) return null;
+        try {
+          const data = await response.json() as Mark[];
+          return Array.isArray(data) && data.length > 0 ? data : null;
+        } catch { return null; }
+      };
+      try {
+        if (marksHash) marks = await read(await contentFetch(`/api/blob/${marksHash}`));
+        if (!marks && !selected) marks = await read(await contentFetch(`/api/marks?${q1}`, { cacheFirst: true }));
+      } catch { /* Audio keeps playing; retry the optional read-along. */ }
+      if (loadSeq.current !== seq) return;
+      if (marks) {
+        marksRef.current = marks;
+        setCurrentIdx(activeMarkIndex(marks, currentTimeRef.current * 1000));
+      } else if (attempt < 15) {
+        window.setTimeout(() => void loadMarks(attempt + 1), 2000);
+      }
+    };
+    void loadMarks();
+  }, []);
+
+  const stageNativeQueue = useCallback(async (id: string, np: NowPlaying, q: Track[], qi: number, snapshot?: SpeechCatalog | null) => {
+    const build = ++queueBuildRef.current;
+    const current = (): boolean => nativeQueueIdRef.current === id && queueBuildRef.current === build;
+    const catalog = snapshot ?? await speechCatalog(np).catch(() => null);
+    if (!catalog || !current()) return;
+    const chapters = new Map(catalog.chapters.map(chapter => [chapter.id, chapter]));
+    const preference = localStorage.getItem(voicePreferenceKey(np));
+    const resume = (track: NowPlaying): number => {
+      const saved = Number(localStorage.getItem(posKey(track.chapterPath, track.lang, track.voice, track.marksHash)));
+      return Number.isFinite(saved) && saved > 0 ? saved : 0;
+    };
+    // Next first, then the rest of the book, then previous tracks. No chapter
+    // marks, synthesis polling, or download is needed to hand off playable URLs.
+    for (const [from, to] of [[qi + 1, q.length], [0, qi]] as const) {
+      for (let start = from; start < to; start += NATIVE_QUEUE_BATCH) {
+        if (!current()) return;
+        const tracks = q.slice(start, Math.min(start + NATIVE_QUEUE_BATCH, to)).map((track, offset) =>
+          queuedNativeTrack(np, track, chapters, preference, rateRef.current, REMOTE, start + offset === q.length - 1, resume));
+        if (!nativeAudioQueueTracks(id, start, tracks)) return;
+        tracks.forEach((track, offset) => {
+          if (track) nativeQueueReadyRef.current.add(start + offset);
+          else nativeQueueReadyRef.current.delete(start + offset);
+        });
+        // Fixed-size IPC and a yield keep long books off the interaction frame.
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const refresh = (): void => {
+      const id = nativeQueueIdRef.current;
+      const np = nowPlayingRef.current;
+      if (!document.hidden && !sourcePendingRef.current && id && np) {
+        void stageNativeQueue(id, np, queueRef.current, queueIndexRef.current);
+      }
+    };
+    const unsubscribe = onPathIndexAdopted(refresh);
+    globalThis.addEventListener("lv-voice-preference", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      unsubscribe();
+      globalThis.removeEventListener("lv-voice-preference", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [stageNativeQueue]);
+
+  const adoptNativeSnapshot = useCallback((snapshot: NativePlaybackSnapshot) => {
+    const np = nativeNowPlaying(snapshot.context);
+    if (!np || !snapshot.queueId) return;
+    const previous = nowPlayingRef.current;
+    const changed = !previous || previous.chapterPath !== np.chapterPath || previous.bookSlug !== np.bookSlug ||
+      previous.lang !== np.lang || previous.rendition !== np.rendition || previous.voice !== np.voice || previous.marksHash !== np.marksHash;
+    nativeQueueIdRef.current = snapshot.queueId;
+    nativeEndedRef.current = snapshot.ended;
+    resetNativePlaybackProof();
+    sourcePendingRef.current = false;
+    pendingPlayIntent.current = snapshot.playing || snapshot.waiting;
+    nowPlayingRef.current = np;
+    queueIndexRef.current = snapshot.index;
+    currentTimeRef.current = snapshot.position;
+    durationRef.current = snapshot.duration;
+    playingRef.current = snapshot.playing;
+    bufferingRef.current = snapshot.waiting;
+    rateRef.current = snapshot.rate;
+    setNowPlaying(np);
+    setQueueIndex(snapshot.index);
+    setCurrentTime(snapshot.position);
+    setDuration(snapshot.duration);
+    setPlaying(snapshot.playing);
+    setBuffering(snapshot.waiting);
+    setLoading(snapshot.waiting);
+    setError(snapshot.error);
+    setRateState(snapshot.rate);
+    sleepRemainingRef.current = snapshot.sleepRemaining;
+    lastSleepTickRef.current = 0;
+    setSleepRemainingMin(Math.ceil(snapshot.sleepRemaining / 60));
+    sleepRemainingStore.set(Math.round(snapshot.sleepRemaining));
+    if (snapshot.sleepRemaining <= 0) {
+      setSleepMinutes(0);
+      sleepMinutesStore.set(0);
+    }
+    for (const completed of snapshot.completed) {
+      const done = nativeNowPlaying(completed.context);
+      if (!done) continue;
+      localStorage.removeItem(posKey(done.chapterPath, done.lang, done.voice, done.marksHash));
+      localStorage.removeItem(unitKey(done));
+    }
+    const through = snapshot.completed.at(-1)?.serial;
+    if (through !== undefined) nativeAudioQueueAck(snapshot.queueId, through);
+    if (queueRef.current[snapshot.index]?.path === np.chapterPath) {
+      persistSession(np, queueRef.current, snapshot.index);
+    }
+    if (changed) marksRef.current = [];
+    persistPos(np.chapterPath, snapshot.ended ? 0 : snapshot.position);
+    if (changed) {
+      const seq = ++loadSeq.current;
+      voiceSeq.current++;
+      setVoiceBusy(false);
+      setVoiceError(null);
+      setPreparation(null);
+      setSentences([]);
+      setVoices([]);
+      setTranscriptUnavailable(false);
+      setCurrentIdx(-1);
+      marksRef.current = [];
+      loadReadAlong(np, seq, np.marksHash, !!np.voice);
+      void chapterVoices(np).then(chapter => {
+        if (loadSeq.current === seq && chapter) setVoices(chapter.voices);
+      }).catch(() => {});
+    } else {
+      setCurrentIdx(activeMarkIndex(marksRef.current, snapshot.position * 1000));
+    }
+  }, [loadReadAlong, persistPos, persistSession, resetNativePlaybackProof]);
+
   // Load a chapter for playback. STORAGE-FIRST + AUDIO-FIRST: resolve the content
   // hashes from the cached manifest, start the audio from the LOCAL cache
   // immediately, and load the read-along data (sentences + marks) AFTER — purely
@@ -474,6 +645,10 @@ export function AudioPlayerProvider(
       const audio = audioRef.current;
       const native = nativeAudioAvailable();
       const seq = ++loadSeq.current;
+      queueBuildRef.current++;
+      nativeQueueIdRef.current = null;
+      nativeEndedRef.current = false;
+      nativeQueueReadyRef.current.clear();
       voiceSeq.current++;
       setVoiceBusy(false);
       setVoiceError(null);
@@ -541,9 +716,12 @@ export function AudioPlayerProvider(
         let media = await chapterMedia(np.bookSlug, np.chapterPath, np.lang);
         let selected = ready?.voice;
         let selectedMarks = ready?.marks;
+        let catalog: SpeechCatalog | null = null;
         try {
+          catalog = await speechCatalog(np).catch(() => null);
           if (!ready) {
-            const chapter = await chapterVoices(np).catch(() => null);
+            const rel = np.chapterPath.startsWith(`${np.bookSlug}/`) ? np.chapterPath.slice(np.bookSlug.length + 1) : np.chapterPath;
+            const chapter = catalog?.chapters.find(c => c.id === `${np.rendition}/${np.lang}/${rel}`);
             if (loadSeq.current !== seq) return;
             if (!chapter && np.voice) throw new Error("Voice choices are unavailable. Reconnect to load this voice.");
             if (chapter) {
@@ -599,25 +777,18 @@ export function AudioPlayerProvider(
             // modes; it plays the cached file keyed by `hash` (offline-instant) and
             // only streams `url` on a true cache miss. /api/audio always serves the
             // compressed Opus variant, matching the download → one shared key.
-            const origin = REMOTE;
+            const identity = nowPlayingRef.current ?? np;
+            const id = nativeAudioQueueAvailable() && q.length <= 100_000 ? crypto.randomUUID() : null;
+            nativeQueueIdRef.current = id;
+            nativeQueueReadyRef.current = new Set([qi]);
             nativeAudioLoad({
-              url: media.audioHash ? `${origin}/api/blob/${media.audioHash}` : `${origin}/api/audio?${q1}${isBookEnd ? "&tail=bookend" : ""}`,
-              ...(media.audioHash ? { hash: media.audioHash } : {}),
-              ...(media.audioBytes
-                ? { bytes: media.audioBytes }
-                : {}),
-              position,
-              rate: rateRef.current,
-              title: np.chapterLabel,
-              artist: np.bookLabel,
-              album: np.bookLabel,
-              artworkUrl: `${origin}/api/artwork?book=${
-                encodeURIComponent(np.bookSlug)
-              }`,
+              ...nativeTrack(identity, media, position, rateRef.current, REMOTE, isBookEnd),
+              ...(id ? { queue: { id, index: qi, count: q.length } } : {}),
             });
+            if (id) void stageNativeQueue(id, identity, q, qi, catalog);
             sourcePendingRef.current = false;
             if (pendingPlayIntent.current) {
-              expectNativePlayback(true);
+              expectNativePlayback(!nativeAudioQueueAvailable());
               nativeAudioPlay();
             }
           } else if (audio) {
@@ -660,74 +831,10 @@ export function AudioPlayerProvider(
           setLoading(false);
         }
 
-        // ── 2) READ-ALONG (sentences + marks) — best-effort, NON-FATAL. ──────
-        // Drives the karaoke highlight only; cache-first, and a failure just means
-        // no highlighting — the audio keeps playing. Run concurrently.
-        void (async () => {
-          try {
-            const sres = await contentFetch(`/api/spoken?${q1}`, {
-              cacheFirst: true,
-            });
-            if (loadSeq.current === seq && sres.ok) {
-              const sdata = (await sres.json()) as SpokenContent;
-              if (loadSeq.current === seq) {
-                setSentences(sdata.sentences);
-                setTranscriptUnavailable(sdata.sentences.length === 0);
-              }
-            } else if (loadSeq.current === seq) {
-              setTranscriptUnavailable(true);
-            }
-          } catch {
-            if (loadSeq.current === seq) setTranscriptUnavailable(true);
-          }
-        })();
-        const loadMarks = async (attempt = 0): Promise<void> => {
-          if (loadSeq.current !== seq) return;
-          let mdata: Mark[] | null = null;
-          const readMarks = async (
-            response: Response,
-          ): Promise<Mark[] | null> => {
-            if (!response.ok) return null;
-            try {
-              const data = (await response.json()) as Mark[];
-              return Array.isArray(data) && data.length > 0 ? data : null;
-            } catch {
-              return null;
-            }
-          };
-          try {
-            // Prefer the content-addressed cached blob. A stale index or transient
-            // blob miss must not strand the player without highlighting, so fall
-            // back to the live endpoint and retry independently of audio.
-            if (media.marksHash) {
-              mdata = await readMarks(
-                await contentFetch(`/api/blob/${media.marksHash}`),
-              );
-            }
-            if (!mdata && !selected) {
-              mdata = await readMarks(
-                await contentFetch(`/api/marks?${q1}`, { cacheFirst: true }),
-              );
-            }
-          } catch {
-            // Retried below; narration must remain independent of timing data.
-          }
-          if (loadSeq.current !== seq) return;
-          if (mdata) {
-            marksRef.current = mdata;
-            setCurrentIdx(
-              activeMarkIndex(mdata, currentTimeRef.current * 1000),
-            );
-            return;
-          }
-          if (attempt < 15) {
-            window.setTimeout(() => void loadMarks(attempt + 1), 2000);
-          }
-        };
-        void loadMarks();
+        loadReadAlong(nowPlayingRef.current ?? np, seq, media.marksHash, !!selected);
       })();
     },
-    [expectNativePlayback, persistSession, resetNativePlaybackProof],
+    [expectNativePlayback, loadReadAlong, persistSession, resetNativePlaybackProof, stageNativeQueue],
   );
 
   // Advance/retreat within the queue, carrying the book identity forward.
@@ -737,6 +844,8 @@ export function AudioPlayerProvider(
       const track = q[qi];
       const base = nowPlayingRef.current;
       if (!track || !base) return;
+      const id = nativeQueueIdRef.current;
+      if (autoplay && id && nativeQueueReadyRef.current.has(qi) && nativeAudioQueueGo(id, qi)) return;
       loadTrack(
         { ...base, voice: undefined, marksHash: undefined, chapterPath: track.path, chapterLabel: track.label },
         q,
@@ -776,6 +885,7 @@ export function AudioPlayerProvider(
     setSleepRemainingMin(minutes);
     lastSleepTickRef.current = 0;
     sleepRemainingStore.set(minutes * 60);
+    nativeAudioSleep(minutes * 60);
   }, []);
 
   // Pause whichever engine owns playback (native AVPlayer or the web <audio>).
@@ -841,7 +951,7 @@ export function AudioPlayerProvider(
           .catch(() => {});
       }
     }
-    if (sleepRemainingRef.current > 0) {
+    if (sleepRemainingRef.current > 0 && !nativeAudioQueueAvailable()) {
       const now = Date.now();
       if (lastSleepTickRef.current === 0) {
         lastSleepTickRef.current = now;
@@ -1005,14 +1115,40 @@ export function AudioPlayerProvider(
   useEffect(() => {
     if (!nativeAudioAvailable()) return undefined;
     return onNativeAudioEvent((ev) => {
+      if (ev.type === "snapshot") {
+        // Startup adopts the native pointer after the local queue is hydrated.
+        // During an explicit load only that load may replace the current source.
+        if (!sourcePendingRef.current && ev.queueId && ev.queueId === nativeQueueIdRef.current) {
+          adoptNativeSnapshot(ev);
+          if (ev.needsAdvance) goTo(ev.index + 1, true);
+        }
+        return;
+      }
+      if (!nativeEventMatches(ev, nativeQueueIdRef.current, queueIndexRef.current)) return;
       switch (ev.type) {
         case "time":
+          if (ev.position < ev.duration) nativeEndedRef.current = false;
+          if (nativeAudioQueueAvailable() && ev.sleepRemaining !== undefined) {
+            sleepRemainingRef.current = ev.sleepRemaining;
+            setSleepRemainingMin(Math.ceil(ev.sleepRemaining / 60));
+            if (ev.sleepRemaining <= 0) setSleepMinutes(0);
+          }
           handleNativePosition(ev.position, ev.duration);
           break;
         case "durationchange":
           setDuration(ev.duration);
           break;
         case "playing":
+          if (nativeAudioQueueAvailable()) {
+            nativeEndedRef.current = false;
+            resetNativePlaybackProof();
+            playingRef.current = true;
+            bufferingRef.current = false;
+            setPlaying(true);
+            setBuffering(false);
+            setLoading(false);
+            break;
+          }
           // Installed protocol-v1 shells report the requested rate, not
           // AVPlayer's actual state. Keep the control pending until periodic
           // media time proves that audio is genuinely advancing.
@@ -1029,7 +1165,7 @@ export function AudioPlayerProvider(
           setPlaying(false);
           setLoading(false);
           const np = nowPlayingRef.current;
-          if (np && currentTimeRef.current > 0) {
+          if (np && currentTimeRef.current > 0 && !nativeEndedRef.current) {
             persistPos(np.chapterPath, currentTimeRef.current);
             void posStore.flush();
           }
@@ -1100,10 +1236,12 @@ export function AudioPlayerProvider(
       }
     });
   }, [
+    adoptNativeSnapshot,
     clearNativeOptimisticTimer,
     expectNativePlayback,
     handleEnded,
     handleNativePosition,
+    goTo,
     nextChapter,
     persistPos,
     prevChapter,
@@ -1154,10 +1292,37 @@ export function AudioPlayerProvider(
       // 1) Hydrate every store from its local mirror. Only `sessionStore` has one
       //    (IDB), so this restores THIS device's last session for an instant
       //    paused mini-player ("continue listening" without auto-playing).
-      await Promise.all(audioStores.map((s) => s.hydrate()));
+      const [, nativeState] = await Promise.all([
+        Promise.all(audioStores.map((s) => s.hydrate())),
+        nativeAudioProbeState(),
+      ]);
       if (cancelled) return;
       const localSession = sessionStore.get();
-      if (localSession && loadSeq.current === mountSeq) {
+      const allowServerResume = loadSeq.current === mountSeq;
+      let restoredNative = false;
+      if (nativeState?.queueId && nativeState.context && loadSeq.current === mountSeq) {
+        const q = nativeSessionQueue(nativeState, localSession);
+        queueRef.current = q;
+        setQueue(q);
+        adoptNativeSnapshot(nativeState);
+        restoredNative = true;
+        const np = nativeNowPlaying(nativeState.context);
+        if (np && q.length) void stageNativeQueue(nativeState.queueId, np, q, nativeState.index);
+        else if (np) {
+          // A missing/older local resume mirror must not pause the active
+          // engine. Recover only a spine whose native index still matches.
+          void loadContentsTree(np.bookSlug, np.rendition).then(tree => {
+            if (nativeQueueIdRef.current !== nativeState.queueId) return;
+            const recovered = flattenTracks(tree, np.lang).filter(track => track.path.startsWith(`${np.bookSlug}/`));
+            if (recovered[nativeState.index]?.path !== np.chapterPath || recovered.length !== nativeState.count) return;
+            queueRef.current = recovered;
+            setQueue(recovered);
+            const current = nowPlayingRef.current;
+            if (current) persistSession(current, recovered, queueIndexRef.current);
+            void stageNativeQueue(nativeState.queueId!, np, recovered, queueIndexRef.current);
+          }).catch(() => {});
+        }
+      } else if (localSession && loadSeq.current === mountSeq) {
         loadTrack(
           localSession.nowPlaying,
           localSession.queue,
@@ -1192,7 +1357,7 @@ export function AudioPlayerProvider(
       let settingsSynced = false;
       const localRate = localStorage.getItem(RATE_KEY);
       const r = Number(rawRate);
-      if (Number.isFinite(r) && r > 0) {
+      if (!restoredNative && Number.isFinite(r) && r > 0) {
         setRate(r);
         if (rawRate !== null && rawRate !== localRate) settingsSynced = true;
       }
@@ -1201,13 +1366,14 @@ export function AudioPlayerProvider(
       // resumes the countdown), plus the chosen option for the menu highlight.
       const sr = Number(rawSleepRem);
       const smChoice = Number(rawSleepMin);
-      if (Number.isFinite(sr) && sr > 0) {
+      if (!restoredNative && Number.isFinite(sr) && sr > 0) {
         sleepRemainingRef.current = sr;
         setSleepRemainingMin(Math.ceil(sr / 60));
         if (Number.isFinite(smChoice) && smChoice > 0) {
           setSleepMinutes(smChoice);
         }
         lastSleepTickRef.current = 0; // counts down once playback starts (frozen until then)
+        nativeAudioSleep(sr);
       }
 
       // Reconcile the resume pointer (the server reflects the most recent write
@@ -1240,7 +1406,7 @@ export function AudioPlayerProvider(
       let audioSynced = false;
       // Skip adoption when the user loaded or stopped a chapter after the local
       // hydrate: the server pointer predates that explicit choice.
-      if (serverSession && loadSeq.current === hydratedSeq) {
+      if (allowServerResume && !restoredNative && serverSession && loadSeq.current === hydratedSeq) {
         const cur = nowPlayingRef.current;
         const chapterDiffers = !cur ||
           cur.chapterPath !== serverSession.nowPlaying.chapterPath ||
@@ -1399,10 +1565,8 @@ export function AudioPlayerProvider(
   useEffect(() => {
     const onVisible = (): void => {
       if (document.visibilityState !== "visible") return;
-      // Native engine: it kept decoding in the background and pushes `time`
-      // events the moment the page resumes, so there's nothing stale to re-sync —
-      // and the <audio> is empty (reading it would wrongly zero the position).
-      if (nativeAudioAvailable()) return;
+      // Native may have advanced through many chapters while JS/IDB slept.
+      if (nativeAudioAvailable()) { nativeAudioRequestState(); return; }
       const a = audioRef.current;
       if (!a) return;
       updatePositionState(a);
@@ -1711,6 +1875,9 @@ export function AudioPlayerProvider(
 
   const stop = useCallback(() => {
     resetNativePlaybackProof();
+    queueBuildRef.current++;
+    nativeQueueIdRef.current = null;
+    nativeQueueReadyRef.current.clear();
     if (nativeAudioAvailable()) nativeAudioStop();
     const a = audioRef.current;
     if (a) {
