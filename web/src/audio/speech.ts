@@ -72,8 +72,14 @@ export async function speechCatalog(np: NowPlaying, fresh = false): Promise<Spee
 
 export function saveVoicePreference(np: NowPlaying, voice: string): void {
   const key = voicePreferenceKey(np);
-  localStorage.setItem(key, voice);
+  storeVoicePreference(key, voice);
   void putServerSetting(key, voice);
+}
+
+function storeVoicePreference(key: string, voice: string): void {
+  if (localStorage.getItem(key) === voice) return;
+  localStorage.setItem(key, voice);
+  globalThis.dispatchEvent(new Event("lv-voice-preference"));
 }
 
 export async function chapterVoices(np: NowPlaying, fresh = false): Promise<ChapterVoices | null> {
@@ -92,7 +98,7 @@ export async function preferredVoice(np: NowPlaying, chapter: ChapterVoices): Pr
     loadServerSetting(key),
     new Promise<null>(resolve => setTimeout(() => resolve(null), 500)),
   ]);
-  if (remote !== null) localStorage.setItem(key, remote);
+  if (remote !== null) storeVoicePreference(key, remote);
   return selectPreferredVoice(chapter, remote ?? local, np.voice);
 }
 

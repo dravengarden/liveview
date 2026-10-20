@@ -356,21 +356,29 @@ function abandonHostReply(id: string): void {
 export async function cacheHas(
   args: { hash: string },
 ): Promise<{ has: boolean }> {
-  if (!hostAudioAvailable()) return { has: false };
+  return { has: await probeCachedAudio(args) === true };
+}
+
+/** Accounting probe: unavailable/invalid replies must not erase disk presence.
+ * Uses the existing v1 command; cacheHas retains its play-path fallback. */
+export async function probeCachedAudio(
+  args: { hash: string },
+): Promise<boolean | null> {
+  if (!hostAudioAvailable()) return null;
   ensureHostResolver();
   const id = `h${++hostSeq}`;
   const pending = hostReply(id, 5_000);
   if (!postHostAudio({ kind: "cacheHas", data: { id, hash: args.hash } })) {
     abandonHostReply(id);
-    return { has: false };
+    return null;
   }
   const json = await pending;
-  if (!json) return { has: false };
+  if (!json) return null;
   try {
     const o = JSON.parse(json) as { has?: unknown };
-    return { has: o.has === true };
+    return typeof o.has === "boolean" ? o.has : null;
   } catch {
-    return { has: false };
+    return null;
   }
 }
 

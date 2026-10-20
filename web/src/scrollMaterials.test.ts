@@ -808,9 +808,14 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "the bridge must not expose the old unbounded resource-array command",
   );
   assertPresent(
-    preloadDriver,
-    /enqueueMissingAudio/,
-    "TS owns the audio worklist; native only enqueues cacheFromUrl",
+    await source("audio/cache.ts"),
+    /enqueueFetch\(job\.hash/,
+    "TS persists the audio worklist before dispatch to the payload store",
+  );
+  assertAbsent(
+    await source("hooks/useBookAudioPreload.ts"),
+    /setInterval/,
+    "book preloading wakes on completion, retry deadlines and lifecycle events",
   );
   assertPresent(
     nativeAudio,

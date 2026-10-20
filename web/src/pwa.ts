@@ -20,7 +20,7 @@ export function setPwaBackendConnected(connected: boolean): void {
 
 export function pwaDownloadsEnabled(): boolean {
   try {
-    return globalThis.localStorage?.getItem("lv.offline.pwaEnabled") === "1";
+    return globalThis.localStorage?.getItem("lv.offline.pwaEnabled") !== "0";
   } catch {
     return false;
   }

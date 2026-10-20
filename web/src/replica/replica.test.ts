@@ -45,6 +45,7 @@ import { flushBlobTouches, noteBlobAccess, TOUCH_MIN_AGE_MS } from "./blobs.ts";
 import { evictUnpinnedAudioToFit } from "./gc.ts";
 import { fetchServerRoot, replicaAppliedRoot } from "./resolve.ts";
 import { enqueueFetch, getWorklist, setWorklist } from "./worklist.ts";
+import { loadContentsTree } from "../audio/contents.ts";
 
 function buf(text: string): ArrayBuffer {
   const u8 = new TextEncoder().encode(text);
@@ -90,6 +91,49 @@ async function setup(quotaBytes?: number): Promise<MemoryIdbHandle> {
   await openReplicaDb();
   return handle;
 }
+
+test("download defaults allow cellular and preserve stored strategy and network overrides", async () => {
+  await setup();
+  assert.equal(loadPolicy().wifiOnly, false);
+  assert.equal(loadPolicy().audioPreload, "book");
+  storage.set("lv.offline.wifiOnly", "1");
+  storage.set("lv.offline.audioPreload", "off");
+  assert.equal(loadPolicy().wifiOnly, true);
+  assert.equal(loadPolicy().audioPreload, "off");
+});
+
+test("fresh contents replace stale audio identities in the offline title snapshot", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1, root: "contents-refresh",
+    resources: [{ path: "contents/book", hash: "contents-list", kind: "list", bytes: 10, url: "/api/contents/book?rendition=text" }],
+  });
+  await putBlob({ hash: "contents-list", kind: "list", bytes: 2, pinned: 0, present: 1, mtime: 1, data: buf("[]") });
+  const snapshot = [{ path: "book", name: "New title", is_dir: true, children: [] }];
+  const network = installFetch(() => Response.json(snapshot));
+  try {
+    assert.deepEqual(await loadContentsTree("book", "text", true), snapshot);
+    assert.deepEqual(JSON.parse(new TextDecoder().decode(await getBlob("contents-list"))), snapshot);
+    globalThis.fetch = async () => { throw new Error("offline"); };
+    assert.deepEqual(await loadContentsTree("book", "text"), snapshot);
+  } finally { network.restore(); }
+});
+
+test("startup does not bulk replay audio before the book policy and priority are known", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1, root: "audio-restart",
+    resources: [{ path: "book/audio", hash: "audio", kind: "audio", bytes: 10, url: "/api/blob/audio" }],
+  });
+  await enqueueFetch("audio", "/api/blob/audio");
+  await persistPolicy(loadPolicy("eager"));
+  const network = installFetch(() => new Response("audio"));
+  try {
+    await replayWorklist();
+    assert.equal(network.calls.length, 0);
+    assert.deepEqual((await getWorklist()).fetch, [{ hash: "audio", url: "/api/blob/audio" }]);
+  } finally { network.restore(); }
+});
 
 test("put/get/has/delete round-trip text bodies", async () => {
   await setup();
@@ -1195,6 +1239,7 @@ test("eager text fill is single-flight and backs off failing hashes", async () =
 
 test("browser download opt-out preserves queued content until downloads resume", async () => {
   await setup();
+  storage.set("lv.offline.pwaEnabled", "0");
   await applyDag({
     protocol_version: 1,
     root: "r",

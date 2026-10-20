@@ -427,6 +427,9 @@ export async function replayWorklist(): Promise<void> {
     const items: ReplicaWorkerFillItem[] = [];
     for (const item of pending) {
       const rec = pathRecordForHash(item.hash);
+      // Audio resumes through the book scheduler, which rechecks the selected
+      // voice, network policy, priority, and storage budget before dispatch.
+      if (rec && isAudioKind(rec.kind)) continue;
       items.push({
         hash: item.hash,
         url: item.url,

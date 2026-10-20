@@ -97,6 +97,7 @@ export interface ReplicaPolicy {
   wifiOnly: boolean;
   capBytes: number;
   persistFullSizeArtwork: boolean;
+  audioPreload?: "book" | "ahead" | "off";
 }
 
 export interface Worklist {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { prepareVoice, speechCatalog, type SpeechPreparation, type VoiceChoice } from "./speech";
+import { preferredVoice, prepareVoice, speechCatalog, type SpeechPreparation, type VoiceChoice } from "./speech";
+import { emitServerSettingPush, loadServerSetting } from "@/syncBackends";
 import type { NowPlaying } from "./player";
 import { sentencePosition, voicePreferenceKey } from "./voice-model";
 import { parseMediaResource } from "@/audioMediaIndex";
@@ -19,6 +20,39 @@ test("voice preferences distinguish rendition and language", () => {
   assert.equal(voicePreferenceKey(base), voicePreferenceKey({ ...base, chapterPath: "english/23.md" }));
 });
 
+test("server voice hydration notifies the book preloader when the local choice changes", async () => {
+  const storage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const dispatch = Object.getOwnPropertyDescriptor(globalThis, "dispatchEvent");
+  const fetch = globalThis.fetch;
+  const np = { bookSlug: "voice-hydration", rendition: "text", lang: "en" } as NowPlaying;
+  const key = voicePreferenceKey(np);
+  let local = "heart";
+  const events: string[] = [];
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+    getItem: () => local, setItem: (_key: string, value: string) => { local = value; },
+  } });
+  Object.defineProperty(globalThis, "dispatchEvent", { configurable: true, value: (event: Event) => { events.push(event.type); return true; } });
+  globalThis.fetch = async () => Response.json({});
+  try {
+    await loadServerSetting(key);
+    emitServerSettingPush(key, "bella");
+    const voices: VoiceChoice[] = ["heart", "bella"].map(id => ({
+      id, label: id, status: "ready", audio_hash: id, marks_hash: `${id}-marks`, bytes: 10,
+    }));
+    const chapter = { id: "chapter", default_voice: "heart", voices };
+    assert.equal((await preferredVoice(np, chapter))?.id, "bella");
+    assert.equal(local, "bella");
+    assert.deepEqual(events, ["lv-voice-preference"]);
+    await preferredVoice(np, chapter);
+    assert.equal(events.length, 1, "an unchanged choice does not restart the planner");
+  } finally {
+    globalThis.fetch = fetch;
+    if (storage) Object.defineProperty(globalThis, "localStorage", storage);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+    if (dispatch) Object.defineProperty(globalThis, "dispatchEvent", dispatch);
+    else Reflect.deleteProperty(globalThis, "dispatchEvent");
+  }
+});
 test("variant DAG entries cannot overwrite default chapter audio", () => {
   const resource = { kind: "audio", hash: "bella", path: "english/text/en/22.md#audio@profile" };
   assert.equal(parseMediaResource(resource), undefined);

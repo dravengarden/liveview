@@ -19,7 +19,6 @@ export function nativeAudioCacheAvailable(): boolean {
 }
 
 let pwaWorker: Worker | null = null;
-let browserCap: number | undefined;
 function browserWorker(): Worker | null {
   if (!pwaOfflineAvailable()) return null;
   if (pwaWorker) return pwaWorker;
@@ -33,7 +32,7 @@ function browserWorker(): Worker | null {
     pwaWorker.addEventListener("error", () => {
       pwaWorker?.terminate();
       pwaWorker = null;
-      posted.clear();
+      for (const hash of [...posted]) cacheSettled(hash, false);
     });
     updateBrowserPolicy();
     return pwaWorker;
@@ -45,11 +44,11 @@ function browserWorker(): Worker | null {
 function updateBrowserPolicy(): void {
   // Network Information is absent on iOS. Unknown means no automatic WiFi
   // permission; the user can explicitly permit downloads on this connection.
-  const wifiOnly = (globalThis.localStorage?.getItem("lv.offline.wifiOnly") ?? "1") === "1";
+  const wifiOnly = (globalThis.localStorage?.getItem("lv.offline.wifiOnly") ?? "0") === "1";
   const connection = (navigator as Navigator & { connection?: { type?: string } }).connection;
   const capBytes = (Number(globalThis.localStorage?.getItem("lv.offline.maxGB") ?? "20") || 20) * 1_073_741_824;
-  if (browserCap !== undefined && browserCap !== capBytes) posted.clear();
-  browserCap = capBytes;
+  // The worker reports terminal events for cancelled work on a cap change.
+  // Keep hashes tracked until then, including if the worker itself fails.
   pwaWorker?.postMessage({
     type: "policy",
     capBytes,
@@ -74,6 +73,19 @@ function isAbsoluteUrl(url: string): boolean {
 
 /** Session-local set of hashes already handed to the active audio store. */
 const posted = new Set<string>();
+const settled = new Set<(hash: string, ok: boolean) => void>();
+
+export function onCacheSettled(listener: (hash: string, ok: boolean) => void): () => void {
+  settled.add(listener);
+  return () => { settled.delete(listener); };
+}
+
+export function forgetCacheQueued(hash: string): void { posted.delete(hash); }
+
+function cacheSettled(hash: string, ok: boolean): void {
+  posted.delete(hash);
+  for (const listener of settled) listener(hash, ok);
+}
 
 export function isCacheQueued(hash: string): boolean {
   return posted.has(hash);
@@ -107,6 +119,7 @@ export function enqueueCacheFromUrl(
 
 export function enqueueCacheDelete(hash: string): boolean {
   posted.delete(hash);
+  cacheSettled(hash, false);
   const browser = nativeCacheProbe() ? null : browserWorker();
   if (browser) {
     browser.postMessage({ type: "delete", hash });
@@ -146,26 +159,32 @@ export function installMediaBridge(onCached?: () => void): () => void {
     if (!isCacheProgress(detail)) return;
     if (pwaOfflineAvailable()) {
       // Browser audio already committed replica bookkeeping in its worker.
-      if (!detail.ok) posted.delete(detail.hash);
-      else onCached?.();
+      cacheSettled(detail.hash, detail.ok);
+      if (detail.ok) onCached?.();
       return;
     }
     void noteCacheProgress(detail.hash, detail.ok).then(
       () => {
+        cacheSettled(detail.hash, detail.ok);
         if (detail.ok) onCached?.();
       },
       (error: unknown) => {
+        cacheSettled(detail.hash, false);
         console.warn("replica: cacheProgress bookkeeping failed", error);
       },
     );
   };
   globalThis.addEventListener("lv-native-audio", listener);
   const policyEvents = ["online", "offline", "lv-download-policy"];
+  const connection = typeof navigator === "undefined" ? undefined
+    : (navigator as Navigator & { connection?: EventTarget }).connection;
   if (pwaOfflineAvailable()) {
     for (const name of policyEvents) globalThis.addEventListener(name, updateBrowserPolicy);
+    connection?.addEventListener("change", updateBrowserPolicy);
   }
   return () => {
     globalThis.removeEventListener("lv-native-audio", listener);
     for (const name of policyEvents) globalThis.removeEventListener(name, updateBrowserPolicy);
+    connection?.removeEventListener("change", updateBrowserPolicy);
   };
 }

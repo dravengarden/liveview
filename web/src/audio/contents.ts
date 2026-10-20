@@ -3,6 +3,9 @@ import type { TreeNode } from "@/types";
 import { contentFetch } from "@/native-sync";
 import { remoteUrl } from "@/apiBase";
 import { useEffect, useState } from "react";
+import { cacheReplicaMetadata } from "@/replica/resolve";
+import { onPathIndexAdopted, pathRecordByUrl } from "@/replica/manifest";
+import { getBlobRecord, putBlob } from "@/replica/blobs";
 
 export interface ChapterAudioInfo {
   voice: VoiceChoice;
@@ -22,7 +25,27 @@ export async function loadContentsTree(book: string, rendition: string, fresh = 
   const response = await (fresh
     ? fetch(remoteUrl(path), { cache: "no-store", signal: AbortSignal.timeout(5000) })
     : contentFetch(path)).catch(() => null);
-  if (response?.ok) return await response.json() as TreeNode[];
+  if (response?.ok) {
+    const tree = await response.json() as TreeNode[];
+    if (fresh) {
+      // Contents is a synthetic DAG list identity. Persist in the same blob row
+      // that a cold offline read resolves, not the URL-only metadata fallback.
+      const record = pathRecordByUrl(path);
+      if (record?.kind === "list") {
+        try {
+          const data = new TextEncoder().encode(JSON.stringify(tree)).buffer;
+          const previous = await getBlobRecord(record.hash);
+          await putBlob({
+            hash: record.hash, kind: record.kind, bytes: data.byteLength, data,
+            pinned: previous?.pinned ?? 0, present: 1, mtime: Date.now(),
+          });
+        } catch { /* A cache failure must not hide a successful server snapshot. */ }
+      } else {
+        await cacheReplicaMetadata(path, tree);
+      }
+    }
+    return tree;
+  }
   if (fresh) throw new Error("Contents refresh unavailable");
   // Old servers and offline replicas may only have the legacy title spine.
   const legacy = await contentFetch(`/api/tree?rendition=${encodeURIComponent(rendition)}`);
@@ -30,7 +53,8 @@ export async function loadContentsTree(book: string, rendition: string, fresh = 
   return await legacy.json() as TreeNode[];
 }
 
-/** Only unfinished synthesis needs refreshes; the first render uses its title snapshot. */
+/** Refresh immutable identities on entry/root changes, then poll only unfinished
+ * synthesis. Keep titles and audio together, including the offline snapshot. */
 export function useContentsSnapshot(initial: TreeNode[], book: string | undefined, rendition: string, visible: boolean): TreeNode[] {
   const [updated, setUpdated] = useState<{ source: TreeNode[]; tree: TreeNode[] }>();
   const tree = updated?.source === initial ? updated.tree : initial;
@@ -38,21 +62,47 @@ export function useContentsSnapshot(initial: TreeNode[], book: string | undefine
     if (!book || !visible) return;
     const pending = (nodes: TreeNode[]): boolean => nodes.some(node =>
       Object.values(node.audio ?? {}).some(chapter => chapter.voices.some(voice => voice.status === "queued" || voice.status === "running")) || pending(node.children));
-    if (!pending(tree)) return;
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
+    let inFlight = false;
+    let dirty = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = async (): Promise<void> => {
+      if (cancelled || document.hidden) return;
+      if (inFlight) { dirty = true; return; }
+      clearTimeout(timer);
+      inFlight = true;
       try {
-        if (!document.hidden) {
-          const next = await loadContentsTree(book, rendition, true);
-          if (!cancelled) { setUpdated({ source: initial, tree: contentsSnapshotScope(initial, next, book) }); return; }
+        const next = await loadContentsTree(book, rendition, true);
+        if (!cancelled) {
+          setUpdated({ source: initial, tree: contentsSnapshotScope(initial, next, book) });
+          if (pending(next)) timer = setTimeout(() => void refresh(), 5000);
         }
-      } catch { /* Keep the complete snapshot during disconnects. */ }
-      if (!cancelled) timer = setTimeout(() => void refresh(), 5000);
+      } catch {
+        // Preserve the complete snapshot. Reconnection/foreground can wake this
+        // earlier without rapid retries while the server is unreachable.
+        if (!cancelled) timer = setTimeout(() => void refresh(), 30_000);
+      } finally {
+        inFlight = false;
+        if (dirty && !cancelled) {
+          dirty = false;
+          clearTimeout(timer);
+          timer = setTimeout(() => void refresh(), 200);
+        }
+      }
     };
-    timer = setTimeout(() => void refresh(), 5000);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [initial, tree, book, rendition, visible]);
+    const wake = (): void => { void refresh(); };
+    const unsubscribe = onPathIndexAdopted(wake);
+    document.addEventListener("visibilitychange", wake);
+    globalThis.addEventListener("online", wake);
+    wake();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      unsubscribe();
+      document.removeEventListener("visibilitychange", wake);
+      globalThis.removeEventListener("online", wake);
+    };
+  }, [initial, book, rendition, visible]);
   return tree;
 }
 

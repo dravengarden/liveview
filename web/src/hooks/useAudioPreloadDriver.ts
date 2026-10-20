@@ -12,7 +12,6 @@ import { contentFetch } from "@/native-sync";
 import { pwaAudioSupported, pwaDownloadsEnabled, pwaNetworkAvailable, pwaOfflineAvailable } from "@/pwa";
 import { ingestDag } from "@/audioMediaIndex";
 import {
-  enqueueMissingAudio,
   evictUnpinnedAudioToFit,
   loadPolicy,
   pauseReplicaFill,
@@ -59,7 +58,6 @@ export function useAudioPreloadDriver(): void {
         setAllowsCellular({ on: !policy.wifiOnly });
         const downloadsOn = !pwaOfflineAvailable() || pwaDownloadsEnabled();
         if (downloadsOn && (!pwaOfflineAvailable() || pwaAudioSupported())) {
-          await enqueueMissingAudio();
           await evictUnpinnedAudioToFit(policy.capBytes);
         }
         // Re-ingest the hydrated DAG index on every foreground. Older installs

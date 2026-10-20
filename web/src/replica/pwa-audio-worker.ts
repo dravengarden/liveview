@@ -35,7 +35,19 @@ let allowed = false;
 let running = 0;
 let capBytes: number | undefined;
 
-async function download(job: Job, ctrl: AbortController): Promise<void> {
+/** Bound inactivity rather than total duration: large chapters on a slow
+ * connection can finish as long as the server keeps delivering bytes. */
+export function audioIdleWatchdog(ctrl: AbortController): { progress(): void; stop(): void } {
+  let timer: ReturnType<typeof setTimeout>;
+  const progress = (): void => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ctrl.abort(), 120_000);
+  };
+  progress();
+  return { progress, stop: () => clearTimeout(timer) };
+}
+
+async function download(job: Job, ctrl: AbortController, progress: () => void): Promise<void> {
   const cache = await caches.open(PWA_AUDIO_CACHE);
   const key = new URL(`/api/blob/${job.hash}`, self.location.origin).href;
   if (await cache.match(key)) return;
@@ -50,6 +62,7 @@ async function download(job: Job, ctrl: AbortController): Promise<void> {
   const legacy = await caches.open("lv-blobs");
   const response = await legacy.match(key) ??
     await fetch(key, { signal: ctrl.signal, cache: "no-store" });
+  progress();
   if (response.status !== 200 || !response.body) {
     throw new Error("Audio unavailable");
   }
@@ -63,6 +76,7 @@ async function download(job: Job, ctrl: AbortController): Promise<void> {
   try {
     while (true) {
       const { value, done } = await reader.read();
+      progress();
       if (done) break;
       size += value.byteLength;
       if (size > limit) throw new Error("Audio exceeds byte reservation");
@@ -95,8 +109,8 @@ function pump(): void {
     const ctrl = new AbortController();
     active.set(job.hash, ctrl);
     running += 1;
-    const timer = setTimeout(() => ctrl.abort(), 120_000);
-    void download(job, ctrl).then(async () => {
+    const watchdog = audioIdleWatchdog(ctrl);
+    void download(job, ctrl, watchdog.progress).then(async () => {
       // Worklist normalization can scan the library. Keep it off the UI thread;
       // IDB readwrite transactions serialize these mutations across workers.
       await setPresent(job.hash, 1);
@@ -111,7 +125,7 @@ function pump(): void {
       () =>
         self.postMessage({ type: "cacheProgress", hash: job.hash, ok: false }),
     ).finally(() => {
-      clearTimeout(timer);
+      watchdog.stop();
       active.delete(job.hash);
       running -= 1;
       pump();
@@ -130,6 +144,7 @@ if (
         capBytes !== undefined && msg.capBytes !== undefined &&
         msg.capBytes !== capBytes
       ) {
+        for (const hash of jobs.keys()) self.postMessage({ type: "cacheProgress", hash, ok: false });
         jobs.clear();
         for (const ctrl of active.values()) ctrl.abort();
       }

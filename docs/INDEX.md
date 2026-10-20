@@ -20,10 +20,13 @@ material, operational guidance, research evidence, and historical notes.
 
 - [`core-requirements.md`](core-requirements.md) — Core Requirements
 - [`design-system.md`](design-system.md) — canonical broad-page Living Book identity, colour, material, motion, and responsive contracts
+- [`home-discovery.md`](home-discovery.md) — Home and library discovery
+- [`library-cli.md`](library-cli.md) — Library CLI
 - [`offline-first-plan.md`](offline-first-plan.md) — Offline First Plan
 - [`offline-first.md`](offline-first.md) — Offline First
 - [`offline-rearchitecture.md`](offline-rearchitecture.md) — Offline Rearchitecture (historical for storage ownership; SW-on-iOS rejection and O(1) stats still stand)
 - [`ota-optimization.md`](ota-optimization.md) — Ota Optimization
+- [`pwa.md`](pwa.md) — PWA installation, book audio preloading, cache status, network policy, and native differences
 
 ### Design
 

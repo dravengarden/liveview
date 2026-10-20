@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import {
+  audioIdleWatchdog,
   deleteCachedAudio,
   verifyAudioBody,
 } from "./replica/pwa-audio-worker.ts";
@@ -275,6 +276,42 @@ test("audio payload integrity uses the server's BLAKE3 identity", () => {
   assert.equal(verifyAudioBody(emptyHash, new Uint8Array()), true);
   assert.equal(verifyAudioBody(emptyHash, new Uint8Array([1])), false);
   assert.equal(verifyAudioBody("invalid", new Uint8Array()), false);
+});
+
+test("slow audio can exceed two minutes while a stalled transfer still times out", () => {
+  const set = globalThis.setTimeout;
+  const clear = globalThis.clearTimeout;
+  let now = 0;
+  let id = 0;
+  const timers = new Map<number, { at: number; callback(): void }>();
+  globalThis.setTimeout = ((callback: () => void, ms: number) => {
+    timers.set(++id, { at: now + ms, callback });
+    return id;
+  }) as unknown as typeof setTimeout;
+  globalThis.clearTimeout = ((timer: number) => { timers.delete(timer); }) as unknown as typeof clearTimeout;
+  const advance = (ms: number): void => {
+    now += ms;
+    for (const [key, timer] of timers) if (timer.at <= now) {
+      timers.delete(key);
+      timer.callback();
+    }
+  };
+  try {
+    const ctrl = new AbortController();
+    const watchdog = audioIdleWatchdog(ctrl);
+    for (let i = 0; i < 10; i++) {
+      advance(90_000);
+      assert.equal(ctrl.signal.aborted, false, "fifteen minutes of steady progress remains allowed");
+      watchdog.progress();
+    }
+    advance(120_000);
+    assert.equal(ctrl.signal.aborted, true, "two minutes without data aborts the stalled request");
+    watchdog.stop();
+    assert.equal(timers.size, 0);
+  } finally {
+    globalThis.setTimeout = set;
+    globalThis.clearTimeout = clear;
+  }
 });
 
 test("audio eviction removes both current and legacy playback payloads", async () => {

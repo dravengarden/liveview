@@ -2,6 +2,7 @@ import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRe
 import {
   alpha,
   Box,
+  Button,
   Collapse,
   IconButton,
   List,
@@ -29,8 +30,10 @@ import { LIVEVIEW_RADII } from "@/brand";
 import { type Language, useI18n } from "@/i18n";
 import { localeDescriptor } from "@/locales/registry";
 import { centerWithin } from "@/scrollWithin";
-import { contentsAudio, contentsPreference, useContentsSnapshot, type ChapterAudioInfo } from "@/audio/contents";
+import { contentsAudio, contentsPreference, type ChapterAudioInfo } from "@/audio/contents";
 import { useAudioPlayer, useAudioTime } from "@/audio/player";
+import { audioCacheAvailable, audioPreloader, useAudioCache } from "@/audio/cache";
+import type { AudioCacheState } from "@/audio/preload";
 
 function audioTime(seconds: number): string {
   const total = Math.max(0, Math.round(seconds));
@@ -43,11 +46,11 @@ function CurrentAudioTime(): React.JSX.Element | null {
   const { currentTime, duration } = useAudioTime(useContext(ContentsVisible));
   const { playing, loading, rate } = useAudioPlayer();
   const { t } = useI18n();
-  if (!duration || loading) return null;
+  if (!duration || loading) return <>{t("audioCache.loading")}</>;
   return <>{t(playing ? "sidebar.playing" : "sidebar.paused")} · {audioTime(currentTime)} / {audioTime(duration)} · {t("sidebar.remaining", { time: audioTime((duration - currentTime) / rate), rate: String(rate) })}</>;
 }
 
-function AudioMetadata({ info, current }: { info: ChapterAudioInfo | undefined; current: boolean }): React.JSX.Element | null {
+function AudioMetadata({ info, current, cache }: { info: ChapterAudioInfo | undefined; current: boolean; cache: AudioCacheState | undefined }): React.JSX.Element | null {
   const { t } = useI18n();
   if (!info && !current) return null;
   const key = info?.voice.status === "ready" ? "sidebar.audioReady"
@@ -59,6 +62,9 @@ function AudioMetadata({ info, current }: { info: ChapterAudioInfo | undefined; 
       {current && <CurrentAudioTime />}
       {!current && info && <>{info.seconds !== undefined ? audioTime(info.seconds) : t(key)} · {info.voice.label}</>}
       {current && info && info.voice.status !== "ready" && <>{t(key)} · {info.voice.label}</>}
+      {audioCacheAvailable() && info?.voice.status === "ready" && <Box component="span" data-audio-cache={cache ?? "checking"} sx={{ display: "inline", color: cache === "failed" ? "error.main" : cache === "cached" ? "text.secondary" : "primary.main" }}>
+        {" · "}{t(`audioCache.${cache ?? "checking"}`)}
+      </Box>}
     </Typography>
   );
 }
@@ -125,6 +131,7 @@ interface TreeItemProps {
   onToggle: (path: string) => void;
   audioRows: ReadonlyMap<string, ChapterAudioInfo>;
   audioPath: string | null;
+  cacheStates: ReadonlyMap<string, AudioCacheState>;
 }
 
 const TreeItem = memo(function TreeItemRow({
@@ -139,6 +146,7 @@ const TreeItem = memo(function TreeItemRow({
   onToggle,
   audioRows,
   audioPath,
+  cacheStates,
 }: TreeItemProps): React.JSX.Element {
   const isExpanded = expandedPaths.has(node.path);
   const isPlaying = playingPath === node.path;
@@ -227,7 +235,7 @@ const TreeItem = memo(function TreeItemRow({
         <ListItemText
           disableTypography
           primary={<TruncatedLabel text={label} />}
-          secondary={!node.is_dir && <AudioMetadata info={audioRows.get(node.path)} current={audioPath === node.path} />}
+          secondary={!node.is_dir && <AudioMetadata info={audioRows.get(node.path)} current={audioPath === node.path} cache={cacheStates.get(audioRows.get(node.path)?.voice.audio_hash ?? "")} />}
         />
         {
           /* Now-playing marker: the audiobook reader is a window onto the engine,
@@ -257,6 +265,7 @@ const TreeItem = memo(function TreeItemRow({
                 onToggle={onToggle}
                 audioRows={audioRows}
                 audioPath={audioPath}
+                cacheStates={cacheStates}
               />
             ))}
           </List>
@@ -363,12 +372,15 @@ export function Sidebar({
   updatedAt,
 }: SidebarProps): React.JSX.Element {
   const { t, lang } = useI18n();
-  const tree = useContentsSnapshot(initialTree, bookSlug, rendition, visible);
+  const tree = initialTree;
   const { nowPlaying } = useAudioPlayer();
   const matchingAudio = nowPlaying !== null && nowPlaying.bookSlug === bookSlug && nowPlaying.rendition === rendition && nowPlaying.lang === currentLang;
   const preference = contentsPreference(bookSlug, rendition, currentLang);
   const audioRows = useMemo(() => contentsAudio(tree, currentLang, preference, matchingAudio ? nowPlaying?.voice : undefined, matchingAudio ? nowPlaying?.chapterPath : undefined), [tree, currentLang, preference, matchingAudio, nowPlaying?.voice, nowPlaying?.chapterPath]);
   const audioPath = matchingAudio ? nowPlaying.chapterPath : null;
+  const cacheStates = useAudioCache();
+  const cachedChapters = [...audioRows.values()].filter(info => info.voice.audio_hash && cacheStates.get(info.voice.audio_hash) === "cached").length;
+  const cacheFailed = [...audioRows.values()].some(info => info.voice.audio_hash && cacheStates.get(info.voice.audio_hash) === "failed");
   const selectRef = useRef(onSelect);
   selectRef.current = onSelect;
   const select = useCallback((path: string) => selectRef.current(path), []);
@@ -564,6 +576,12 @@ export function Sidebar({
         </Box>
       )}
 
+      {audioCacheAvailable() && audioRows.size > 0 && <Box data-testid="book-audio-cache" sx={{ px: 2.5, py: 0.75, display: "flex", alignItems: "center", gap: 1, borderBottom: 1, borderColor: "divider" }}>
+        <Typography variant="caption" sx={{ flex: 1, color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>
+          {t("audioCache.book", { done: cachedChapters, total: audioRows.size })}
+        </Typography>
+        {cacheFailed && <Button size="small" onClick={() => { audioPreloader.retry(); void audioPreloader.tick(); }}>{t("audioCache.retry")}</Button>}
+      </Box>}
       <Box
         ref={listContainerRef}
         sx={{
@@ -598,6 +616,7 @@ export function Sidebar({
               onToggle={handleToggle}
               audioRows={audioRows}
               audioPath={audioPath}
+              cacheStates={cacheStates}
             />
           ))}
         </List>

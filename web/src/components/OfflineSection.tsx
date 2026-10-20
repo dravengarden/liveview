@@ -13,7 +13,7 @@ import {
   Switch,
   Typography,
 } from "@mui/material";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   type CacheStats,
   contentFetch,
@@ -35,6 +35,7 @@ import { useI18n } from "@/i18n";
 import { pwaAudioSupported, pwaDownloadsEnabled, pwaOfflineAvailable } from "@/pwa";
 import { PwaOfflineControls } from "./PwaOfflineControls";
 import { useSettingsSurfaceOpen } from "../_shell/settings-sheet.tsx";
+import { audioPreloadStrategy, setAudioPreloadStrategy, type AudioPreloadStrategy } from "@/audio/preload";
 
 function gb(bytes: number): string {
   const g = bytes / 1_073_741_824;
@@ -77,6 +78,8 @@ export function OfflineSection({ visible = true }: { visible?: boolean }): React
     { audioBytes: number; audioCount: number; textBytes: number } | null
   >(null);
   const [wifiOnly, setWifiOnly] = useState(offlineWifiOnly());
+  const strategyLabel = useId();
+  const [strategy, setStrategy] = useState(audioPreloadStrategy());
   const [cap, setCap] = useState(maxGB());
   const [confirmCap, setConfirmCap] = useState<number | null>(null);
   const [speed, setSpeed] = useState<number | null>(null);
@@ -132,6 +135,7 @@ export function OfflineSection({ visible = true }: { visible?: boolean }): React
     if (!activePanel || !offlineDownloadsAvailable()) return undefined;
     // Another retained settings surface may have changed these preferences.
     setWifiOnly(offlineWifiOnly());
+    setStrategy(audioPreloadStrategy());
     setCap(maxGB());
     samplesRef.current = [];
     const unsubNet = onNativeNetworkClass(() => {
@@ -254,6 +258,20 @@ export function OfflineSection({ visible = true }: { visible?: boolean }): React
       </Typography>
 
       <Stack>
+        <Stack spacing={0.5} sx={{ mb: 1.5 }}>
+          <Typography id={strategyLabel} variant="body2">{t("audioCache.strategy")}</Typography>
+          <Select size="small" value={strategy} labelId={strategyLabel} data-testid="audio-preload-strategy" onChange={e => {
+            const value = e.target.value as AudioPreloadStrategy;
+            setStrategy(value);
+            setAudioPreloadStrategy(value);
+            void persistPolicy(loadPolicy());
+          }}>
+            <MenuItem value="book">{t("audioCache.strategyBook")}</MenuItem>
+            <MenuItem value="ahead">{t("audioCache.strategyAhead")}</MenuItem>
+            <MenuItem value="off">{t("audioCache.strategyOff")}</MenuItem>
+          </Select>
+          <Typography variant="caption" color="text.secondary">{t("audioCache.strategyHint")}</Typography>
+        </Stack>
         <ToggleRow
           label={t("offline.wifiOnly")}
           hint={t(pwaOfflineAvailable() && nativeNetworkClass() === "unknown" ? "pwa.networkHint" : "offline.wifiOnlyHint")}

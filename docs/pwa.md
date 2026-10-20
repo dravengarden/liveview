@@ -12,11 +12,32 @@ Screen. Enable “Open as Web App” if that option is offered. The manifest kee
 stable `/` identity and scope. On other browsers use their installation menu.
 
 Settings → Downloads exposes the same content and audio accounting, storage cap,
-and audio LRU eviction as the app. Browser library downloads require an explicit
-opt-in. Keep LiveView open while downloading. WiFi-only remains enabled by
-default. When the browser cannot identify the connection, automatic audio waits;
-turning WiFi-only off explicitly permits the current connection, including
-cellular. Browser connection estimates are not native reachability guarantees.
+and audio LRU eviction as the app. Downloads default on; existing explicit
+opt-outs remain respected. Opening a book preloads the selected voice for its
+whole spine, prioritizing the current chapter, the next two, the previous one,
+and then the remaining chapters. Settings can limit preloading to the current
+chapter and next two, or disable automatic preloading. Generation of missing
+audio remains a separate server policy.
+
+WiFi and cellular are both allowed by default. Existing WiFi-only choices are
+preserved. With WiFi-only enabled, an unidentified connection waits rather than
+assuming it is WiFi. Keep LiveView open while downloading. Browser connection
+estimates are not native reachability guarantees.
+
+The contents list reports per-chapter cache state and selected-voice book
+coverage. “Cached” requires local audio and timing data; server-ready audio alone
+does not qualify. Cache inspection is bounded to 32 entries per pass, with at
+most two transfers dispatched at once. Completion, navigation, foreground,
+network changes and bounded retry deadlines wake the scheduler. Failures back
+off up to five minutes, and the storage cap includes pending transfers.
+Navigation retains verified cache states and retry deadlines. A failed native
+cache probe does not erase disk accounting or stop checks for other chapters.
+Browser downloads time out after two minutes without progress, rather than
+limiting the total transfer duration; native transfers retain their scheduler
+slot until the host reports completion.
+Turning preloading off stops new dispatch; at most two already dispatched
+transfers can finish. Device preferences and replica bookkeeping persist across
+reloads. Reopening the book replans unfinished work against its current hashes.
 
 The browser's quota is shown separately from the desired download cap. Persistent
 storage can be requested, but the browser decides whether to grant it. Installing
@@ -49,7 +70,7 @@ it does not make the final chapter depend on the network.
 | Capability | PWA | Native app |
 |---|---|---|
 | Reading, search, themes, progress and resume | Shared UI and replica | Shared UI and replica |
-| Text, artwork and audio downloads | Opt-in, foreground, browser quota | Foreground native file downloads and shared replica |
+| Text, artwork and audio downloads | Automatic by default, foreground, browser quota | Foreground native file downloads and shared replica |
 | Offline audio seeking | Service worker range responses | Native local files |
 | Playback and lock-screen integration | HTML audio and available Media Session APIs | AVPlayer, AVAudioSession and native media controls |
 | Background/resume guarantees | Browser-managed; suspension can stop JavaScript or transfers | Native audio lifecycle |

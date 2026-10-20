@@ -266,7 +266,7 @@ export async function nativeRefreshManifest(): Promise<string> {
 }
 
 // ── Download preferences (persisted, shell-only). Auto-download defaults ON, and
-// WiFi-only defaults ON so we never surprise-burn cellular data.
+// Audio downloads allow both WiFi and cellular unless explicitly restricted.
 
 const AUTO_KEY = "lv.offline.auto";
 const WIFI_KEY = "lv.offline.wifiOnly";
@@ -275,7 +275,7 @@ export function offlineAuto(): boolean {
   return (globalThis.localStorage?.getItem(AUTO_KEY) ?? "1") === "1";
 }
 export function offlineWifiOnly(): boolean {
-  return (globalThis.localStorage?.getItem(WIFI_KEY) ?? "1") === "1";
+  return (globalThis.localStorage?.getItem(WIFI_KEY) ?? "0") === "1";
 }
 export function setOfflineAuto(on: boolean): void {
   globalThis.localStorage?.setItem(AUTO_KEY, on ? "1" : "0");

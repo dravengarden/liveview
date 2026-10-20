@@ -9,6 +9,7 @@ import {
   cacheDelete,
   cacheFromUrl,
   cacheHas,
+  probeCachedAudio,
   fetchHostOrigins,
   HOST_CMD_HAPTIC_IMPACT,
   HOST_CMD_HAPTIC_NOTIFICATION,
@@ -140,6 +141,7 @@ test("future wrappers exist and no-op when native APIs are absent", async () => 
   );
   assert.equal(cacheFromUrl({ url: "/api/blob/abc", hash: "abc" }), false);
   assert.deepEqual(await cacheHas({ hash: "abc" }), { has: false });
+  assert.equal(await probeCachedAudio({ hash: "abc" }), null);
   assert.equal(cacheDelete({ hash: "abc" }), false);
   assert.deepEqual(await cacheCount(), { count: 0 });
   assert.equal(setAllowsCellular({ on: false }), false);
@@ -152,6 +154,36 @@ test("future wrappers exist and no-op when native APIs are absent", async () => 
   assert.equal(await fetchHostOrigins(), null);
   assert.equal(await hostAppVersion(), null);
   assert.equal(await hostOpenUrl("https://example.test"), false);
+});
+
+test("cache accounting distinguishes an absent payload from a missing or invalid host reply", async () => {
+  const scope = globalThis as unknown as {
+    webkit?: { messageHandlers: Record<string, { postMessage(message: unknown): void }> };
+    __lvHostResolve?: (id: string, json: string) => void;
+  };
+  const previous = scope.webkit;
+  const timeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) =>
+    timeout(args[0], args[1] === 5000 ? 0 : args[1], ...args.slice(2))) as typeof setTimeout;
+  let reply: string | undefined = '{"has":false}';
+  scope.webkit = { messageHandlers: { lvNativeAudio: { postMessage(message: unknown): void {
+    const request = message as { data: { id: string } };
+    if (reply !== undefined) scope.__lvHostResolve?.(request.data.id, reply);
+  } } } };
+  try {
+    assert.equal(await probeCachedAudio({ hash: "a" }), false);
+    reply = '{"has":true}';
+    assert.equal(await probeCachedAudio({ hash: "a" }), true);
+    reply = "{}";
+    assert.equal(await probeCachedAudio({ hash: "a" }), null);
+    reply = undefined;
+    assert.equal(await probeCachedAudio({ hash: "a" }), null, "timeout must not erase disk accounting");
+    assert.deepEqual(await cacheHas({ hash: "a" }), { has: false }, "existing play-path fallback stays compatible");
+  } finally {
+    if (previous) scope.webkit = previous;
+    else delete scope.webkit;
+    globalThis.setTimeout = timeout;
+  }
 });
 
 test("cacheFromUrl forwards optional integrity bytes additively", () => {

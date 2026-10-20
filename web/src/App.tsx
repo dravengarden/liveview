@@ -61,6 +61,7 @@ import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
 import { useAutoUpdate } from "@/hooks/useAutoUpdate";
 import { useAudioPreloadDriver } from "@/hooks/useAudioPreloadDriver";
+import { useBookAudioPreload } from "@/hooks/useBookAudioPreload";
 import { useBookPrefs } from "@/hooks/useBookPrefs";
 import { useForegroundRepaint } from "@/hooks/useForegroundRepaint";
 import { useShelfRootRefresh } from "@/hooks/useShelfRootRefresh";
@@ -201,6 +202,7 @@ export function App(): React.JSX.Element {
     playChapter: audioPlayChapter,
     syncNotice,
     nowPlaying,
+    playing: audioPlaying,
     stop: stopPlayback,
   } = useAudioPlayer();
   // Mirror of `nowPlaying` for the view→engine effect's guard. That effect must
@@ -216,8 +218,7 @@ export function App(): React.JSX.Element {
   // reader/listener. See connectionStore + ReconnectBanner.
   useAutoUpdate();
   // Drive the offline audio fill from app level, so it runs the moment the app
-  // opens (not only while the Settings → Downloads panel is mounted). Browsers
-  // opt in to library downloads; native retains its existing automatic policy.
+  // opens (not only while the Settings → Downloads panel is mounted).
   useAudioPreloadDriver();
 
   // When a fresh load pulls a newer playback position from another device, the
@@ -264,6 +265,7 @@ export function App(): React.JSX.Element {
     // chapters/sections directly. Docs mode keeps the root for context.
     return bookMode ? root.children : [root];
   }, [tree, activeSlug, bookMode]);
+  const contentsTree = useBookAudioPreload(activeTree, activeSlug, rendition, lang, currentPath, nowPlaying, audioPlaying);
   const bookLabel = activeBook?.label ?? activeSlug ?? "";
   // The current chapter's display title (current UI edition, falling back to the
   // node name, then the file name) — shown as the primary line of the in-book
@@ -1716,7 +1718,7 @@ export function App(): React.JSX.Element {
               }
               nav={(api) => (
                 <Sidebar
-                  tree={activeTree}
+                  tree={contentsTree}
                   bookSlug={activeSlug ?? undefined}
                   rendition={rendition}
                   visible={api.visible}

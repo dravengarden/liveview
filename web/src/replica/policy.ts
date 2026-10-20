@@ -11,6 +11,7 @@ import {
 } from "./schema.ts";
 import { idbRequest, withTxn } from "./idb.ts";
 import { pwaDownloadsEnabled } from "../pwa.ts";
+import { audioPreloadStrategy } from "../audio/preload.ts";
 
 let persistFullSizeArtwork = true;
 let currentPolicy: ReplicaPolicy | null = null;
@@ -38,7 +39,7 @@ export function defaultMode(): DataMode {
 }
 
 export function wifiOnlyPref(): boolean {
-  return (readStorage(WIFI_ONLY_KEY) ?? "1") === "1";
+  return (readStorage(WIFI_ONLY_KEY) ?? "0") === "1";
 }
 
 export function capBytesPref(): number {
@@ -53,6 +54,7 @@ export function loadPolicy(mode?: DataMode): ReplicaPolicy {
     wifiOnly: wifiOnlyPref(),
     capBytes: capBytesPref(),
     persistFullSizeArtwork,
+    audioPreload: audioPreloadStrategy(),
   };
   return currentPolicy;
 }
