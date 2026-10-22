@@ -95,7 +95,17 @@
 
       # edge-tts remains an optional reference speech adapter. The default
       # package does not depend on it; deployments may select the adapter bundle.
-      edgeTts = pkgs.python3Packages.edge-tts;
+      # The Edge read-aloud service rejects outdated client handshakes with 403,
+      # so track upstream releases ahead of nixpkgs when they fix that.
+      edgeTts = pkgs.python3Packages.edge-tts.overridePythonAttrs (_: rec {
+        version = "7.3.1";
+        src = pkgs.fetchFromGitHub {
+          owner = "rany2";
+          repo = "edge-tts";
+          tag = version;
+          hash = "sha256-1Ji1IqOC3iB36N00Ud6LRXyAwRbUrm5iFd1MyCxkbVc=";
+        };
+      });
       kokoroTts = import ./nix/kokoro.nix { inherit pkgs; };
 
       # Vendor only npm dependencies in the fixed-output derivation. Application
