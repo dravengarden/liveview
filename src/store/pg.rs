@@ -1071,6 +1071,36 @@ impl PgStore {
         .map(|r| r.rows_affected())
     }
 
+    /// Give each failed task one more attempt once it has rested for `min_age_ms`.
+    /// A synthesis provider outage (an Edge handshake change, a network partition)
+    /// exhausts every attempt within seconds; without this, whole books stay
+    /// failed until an operator retries them. Chapters with nothing speakable
+    /// (`silent_error`) never recover by retrying, and tasks first enqueued more
+    /// than `max_age_ms` ago are left to explicit retry.
+    pub async fn revive_failed_audio_tasks(
+        &self,
+        min_age_ms: i64,
+        max_age_ms: i64,
+        max_attempts: i32,
+        silent_error: &str,
+    ) -> Result<u64, sqlx::Error> {
+        let now = now_millis();
+        sqlx::query(
+            "UPDATE audio_tasks SET status = 'queued', attempts = $1 - 1, started_at = NULL
+             WHERE status = 'failed'
+               AND error IS DISTINCT FROM $2
+               AND finished_at <= $3
+               AND enqueued_at >= $4",
+        )
+        .bind(max_attempts)
+        .bind(silent_error)
+        .bind(now - min_age_ms)
+        .bind(now - max_age_ms)
+        .execute(&self.pool)
+        .await
+        .map(|r| r.rows_affected())
+    }
+
     /// Re-queue all `failed` tasks (the `liveview tasks retry` path); scope to one
     /// book when `book_slug` is `Some`.
     pub async fn retry_failed_audio_tasks(
@@ -1657,6 +1687,91 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(status().await.unwrap().as_deref(), Some("queued"));
+        s.delete_book(slug).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_tasks_get_one_more_attempt_after_resting() {
+        let Some(s) = store().await else { return };
+        let slug = "t-revive";
+        s.delete_book(slug).await.unwrap();
+        for rel in ["00.spoken.md", "01.spoken.md", "02.spoken.md"] {
+            s.upsert_chapter(&chapter(slug, rel, "h")).await.unwrap();
+            enqueue(&s, slug, rel, "h").await;
+        }
+        let hour = 3_600_000;
+        let now = now_millis();
+        let set = |rel: &'static str, error: &'static str, finished: i64, enqueued: i64| {
+            sqlx::query(
+                "UPDATE audio_tasks SET status='failed', attempts=4, error=$3,
+                     finished_at=$4, enqueued_at=$5 WHERE book_slug=$1 AND rel_path=$2",
+            )
+            .bind(slug)
+            .bind(rel)
+            .bind(error)
+            .bind(finished)
+            .bind(enqueued)
+            .execute(&s.pool)
+        };
+        // Rested provider failure, silent chapter, and an abandoned old task.
+        set("00.spoken.md", "edge 403", now - 2 * hour, now - 3 * hour)
+            .await
+            .unwrap();
+        set("01.spoken.md", "silent", now - 2 * hour, now - 3 * hour)
+            .await
+            .unwrap();
+        set(
+            "02.spoken.md",
+            "edge 403",
+            now - 2 * hour,
+            now - 9 * 24 * hour,
+        )
+        .await
+        .unwrap();
+        let revived = s
+            .revive_failed_audio_tasks(hour, 7 * 24 * hour, 4, "silent")
+            .await
+            .unwrap();
+        assert_eq!(revived, 1);
+        let status = |rel| s.audio_task_status(slug, "audio", "en", rel);
+        assert_eq!(
+            status("00.spoken.md").await.unwrap().as_deref(),
+            Some("queued")
+        );
+        assert_eq!(
+            status("01.spoken.md").await.unwrap().as_deref(),
+            Some("failed")
+        );
+        assert_eq!(
+            status("02.spoken.md").await.unwrap().as_deref(),
+            Some("failed")
+        );
+        // The revived task has exactly one attempt left: the next claim
+        // increments `attempts` to the limit, so a further failure is final.
+        let attempts: i32 = sqlx::query_scalar(
+            "SELECT attempts FROM audio_tasks WHERE book_slug=$1 AND rel_path='00.spoken.md'",
+        )
+        .bind(slug)
+        .fetch_one(&s.pool)
+        .await
+        .unwrap();
+        assert_eq!(attempts, 3);
+        sqlx::query(
+            "UPDATE audio_tasks SET status='failed', finished_at=$2
+             WHERE book_slug=$1 AND rel_path='00.spoken.md'",
+        )
+        .bind(slug)
+        .bind(now_millis())
+        .execute(&s.pool)
+        .await
+        .unwrap();
+        // A task that has not rested yet is left alone.
+        assert_eq!(
+            s.revive_failed_audio_tasks(hour, 7 * 24 * hour, 4, "silent")
+                .await
+                .unwrap(),
+            0
+        );
         s.delete_book(slug).await.unwrap();
     }
 

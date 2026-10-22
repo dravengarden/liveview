@@ -528,10 +528,13 @@ async fn book_end_cue(state: &AppState, row: &ChapterRecord) -> Option<Vec<u8>> 
     let phrase = book_end_phrase(&state.book_end_phrases, &row.lang)?;
     let voice = {
         let cat = state.catalog.read().await;
-        cat.book(&row.book_slug)
+        let voice = cat
+            .book(&row.book_slug)
             .and_then(|b| b.rendition(RenditionKind::Audio))
             .and_then(|r| r.voice.clone())
-            .or_else(|| state.tts_voice.clone())?
+            .or_else(|| state.tts_voice.clone())?;
+        // The cue speaks the edition's phrase, so it needs a voice of that language.
+        crate::speech::language_default(&row.lang, Some(&voice))
     };
     let key = format!("{voice}|{phrase}");
     if let Some(cue) = state.book_end_cue.lock().await.get(&key) {

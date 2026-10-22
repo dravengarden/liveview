@@ -26,10 +26,18 @@ use crate::sync::objstore::ObjStore;
 /// interactive (priority) task since a tap promotes its row to the queue head.
 const SLOTS: usize = 3;
 /// Give up on a task after this many failures (then it shows in the Sync sheet
-/// as failed, retryable via `liveview tasks retry`).
+/// as failed, retryable via `liveview tasks retry`, and gets one more attempt
+/// each `REVIVE_EVERY` while it is younger than `REVIVE_FOR_MS`).
 const MAX_ATTEMPTS: i32 = 4;
 /// Poll interval when the queue is empty.
 const IDLE_POLL_MS: u64 = 1500;
+/// Recorded for chapters with nothing to speak; retrying never helps them.
+const SILENT_ERROR: &str = "No speakable text in this chapter";
+/// How often failed tasks are given one more attempt, and how long after
+/// first being enqueued they keep getting one. An hourly attempt per failed
+/// task is cheap, and lets a recovered provider finish the backlog unattended.
+const REVIVE_EVERY: std::time::Duration = std::time::Duration::from_secs(3600);
+const REVIVE_FOR_MS: i64 = 7 * 24 * 3_600_000;
 
 /// Spawn the worker pool. Re-queues any `running` rows a prior server left behind
 /// (crash/restart reaper) before the loops start claiming.
@@ -44,7 +52,25 @@ pub fn spawn(pg: PgStore, obj: ObjStore, tts_cmd: String, tx: broadcast::Sender<
             let (pg, obj, tts_cmd, tx) = (pg.clone(), obj.clone(), tts_cmd.clone(), tx.clone());
             tokio::spawn(async move { run_loop(slot, pg, obj, tts_cmd, tx).await });
         }
+        revive_loop(pg).await;
     });
+}
+
+/// Periodically give rested failures another attempt (see
+/// `PgStore::revive_failed_audio_tasks`).
+async fn revive_loop(pg: PgStore) {
+    let min_age = i64::try_from(REVIVE_EVERY.as_millis()).unwrap_or(i64::MAX);
+    loop {
+        tokio::time::sleep(REVIVE_EVERY).await;
+        match pg
+            .revive_failed_audio_tasks(min_age, REVIVE_FOR_MS, MAX_ATTEMPTS, SILENT_ERROR)
+            .await
+        {
+            Ok(n) if n > 0 => tracing::info!("audio worker: retrying {n} rested failed task(s)"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "audio worker: revive failed"),
+        }
+    }
 }
 
 async fn run_loop(
@@ -97,9 +123,7 @@ async fn process(
             if outcome == Outcome::Silent {
                 // Do not report absent audio as completed: automatic repair
                 // would otherwise enqueue this chapter on every scan.
-                let _ = pg
-                    .fail_audio_task(&task, "No speakable text in this chapter", 1)
-                    .await;
+                let _ = pg.fail_audio_task(&task, SILENT_ERROR, 1).await;
                 return;
             }
             if outcome == Outcome::Stale {

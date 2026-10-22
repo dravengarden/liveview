@@ -140,6 +140,12 @@ impl SpeechOptions {
         Ok(())
     }
     pub fn default_for(&self, lang: &str, legacy: Option<&str>) -> String {
+        // An inherited legacy voice (a rendition voice or the server default)
+        // only serves editions in its own language; an English edition must
+        // not be read by a Chinese voice merely because the book or server
+        // default is Chinese.
+        let legacy = legacy.map(|voice| language_default(lang, Some(voice)));
+        let legacy = legacy.as_deref();
         if !self.has_audio_options()
             && let Some(voice) = legacy
         {
@@ -187,9 +193,7 @@ impl SpeechOptions {
     }
     pub fn resolve(&self, lang: &str, legacy: Option<&str>) -> String {
         if !self.has_audio_options() {
-            return legacy
-                .map(str::to_owned)
-                .unwrap_or_else(|| language_default(lang, None));
+            return language_default(lang, legacy);
         }
         self.recipe(&self.default_for(lang, legacy)).encode()
     }
@@ -421,12 +425,50 @@ mod tests {
             "en-US-GuyNeural"
         );
         assert_eq!(
-            options.default_for("en", Some("zh-CN-XiaoxiaoNeural")),
-            "zh-CN-XiaoxiaoNeural"
-        );
-        assert_eq!(
             options.available_voices("en", Some("en-US-GuyNeural")),
             vec!["en-US-GuyNeural"]
+        );
+    }
+    #[test]
+    fn inherited_voices_only_serve_editions_in_their_language() {
+        let none = SpeechOptions::default();
+        let encoding = config(r#"{"bitrate_kbps":128}"#).options;
+        for options in [&none, &encoding] {
+            assert_eq!(
+                options.default_for("en", Some("zh-CN-XiaoxiaoNeural")),
+                "en-US-EmmaMultilingualNeural"
+            );
+            assert_eq!(
+                options.default_for("zh", Some("zh-CN-XiaoxiaoNeural")),
+                "zh-CN-XiaoxiaoNeural"
+            );
+            assert_eq!(
+                options.default_for("en-GB", Some("en-US-GuyNeural")),
+                "en-US-GuyNeural"
+            );
+            assert_eq!(
+                options.default_for("zh", Some("kokoro:af_heart")),
+                "zh-CN-XiaoxiaoNeural"
+            );
+        }
+        assert_eq!(
+            none.resolve("en", Some("zh-CN-XiaoxiaoNeural")),
+            "en-US-EmmaMultilingualNeural"
+        );
+        assert_eq!(
+            none.resolve("zh", Some("zh-CN-YunyangNeural")),
+            "zh-CN-YunyangNeural"
+        );
+        // A language without a built-in voice keeps the configured one.
+        assert_eq!(
+            none.resolve("default", Some("zh-CN-XiaoxiaoNeural")),
+            "zh-CN-XiaoxiaoNeural"
+        );
+        // An explicit policy voice is author-owned and is not second-guessed.
+        let explicit = config(r#"{"default_voice":"zh-CN-XiaoxiaoNeural"}"#).options;
+        assert_eq!(
+            explicit.default_for("en", Some("en-US-GuyNeural")),
+            "zh-CN-XiaoxiaoNeural"
         );
     }
     #[test]
@@ -444,8 +486,8 @@ mod tests {
             "en-US-EmmaMultilingualNeural"
         );
         assert_eq!(
-            SpeechPolicy::default().resolve("en", "1.md", Some("legacy")),
-            "legacy"
+            SpeechPolicy::default().resolve("en", "1.md", Some("en-US-GuyNeural")),
+            "en-US-GuyNeural"
         );
     }
     #[test]
