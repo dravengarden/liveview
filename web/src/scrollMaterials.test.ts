@@ -291,6 +291,11 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /data-lv-status-bar-material[\s\S]{0,1400}html\[data-lv-spatial-drawer-open\] &[\s\S]{0,80}display:\s*"none"/,
     "the fixed iOS status-bar material must leave the compositor while the spatial drawer owns that edge",
   );
+  assertPresent(
+    syncIndicator,
+    /zIndex: \(th\) => th\.zIndex\.appBar,[\s\S]{0,600}html\[data-lv-spatial-drawer-open\] &[\s\S]{0,40}display:\s*"none"/,
+    "the fixed sync strip must not float over the spatial Contents drawer",
+  );
   assertAbsent(
     navShell.match(/data-spatial-drawer[\s\S]{0,700}/)?.[0] ?? "",
     /borderRight/,

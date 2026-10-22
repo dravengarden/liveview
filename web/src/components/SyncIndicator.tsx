@@ -165,6 +165,12 @@ export function SyncIndicator(
                 borderBottom: 1,
               }),
             zIndex: (th) => th.zIndex.appBar,
+            // The spatial Contents drawer is its own full-height surface with
+            // its own bottom controls. The strip's offsets describe the reader's
+            // bottom chrome, so leaving it up floats it mid-list over the
+            // drawer's rows. Drop it from the compositor while the drawer owns
+            // the screen, as the status-bar material does.
+            "html[data-lv-spatial-drawer-open] &": { display: "none" },
             cursor: "pointer",
             overflow: "hidden", // clip the progress filament to the edges
             color: "text.secondary",
