@@ -293,8 +293,13 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     syncIndicator,
-    /zIndex: \(th\) => th\.zIndex\.appBar,[\s\S]{0,600}html\[data-lv-spatial-drawer-open\] &[\s\S]{0,40}display:\s*"none"/,
+    /zIndex: \(th\) => th\.zIndex\.appBar,[\s\S]{0,900}html\[data-lv-spatial-drawer-open\] &[\s\S]{0,60}opacity: 0,[\s\S]{0,20}visibility: "hidden"/,
     "the fixed sync strip must not float over the spatial Contents drawer",
+  );
+  assertPresent(
+    shell,
+    /<SyncIndicator bookSlug=\{activeSlug\} \/>\s*<\/NavShell>/,
+    "the reader's sync strip must live inside the translated reader surface so it slides with the drawer gesture",
   );
   assertAbsent(
     navShell.match(/data-spatial-drawer[\s\S]{0,700}/)?.[0] ?? "",

@@ -1809,6 +1809,13 @@ export function App(): React.JSX.Element {
                     footer={chapterPager}
                   />
                 )}
+              {
+                /* Inside the reader surface, not at the root: the spatial
+                  Contents drawer translates this surface, and the strip is the
+                  top segment of the same bottom slab as the bar and transport,
+                  so it must travel with them instead of staying full-width. */
+              }
+              <SyncIndicator bookSlug={activeSlug} />
             </NavShell>
           )}
         </Box>
@@ -1825,9 +1832,10 @@ export function App(): React.JSX.Element {
       />
       {
         /* Ambient background-work indicator (audio generation + offline prefetch)
-          → the Sync sheet. Low-weight; only shows while something is in flight. */
+          → the Sync sheet. Low-weight; only shows while something is in flight.
+          The shelf mounts it here; the reader mounts it inside NavShell. */
       }
-      <SyncIndicator bookSlug={activeSlug} />
+      {activeSlug === null && <SyncIndicator bookSlug={null} />}
       {
         /* Desktop keyboard-shortcut cheat-sheet (opened with `?`). The Dialog
           renders nothing while closed; on touch it never opens (the `?` handler

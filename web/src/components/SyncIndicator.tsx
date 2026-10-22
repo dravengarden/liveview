@@ -165,30 +165,41 @@ export function SyncIndicator(
                 borderBottom: 1,
               }),
             zIndex: (th) => th.zIndex.appBar,
-            // The spatial Contents drawer is its own full-height surface with
-            // its own bottom controls. The strip's offsets describe the reader's
-            // bottom chrome, so leaving it up floats it mid-list over the
-            // drawer's rows. Drop it from the compositor while the drawer owns
-            // the screen, as the status-bar material does.
-            "html[data-lv-spatial-drawer-open] &": { display: "none" },
+            // In the reader this strip is mounted inside the spatial drawer's
+            // translated surface, so it slides with the bar and transport
+            // during a Contents gesture. Once the drawer settles open only a
+            // narrow rail of the reader remains, where a clipped label is noise:
+            // fade out, then leave hit-testing and painting (visibility flips
+            // after the fade). Closing restores visibility at once and fades in.
+            transition: "opacity .18s ease",
+            "html[data-lv-spatial-drawer-open] &": {
+              opacity: 0,
+              visibility: "hidden",
+              pointerEvents: "none",
+              transition: "opacity .18s ease, visibility 0s linear .18s",
+            },
             cursor: "pointer",
             overflow: "hidden", // clip the progress filament to the edges
             color: "text.secondary",
-            // Strong frost so content scrolling UNDER the strip is cleanly
-            // obscured, not bled-through to collide with the label. On mobile the
-            // strip overlays the reading content (its space is reserved above),
-            // so it must read as solid chrome — near-opaque + a heavy blur. On
+            // Content scrolling UNDER the strip must be cleanly obscured, not
+            // bled-through to collide with the label. On mobile the strip
+            // overlays the reading content (its space is reserved above), so it
+            // must read as solid chrome. On
             // desktop it rides over the NavShell bar, but a static material keeps
             // the same component safe when responsive layout changes move it over
             // the scroller.
+            // Mobile: fully opaque. Even 4% of light body text bleeding through
+            // reads as ghost text under the label once it scrolls beneath.
             bgcolor: (th) =>
-              alpha(th.palette.background.default, navbarAtBottom ? 0.96 : 0.92),
+              navbarAtBottom
+                ? th.palette.background.default
+                : alpha(th.palette.background.default, 0.92),
             // No backdrop-filter: this fixed status surface can overlap a reader
             // or shelf after a breakpoint change, and WKWebView otherwise
             // re-rasterizes the moving page beneath it on every frame.
             borderColor: "divider",
             "@media (hover: hover)": {
-              transition: "background-color .15s",
+              transition: "background-color .15s, opacity .18s ease",
               "&:hover": {
                 bgcolor: (th) => alpha(th.palette.background.default, 0.92),
               },
