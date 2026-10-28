@@ -9,6 +9,20 @@ import {
   pollTickDue,
   setLiveSocketConnected,
 } from "./liveSocket.ts";
+import { noteStaleRead } from "./serverReachability.ts";
+
+// Runs first: it needs the module before any connect.
+test("the first connect catches up when startup read the local copy", () => {
+  let catchUps = 0;
+  const off = onLiveSocketReconnect(() => catchUps++);
+  noteStaleRead();
+  setLiveSocketConnected(true);
+  assert.equal(catchUps, 1);
+  // The stale read is consumed: a duplicate open signal does not repeat it.
+  setLiveSocketConnected(true);
+  assert.equal(catchUps, 1);
+  off();
+});
 
 test("polls run every tick while disconnected and slowly while connected", () => {
   assert.equal(pollTickDue(false, 1_000, 1_001), true);

@@ -1,6 +1,9 @@
 import type { RemoteBackend } from "@/_sync/mod.ts";
 import { contentFetch } from "@/native-sync";
-import { enqueueMutation } from "@/syncQueue";
+import { KnownSettings } from "@/knownSettings";
+import { onLiveSocketReconnect } from "@/liveSocket";
+import { STALE_HEADER } from "@/replica/mod.ts";
+import { enqueueMutation, hasPendingMutation } from "@/syncQueue";
 import type { ProgressEntry } from "@/types";
 
 // RemoteBackend adapters over liveview's EXISTING server endpoints, for the
@@ -16,12 +19,20 @@ import type { ProgressEntry } from "@/types";
 // cost ONE fetch. A PUT also patches the cached map so a later `load()` in the
 // same session reflects our own write (the GET is fetched once, never refetched).
 let settingsCache: Promise<Record<string, string>> | null = null;
+const knownSettings = new KnownSettings();
 
 function loadSettingsMap(): Promise<Record<string, string>> {
   // fresh: live settings online, last-known offline (the native shell caches the
   // map so reader prefs hydrate offline instead of resetting to defaults).
   settingsCache ??= contentFetch("/api/settings", { fresh: true })
-    .then((r) => (r.ok ? (r.json() as Promise<Record<string, string>>) : {}))
+    .then(async (r) => {
+      if (!r.ok) return {};
+      const map = (await r.json()) as Record<string, string>;
+      // A local copy may lag the server, so it is no proof of what the server
+      // holds: echo suppression would then drop a real write.
+      if (!r.headers.get(STALE_HEADER)) knownSettings.seed(map);
+      return map;
+    })
     .catch(() => ({}));
   return settingsCache;
 }
@@ -45,6 +56,9 @@ export function loadAllServerSettings(): Promise<Record<string, string>> {
  *  imperative call sites that want a single fire-and-forget remote-wins push
  *  (e.g. App's per-book rendition/lang prefs). */
 export function putServerSetting(key: string, value: string): Promise<void> {
+  // Startup adoption writes back what the server just returned; see KnownSettings.
+  if (knownSettings.isEcho(key, value)) return Promise.resolve();
+  knownSettings.note(key, value);
   // Keep the memoized map current so a later load() in this session reflects our
   // own write.
   if (settingsCache !== null) {
@@ -71,6 +85,7 @@ const settingPushListeners = new Map<string, Set<(raw: string) => void>>();
  *  Also patches the memoized settings map so a later `load()` is consistent with
  *  the push (the bulk GET is fetched once and never refetched). */
 export function emitServerSettingPush(key: string, value: string): void {
+  knownSettings.note(key, value);
   if (settingsCache !== null) {
     settingsCache = settingsCache.then((s) => ({ ...s, [key]: value }));
   }
@@ -81,6 +96,27 @@ export function emitServerSettingPush(key: string, value: string): void {
     }
   }
 }
+
+/** Catch up on setting changes made elsewhere while this client could not
+ *  receive pushes (socket down, or a launch that read settings from the local
+ *  copy): every server value this client does not know, and has no undelivered
+ *  write for, is applied as if it had been pushed. */
+async function resyncServerSettings(): Promise<void> {
+  if (settingsCache === null) return; // The first load will read the server.
+  let map: Record<string, string>;
+  try {
+    const r = await contentFetch("/api/settings", { fresh: true });
+    if (!r.ok || r.headers.get(STALE_HEADER)) return;
+    map = (await r.json()) as Record<string, string>;
+  } catch {
+    return;
+  }
+  for (const [key, value] of Object.entries(map)) {
+    if (knownSettings.isEcho(key, value) || hasPendingMutation("setting", key)) continue;
+    emitServerSettingPush(key, value);
+  }
+}
+onLiveSocketReconnect(() => void resyncServerSettings());
 
 /** Encode/decode a typed setting value to/from the string the KV stores. */
 export interface Codec<T> {

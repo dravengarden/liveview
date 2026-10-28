@@ -13,6 +13,7 @@
 // tauri-remote-ipc-needs-plugin.
 
 import { HOST_ORIGIN } from "./native-host.ts";
+import { noteServerStatus, noteServerUnreachable } from "./serverReachability.ts";
 
 const CONFIGURED_REMOTES = (
   (import.meta as { env?: { VITE_LIVEVIEW_ORIGINS?: string } }).env
@@ -199,7 +200,17 @@ export function installApiShim(): void {
         (typeof AbortSignal.timeout === "function"
           ? AbortSignal.timeout(15_000)
           : null);
-      return orig(url, { ...init, signal });
+      return orig(url, { ...init, signal }).then(
+        (response) => {
+          noteServerStatus(response.status);
+          return response;
+        },
+        (error: unknown) => {
+          // A caller's own abort says nothing about the server.
+          if (!init?.signal?.aborted) noteServerUnreachable();
+          throw error;
+        },
+      );
     }
     return orig(input, init);
   };

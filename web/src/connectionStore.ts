@@ -25,6 +25,9 @@ export const connectionStore = createConnectionStore({
   // a calm warning, not an alarm.
   reconnectBannerThreshold: 4,
   reconnectBackoffMaxMs: 60_000,
+  // Offline is a normal mode, not an error: say so once, briefly, then get out
+  // of the way of reading. Recovery flashes "reconnected".
+  outageNoticeMs: 5_000,
 });
 
 // Bound re-exports — same named bindings the rest of liveview imports today, so

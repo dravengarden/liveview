@@ -94,8 +94,19 @@ export function SyncIndicator(
   }, []);
   useEffect(() => {
     if (!generating && !open) return undefined;
-    const id = window.setInterval(() => void refreshSyncStatus(), 5000);
-    return () => window.clearInterval(id);
+    // Nobody sees the progress while the app is backgrounded (e.g. listening
+    // with the screen locked); catch up the moment it is visible again.
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== "hidden") void refreshSyncStatus();
+    }, 5000);
+    const onVisible = (): void => {
+      if (document.visibilityState === "visible") void refreshSyncStatus();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [generating, open]);
 
   // Reserve the strip's height so content clears it yet still scrolls UNDER it.

@@ -248,11 +248,20 @@ export async function applyDag(manifest: Manifest): Promise<void> {
             mtime: now,
             present: 0,
           };
-          await idbRequest(blobs.put(next));
+          // Queued, not awaited: a failed put aborts the transaction, and a
+          // round trip per resource kept the stores locked against chapter
+          // reads for the whole corpus.
+          void blobs.put(next);
           await applyCachedDelta(txn, undefined, next);
         }
 
-        await idbRequest(paths.clear());
+        // Rewrite only the paths that changed; a deploy usually touches a
+        // handful of the corpus's resources.
+        const previous = new Map<string, PathRecord>();
+        await forEachCursor<PathRecord>(paths, null, (rec) => {
+          previous.set(rec.path, rec);
+          return true;
+        });
         for (const resource of manifest.resources) {
           const rec: PathRecord = {
             path: resource.path,
@@ -261,12 +270,24 @@ export async function applyDag(manifest: Manifest): Promise<void> {
             bytes: resource.bytes,
             url: resource.url,
           };
-          await idbRequest(paths.put(rec));
+          const old = previous.get(rec.path);
+          previous.delete(rec.path);
+          if (
+            !old ||
+            old.hash !== rec.hash ||
+            old.kind !== rec.kind ||
+            old.bytes !== rec.bytes ||
+            old.url !== rec.url
+          ) {
+            void paths.put(rec);
+          }
           nextPaths.set(resource.path, rec);
           if (!nextUrls.has(resource.hash)) {
             nextUrls.set(resource.hash, resource.url);
           }
         }
+
+        for (const stale of previous.keys()) void paths.delete(stale);
 
         await rewriteTotals(txn, manifest.resources);
         await idbRequest(

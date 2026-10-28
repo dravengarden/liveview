@@ -107,6 +107,26 @@ BEGIN
     END IF;
 END $$;
 
+-- Reverse lookups for asset garbage collection: "does any chapter still
+-- reference this blob?" is an index probe instead of a chapters scan. Created
+-- through the catalog check for the same lock reason as above.
+DO $$
+DECLARE col TEXT;
+BEGIN
+    FOREACH col IN ARRAY ARRAY['asset_hash', 'audio_hash', 'marks_hash'] LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE schemaname = current_schema()
+              AND indexname = 'chapters_' || col
+        ) THEN
+            EXECUTE format(
+                'CREATE INDEX chapters_%1$s ON chapters (%1$s) WHERE %1$s IS NOT NULL',
+                col
+            );
+        END IF;
+    END LOOP;
+END $$;
+
 -- Content-addressed binary blobs stored in the private rustfs bucket. Shared
 -- across editions/books by hash (a Merkle-DAG leaf with multiple parents).
 CREATE TABLE IF NOT EXISTS assets (

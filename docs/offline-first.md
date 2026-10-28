@@ -204,6 +204,31 @@ offline audio is guaranteed only on native (or within the LRU budget). Everythin
 *already acquired* is 100% offline in both modes. Pause/seek/navigation within
 acquired content is always network-free.
 
+### Server unreachable is offline too
+
+"The device has a network" is not "the server answers": a captive portal, a
+network with no route to the server, or a server outage all leave NWPathMonitor
+and `navigator.onLine` reporting online. `web/src/serverReachability.ts` tracks
+the server itself — an open live socket or any server response is reachable; a
+thrown request or a gateway 502/503/504 is unreachable.
+
+- Manifest resources are local-first regardless (§1).
+- Url-keyed user state (`/api/library`, `/api/settings`, `/api/progress/*`,
+  `/api/tasks`, `/api/sizes`, …) with a local copy waits at most
+  `REPLICA_FRESH_GRACE_MS` for a fresher answer, and not at all while the server
+  is known unreachable. The request still completes in the background and
+  refreshes the local copy. Such a response carries `x-lv-stale: 1`.
+- A read with no local copy keeps a full budget while the server is reachable
+  and a short recovery-probe budget while it is not, so an undownloaded page
+  says so in seconds.
+- On a socket connect — including the first one after a launch that read local
+  copies — the client delivers queued writes, then catches up: library and
+  shelf refresh, and settings changed elsewhere are applied unless a local write
+  for that key is still undelivered. A stale settings read never seeds echo
+  suppression.
+- The outage notice says the reader is offline and downloaded content works,
+  once, for a few seconds; recovery flashes "reconnected".
+
 ---
 
 ## 8. Risks

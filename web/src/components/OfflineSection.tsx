@@ -92,7 +92,8 @@ export function OfflineSection({ visible = true }: { visible?: boolean }): React
     let s: CacheStats | null = null;
     try {
       s = await nativeCacheStats();
-      setStats(s);
+      const next = s;
+      setStats((prev) => (sameJson(prev, next) ? prev : next));
     } catch {
       /* keep last-known */
     }
@@ -105,7 +106,7 @@ export function OfflineSection({ visible = true }: { visible?: boolean }): React
         cachedCount: replica.audioCached,
         net,
       };
-      setAudio(a);
+      setAudio((prev) => (sameJson(prev, a) ? prev : a));
       const now = Date.now();
       const arr = samplesRef.current;
       arr.push({ t: now, used: a.usedBytes });
@@ -428,4 +429,10 @@ function ToggleRow({
       <Switch checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} size="small" />
     </Stack>
   );
+}
+
+/** The gauge polls every 2 s; keep unchanged state so the panel does not
+ *  re-render on ticks where nothing moved. */
+function sameJson(a: unknown, b: unknown): boolean {
+  return a === b || JSON.stringify(a) === JSON.stringify(b);
 }

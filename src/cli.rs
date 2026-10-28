@@ -297,7 +297,8 @@ pub struct SyncArgs {
     pub pregen_text_audio: bool,
 
     /// Bump to force a full re-render (renderer upgrade).
-    #[arg(long, default_value_t = 1)]
+    /// 2: CJK soft line breaks no longer render as spaces.
+    #[arg(long, default_value_t = 2)]
     pub render_version: i32,
 
     /// Self-heal a chapters↔merkle desync. A normal sync trusts the Merkle

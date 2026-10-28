@@ -886,6 +886,17 @@ test("focusing a text field never triggers the iOS page zoom", async () => {
     /MuiInputBase:[\s\S]{0,200}pointer: coarse[\s\S]{0,60}max\(16px, 1rem\)/,
     "touch text fields must stay at 16px or larger, however the app font scale is set",
   );
+  assertPresent(
+    theme,
+    /MuiSelect:[\s\S]{0,200}select:[\s\S]{0,60}pointer: coarse[\s\S]{0,40}fontSize: "1rem"/,
+    "a Select's value display is not a text field and must follow the app font scale",
+  );
+  const organizer = await source("components/LibraryOrganizer.tsx");
+  assertPresent(
+    organizer,
+    /component="select"[\s\S]{0,600}pointer: coarse[\s\S]{0,40}max\(16px, 1rem\)/,
+    "the native directory select must stay at 16px or larger on touch devices",
+  );
 });
 
 test("search highlighting stays a flat tint", async () => {

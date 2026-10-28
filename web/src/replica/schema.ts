@@ -24,6 +24,12 @@ export const META_URL_PREFIX = "url:";
 /** Overall replica fetch budget (body included). Instant fail when net === "none". */
 export const REPLICA_FETCH_MS = 15_000;
 export const REPLICA_DAG_MS = 30_000;
+/** Budget while the server is known unreachable: still a recovery probe, but a
+ *  missing resource fails fast. */
+export const REPLICA_UNREACHABLE_FETCH_MS = 4_000;
+/** How long a url-keyed read with a local copy waits for a fresher server
+ *  answer before serving the local copy. */
+export const REPLICA_FRESH_GRACE_MS = 1_200;
 
 export const AGG_ALL = "all";
 export const AGG_AUDIO = "audio";

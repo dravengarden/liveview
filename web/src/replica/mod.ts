@@ -95,6 +95,7 @@ export {
   replicaFetchBudgetMs,
   replicaIsOffline,
   setReplicaOfflineProbe,
+  STALE_HEADER,
 } from "./resolve.ts";
 export { contentReplicaStats } from "./agg.ts";
 export { currentReplicaPolicy } from "./policy.ts";

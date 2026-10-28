@@ -187,6 +187,7 @@ pub struct DagChapter {
     pub lang: String,
     pub rel_path: String,
     pub content_hash: String,
+    pub render_version: i32,
     pub file_type: String,
     pub html_bytes: Option<i64>,
     pub audio_hash: Option<String>,

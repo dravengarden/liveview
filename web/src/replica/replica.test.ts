@@ -46,6 +46,13 @@ import { evictUnpinnedAudioToFit } from "./gc.ts";
 import { fetchServerRoot, replicaAppliedRoot } from "./resolve.ts";
 import { enqueueFetch, getWorklist, setWorklist } from "./worklist.ts";
 import { loadContentsTree } from "../audio/contents.ts";
+import {
+  noteServerUnreachable,
+  resetServerReachability,
+  serverReachability,
+  takeStaleRead,
+} from "../serverReachability.ts";
+import { STALE_HEADER } from "./resolve.ts";
 
 function buf(text: string): ArrayBuffer {
   const u8 = new TextEncoder().encode(text);
@@ -85,6 +92,7 @@ async function setup(quotaBytes?: number): Promise<MemoryIdbHandle> {
   setNativeAudioCacheProbe(() => false);
   setReplicaOfflineProbe(() => false);
   setReplicaRemote("https://example.test");
+  resetServerReachability();
   const handle = installMemoryIndexedDB();
   if (quotaBytes !== undefined) handle.setQuotaBytes(quotaBytes);
   await resetReplica();
@@ -816,6 +824,86 @@ test("persist failure after a 200 still returns the body", async () => {
   }
 });
 
+test("a slow server never holds a url-keyed read that has a local copy", async () => {
+  await setup();
+  await cacheReplicaMetadata("/api/library", { revision: 1 });
+  let release: (r: Response) => void = () => {};
+  const fetchMock = installFetch(() =>
+    new Promise<Response>((resolve) => {
+      release = resolve;
+    })
+  );
+  try {
+    const started = Date.now();
+    const res = await replicaContentFetch("/api/library", { fresh: true });
+    assert.ok(Date.now() - started < 5_000);
+    assert.equal(res.headers.get(STALE_HEADER), "1");
+    assert.deepEqual(await res.json(), { revision: 1 });
+    assert.equal(takeStaleRead(), true);
+    // The request finishes in the background and refreshes the local copy.
+    release(new Response(JSON.stringify({ revision: 2 }), { status: 200 }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const next = await replicaContentFetch("/api/library", {
+      cacheFirst: true,
+    });
+    assert.deepEqual(await next.json(), { revision: 2 });
+    assert.equal(serverReachability(), "reachable");
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("a known-unreachable server serves the local copy without waiting", async () => {
+  await setup();
+  await cacheReplicaMetadata("/api/progress/recent", [{ path: "b/1.md" }]);
+  noteServerUnreachable();
+  const fetchMock = installFetch(() => new Promise<Response>(() => {}));
+  try {
+    const started = Date.now();
+    const res = await replicaContentFetch("/api/progress/recent", {
+      fresh: true,
+    });
+    assert.ok(Date.now() - started < 500);
+    assert.equal(res.headers.get(STALE_HEADER), "1");
+    assert.deepEqual(await res.json(), [{ path: "b/1.md" }]);
+    // Still probes, so recovery is noticed.
+    assert.equal(fetchMock.calls.length, 1);
+    assert.ok(replicaFetchBudgetMs() < 15_000);
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("a fast server answer wins over the local copy", async () => {
+  await setup();
+  await cacheReplicaMetadata("/api/settings", { "audio.rate": "1" });
+  const fetchMock = installFetch(() =>
+    new Response(JSON.stringify({ "audio.rate": "2" }), { status: 200 })
+  );
+  try {
+    const res = await replicaContentFetch("/api/settings", { fresh: true });
+    assert.equal(res.headers.get(STALE_HEADER), null);
+    assert.deepEqual(await res.json(), { "audio.rate": "2" });
+  } finally {
+    fetchMock.restore();
+  }
+});
+
+test("a failed request marks the server unreachable", async () => {
+  await setup();
+  const fetchMock = installFetch(() => {
+    throw new Error("no route");
+  });
+  try {
+    const res = await replicaContentFetch("/api/tasks", { fresh: true });
+    assert.equal(res.status, 504);
+    assert.equal(serverReachability(), "unreachable");
+  } finally {
+    fetchMock.restore();
+  }
+});
+
 test("replica fetch budget is 0 offline and longer than 1.5s online", async () => {
   await setup();
   assert.equal(replicaFetchBudgetMs({ offline: true }), 0);
@@ -1133,6 +1221,44 @@ test("applyDag only rewrites blob rows whose metadata changed", async () => {
   });
   assert.equal((handle.factory.putCounts.get("blobs") ?? 0) - before, 1);
   assert.ok(await getBlob("t1"));
+});
+
+test("applyDag rewrites only changed paths and drops removed ones", async () => {
+  const handle = await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r1",
+    resources: [
+      textResource("t1", "a/text/en/01.md"),
+      textResource("t2", "a/text/en/02.md"),
+    ],
+  });
+  const before = handle.factory.putCounts.get("paths") ?? 0;
+  await applyDag({
+    protocol_version: 1,
+    root: "r2",
+    resources: [
+      textResource("t1", "a/text/en/01.md"),
+      textResource("t3", "a/text/en/03.md"),
+    ],
+  });
+  assert.equal((handle.factory.putCounts.get("paths") ?? 0) - before, 1);
+  const stored = await withTxn(["paths"], "readonly", async (txn) => {
+    const store = txn.objectStore("paths");
+    const keys: string[] = [];
+    for (
+      const path of ["a/text/en/01.md", "a/text/en/02.md", "a/text/en/03.md"]
+    ) {
+      const rec = await new Promise<unknown>((resolve, reject) => {
+        const req = store.get(path);
+        req.addEventListener("success", () => resolve(req.result));
+        req.addEventListener("error", () => reject(req.error));
+      });
+      if (rec) keys.push(path);
+    }
+    return keys;
+  });
+  assert.deepEqual(stored, ["a/text/en/01.md", "a/text/en/03.md"]);
 });
 
 test("DAG totals count each blob once even when several paths share it", async () => {

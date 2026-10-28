@@ -1060,6 +1060,18 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
             ));
         }
     }
+    // `<stem>.spoken.md` overlays by edition, so a text chapter's transcript
+    // address can fold in the overlay `/api/spoken` actually narrates.
+    let overlays: HashMap<(&str, &str, &str), &str> = chapters
+        .iter()
+        .filter(|c| c.rendition == "text" && c.rel_path.ends_with(".spoken.md"))
+        .map(|c| {
+            (
+                (c.book_slug.as_str(), c.lang.as_str(), c.rel_path.as_str()),
+                c.content_hash.as_str(),
+            )
+        })
+        .collect();
     for c in &chapters {
         let doc = format!("{}/{}/{}/{}", c.book_slug, c.rendition, c.lang, c.rel_path);
         // Wire path /api/file expects `<slug>/<rel_path>` + lang/rendition query.
@@ -1072,8 +1084,21 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
             encode_query_value(&c.rendition)
         );
         if c.file_type == "markdown" || c.file_type == "html" {
+            let overlay = (c.rendition == "text")
+                .then(|| c.rel_path.strip_suffix(".md"))
+                .flatten()
+                .and_then(|stem| {
+                    overlays
+                        .get(&(
+                            c.book_slug.as_str(),
+                            c.lang.as_str(),
+                            format!("{stem}.spoken.md").as_str(),
+                        ))
+                        .copied()
+                });
+            let hashes = derived_text_hashes(&c.content_hash, c.render_version, overlay);
             resources.push(serde_json::json!({
-                "path": doc, "hash": c.content_hash, "kind": "text",
+                "path": doc, "hash": hashes.text, "kind": "text",
                 "bytes": c.html_bytes.unwrap_or(0), "url": format!("/api/file?{q}"),
             }));
             // Read-along extras, keyed off content_hash so they're stable per
@@ -1087,13 +1112,13 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
             // native text-sync pulls every non-audio dag resource, so listing it
             // here is all it takes to make the transcript available offline.
             resources.push(serde_json::json!({
-                "path": format!("{doc}#spoken"), "hash": format!("{}:spoken", c.content_hash),
+                "path": format!("{doc}#spoken"), "hash": hashes.spoken,
                 "kind": "spoken", "bytes": 0, "url": format!("/api/spoken?{q}"),
             }));
             // `units` (word-level tap-to-seek) is a text-read-aloud feature only.
             if c.rendition == "text" {
                 resources.push(serde_json::json!({
-                    "path": format!("{doc}#units"), "hash": format!("{}:units", c.content_hash),
+                    "path": format!("{doc}#units"), "hash": hashes.units,
                     "kind": "units", "bytes": 0, "url": format!("/api/units?{q}"),
                 }));
             }
@@ -1156,6 +1181,39 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
         body: body.clone(),
     });
     manifest_json_response(&root, body)
+}
+
+/// Manifest addresses of a text chapter's rendered body and read-along extras.
+struct DerivedTextHashes {
+    text: String,
+    spoken: String,
+    units: String,
+}
+
+/// The replica keeps a body for as long as its address is unchanged, so each
+/// address folds in everything the served bytes derive from: the source hash,
+/// the renderer version (a re-render of unchanged source must still reach
+/// devices), and for the transcript the `.spoken.md` overlay it narrates.
+/// Version 1 keeps the source hash alone, the address every device already has.
+fn derived_text_hashes(
+    content_hash: &str,
+    render_version: i32,
+    overlay: Option<&str>,
+) -> DerivedTextHashes {
+    let base = if render_version <= 1 {
+        content_hash.to_string()
+    } else {
+        format!("{content_hash}:r{render_version}")
+    };
+    let spoken = match overlay {
+        Some(overlay) => format!("{base}:spoken:{overlay}"),
+        None => format!("{base}:spoken"),
+    };
+    DerivedTextHashes {
+        units: format!("{base}:units"),
+        spoken,
+        text: base,
+    }
 }
 
 fn artwork_resource(slug: &str, kind: &str, hash: &str, bytes: i64) -> serde_json::Value {
@@ -1301,7 +1359,16 @@ fn apm_token_matches(headers: &HeaderMap, want: &str) -> bool {
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
-    dedicated == Some(want) || bearer == Some(want)
+    let matches =
+        |got: Option<&str>| got.is_some_and(|got| secret_eq(got.as_bytes(), want.as_bytes()));
+    // Evaluate both so the response time does not reveal which one was tried.
+    matches(dedicated) | matches(bearer)
+}
+
+/// Compare a presented secret without an early exit on the first differing
+/// byte, so response timing does not leak how much of a guess was right.
+fn secret_eq(got: &[u8], want: &[u8]) -> bool {
+    got.len() == want.len() && got.iter().zip(want).fold(0u8, |acc, (a, b)| acc | (a ^ b)) == 0
 }
 
 async fn api_ingest(
@@ -1548,7 +1615,8 @@ fn build_app_with_policy(state: SharedState, policy: HttpPolicy) -> Router {
             move |request: axum::http::Request<Body>, next: axum::middleware::Next| {
                 let expected = expected.clone();
                 async move {
-                    if request.headers().get(header::AUTHORIZATION) == Some(&expected) {
+                    let presented = request.headers().get(header::AUTHORIZATION);
+                    if presented.is_some_and(|got| secret_eq(got.as_bytes(), expected.as_bytes())) {
                         next.run(request).await
                     } else {
                         StatusCode::UNAUTHORIZED.into_response()
@@ -2628,6 +2696,34 @@ mod apm_tests {
             Some("part/01-why.md")
         );
         assert_eq!(audio_text_fallback_path("01-why.md"), None);
+    }
+
+    #[test]
+    fn derived_text_hashes_move_with_renderer_and_overlay() {
+        let v1 = derived_text_hashes("abc", 1, None);
+        assert_eq!(
+            (v1.text.as_str(), v1.spoken.as_str(), v1.units.as_str()),
+            ("abc", "abc:spoken", "abc:units")
+        );
+        let v2 = derived_text_hashes("abc", 2, None);
+        assert_eq!(v2.text, "abc:r2");
+        assert_eq!(v2.units, "abc:r2:units");
+        assert_eq!(
+            derived_text_hashes("abc", 2, Some("ov")).spoken,
+            "abc:r2:spoken:ov"
+        );
+        assert_ne!(
+            derived_text_hashes("abc", 2, Some("ov")).spoken,
+            derived_text_hashes("abc", 2, Some("ov2")).spoken
+        );
+    }
+
+    #[test]
+    fn secret_eq_requires_the_exact_secret() {
+        assert!(secret_eq(b"Bearer s3cret", b"Bearer s3cret"));
+        assert!(!secret_eq(b"Bearer s3creT", b"Bearer s3cret"));
+        assert!(!secret_eq(b"Bearer s3cre", b"Bearer s3cret"));
+        assert!(!secret_eq(b"", b"Bearer s3cret"));
     }
 
     #[test]

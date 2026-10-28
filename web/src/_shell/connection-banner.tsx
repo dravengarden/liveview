@@ -22,6 +22,7 @@
 
 import { Box, Button, CircularProgress } from "@mui/material";
 import CheckIcon from "@mui/icons-material/Check";
+import CloudOffIcon from "@mui/icons-material/CloudOffOutlined";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { type ShellLabels, useShellLabels } from "./shell-labels.tsx";
 
@@ -43,6 +44,11 @@ export interface ConnectionStoreOptions {
   /** How long the green "reconnected" flash lingers before auto-dismissing.
    *  Default 4000ms. */
   readonly reconnectedDismissMs?: number;
+  /** For an app that works offline: hide the outage banner after this long
+   *  instead of keeping it up for the whole outage, and show it as a calm
+   *  offline notice rather than a reconnect spinner. Recovery still flashes the
+   *  "reconnected" state. Default: shown until the connection returns. */
+  readonly outageNoticeMs?: number;
   /** Host-owned update transaction; preserves durable content stores. */
   readonly applyUpdate?: () => Promise<void>;
 }
@@ -68,6 +74,8 @@ export interface ConnectionStore {
   useConnectionBanner(): Banner | undefined;
   /** The current known build id — for cache-busting fetches keyed on the build. */
   version(): string | undefined;
+  /** Whether the outage banner is a transient offline notice. */
+  readonly offlineCapable: boolean;
 }
 
 // Surface the red banner once this many consecutive (re)connect cycles fail.
@@ -98,6 +106,7 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
   const reconnectBannerThreshold = opts.reconnectBannerThreshold ?? DEFAULT_RECONNECT_BANNER_THRESHOLD;
   const reconnectBackoffMaxMs = opts.reconnectBackoffMaxMs ?? DEFAULT_RECONNECT_BACKOFF_MAX_MS;
   const reconnectedDismissMs = opts.reconnectedDismissMs ?? DEFAULT_RECONNECTED_DISMISS_MS;
+  const outageNoticeMs = opts.outageNoticeMs;
 
   // ─── Per-instance closure state (was module-level in liveview's store) ─────
   let banner: Banner | undefined = undefined;
@@ -109,6 +118,7 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
   // blip.
   let outageSurfaced = false;
   let reconnectedTimer: ReturnType<typeof setTimeout> | undefined = undefined;
+  let outageNoticeTimer: ReturnType<typeof setTimeout> | undefined = undefined;
   // The build id this tab loaded against; re-probed after each reconnect and on
   // foreground. A change means the server was redeployed under a now-stale tab.
   let knownVersion: string | undefined = undefined;
@@ -148,6 +158,10 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
   // flashes green if a red banner was up, then probes for a new build first thing.
   function connectionReady(): void {
     const recovered = outageSurfaced;
+    if (outageNoticeTimer) {
+      clearTimeout(outageNoticeTimer);
+      outageNoticeTimer = undefined;
+    }
     attempts = 0;
     outageSurfaced = false;
     // Recovered from a surfaced outage → flash green, but never stomp a sticky
@@ -175,9 +189,18 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
   // backoff delay the app should wait before the next attempt.
   function connectionLost(): number {
     attempts += 1;
-    if (attempts >= reconnectBannerThreshold && banner?.kind !== "update") {
+    // An offline-capable app announces the outage once; later failed retries
+    // of the same outage stay quiet.
+    const announce = outageNoticeMs === undefined || !outageSurfaced;
+    if (attempts >= reconnectBannerThreshold && banner?.kind !== "update" && announce) {
       outageSurfaced = true;
       setBanner({ kind: "down" });
+      if (outageNoticeMs !== undefined) {
+        outageNoticeTimer = setTimeout(() => {
+          outageNoticeTimer = undefined;
+          if (banner?.kind === "down") setBanner(undefined);
+        }, outageNoticeMs);
+      }
     }
     // Probe the build on EVERY drop, not just on a successful reconnect. A deploy
     // restarts the server, which is often WHY we just disconnected — and if the WS
@@ -246,6 +269,7 @@ export function createConnectionStore(opts: ConnectionStoreOptions): ConnectionS
     watchForegroundVersion,
     useConnectionBanner,
     version,
+    offlineCapable: outageNoticeMs !== undefined,
   };
 }
 
@@ -354,7 +378,9 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
         zIndex: (t) => t.zIndex.tooltip + 1,
       }}
     >
-      {banner.kind === "down" && <CircularProgress size={14} color="inherit" thickness={5} />}
+      {banner.kind === "down" && (store.offlineCapable
+        ? <CloudOffIcon sx={{ fontSize: "1.125rem" }} />
+        : <CircularProgress size={14} color="inherit" thickness={5} />)}
       {banner.kind === "reconnected" && <CheckIcon sx={{ fontSize: "1.125rem" }} />}
       {!(isUpdate && props.updateLabel) && <span>{label}</span>}
       {isUpdate && props.updateLabel && <Button color="inherit" size="small" disabled={updating} sx={{ pointerEvents: "auto" }} onClick={() => {

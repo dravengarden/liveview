@@ -28,6 +28,8 @@
 // response (even a rejected-as-stale 204) means the server has made its call, so
 // the entry is dropped; only a network failure keeps it for retry.
 
+import { onServerReachability } from "./serverReachability.ts";
+
 interface Entry {
   value: string;
   /** Wall-clock ms at the edit, the LWW key. */
@@ -169,9 +171,22 @@ function ensureStarted(): void {
     if (document.visibilityState === "visible") void flushSyncQueue();
   });
   globalThis.setInterval?.(() => void flushSyncQueue(), RETRY_MS);
+  // The device can stay "online" through an outage of the server itself; drain
+  // the moment any request reaches it again.
+  onServerReachability((state) => {
+    if (state === "reachable") void flushSyncQueue();
+  });
   // A queue restored from a prior session should drain on boot, even before any
   // new edit — the user may have quit while offline with writes still pending.
   void flushSyncQueue();
+}
+
+/** Whether a write for this key is still waiting for delivery. */
+export function hasPendingMutation(
+  namespace: "setting" | "progress",
+  id: string,
+): boolean {
+  return pending.has(`${namespace}:${id}`);
 }
 
 /** Public start hook — call once from main.tsx AFTER installApiShim() so a cold

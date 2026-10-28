@@ -36,24 +36,20 @@ pub(crate) fn manifest_root(root: &str, epoch: i64) -> String {
 }
 
 /// `assets a` row predicate: referenced by no chapter or book artwork, and not
-/// registered since `$1` (the GC grace cutoff, unix ms).
+/// registered since `$1` (the GC grace cutoff, unix ms). One `NOT EXISTS` per
+/// column: an `OR`-joined correlation cannot become a hashed anti-join, which
+/// made the sweep a per-asset scan of every chapter.
 const ORPHAN_ASSET: &str = "a.touched_at < $1
-     AND NOT EXISTS (
-         SELECT 1 FROM speech_audio s JOIN chapters c USING(book_slug,rendition,lang,rel_path)
-         WHERE c.content_hash=s.content_hash AND (s.audio_hash = a.content_hash OR s.marks_hash = a.content_hash)
-     )
-     AND NOT EXISTS (
-         SELECT 1 FROM chapters c
-         WHERE c.asset_hash = a.content_hash
-            OR c.audio_hash = a.content_hash
-            OR c.marks_hash = a.content_hash
-     )
-     AND NOT EXISTS (
-         SELECT 1 FROM books b
-         WHERE b.cover_hash = a.content_hash
-            OR b.backdrop_hash = a.content_hash
-            OR b.card_backdrop_hash = a.content_hash
-     )";
+    AND NOT EXISTS (
+        SELECT 1 FROM speech_audio s JOIN chapters c USING(book_slug,rendition,lang,rel_path)
+        WHERE c.content_hash=s.content_hash AND (s.audio_hash = a.content_hash OR s.marks_hash = a.content_hash)
+    )
+    AND NOT EXISTS (SELECT 1 FROM chapters c WHERE c.asset_hash = a.content_hash)
+    AND NOT EXISTS (SELECT 1 FROM chapters c WHERE c.audio_hash = a.content_hash)
+    AND NOT EXISTS (SELECT 1 FROM chapters c WHERE c.marks_hash = a.content_hash)
+    AND NOT EXISTS (SELECT 1 FROM books b WHERE b.cover_hash = a.content_hash)
+    AND NOT EXISTS (SELECT 1 FROM books b WHERE b.backdrop_hash = a.content_hash)
+    AND NOT EXISTS (SELECT 1 FROM books b WHERE b.card_backdrop_hash = a.content_hash)";
 
 #[derive(Clone)]
 pub struct PgStore {
@@ -1212,7 +1208,7 @@ impl PgStore {
     pub async fn dag_chapters(&self) -> Result<Vec<DagChapter>, sqlx::Error> {
         sqlx::query_as::<_, DagChapter>(
             "SELECT c.book_slug, c.rendition, c.lang, c.rel_path,
-                    c.content_hash, c.file_type,
+                    c.content_hash, c.render_version, c.file_type,
                     octet_length(c.html)::bigint AS html_bytes,
                     c.audio_hash, aa.size AS audio_size,
                     c.marks_hash, am.size AS marks_size,
@@ -1262,27 +1258,26 @@ impl PgStore {
         .await
     }
 
-    /// The most-recently-read chapter per (book, rendition), newest first —
-    /// dedup happens in Rust. A text+audio book keeps BOTH its newest text
+    /// The most-recently-read chapter per (book, rendition), newest first.
+    /// A text+audio book keeps BOTH its newest text
     /// chapter and its newest audio (`.spoken.md`) chapter, so the shelf card
     /// can show reading AND listening progress side by side; deduping by slug
     /// alone dropped whichever rendition was touched less recently. Paths may be
     /// a bare `<slug>` (no chapter), which classifies as the text rendition.
     pub async fn progress_recent_per_rendition(&self) -> Result<Vec<ProgressEntry>, sqlx::Error> {
-        let rows = sqlx::query_as::<_, ProgressEntry>(
-            "SELECT path, scroll, updated_at FROM progress ORDER BY updated_at DESC",
+        // Deduplicate in SQL so the shelf does not fetch every chapter ever read.
+        sqlx::query_as::<_, ProgressEntry>(
+            "SELECT path, scroll, updated_at FROM (
+                 SELECT DISTINCT ON (split_part(path, '/', 1), path LIKE '%.spoken.md')
+                        path, scroll, updated_at
+                 FROM progress
+                 ORDER BY split_part(path, '/', 1), path LIKE '%.spoken.md',
+                          updated_at DESC, path
+             ) latest
+             ORDER BY updated_at DESC, path",
         )
         .fetch_all(&self.pool)
-        .await?;
-        let mut seen = std::collections::HashSet::new();
-        Ok(rows
-            .into_iter()
-            .filter(|r| {
-                let slug = r.path.split('/').next().unwrap_or("").to_string();
-                let is_audio = r.path.ends_with(".spoken.md");
-                seen.insert((slug, is_audio))
-            })
-            .collect())
+        .await
     }
 
     /// Upsert one doc's scroll with last-write-wins on `ts` (client edit time;
@@ -1304,7 +1299,7 @@ impl PgStore {
         )
         .bind(path)
         .bind(scroll.clamp(0.0, 1.0))
-        .bind(ts.unwrap_or_else(now_millis))
+        .bind(write_time(ts))
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected() > 0)
@@ -1333,11 +1328,19 @@ impl PgStore {
         )
         .bind(key)
         .bind(value)
-        .bind(ts.unwrap_or_else(now_millis))
+        .bind(write_time(ts))
         .execute(&self.pool)
         .await?;
         Ok(r.rows_affected() > 0)
     }
+}
+
+/// The last-write-wins stamp for a client write: its edit time, never later
+/// than now. A device whose clock runs ahead would otherwise stamp every write
+/// in the future and reject other devices' newer edits until real time caught up.
+fn write_time(ts: Option<i64>) -> i64 {
+    let now = now_millis();
+    ts.map_or(now, |ts| ts.min(now))
 }
 
 pub(crate) fn now_millis() -> i64 {
@@ -1352,6 +1355,18 @@ impl PgStore {
         &self,
         change: Option<&crate::library::Change>,
     ) -> Result<crate::library::Library, String> {
+        // A plain read of an initialized library needs neither the write lock
+        // nor the book list; every client polls and refetches it on push.
+        if change.is_none() {
+            let value: Option<serde_json::Value> =
+                sqlx::query_scalar("SELECT snapshot FROM library_state WHERE id = 1")
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            if let Some(value) = value {
+                return serde_json::from_value(value).map_err(|e| e.to_string());
+            }
+        }
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         sqlx::query("SELECT pg_advisory_xact_lock(8148)")
             .execute(&mut *tx)
@@ -1442,6 +1457,15 @@ impl PgStore {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn write_time_never_lies_in_the_future() {
+        let now = super::now_millis();
+        assert_eq!(super::write_time(Some(1_000)), 1_000);
+        let future = super::write_time(Some(now + 3_600_000));
+        assert!(future >= now && future < now + 60_000);
+        assert!(super::write_time(None) >= now);
+    }
+
     use super::*;
 
     /// Open + migrate against `$DATABASE_URL`, or `None` to skip when unset so

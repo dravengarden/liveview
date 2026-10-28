@@ -1,3 +1,5 @@
+import { takeStaleRead } from "./serverReachability.ts";
+
 // Live WebSocket state shared with background refreshers. While the socket is
 // connected the server pushes corpus (`TreeUpdate`), audio (`chapter-ready`),
 // and organization (`LibraryUpdate`) changes, so pollers drop to a slow safety
@@ -19,11 +21,13 @@ export function isLiveSocketConnected(): boolean {
   return connected;
 }
 
-/** Record the socket state. A reconnect (not the first connect, which the
- *  startup fetches already cover) notifies listeners so they can catch up on
- *  pushes missed while disconnected. */
+/** Record the socket state. A reconnect notifies listeners so they can catch
+ *  up on pushes missed while disconnected. The first connect does too when a
+ *  startup read was answered from the local copy (a launch without the server),
+ *  since the startup fetches did not cover it then. */
 export function setLiveSocketConnected(next: boolean): void {
-  const reconnected = next && !connected && everConnected;
+  const opened = next && !connected;
+  const reconnected = opened && (takeStaleRead() || everConnected);
   connected = next;
   if (next) everConnected = true;
   if (reconnected) { for (const listener of reconnectListeners) listener(); }

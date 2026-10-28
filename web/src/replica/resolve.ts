@@ -23,9 +23,17 @@ import {
   type PathRecord,
   REPLICA_DAG_MS,
   REPLICA_FETCH_MS,
+  REPLICA_FRESH_GRACE_MS,
+  REPLICA_UNREACHABLE_FETCH_MS,
   STORE_META,
 } from "./schema.ts";
 import { replicaRemoteBase } from "./sync.ts";
+import {
+  noteServerStatus,
+  noteServerUnreachable,
+  noteStaleRead,
+  serverReachability,
+} from "../serverReachability.ts";
 import { joinRemoteUrl } from "./worker.ts";
 
 export interface ReplicaContentFetchOpts {
@@ -56,11 +64,25 @@ export function replicaIsOffline(): boolean {
   return offlineProbe();
 }
 
-/** 0 when net is none; otherwise a body-inclusive budget (not connect-only). */
+/** 0 when net is none; otherwise a body-inclusive budget (not connect-only).
+ *  While the server is known unreachable the budget is short: the request still
+ *  probes for recovery, but a missing resource reports "not downloaded" quickly
+ *  instead of after the full timeout. */
 export function replicaFetchBudgetMs(opts?: ReplicaContentFetchOpts): number {
   if (opts?.offline === true || replicaIsOffline()) return 0;
   if (opts?.connectMs !== undefined) return opts.connectMs;
-  return REPLICA_FETCH_MS;
+  return serverReachability() === "unreachable"
+    ? REPLICA_UNREACHABLE_FETCH_MS
+    : REPLICA_FETCH_MS;
+}
+
+/** Marks a response answered from the local copy because the server did not
+ *  answer in time. Callers that memoize a read can refetch it later. */
+export const STALE_HEADER = "x-lv-stale";
+
+function staleResponse(body: ArrayBuffer): Response {
+  noteStaleRead();
+  return new Response(body, { status: 200, headers: { [STALE_HEADER]: "1" } });
 }
 
 function offline504(): Response {
@@ -125,11 +147,16 @@ async function fetchAbsoluteWith(
   const controller = new AbortController();
   const timer = globalThis.setTimeout(() => controller.abort(), budgetMs);
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       cache: "no-store",
       signal: controller.signal,
       ...(headers ? { headers } : {}),
     });
+    noteServerStatus(response.status);
+    return response;
+  } catch (error) {
+    noteServerUnreachable();
+    throw error;
   } finally {
     globalThis.clearTimeout(timer);
   }
@@ -326,39 +353,65 @@ async function resolveManifest(
   return new Response(buffer, { status: 200 });
 }
 
+/** Network read of a url-keyed resource. A 200 refreshes the local copy; a 4xx
+ *  is a real answer the caller sees when there is no local copy; anything else
+ *  (5xx, timeout, network error) is `undefined`. Never rejects. */
+async function fetchKeyed(
+  norm: string,
+  budget: number,
+): Promise<Response | undefined> {
+  try {
+    const response = await fetchAbsolute(absoluteUrl(norm), budget);
+    if (response.ok) {
+      const buffer = await response.arrayBuffer();
+      try {
+        await putUrlCache(norm, buffer);
+      } catch {
+        // Persist is best-effort; the caller still gets the fresh body.
+      }
+      return new Response(buffer, { status: 200 });
+    }
+    if (response.status >= 400 && response.status < 500) return response;
+  } catch {
+    // offline / timeout: the caller falls back to the local copy
+  }
+  return undefined;
+}
+
+/** Url-keyed (user-state) reads: the local copy when asked for it, else the
+ *  network — but never held hostage by it. With a local copy, the server gets a
+ *  short grace window to deliver a fresher answer (none when it is known
+ *  unreachable); after that the local copy is served and the request finishes
+ *  in the background, refreshing the copy for the next read. */
 async function resolveKeyed(
   norm: string,
   opts?: ReplicaContentFetchOpts,
 ): Promise<Response> {
-  const cacheFirst = opts?.cacheFirst === true;
-  if (cacheFirst) {
+  if (opts?.cacheFirst === true) {
     const hit = await getUrlCache(norm);
     if (hit) return new Response(hit, { status: 200 });
   }
   const budget = replicaFetchBudgetMs(opts);
-  let clientFailure: Response | undefined;
-  if (budget > 0) {
-    try {
-      const response = await fetchAbsolute(absoluteUrl(norm), budget);
-      if (response.ok) {
-        const buffer = await response.arrayBuffer();
-        try {
-          await putUrlCache(norm, buffer);
-        } catch {
-          // Persist is best-effort; the caller still gets the fresh body.
-        }
-        return new Response(buffer, { status: 200 });
-      }
-      if (response.status >= 400 && response.status < 500) {
-        clientFailure = response;
-      }
-    } catch {
-      // fall through to last-good cache
-    }
+  if (budget <= 0) {
+    const local = await getUrlCache(norm);
+    return local ? staleResponse(local) : offline504();
   }
-  const fallback = await getUrlCache(norm);
-  if (fallback) return new Response(fallback, { status: 200 });
-  return clientFailure ?? offline504();
+  const network = fetchKeyed(norm, budget);
+  const local = await getUrlCache(norm);
+  if (!local) return (await network) ?? offline504();
+  const grace = serverReachability() === "unreachable" ? 0 : REPLICA_FRESH_GRACE_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const waited = await Promise.race([
+    network.then((response) => ({ response })),
+    new Promise<null>((resolve) => {
+      timer = globalThis.setTimeout(() => resolve(null), grace);
+    }),
+  ]);
+  globalThis.clearTimeout(timer);
+  if (waited?.response?.ok) return waited.response;
+  // A 4xx with a local copy (e.g. a proxy rejecting during an outage) or no
+  // timely answer: the last-known state is the better answer.
+  return staleResponse(local);
 }
 
 /**

@@ -8,6 +8,8 @@ import { runOtaCheck } from "@/otaUpdater";
 import { webSocketUrl } from "@/webSocketUrl";
 import { setPwaBackendConnected } from "@/pwa";
 import { dispatchLibraryUpdate, setLiveSocketConnected } from "@/liveSocket";
+import { noteServerReachable } from "@/serverReachability";
+import { flushSyncQueue } from "@/syncQueue";
 
 interface UseWebSocketOptions {
   onContentUpdate: (
@@ -49,6 +51,10 @@ export function useWebSocket(
         // Resets the reconnect counter, flashes the green banner if an outage was
         // surfaced, and probes /version for a redeploy (see connectionStore).
         connectionReady();
+        noteServerReachable();
+        // Deliver writes made while the server was away before catch-up reads
+        // compare against it.
+        void flushSyncQueue();
         setLiveSocketConnected(true);
         // App-bundle OTA is now SERVER-PUSHED: the server sends an `AppVersion`
         // message right after this connect (see below), so there's nothing to poll

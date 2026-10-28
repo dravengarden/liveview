@@ -104,6 +104,22 @@ interface UntranslatedNotice {
   shown: string;
 }
 
+/**
+ * A state updater that keeps the previous value when a revalidated response is
+ * structurally identical, so memoized shelf cards and progress meters do not
+ * re-render on every refresh that changed nothing.
+ */
+function keepIfSame<T>(next: T): (prev: T) => T {
+  return (prev) => {
+    if (prev === next) return prev;
+    try {
+      return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+    } catch {
+      return next;
+    }
+  };
+}
+
 export function App(): React.JSX.Element {
   const [tree, setTree] = useState<TreeNode[]>([]);
   // Full AUDIO forest (all books), held ONLY for the shelf's listening meter so it
@@ -352,7 +368,7 @@ export function App(): React.JSX.Element {
             const fresh = (await (
               await contentFetch("/api/books", { fresh: true })
             ).json()) as Book[];
-            setBooks(fresh);
+            setBooks(keepIfSame(fresh));
           } catch {
             /* offline / transient — the cached shelf stands */
           }
@@ -368,7 +384,7 @@ export function App(): React.JSX.Element {
             const at = (await (
               await contentFetch("/api/tree?rendition=audio")
             ).json()) as TreeNode[];
-            setAudioTree(at);
+            setAudioTree(keepIfSame(at));
           } catch {
             /* offline / transient — the cached meter stands */
           }
@@ -403,7 +419,7 @@ export function App(): React.JSX.Element {
     try {
       const list = (await (await contentFetch("/api/books", { fresh: true }))
         .json()) as Book[];
-      setBooks(list);
+      setBooks(keepIfSame(list));
     } catch {
       /* offline / transient — the cached shelf stands */
     }
@@ -425,7 +441,7 @@ export function App(): React.JSX.Element {
     // returning to the shelf re-seeds from the now-fresh cache.
     if (currentPathRef.current === null && bareTree) {
       try {
-        setTree((await bareTree.json()) as TreeNode[]);
+        setTree(keepIfSame((await bareTree.json()) as TreeNode[]));
       } catch {
         /* malformed — keep the prior tree, next deploy retries */
       }
@@ -434,7 +450,7 @@ export function App(): React.JSX.Element {
     // audio spine (reuses the fresh fetch above — no extra round-trip).
     if (currentPathRef.current === null && audioForest) {
       try {
-        setAudioTree((await audioForest.json()) as TreeNode[]);
+        setAudioTree(keepIfSame((await audioForest.json()) as TreeNode[]));
       } catch {
         /* malformed — keep the prior audio forest, next deploy retries */
       }
@@ -1066,9 +1082,16 @@ export function App(): React.JSX.Element {
     };
   }, [currentPath, backToLanding]);
 
+  // Name the window after what is being read: it shows in the browser tab,
+  // history, and the iOS app switcher, where a raw `<slug>/<file>.md` path
+  // means nothing.
   useEffect(() => {
-    document.title = currentPath ?? "liveview";
-  }, [currentPath]);
+    document.title = !currentPath
+      ? "LiveView"
+      : chapterLabel && chapterLabel !== bookLabel
+      ? `${chapterLabel} · ${bookLabel}`
+      : chapterLabel || bookLabel || "LiveView";
+  }, [currentPath, chapterLabel, bookLabel]);
 
   // Resolve which (rendition, lang) a hash deep-link should open: explicit
   // `&rendition=`/`&lang=` win; else the book's default rendition and that

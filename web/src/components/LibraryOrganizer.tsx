@@ -174,6 +174,8 @@ export function LibraryOrganizer(
               bgcolor: "background.paper",
               color: "text.primary",
               font: "inherit",
+              // iOS zooms the page when a native select under 16px is focused.
+              "@media (pointer: coarse)": { fontSize: "max(16px, 1rem)" },
               width: "100%",
               minWidth: 0,
             }}
