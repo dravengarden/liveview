@@ -170,7 +170,7 @@ const STRINGS: Record<Language, Dict> = {
       "The browser did not grant persistent storage. Installing on the Home Screen may help; downloads remain best-effort.",
     "pwa.networkHint":
       "This browser cannot identify WiFi. Turn this off to allow downloads on your current connection, including cellular.",
-    "pwa.update": "New version available · Tap to update",
+    "pwa.update": "New version · Update",
     "pwa.updateFailed": "Update failed. Try again when online.",
     "offline.description":
       "Text is saved automatically. Opening a book preloads its selected audio for offline listening.",
@@ -480,7 +480,7 @@ const STRINGS: Record<Language, Dict> = {
       "浏览器未授予持久存储权限。添加到主屏幕可能有帮助；下载内容仍可能被系统清理。",
     "pwa.networkHint":
       "此浏览器无法识别 WiFi。关闭此项可允许在当前网络下载，包括蜂窝网络。",
-    "pwa.update": "有新版本 · 点击更新",
+    "pwa.update": "新版本 · 更新",
     "pwa.updateFailed": "更新失败，请联网后重试。",
     "offline.description":
       "文字自动保存；打开书籍后预加载当前选定声音的音频，供离线收听。",

@@ -308,6 +308,10 @@ export interface ConnectionBannerProps {
   /** A reader can defer updates until an explicit tap. */
   readonly updateLabel?: string;
   readonly updateFailedLabel?: string;
+  /** With `updateLabel`, present the deferred update as a bottom pill offset
+   *  by this CSS length (the app's bottom chrome) instead of the top bar, so
+   *  the prompt stays reachable and never covers the top of the content. */
+  readonly updateBottomOffset?: string;
 }
 
 // Full-width overlay bar tracking the app's socket + build version. All three
@@ -351,6 +355,60 @@ export function ConnectionBanner(props: ConnectionBannerProps): ReactNode {
 
   const palette = bannerPalette(banner.kind);
   const label = bannerLabel(banner.kind, secs, labels);
+
+  if (isUpdate && props.updateLabel && props.updateBottomOffset !== undefined) {
+    const applyUpdate = (): void => {
+      setUpdating(true);
+      setUpdateFailed(false);
+      void store.applyUpdate().catch(() => {
+        setUpdateFailed(true);
+        setUpdating(false);
+      });
+    };
+    return (
+      <Box
+        role="status"
+        aria-live="polite"
+        sx={{
+          position: "fixed",
+          left: 0,
+          right: 0,
+          bottom: `max(calc(${props.updateBottomOffset} + 12px), calc(env(safe-area-inset-bottom, 0px) + 12px))`,
+          display: "flex",
+          justifyContent: "center",
+          px: 2,
+          // Only the pill takes taps; the strip around it stays transparent.
+          pointerEvents: "none",
+          zIndex: (t) => t.zIndex.tooltip + 1,
+          // The open spatial drawer owns the bottom edge with its own controls.
+          "html[data-lv-spatial-drawer-open] &": { display: "none" },
+        }}
+      >
+        <Button
+          variant="contained"
+          disableElevation
+          disabled={updating}
+          onClick={applyUpdate}
+          startIcon={updating
+            ? <CircularProgress size={14} color="inherit" thickness={5} />
+            : undefined}
+          sx={{
+            pointerEvents: "auto",
+            minHeight: 40,
+            px: 2,
+            borderRadius: 999,
+            textTransform: "none",
+            fontWeight: 600,
+            maxWidth: "100%",
+          }}
+        >
+          {updateFailed
+            ? props.updateFailedLabel ?? "Update failed. Try again."
+            : props.updateLabel}
+        </Button>
+      </Box>
+    );
+  }
 
   return (
     <Box

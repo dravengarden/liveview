@@ -29,7 +29,11 @@ import type { LangInfo, TreeNode } from "@/types";
 import { LIVEVIEW_RADII } from "@/brand";
 import { type Language, useI18n } from "@/i18n";
 import { localeDescriptor } from "@/locales/registry";
-import { centerWithin } from "@/scrollWithin";
+import {
+  centerWithin,
+  centredWithin,
+  fullyVisibleWithin,
+} from "@/scrollWithin";
 import { contentsAudio, contentsPreference, type ChapterAudioInfo } from "@/audio/contents";
 import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { audioCacheAvailable, audioPreloader, useAudioCache } from "@/audio/cache";
@@ -394,7 +398,10 @@ export function Sidebar({
   // (the reader is a window onto the engine), else the viewed chapter.
   const focusPath = playingPath ?? currentPath;
 
-  // Auto-expand parent directories only when the focused chapter changes
+  // Auto-expand parent directories only when the focused chapter changes, and
+  // keep that chapter in view: opening the contents of a long book lands on
+  // where you are instead of its first chapter.
+  const revealedRef = useRef<string | null>(null);
   useEffect(() => {
     if (
       focusPath && focusPath !== prevCurrentPathRef.current &&
@@ -413,6 +420,68 @@ export function Sidebar({
     }
     prevCurrentPathRef.current = focusPath;
   }, [focusPath, tree]);
+
+  const revealFocus = useCallback(() => {
+    if (!focusPath || revealedRef.current === focusPath) return;
+    const container = listContainerRef.current;
+    const element = container?.querySelector(
+      `[data-path="${CSS.escape(focusPath)}"]`,
+    );
+    // Until the pane is height-constrained and its rows are laid out, nothing
+    // can be measured reliably; the resize observer below retries then.
+    if (
+      !container || !element ||
+      container.scrollHeight <= container.clientHeight
+    ) {
+      return;
+    }
+    if (showHeader) {
+      // The persistent pane is on screen: leave a visible row alone, else glide.
+      revealedRef.current = focusPath;
+      if (!fullyVisibleWithin(container, element)) {
+        centerWithin(container, element);
+      }
+      return;
+    }
+    // The temporary drawer is usually closed when the chapter changes: jump the
+    // row to the middle, and keep correcting while the list still settles (the
+    // resize observer calls back) until it is centred or the reader takes over,
+    // so the drawer opens centred on it.
+    centerWithin(container, element, "instant");
+    if (centredWithin(container, element)) revealedRef.current = focusPath;
+  }, [focusPath, showHeader]);
+
+  useEffect(() => {
+    // After the expansion above has rendered the row.
+    const frame = requestAnimationFrame(revealFocus);
+    return () => cancelAnimationFrame(frame);
+  }, [revealFocus, tree, expandedPaths]);
+
+  useEffect(() => {
+    const container = listContainerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(() => revealFocus());
+    observer.observe(container);
+    // The rows can finish laying out (folders animate open) after the pane
+    // already has its size.
+    if (container.firstElementChild) {
+      observer.observe(container.firstElementChild);
+    }
+    // Once the reader touches the list, it is theirs: stop correcting.
+    const yield_ = (): void => {
+      revealedRef.current = focusPath;
+    };
+    const opts = { passive: true } as const;
+    container.addEventListener("pointerdown", yield_, opts);
+    container.addEventListener("wheel", yield_, opts);
+    container.addEventListener("touchstart", yield_, opts);
+    return () => {
+      observer.disconnect();
+      container.removeEventListener("pointerdown", yield_);
+      container.removeEventListener("wheel", yield_);
+      container.removeEventListener("touchstart", yield_);
+    };
+  }, [revealFocus, focusPath]);
 
   const isAllExpanded = allDirPaths.length > 0 &&
     allDirPaths.every((p) => expandedPaths.has(p));
