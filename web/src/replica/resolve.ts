@@ -428,8 +428,15 @@ export async function replicaContentFetch(
   const rec = replicaUsable()
     ? pathRecordByUrl(norm) ?? blobRecord(norm)
     : undefined;
-  if (rec) return resolveManifest(rec, opts);
+  if (rec && !rootlessList(rec)) return resolveManifest(rec, opts);
   return resolveKeyed(norm, opts);
+}
+
+/** A list resource is addressed by `<root>:<url>`. Servers without a deploy
+ *  root (filesystem preview) once listed them as `:<url>`, a constant that
+ *  would pin the first copy forever; read those url-keyed instead. */
+function rootlessList(rec: PathRecord): boolean {
+  return rec.kind === "list" && rec.hash.startsWith(":");
 }
 
 function blobRecord(norm: string): PathRecord | undefined {

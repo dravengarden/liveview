@@ -1156,13 +1156,22 @@ async fn api_dag(State(state): State<SharedState>, headers: HeaderMap) -> Respon
     // the client requests via contentFetch (App.tsx enterBook/backToLanding + the
     // shelf load), so the offline cache-first hit matches. Bytes 0 (tiny; the size
     // accounting is dominated by audio anyway).
+    //
+    // Without a deploy root (filesystem preview) these lists have no content
+    // address: a constant key would pin the first copy in the replica forever,
+    // so a preview edit never reached the shelf. Leave them url-keyed there.
     let root_key = root.clone();
-    for u in [
-        "/api/books",
-        "/api/tree",
-        "/api/tree?rendition=text",
-        "/api/tree?rendition=audio",
-    ] {
+    let lists: &[&str] = if root.is_empty() {
+        &[]
+    } else {
+        &[
+            "/api/books",
+            "/api/tree",
+            "/api/tree?rendition=text",
+            "/api/tree?rendition=audio",
+        ]
+    };
+    for u in lists {
         resources.push(serde_json::json!({
             "path": u, "hash": format!("{root_key}:{u}"), "kind": "list",
             "bytes": 0, "url": u,

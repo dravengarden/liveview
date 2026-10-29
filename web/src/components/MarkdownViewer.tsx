@@ -1037,10 +1037,20 @@ export function MarkdownViewer({
                 opacity: 1,
                 minHeight: 32,
                 px: 1.25,
+                top: 4,
+                right: 4,
               },
             },
             "& pre:hover .copy-btn": {
               opacity: 1,
+            },
+            // The always-visible touch button is taller than a one-line block's
+            // slim padding; without room it was clipped in half by the block's
+            // own overflow.
+            "@media (hover: none)": {
+              "& pre:has(> .copy-btn)": {
+                minHeight: 40,
+              },
             },
           }}
         >

@@ -602,6 +602,41 @@ test("replica resolve serves a cache hit without network", async () => {
   }
 });
 
+test("a rootless list resource is read url-keyed, so it keeps refreshing", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "",
+    resources: [{
+      path: "/api/books",
+      hash: ":/api/books",
+      kind: "list",
+      bytes: 0,
+      url: "/api/books",
+    }],
+  });
+  await putBlob({
+    hash: ":/api/books",
+    kind: "list",
+    bytes: 2,
+    pinned: 0,
+    mtime: 1,
+    present: 1,
+    data: buf("[]"),
+  });
+  let body = '["fresh"]';
+  const fetchMock = installFetch(() => new Response(body, { status: 200 }));
+  try {
+    const first = await replicaContentFetch("/api/books", { fresh: true });
+    assert.equal(await first.text(), '["fresh"]');
+    body = '["newer"]';
+    const second = await replicaContentFetch("/api/books", { fresh: true });
+    assert.equal(await second.text(), '["newer"]');
+  } finally {
+    fetchMock.restore();
+  }
+});
+
 test("replica resolve miss fetches the absolute URL and puts", async () => {
   await setup();
   await applyDag({
