@@ -55,7 +55,7 @@ pub fn build_virtual_tree(books: &[BookState], rendition: RenditionKind) -> Vec<
 
 /// Audiobook spine: the rendition's default-edition top-level `*.spoken.md`
 /// files (these ARE the audiobook chapters), titled by each file's H1, in
-/// filename order. Per-language titles are collected across the rendition's
+/// natural filename order. Per-language titles are collected across the rendition's
 /// editions so the sidebar can swap titles with the language.
 fn build_audio_spine(book: &BookState, rendition: &RenditionState) -> Vec<TreeNode> {
     let ed = rendition.default_edition();
@@ -63,7 +63,7 @@ fn build_audio_spine(book: &BookState, rendition: &RenditionState) -> Vec<TreeNo
         return Vec::new();
     };
     let mut paths: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
-    paths.sort();
+    sort_by_chapter_name(&mut paths);
 
     let mut nodes = Vec::new();
     for path in paths {
@@ -111,8 +111,8 @@ fn build_spine(book: &BookState, rendition: &RenditionState) -> Vec<TreeNode> {
 /// `root`). Markdown files become H1-titled, language-aware chapter nodes;
 /// subdirectories that contain at least one markdown chapter (at any depth)
 /// become group nodes. A dir with no markdown under it is dropped, so asset
-/// directories never surface. Siblings are sorted by filename — the book
-/// convention for chapter ordering (numeric `NN-` prefixes sort naturally).
+/// directories never surface. Siblings are sorted by filename in natural order
+/// (see [`chapter_name_cmp`]), so `100-x.md` follows `99-x.md`.
 fn build_spine_dir(
     book: &BookState,
     rendition: &RenditionState,
@@ -123,7 +123,7 @@ fn build_spine_dir(
         return Vec::new();
     };
     let mut paths: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
-    paths.sort();
+    sort_by_chapter_name(&mut paths);
 
     let mut nodes = Vec::new();
     for path in paths {
@@ -298,6 +298,56 @@ fn apply_layout_order(nodes: &mut [TreeNode], layout: &Layout) {
     });
 }
 
+/// Sort chapter paths by file name in natural order.
+fn sort_by_chapter_name(paths: &mut [PathBuf]) {
+    paths.sort_by(|a, b| {
+        let name = |p: &PathBuf| p.file_name().map(|n| n.to_string_lossy().into_owned());
+        chapter_name_cmp(&name(a).unwrap_or_default(), &name(b).unwrap_or_default())
+    });
+}
+
+/// Natural filename order for chapter spines: runs of ASCII digits compare by
+/// numeric value, everything else bytewise. Books number chapters with a
+/// leading `NN-` prefix, and a bytewise sort would put `100-` between `10-`
+/// and `11-`. Equal numeric values with different zero padding fall back to
+/// the shorter run first, and fully equal keys fall back to bytewise order so
+/// the result stays total and deterministic.
+fn chapter_name_cmp(a: &str, b: &str) -> Ordering {
+    let (ab, bb) = (a.as_bytes(), b.as_bytes());
+    let (mut i, mut j) = (0, 0);
+    while i < ab.len() && j < bb.len() {
+        if ab[i].is_ascii_digit() && bb[j].is_ascii_digit() {
+            let (si, sj) = (i, j);
+            while i < ab.len() && ab[i].is_ascii_digit() {
+                i += 1;
+            }
+            while j < bb.len() && bb[j].is_ascii_digit() {
+                j += 1;
+            }
+            let (ra, rb) = (&ab[si..i], &bb[sj..j]);
+            let ta = &ra[ra.iter().position(|&c| c != b'0').unwrap_or(ra.len())..];
+            let tb = &rb[rb.iter().position(|&c| c != b'0').unwrap_or(rb.len())..];
+            let ord = ta
+                .len()
+                .cmp(&tb.len())
+                .then_with(|| ta.cmp(tb))
+                .then_with(|| ra.len().cmp(&rb.len()));
+            if ord != Ordering::Equal {
+                return ord;
+            }
+        } else {
+            match ab[i].cmp(&bb[j]) {
+                Ordering::Equal => {
+                    i += 1;
+                    j += 1;
+                }
+                ord => return ord,
+            }
+        }
+    }
+    (ab.len() - i).cmp(&(bb.len() - j)).then_with(|| ab.cmp(bb))
+}
+
 fn default_cmp(a_is_dir: bool, b_is_dir: bool, a_name: &str, b_name: &str) -> Ordering {
     b_is_dir
         .cmp(&a_is_dir)
@@ -419,6 +469,40 @@ mod tests {
                 ("The Basics", "mybook/01-basics.md", false),
             ]
         );
+    }
+
+    #[test]
+    fn manifest_spine_orders_chapter_numbers_naturally() {
+        let tmp = TempDir::new("lv-spine-natural");
+        for (file, title) in [
+            ("100-review.md", "100"),
+            ("10-ten.md", "10"),
+            ("99-ninety-nine.md", "99"),
+            ("11-eleven.md", "11"),
+            ("9-nine.md", "9"),
+            ("200-end.md", "200"),
+        ] {
+            fs::write(tmp.path().join(file), format!("# {title}\n")).unwrap();
+        }
+
+        let mut book = mk_mount("My Book", "mybook", tmp.path(), None);
+        book.renditions[0].manifest = true;
+        let tree = build_virtual_tree(&[book], RenditionKind::Text);
+
+        let titles: Vec<&str> = tree[0].children.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(titles, vec!["9", "10", "11", "99", "100", "200"]);
+    }
+
+    #[test]
+    fn chapter_name_cmp_compares_digit_runs_by_value() {
+        use std::cmp::Ordering::{Greater, Less};
+        assert_eq!(chapter_name_cmp("99-a.md", "100-a.md"), Less);
+        assert_eq!(chapter_name_cmp("10-a.md", "100-a.md"), Less);
+        assert_eq!(chapter_name_cmp("100-a.md", "11-a.md"), Greater);
+        assert_eq!(chapter_name_cmp("99-a.md", "99b-a.md"), Less);
+        assert_eq!(chapter_name_cmp("01-a.md", "1-a.md"), Greater);
+        assert_eq!(chapter_name_cmp("ch2.md", "ch10.md"), Less);
+        assert_eq!(chapter_name_cmp("a.md", "b.md"), Less);
     }
 
     #[test]
