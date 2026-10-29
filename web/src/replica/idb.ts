@@ -4,6 +4,7 @@ import {
   INDEX_APM_TS,
   INDEX_BY_KIND,
   INDEX_LRU,
+  INDEX_PRESENT,
   REPLICA_DB,
   REPLICA_VERSION,
   STORE_AGG,
@@ -32,11 +33,19 @@ function request<T>(req: IDBRequest<T>): Promise<T> {
 
 export { request as idbRequest };
 
-function upgrade(database: IDBDatabase): void {
+function upgrade(database: IDBDatabase, txn: IDBTransaction | null): void {
   if (!database.objectStoreNames.contains(STORE_BLOBS)) {
     const blobs = database.createObjectStore(STORE_BLOBS, { keyPath: "hash" });
     blobs.createIndex(INDEX_BY_KIND, "kind", { unique: false });
     blobs.createIndex(INDEX_LRU, ["pinned", "mtime"], { unique: false });
+    blobs.createIndex(INDEX_PRESENT, "present", { unique: false });
+  } else if (txn) {
+    // v2: which bodies are stored is answerable from index keys alone, without
+    // reading (and cloning) every body.
+    const blobs = txn.objectStore(STORE_BLOBS);
+    if (!blobs.indexNames.contains(INDEX_PRESENT)) {
+      blobs.createIndex(INDEX_PRESENT, "present", { unique: false });
+    }
   }
   if (!database.objectStoreNames.contains(STORE_PATHS)) {
     database.createObjectStore(STORE_PATHS, { keyPath: "path" });
@@ -54,11 +63,33 @@ function upgrade(database: IDBDatabase): void {
   }
 }
 
+function isVersionError(error: unknown): boolean {
+  return (error as { name?: unknown } | null)?.name === "VersionError";
+}
+
 export function openReplicaDb(): Promise<IDBDatabase> {
-  dbPromise ??= new Promise<IDBDatabase>((resolve, reject) => {
-    const req = factory().open(REPLICA_DB, REPLICA_VERSION);
+  dbPromise ??= openAt(REPLICA_VERSION)
+    .catch((error: unknown) => {
+      // A newer bundle already upgraded this database (an installed shell can
+      // boot its older embedded bundle first). Upgrades are additive, so open
+      // it at its current version instead of losing the replica for a launch.
+      if (!isVersionError(error)) throw error;
+      return openAt(undefined);
+    })
+    .catch((error: unknown) => {
+      dbPromise = undefined;
+      throw error;
+    });
+  return dbPromise;
+}
+
+function openAt(version: number | undefined): Promise<IDBDatabase> {
+  return new Promise<IDBDatabase>((resolve, reject) => {
+    const req = version === undefined
+      ? factory().open(REPLICA_DB)
+      : factory().open(REPLICA_DB, version);
     req.addEventListener("upgradeneeded", () => {
-      upgrade(req.result);
+      upgrade(req.result, req.transaction);
     });
     req.addEventListener("success", () => {
       const database = req.result;
@@ -69,15 +100,12 @@ export function openReplicaDb(): Promise<IDBDatabase> {
       resolve(database);
     });
     req.addEventListener("error", () => {
-      dbPromise = undefined;
       reject(req.error ?? new Error("IndexedDB open failed"));
     });
     req.addEventListener("blocked", () => {
-      dbPromise = undefined;
       reject(new Error("IndexedDB open blocked"));
     });
   });
-  return dbPromise;
 }
 
 export async function closeReplicaDb(): Promise<void> {

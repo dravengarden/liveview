@@ -6,6 +6,7 @@ import {
   getBlobRecord,
   hasBlob,
   noteBodyPresent,
+  seedKnownBodies,
   putBlob,
 } from "./blobs.ts";
 import { forEachCursor, withTxn } from "./idb.ts";
@@ -279,6 +280,7 @@ function fillMessage(items: ReplicaWorkerFillItem[]): ReplicaWorkerFill {
 export async function missingTextArt(): Promise<ReplicaWorkerFillItem[]> {
   const out: ReplicaWorkerFillItem[] = [];
   const seen = new Set<string>();
+  await seedKnownBodies();
   for (const rec of allPathRecords()) {
     if (isAudioKind(rec.kind) || seen.has(rec.hash)) continue;
     if (!persistBodyForKind(rec.kind)) continue;

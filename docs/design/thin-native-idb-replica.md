@@ -400,17 +400,19 @@ It is not a blob store:
 
 Reuse the **patterns**: Promise-wrapped IDB, graceful open failure for *prefs*, one DB per concern. Do not reuse the module as the blob engine. Keep `_sync-idb` for `_sync` tiers.
 
-#### 3.2 Schema (`liveview-replica`, version 1)
+#### 3.2 Schema (`liveview-replica`, version 2)
 
 ```ts
 // web/src/replica/schema.ts
 export const REPLICA_DB = "liveview-replica";
-export const REPLICA_VERSION = 1;
+export const REPLICA_VERSION = 2;
 
 // object stores:
 // blobs     keyPath: hash
 //   { hash, kind, bytes, pinned /*0|1*/, mtime, present /*0|1*/, data?: ArrayBuffer }
-//   indexes: by-kind, lru = [pinned+mtime]
+//   indexes: by-kind, lru = [pinned+mtime], by-present (v2)
+//   by-present: key-only scan seeds the session's "body stored" hint, so a
+//   cold start never reads bodies to learn which ones exist
 //   present: audio flips 1 only on cacheProgress ok; text/art flips 1 on IDB put
 // paths     keyPath: path
 //   { path, hash, kind, bytes, url }   // url is origin-relative as in /api/dag
@@ -423,6 +425,9 @@ export const REPLICA_VERSION = 1;
 //   total* rewritten by applyDag from the DAG (not from puts)
 // apm       keyPath: event_id
 //   { event_id, ts, body }        // schema-dumb; INSERT-OR-IGNORE; cap 5000
+// Upgrades are additive. An older bundle (an installed shell boots its
+// embedded SPA first) that meets a newer database opens it at its current
+// version instead of failing with VersionError.
 ```
 
 **Blob policy (the quota-honest split):**

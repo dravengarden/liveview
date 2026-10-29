@@ -194,6 +194,25 @@ class MemoryIndex {
     return this.store.openIndexCursor(this, range ?? null);
   }
 
+  /** Primary keys of the rows whose index key falls in `range`, in index
+   *  order. Like the real API, it never hands values back. */
+  getAllKeys(range?: MemoryKeyRange | IDBKeyRange | null): MemoryRequest<Key[]> {
+    const req = new MemoryRequest<Key[]>();
+    this.store.txn.addPending();
+    schedule(() => {
+      const memRange = (range ?? null) as MemoryKeyRange | null;
+      const rows = this.store.rows()
+        .map((row) => ({ ik: keyFromPath(row.value, this.keyPath), key: row.key }))
+        .filter(({ ik }) => !memRange || memRange.includes(ik));
+      rows.sort((a, b) => compareKeys(a.ik, b.ik) || compareKeys(a.key, b.key));
+      req.result = rows.map(({ key }) => key);
+      req.readyState = "done";
+      req.dispatch("success");
+      this.store.txn.removePending();
+    });
+    return req;
+  }
+
   get(key: Key): MemoryRequest<unknown> {
     const req = new MemoryRequest<unknown>();
     this.store.txn.addPending();
@@ -294,6 +313,10 @@ class MemoryObjectStore {
 
   rows(): StoredRow[] {
     return [...this.data.values()];
+  }
+
+  get indexNames(): MemoryStringList {
+    return new MemoryStringList([...this.indexes.keys()]);
   }
 
   createIndex(
@@ -609,7 +632,15 @@ function dataBytes(value: unknown): number {
 }
 
 class MemoryOpenRequest extends MemoryRequest<MemoryDatabase> {
-  // IDBOpenDBRequest
+  /** Expose the versionchange transaction only while `upgradeneeded` runs. */
+  upgrade(db: MemoryDatabase): void {
+    this.result = db;
+    const stores = [...db.objectStoreNames];
+    this.transaction = new MemoryTransaction(db, stores, "versionchange");
+    this.dispatch("upgradeneeded");
+    this.transaction.commit();
+    this.transaction = null;
+  }
 }
 
 export class MemoryFactory extends Emitter {
@@ -628,22 +659,23 @@ export class MemoryFactory extends Emitter {
       if (!db) {
         db = new MemoryDatabase(name, ver, this);
         this.dbs.set(name, db);
-        req.result = db;
-        req.dispatch("upgradeneeded");
+        req.upgrade(db);
         req.readyState = "done";
         req.dispatch("success");
         return;
       }
       if (ver < db.version) {
-        req.error = new Error("VersionError");
+        req.error = new DOMException(
+          `requested version ${ver} is below ${db.version}`,
+          "VersionError",
+        );
         req.readyState = "done";
         req.dispatch("error");
         return;
       }
       if (ver > db.version) {
         db.version = ver;
-        req.result = db;
-        req.dispatch("upgradeneeded");
+        req.upgrade(db);
         req.readyState = "done";
         req.dispatch("success");
         return;

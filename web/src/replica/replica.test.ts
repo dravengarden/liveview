@@ -12,6 +12,11 @@ import {
 } from "./blobs.ts";
 import { evictUnpinnedLru } from "./gc.ts";
 import { closeReplicaDb, openReplicaDb, withTxn } from "./idb.ts";
+import {
+  bodyKnownPresent,
+  resetKnownBodies,
+  seedKnownBodies,
+} from "./blobs.ts";
 import { applyDag, parseManifest, parseRoot } from "./manifest.ts";
 import { installMemoryIndexedDB, type MemoryIdbHandle } from "./memory-idb.ts";
 import { contentFetch } from "../native-sync.ts";
@@ -1259,6 +1264,104 @@ test("applyDag rewrites only changed paths and drops removed ones", async () => 
     return keys;
   });
   assert.deepEqual(stored, ["a/text/en/01.md", "a/text/en/03.md"]);
+});
+
+test("seedKnownBodies learns stored bodies from index keys, not audio or placeholders", async () => {
+  await setup();
+  await putBlob({
+    hash: "body",
+    kind: "text",
+    bytes: 2,
+    pinned: 0,
+    mtime: 1,
+    present: 1,
+    data: buf("ok"),
+  });
+  await putBlob({
+    hash: "placeholder",
+    kind: "text",
+    bytes: 2,
+    pinned: 0,
+    mtime: 1,
+    present: 0,
+  });
+  await putBlob({
+    hash: "song",
+    kind: "audio",
+    bytes: 2,
+    pinned: 0,
+    mtime: 1,
+    present: 0,
+  });
+  await setPresent("song", 1);
+  resetKnownBodies();
+  await seedKnownBodies();
+  assert.equal(bodyKnownPresent("body"), true);
+  assert.equal(bodyKnownPresent("placeholder"), false);
+  assert.equal(bodyKnownPresent("song"), false);
+});
+
+/** Open the replica database at `version` with the v1 layout (no
+ *  `by-present` index) and one stored text body, bypassing the module. */
+async function seedLegacyDb(version: number): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const req = indexedDB.open("liveview-replica", version);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      const blobs = db.createObjectStore("blobs", { keyPath: "hash" });
+      blobs.createIndex("by-kind", "kind");
+      blobs.createIndex("lru", ["pinned", "mtime"]);
+      for (const name of ["paths", "meta", "agg"]) {
+        db.createObjectStore(name, {
+          keyPath: name === "paths" ? "path" : name === "agg" ? "kind" : "key",
+        });
+      }
+      db.createObjectStore("apm", { keyPath: "event_id" }).createIndex(
+        "by-ts",
+        "ts",
+      );
+    };
+    req.onsuccess = () => {
+      const txn = req.result.transaction(["blobs"], "readwrite");
+      txn.objectStore("blobs").put({
+        hash: "legacy",
+        kind: "text",
+        bytes: 2,
+        pinned: 0,
+        mtime: 1,
+        present: 1,
+        data: buf("ok"),
+      });
+      txn.oncomplete = () => resolve();
+      txn.onerror = () => reject(txn.error);
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+test("a v1 replica upgrades in place and keeps its bodies", async () => {
+  await setup();
+  await closeReplicaDb();
+  installMemoryIndexedDB();
+  await seedLegacyDb(1);
+  resetKnownBodies();
+  await openReplicaDb();
+  await seedKnownBodies();
+  assert.equal(bodyKnownPresent("legacy"), true);
+  assert.ok(await getBlob("legacy"));
+});
+
+test("an older bundle opens a database a newer bundle already upgraded", async () => {
+  await setup();
+  await closeReplicaDb();
+  installMemoryIndexedDB();
+  await seedLegacyDb(99);
+  await openReplicaDb();
+  assert.ok(await getBlob("legacy"));
+  // The newer layout is unknown here; the hint stays empty instead of failing.
+  resetKnownBodies();
+  await seedKnownBodies();
+  assert.equal(bodyKnownPresent("legacy"), false);
 });
 
 test("DAG totals count each blob once even when several paths share it", async () => {

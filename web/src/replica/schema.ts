@@ -2,7 +2,9 @@
 export const MANIFEST_PROTOCOL_VERSION = 1;
 
 export const REPLICA_DB = "liveview-replica";
-export const REPLICA_VERSION = 1;
+/** 2: `by-present` index on blobs. Upgrades are additive, so an older bundle
+ *  can still open a newer database (see `openReplicaDb`). */
+export const REPLICA_VERSION = 2;
 
 export const STORE_BLOBS = "blobs";
 export const STORE_PATHS = "paths";
@@ -12,6 +14,7 @@ export const STORE_APM = "apm";
 
 export const INDEX_BY_KIND = "by-kind";
 export const INDEX_LRU = "lru";
+export const INDEX_PRESENT = "by-present";
 export const INDEX_APM_TS = "by-ts";
 
 export const META_ROOT = "root";

@@ -10,7 +10,9 @@ import { persistBodyForKind, setPersistFullSizeArtwork } from "./policy.ts";
 import {
   type BlobRecord,
   GC_BATCH,
+  INDEX_BY_KIND,
   INDEX_LRU,
+  INDEX_PRESENT,
   isAudioKind,
   STORE_AGG,
   STORE_BLOBS,
@@ -35,11 +37,43 @@ export function noteBodyPresent(hash: string): void {
 }
 
 export function forgetKnownBodies(hashes: Iterable<string>): void {
+  forgetEpoch++;
   for (const hash of hashes) knownBodies.delete(hash);
 }
 
 export function resetKnownBodies(): void {
+  forgetEpoch++;
+  knownBodiesSeeded = false;
   knownBodies.clear();
+}
+
+let knownBodiesSeeded = false;
+/** Bumped whenever a hash leaves the hint, so a seed read that raced a removal
+ *  is discarded instead of re-adding it. */
+let forgetEpoch = 0;
+
+/**
+ * Fill the hint from the database once per session. Non-audio `present === 1`
+ * means the body is stored (`prepareBlobRecord`), and both index scans read
+ * keys only, so a cold start never loads the corpus's bodies just to learn
+ * which ones it already has.
+ */
+export async function seedKnownBodies(): Promise<void> {
+  if (knownBodiesSeeded) return;
+  const epoch = forgetEpoch;
+  const stored = await withTxn([STORE_BLOBS], "readonly", async (txn) => {
+    const store = txn.objectStore(STORE_BLOBS);
+    if (!store.indexNames.contains(INDEX_PRESENT)) return null;
+    const [present, audio] = await Promise.all([
+      idbRequest(store.index(INDEX_PRESENT).getAllKeys(IDBKeyRange.only(1))),
+      idbRequest(store.index(INDEX_BY_KIND).getAllKeys(IDBKeyRange.only("audio"))),
+    ]);
+    const audioKeys = new Set(audio);
+    return present.filter((key) => !audioKeys.has(key)) as string[];
+  });
+  if (stored === null || epoch !== forgetEpoch) return;
+  for (const hash of stored) knownBodies.add(hash);
+  knownBodiesSeeded = true;
 }
 
 async function putOnce(record: BlobRecord): Promise<void> {

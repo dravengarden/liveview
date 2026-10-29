@@ -67,13 +67,15 @@ export const SPIKE_EVAL_JS = `(() => {
   const count = 32;
   const payload = new TextEncoder().encode("lv-card-backdrop");
   const openDb = () => new Promise((resolve, reject) => {
-    const req = indexedDB.open("liveview-replica", 1);
+    // No version: open whatever the app created; upgrades stay the app's job.
+    const req = indexedDB.open("liveview-replica");
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains("blobs")) {
         const blobs = db.createObjectStore("blobs", { keyPath: "hash" });
         blobs.createIndex("by-kind", "kind");
         blobs.createIndex("lru", ["pinned", "mtime"]);
+        blobs.createIndex("by-present", "present");
       }
       if (!db.objectStoreNames.contains("paths")) {
         db.createObjectStore("paths", { keyPath: "path" });
