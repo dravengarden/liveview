@@ -44,7 +44,12 @@ import {
   setPersistFullSizeArtwork,
 } from "./policy.ts";
 import { REPLICA_FLAG_KEY } from "./schema.ts";
-import { missingTextArt, pullMissingTextArt, replayWorklist } from "./sync.ts";
+import {
+  missingTextArt,
+  pullMissingTextArt,
+  replayWorklist,
+  storedTextPaths,
+} from "./sync.ts";
 import { setNativeAudioCacheProbe } from "./media-bridge.ts";
 import { flushBlobTouches, noteBlobAccess, TOUCH_MIN_AGE_MS } from "./blobs.ts";
 import { evictUnpinnedAudioToFit } from "./gc.ts";
@@ -1397,6 +1402,34 @@ test("an older bundle opens a database a newer bundle already upgraded", async (
   resetKnownBodies();
   await seedKnownBodies();
   assert.equal(bodyKnownPresent("legacy"), false);
+});
+
+test("storedTextPaths lists only text chapters whose body is stored", async () => {
+  await setup();
+  await applyDag({
+    protocol_version: 1,
+    root: "r",
+    resources: [
+      textResource("kept", "book/text/en/01.md"),
+      textResource("missing", "book/text/en/02.md"),
+      { ...textResource("units", "book/text/en/01.md#units"), kind: "units" },
+    ],
+  });
+  for (const hash of ["kept", "units"]) {
+    await putBlob({
+      hash,
+      kind: hash === "units" ? "units" : "text",
+      bytes: 2,
+      pinned: 0,
+      mtime: 1,
+      present: 1,
+      data: buf("ok"),
+    });
+  }
+  resetKnownBodies();
+  assert.deepEqual([...(await storedTextPaths()) ?? []], [
+    "book/text/en/01.md",
+  ]);
 });
 
 test("DAG totals count each blob once even when several paths share it", async () => {

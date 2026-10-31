@@ -53,13 +53,14 @@ let knownBodiesSeeded = false;
 let forgetEpoch = 0;
 
 /**
- * Fill the hint from the database once per session. Non-audio `present === 1`
+ * Fill the hint from the database once per session. Returns whether the hint
+ * now reflects every stored body (false when the layout cannot tell). Non-audio `present === 1`
  * means the body is stored (`prepareBlobRecord`), and both index scans read
  * keys only, so a cold start never loads the corpus's bodies just to learn
  * which ones it already has.
  */
-export async function seedKnownBodies(): Promise<void> {
-  if (knownBodiesSeeded) return;
+export async function seedKnownBodies(): Promise<boolean> {
+  if (knownBodiesSeeded) return true;
   const epoch = forgetEpoch;
   const stored = await withTxn([STORE_BLOBS], "readonly", async (txn) => {
     const store = txn.objectStore(STORE_BLOBS);
@@ -71,9 +72,10 @@ export async function seedKnownBodies(): Promise<void> {
     const audioKeys = new Set(audio);
     return present.filter((key) => !audioKeys.has(key)) as string[];
   });
-  if (stored === null || epoch !== forgetEpoch) return;
+  if (stored === null || epoch !== forgetEpoch) return false;
   for (const hash of stored) knownBodies.add(hash);
   knownBodiesSeeded = true;
+  return true;
 }
 
 async function putOnce(record: BlobRecord): Promise<void> {

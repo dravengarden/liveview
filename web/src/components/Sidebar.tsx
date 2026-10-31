@@ -120,6 +120,16 @@ function TruncatedLabel({ text }: { text: string }): React.JSX.Element {
     : label;
 }
 
+/** Whether no chapter under `node` (or `node` itself) can be opened. */
+function nothingReadable(
+  node: TreeNode,
+  unavailable: (path: string) => boolean,
+): boolean {
+  if (!node.is_dir) return unavailable(node.path);
+  return node.children.length > 0 &&
+    node.children.every((child) => nothingReadable(child, unavailable));
+}
+
 interface TreeItemProps {
   node: TreeNode;
   level: number;
@@ -131,6 +141,8 @@ interface TreeItemProps {
   playingPath: string | null;
   currentLang: string | undefined;
   expandedPaths: Set<string>;
+  /** Offline: whether a chapter is not downloaded (absent when online). */
+  unavailable: ((path: string) => boolean) | undefined;
   onSelect: (path: string) => void;
   onToggle: (path: string) => void;
   audioRows: ReadonlyMap<string, ChapterAudioInfo>;
@@ -146,6 +158,7 @@ const TreeItem = memo(function TreeItemRow({
   playingPath,
   currentLang,
   expandedPaths,
+  unavailable,
   onSelect,
   onToggle,
   audioRows,
@@ -153,6 +166,11 @@ const TreeItem = memo(function TreeItemRow({
   cacheStates,
 }: TreeItemProps): React.JSX.Element {
   const isExpanded = expandedPaths.has(node.path);
+  // Still tappable, just visibly out of reach; a folder when nothing in it is.
+  const isUnavailable = useMemo(
+    () => unavailable !== undefined && nothingReadable(node, unavailable),
+    [node, unavailable],
+  );
   const isPlaying = playingPath === node.path;
   // Navigation selection belongs exclusively to the chapter in the reader.
   // Playback is an independent state and uses the trailing equalizer marker;
@@ -174,6 +192,7 @@ const TreeItem = memo(function TreeItemRow({
   return (
     <>
       <ListItemButton
+        data-lv-offline-unavailable={isUnavailable ? "" : undefined}
         data-path={node.path}
         data-liveview-nav-row
         onClick={handleClick}
@@ -189,6 +208,7 @@ const TreeItem = memo(function TreeItemRow({
           py: { xs: 0.75, md: 0.5 },
           minHeight: { xs: 44, md: 32 },
           position: "relative",
+          opacity: isUnavailable ? 0.45 : 1,
           transition: "background-color 140ms ease, color 140ms ease",
           "&.Mui-selected": {
             bgcolor: (theme) =>
@@ -265,6 +285,7 @@ const TreeItem = memo(function TreeItemRow({
                 playingPath={playingPath}
                 currentLang={currentLang}
                 expandedPaths={expandedPaths}
+                unavailable={unavailable}
                 onSelect={onSelect}
                 onToggle={onToggle}
                 audioRows={audioRows}
@@ -338,6 +359,9 @@ interface SidebarProps {
    * navigation gets its labelled back/close header from NavShell instead. */
   showHeader?: boolean;
   onSwitchLang?: (lang: string) => void;
+  /** While offline, whether a chapter is not downloaded; such rows are dimmed.
+   *  Absent online or when the replica cannot tell. */
+  unavailable?: ((path: string) => boolean) | undefined;
   onSelect: (path: string) => void;
   /** Deploy-time stamps (unix ms) of the open book; 0/undefined ⇒ hidden. */
   createdAt?: number | undefined;
@@ -371,6 +395,7 @@ export function Sidebar({
   currentLang,
   showHeader = true,
   onSwitchLang,
+  unavailable,
   onSelect,
   createdAt,
   updatedAt,
@@ -681,6 +706,7 @@ export function Sidebar({
               playingPath={playingPath}
               currentLang={currentLang}
               expandedPaths={expandedPaths}
+              unavailable={unavailable}
               onSelect={select}
               onToggle={handleToggle}
               audioRows={audioRows}

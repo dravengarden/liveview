@@ -1088,6 +1088,16 @@ export function AudioPlayerProvider(
     const onEnded = (): void => {
       handleEnded();
     };
+    // A source that cannot load (offline and not downloaded, or a failed
+    // synthesis) only reports here; without it the transport sat at 0:00 with
+    // a live-looking Play button and no explanation.
+    const onMediaError = (): void => {
+      if (sourcePendingRef.current || !audio.error) return;
+      playingRef.current = false;
+      setPlaying(false);
+      setLoading(false);
+      setError(audio.error.message || `media error ${audio.error.code}`);
+    };
 
     // The play/pause button must ALWAYS match the element. The `play`/`pause`
     // events alone aren't enough: loading a new chapter (a src change) pauses the
@@ -1117,6 +1127,7 @@ export function AudioPlayerProvider(
     audio.addEventListener("play", onPlay);
     audio.addEventListener("pause", onPause);
     audio.addEventListener("ended", onEnded);
+    audio.addEventListener("error", onMediaError);
     for (const ev of SYNC_EVENTS) audio.addEventListener(ev, syncPlaying);
     return () => {
       audio.removeEventListener("timeupdate", onTime);
@@ -1125,6 +1136,7 @@ export function AudioPlayerProvider(
       audio.removeEventListener("play", onPlay);
       audio.removeEventListener("pause", onPause);
       audio.removeEventListener("ended", onEnded);
+      audio.removeEventListener("error", onMediaError);
       for (const ev of SYNC_EVENTS) audio.removeEventListener(ev, syncPlaying);
     };
   }, [handlePosition, handleEnded, startSleepSession]);
@@ -1693,6 +1705,14 @@ export function AudioPlayerProvider(
       chapter: np?.chapterPath,
     });
     if (a.paused) {
+      // A failed source stays failed; Play is the retry (back online, or the
+      // audio has since been downloaded), so fetch it again.
+      if (a.error) {
+        setError(null);
+        const at = currentTimeRef.current;
+        a.load();
+        if (at > 0) a.currentTime = at;
+      }
       playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
     } else a.pause();
   }, [expectNativePlayback, resetNativePlaybackProof, error, loadTrack]);

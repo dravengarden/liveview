@@ -66,6 +66,11 @@ import { useBookPrefs } from "@/hooks/useBookPrefs";
 import { useForegroundRepaint } from "@/hooks/useForegroundRepaint";
 import { useShelfRootRefresh } from "@/hooks/useShelfRootRefresh";
 import { useStatusBarScroll } from "@/hooks/useStatusBarScroll";
+import {
+  readingOffline,
+  useReadingOffline,
+  useStoredTextPaths,
+} from "@/hooks/useOfflineReading";
 import { NativeReleaseUpdatePrompt, NavShell } from "./_shell";
 import {
   findFirstFile,
@@ -305,6 +310,41 @@ export function App(): React.JSX.Element {
     bookRenditions[0] ??
     null;
   const bookLangs = activeRendition?.langs ?? [];
+  // Offline (airplane mode, or a network that cannot reach the server) only
+  // downloaded chapters open. Mark the rest so the reader can see where to go
+  // instead of discovering it one tap at a time.
+  const offline = useReadingOffline();
+  const storedTextPaths = useStoredTextPaths(offline);
+  const textDefaultLang = activeBook?.renditions.find((r) => r.kind === "text")
+    ?.default_lang;
+  const chapterUnavailable = useMemo(() => {
+    if (!storedTextPaths || rendition !== "text") return undefined;
+    return (path: string): boolean => {
+      const slash = path.indexOf("/");
+      if (slash < 0) return false;
+      const slug = path.slice(0, slash);
+      const rel = path.slice(slash + 1);
+      // The server falls back to the default edition for an untranslated page.
+      return !storedTextPaths.has(`${slug}/text/${lang}/${rel}`) &&
+        !(textDefaultLang &&
+          storedTextPaths.has(`${slug}/text/${textDefaultLang}/${rel}`));
+    };
+  }, [storedTextPaths, rendition, lang, textDefaultLang]);
+  const booksUnavailableOffline = useMemo(() => {
+    if (!storedTextPaths) return undefined;
+    const readable = new Set<string>();
+    for (const path of storedTextPaths) {
+      readable.add(path.slice(0, path.indexOf("/")));
+    }
+    // Only text can be judged from here; an audio-only book stays as is.
+    return new Set(
+      books
+        .filter((b) =>
+          b.renditions.some((r) => r.kind === "text") && !readable.has(b.slug)
+        )
+        .map((b) => b.slug),
+    );
+  }, [storedTextPaths, books]);
   // The chapter the ENGINE is actually playing in THIS book — the sidebar's
   // now-playing marker. The audiobook reader is "a window onto the engine"
   // (AudiobookPlayer renders `nowPlaying.chapterPath`), but the list highlight
@@ -664,7 +704,7 @@ export function App(): React.JSX.Element {
           // The TypeScript replica now preserves a real 404. A 504 means a
           // transient/offline miss and has already received one bounded retry;
           // never redirect a valid chapter to the first page on that signal.
-          const offline = isLikelyOffline();
+          const offline = readingOffline();
           if (!offline && res.status === 404) {
             const slug = path.split("/")[0] ?? "";
             const first = await resolveFirstChapter(slug, reqRendition);
@@ -723,11 +763,18 @@ export function App(): React.JSX.Element {
       } catch (e) {
         if (seq !== fileLoadSeq.current) return;
         console.error("Failed to fetch file:", e);
-        setFileError(isLikelyOffline() ? "offline" : "failed");
+        setFileError(readingOffline() ? "offline" : "failed");
       }
     },
     [],
   );
+
+  // A chapter that was not downloaded opens by itself once the server answers
+  // again (landing, or paying for in-flight Wi-Fi), without a Retry tap.
+  useEffect(() => {
+    if (fileError !== "offline" || offline || !currentPath) return;
+    void loadFile(currentPath, lang, rendition);
+  }, [fileError, offline, currentPath, lang, rendition, loadFile]);
 
   // Open a file in a given edition + rendition: sync state, URL hash, and (for
   // the text rendition) content. The audio rendition renders in the player off
@@ -1664,6 +1711,7 @@ export function App(): React.JSX.Element {
               onOpen={enterBook}
               settingsSlot={settingsButton}
               navbarAtBottom={navbarAtBottom}
+              unavailableOffline={booksUnavailableOffline}
             />
           </Box>
           {activeSlug !== null && (
@@ -1751,6 +1799,7 @@ export function App(): React.JSX.Element {
                   langs={bookLangs}
                   currentLang={lang}
                   showHeader={!api.isMobile}
+                  unavailable={chapterUnavailable}
                   onSwitchLang={switchLang}
                   onSelect={(path) => {
                     handleSelect(path);

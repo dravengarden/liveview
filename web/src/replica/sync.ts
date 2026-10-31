@@ -277,6 +277,25 @@ function fillMessage(items: ReplicaWorkerFillItem[]): ReplicaWorkerFill {
   };
 }
 
+/**
+ * Replica paths (`<slug>/<rendition>/<lang>/<rel>`) of text chapters whose body
+ * is stored, so offline navigation can tell readable chapters apart. `null`
+ * when the replica cannot answer (disabled, or a layout without the index).
+ */
+export async function storedTextPaths(): Promise<Set<string> | null> {
+  if (!replicaUsable()) return null;
+  try {
+    if (!(await seedKnownBodies())) return null;
+  } catch {
+    return null;
+  }
+  const out = new Set<string>();
+  for (const rec of allPathRecords()) {
+    if (rec.kind === "text" && bodyKnownPresent(rec.hash)) out.add(rec.path);
+  }
+  return out;
+}
+
 export async function missingTextArt(): Promise<ReplicaWorkerFillItem[]> {
   const out: ReplicaWorkerFillItem[] = [];
   const seen = new Set<string>();

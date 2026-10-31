@@ -81,6 +81,7 @@ export {
   pauseReplicaFill,
   pullMissingTextArt,
   setReplicaRemote,
+  storedTextPaths,
 } from "./sync.ts";
 export {
   artworkBlobSrc,

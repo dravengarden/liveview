@@ -228,6 +228,12 @@ thrown request or a gateway 502/503/504 is unreachable.
   suppression.
 - The outage notice says the reader is offline and downloaded content works,
   once, for a few seconds; recovery flashes "reconnected".
+- While offline (no network, or a network that cannot reach the server, such
+  as in-flight Wi-Fi before purchase) the shelf dims books with nothing
+  downloaded and Contents dims chapters (and folders) that are not; they stay
+  tappable. An undownloaded chapter says so and opens by itself once the
+  server answers again. Read-aloud whose audio is not local says so in the
+  transport instead of idling at 0:00; Play retries the source.
 
 ---
 

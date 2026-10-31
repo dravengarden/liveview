@@ -93,6 +93,9 @@ interface LandingProps {
    *  drops below the shelf (mobile-browser style), matching the in-book bar. */
   navbarAtBottom: boolean;
   isVisible: boolean;
+  /** Offline: books with nothing downloaded, dimmed so readable ones stand
+   *  out. Absent online. */
+  unavailableOffline?: ReadonlySet<string> | undefined;
 }
 
 /** The shelf kind filter — a SINGLE choice. "book" covers everything readable or
@@ -117,6 +120,7 @@ export function Landing({
   settingsSlot,
   navbarAtBottom,
   isVisible,
+  unavailableOffline,
 }: LandingProps): React.JSX.Element {
   const { t, lang } = useI18n();
   const theme = useTheme();
@@ -689,6 +693,7 @@ export function Landing({
         ? undefined
         : searchMatches.get(e.book.slug) ?? undefined}
       onOpen={onOpen}
+      unavailableOffline={unavailableOffline?.has(e.book.slug) ?? false}
       t={t}
     />
   );

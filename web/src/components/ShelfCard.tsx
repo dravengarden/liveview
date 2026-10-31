@@ -58,6 +58,8 @@ interface ShelfCardProps {
   /** Present while searching: what matched, for highlighting. */
   match?: BookSearchMatch | undefined;
   onOpen: (slug: string, renditionKind?: string) => void;
+  /** Offline with nothing of this book downloaded. */
+  unavailableOffline?: boolean;
   t: ReturnType<typeof useI18n>["t"];
 }
 
@@ -72,6 +74,7 @@ export const ShelfCard = memo(function ShelfCard({
   directoryLabel,
   match,
   onOpen,
+  unavailableOffline = false,
   t,
 }: ShelfCardProps): React.JSX.Element {
   // Progress is split by rendition: a text+audio book shows
@@ -111,8 +114,10 @@ export const ShelfCard = memo(function ShelfCard({
   return (
     <Box
       data-lv-book={b.slug}
+      data-lv-offline-unavailable={unavailableOffline ? "" : undefined}
       component="article"
       sx={{
+        opacity: unavailableOffline ? 0.5 : 1,
         border: 1,
         borderColor: "divider",
         borderRadius: "14px",
@@ -204,7 +209,9 @@ export const ShelfCard = memo(function ShelfCard({
               <Highlighted text={context.text} ranges={context.ranges} />
             </Typography>
           )
-          : !resume && b.description && (
+          : !resume && (b.description || unavailableOffline) && (
+            // Offline, the description line says why the card is dimmed, so
+            // the card keeps its height.
             <Typography
               variant="caption"
               color="text.secondary"
@@ -212,7 +219,9 @@ export const ShelfCard = memo(function ShelfCard({
               component="div"
               sx={{ mt: 0.5 }}
             >
-              {b.description}
+              {unavailableOffline
+                ? t("landing.notDownloaded")
+                : b.description}
             </Typography>
           )}
         {generating && (
