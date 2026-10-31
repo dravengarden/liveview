@@ -3,6 +3,7 @@ import { Box, Button, LinearProgress, Typography } from "@mui/material";
 import { useAudioPlayer, useAudioPreparation } from "@/audio/player";
 import { fmtTime } from "@/audio/playback-ui";
 import { useI18n } from "@/i18n";
+import { useReadingOffline } from "@/hooks/useOfflineReading";
 
 /** The waiting clock belongs to this small label, never the player context or
  * reader. Stop ticking hidden pages and closed playback sheets. */
@@ -35,12 +36,14 @@ export function PlaybackPreparation({ children, active = true }: { children: Rea
   const preparation = useAudioPreparation();
   const { loading, voiceBusy, error, voiceError, nowPlaying, togglePlay, chooseVoice } = useAudioPlayer();
   const failed = Boolean(error || voiceError);
+  const offline = useReadingOffline();
   if (!preparation && !loading && !voiceBusy && !failed) {
     return <Box sx={{ display: "flex", alignItems: "center", gap: 1, flex: 1, minWidth: 0 }}>{children}</Box>;
   }
   const phase = failed ? "failed" : preparation?.phase ?? "loading";
   const title = t(`audiobook.preparation.${phase}`);
-  const hint = failed ? error ?? voiceError
+  // Offline, the raw media error only means "not downloaded"; say so.
+  const hint = failed ? (offline && error ? t("audiobook.offlineUnavailable") : error ?? voiceError)
     : phase === "reconnecting" ? t("audiobook.preparationReconnectHint")
     : phase === "loading" ? t("audiobook.preparationLoadHint")
     : voiceBusy ? t("audiobook.voicePreparing") : t("audiobook.preparationHint");

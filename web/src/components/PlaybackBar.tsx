@@ -25,7 +25,6 @@ import {
 import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
 import { PlaybackPreparation } from "./PlaybackPreparation";
-import { useReadingOffline } from "@/hooks/useOfflineReading";
 
 /** Read-along follow control for the host reader (audiobook page OR the in-place
  *  text read-aloud). The bar renders the toggle; the host owns the scroll. */
@@ -62,7 +61,6 @@ export function PlaybackBar(
     playing,
     buffering,
     loading,
-    error,
     canPrev,
     canNext,
     togglePlay,
@@ -73,8 +71,6 @@ export function PlaybackBar(
   } = useAudioPlayer();
   const { currentTime, duration } = useAudioTime();
   const scrub = useScrubber(currentTime, seek);
-  const offline = useReadingOffline();
-  const failed = error !== null && !loading;
 
   const transportRef = useRef<HTMLDivElement>(null);
   // ONE row (scrubber + controls together) when wide enough, else TWO rows.
@@ -192,7 +188,7 @@ export function PlaybackBar(
           ? t("audiobook.pause")
           : t("audiobook.play")}
         // Unavailable audio looks it, yet stays tappable: Play retries.
-        sx={{ width: tap(48), height: tap(48), opacity: failed ? 0.45 : 1 }}
+        sx={{ width: tap(48), height: tap(48) }}
       >
         {loading
           ? <CircularProgress size={rem(32)} color="inherit" />
@@ -329,19 +325,6 @@ export function PlaybackBar(
             }px)`,
         }}
       >
-        {failed && (
-          <Typography
-            role="status"
-            variant="caption"
-            color="text.secondary"
-            component="div"
-            sx={{ textAlign: "center", pb: 0.5 }}
-          >
-            {offline
-              ? t("audiobook.offlineUnavailable")
-              : t("audiobook.loadFailed")}
-          </Typography>
-        )}
         {oneRow
           ? (
             <Box

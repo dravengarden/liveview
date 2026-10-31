@@ -888,7 +888,7 @@ test("focusing a text field never triggers the iOS page zoom", async () => {
   );
   assertPresent(
     theme,
-    /MuiSelect:[\s\S]{0,200}select:[\s\S]{0,60}pointer: coarse[\s\S]{0,40}fontSize: "1rem"/,
+    /pointer: coarse[\s\S]{0,40}"&:is\(input, textarea\)": \{ fontSize: "max\(16px, 1rem\)" \}/,
     "a Select's value display is not a text field and must follow the app font scale",
   );
   const organizer = await source("components/LibraryOrganizer.tsx");

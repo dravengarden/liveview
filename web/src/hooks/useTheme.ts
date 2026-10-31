@@ -446,18 +446,6 @@ export function useTheme(): UseThemeResult {
             },
           },
         },
-        // A MUI Select's value display is a div that reuses the InputBase
-        // input slot. It is not a focusable text field, so it cannot trigger
-        // the zoom; let it follow the app font scale like the rest of the
-        // chrome. The floor would also leave its text off-center, because the
-        // inherited line box is still sized from the scaled root font.
-        MuiSelect: {
-          styleOverrides: {
-            select: {
-              "@media (pointer: coarse)": { fontSize: "1rem" },
-            },
-          },
-        },
         MuiCard: {
           styleOverrides: {
             root: {

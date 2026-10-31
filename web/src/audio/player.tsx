@@ -1705,14 +1705,6 @@ export function AudioPlayerProvider(
       chapter: np?.chapterPath,
     });
     if (a.paused) {
-      // A failed source stays failed; Play is the retry (back online, or the
-      // audio has since been downloaded), so fetch it again.
-      if (a.error) {
-        setError(null);
-        const at = currentTimeRef.current;
-        a.load();
-        if (at > 0) a.currentTime = at;
-      }
       playAudio(a, (e) => setError(e instanceof Error ? e.message : String(e)));
     } else a.pause();
   }, [expectNativePlayback, resetNativePlaybackProof, error, loadTrack]);
