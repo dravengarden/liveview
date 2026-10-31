@@ -640,6 +640,7 @@ export function Landing({
   // VisualViewport and offset the toolbar by it. Self-correcting vs the viewport
   // `interactive-widget=resizes-content`: where the layout viewport already
   // shrinks, innerHeight === visualViewport.height → 0, so no double-shift.
+  const keyboardSeenRef = useRef(false);
   useEffect(() => {
     const vv = globalThis.visualViewport;
     const regionEl = shelfRegionRef.current;
@@ -658,6 +659,21 @@ export function Landing({
         ? Math.max(0, globalThis.innerHeight - vv.height - vv.offsetTop)
         : 0;
       regionEl.style.setProperty("--lv-kb-inset", `${inset}px`);
+      // iOS can retract the keyboard without blurring the field (keyboard
+      // dismissal while backgrounded, an external keyboard connecting, a
+      // system sheet). The search would then stay in its focus-owned editing
+      // mode — Sort/Filter hidden, a dead keyboard-dismiss button — with no
+      // keyboard to type into. Leave that mode once a keyboard we saw open is
+      // gone. Height alone measures the keyboard; offsetTop also moves when
+      // WebKit pans the field into view. Where the layout viewport resizes
+      // with the keyboard this never reads as open, so it never blurs.
+      const keyboardOpen = editing && globalThis.innerHeight - vv.height > 120;
+      if (keyboardOpen) {
+        keyboardSeenRef.current = true;
+      } else if (keyboardSeenRef.current) {
+        keyboardSeenRef.current = false;
+        if (ae === searchInputRef.current) searchInputRef.current?.blur();
+      }
     };
     apply();
     vv.addEventListener("resize", apply);
@@ -665,7 +681,10 @@ export function Landing({
     // Reset the instant the search field blurs (e.g. before navigating away), so
     // we never leave a stale lift behind for the return.
     document.addEventListener("focusout", apply);
+    // Returning from the background may not resize the viewport again.
+    document.addEventListener("visibilitychange", apply);
     return () => {
+      document.removeEventListener("visibilitychange", apply);
       vv.removeEventListener("resize", apply);
       vv.removeEventListener("scroll", apply);
       document.removeEventListener("focusout", apply);
