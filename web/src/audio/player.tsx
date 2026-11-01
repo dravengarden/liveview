@@ -596,6 +596,13 @@ export function AudioPlayerProvider(
     nativeQueueIdRef.current = snapshot.queueId;
     nativeEndedRef.current = snapshot.ended;
     resetNativePlaybackProof();
+    // `playing` fires once, on the transition, and may already have been lost.
+    // Stay provable by advancing media time, or a running engine sits behind
+    // the loading panel with the read-along frozen on its paused style.
+    if (snapshot.waiting) {
+      nativePlaybackUnconfirmedRef.current = true;
+      nativePositionSampleRef.current = { position: snapshot.position, at: performance.now() };
+    }
     sourcePendingRef.current = false;
     pendingPlayIntent.current = snapshot.playing || snapshot.waiting;
     nowPlayingRef.current = np;
@@ -1349,6 +1356,9 @@ export function AudioPlayerProvider(
         setQueue(q);
         adoptNativeSnapshot(nativeState);
         restoredNative = true;
+        // The probed snapshot aged through hydration, and every queue event in
+        // that window was dropped because no queue id was adopted yet.
+        nativeAudioRequestState();
         const np = nativeNowPlaying(nativeState.context);
         if (np && q.length) void stageNativeQueue(nativeState.queueId, np, q, nativeState.index);
         else if (np) {

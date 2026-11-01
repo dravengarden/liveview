@@ -70,3 +70,12 @@ test("protocol-v1 playing events require advancing media time", async () => {
   );
   assert.match(player, /nativeAudioPause\(\);[\s\S]*?audio_play_unconfirmed/);
 });
+
+test("a waiting snapshot stays provable and startup adoption resyncs", async () => {
+  const player = await source("audio/player.tsx");
+
+  const adopt = player.match(/const adoptNativeSnapshot = useCallback[\s\S]*?sourcePendingRef\.current = false;/)?.[0];
+  assert.ok(adopt, "snapshot adoption exists");
+  assert.match(adopt, /resetNativePlaybackProof\(\);[\s\S]*?if \(snapshot\.waiting\) \{[\s\S]*?nativePlaybackUnconfirmedRef\.current = true;/);
+  assert.match(player, /adoptNativeSnapshot\(nativeState\);[\s\S]*?nativeAudioRequestState\(\);/);
+});
