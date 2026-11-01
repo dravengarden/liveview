@@ -242,7 +242,7 @@ export function PlaybackBar(
       value={Math.min(scrub.value, duration || 1)}
       onChange={scrub.onChange}
       onChangeCommitted={scrub.onChangeCommitted}
-      disabled={loading || duration === 0}
+      disabled={duration === 0}
       aria-label={t("audiobook.seek")}
       sx={{
         flex: 1,
@@ -337,7 +337,7 @@ export function PlaybackBar(
             >
               <Box sx={earSx}>{followBtn}</Box>
               {mainCluster}
-              <PlaybackPreparation>{timeStart}{scrubber}{timeEnd}</PlaybackPreparation>
+              <PlaybackPreparation timeline={duration > 0}>{timeStart}{scrubber}{timeEnd}</PlaybackPreparation>
               <Box sx={earSx}>
                 <SpeedChip />
               </Box>
@@ -351,7 +351,7 @@ export function PlaybackBar(
             <>
               <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                 <Box sx={earSx}>{followBtn}</Box>
-                <PlaybackPreparation>{timeStart}{scrubber}{timeEnd}</PlaybackPreparation>
+                <PlaybackPreparation timeline={duration > 0}>{timeStart}{scrubber}{timeEnd}</PlaybackPreparation>
                 <Box sx={earSx}>{controlsBtn}</Box>
               </Box>
               <Box

@@ -30,14 +30,16 @@ function WaitingTime({ startedAt, active }: { startedAt: number; active: boolean
 
 /** Replaces a meaningless 0:00 / disabled scrubber with the actual preparation
  * stage. The server reports stages, not a completion fraction: no fake percent
- * or countdown. Once audio is playable, the ordinary timeline returns. */
-export function PlaybackPreparation({ children, active = true }: { children: ReactNode; active?: boolean }): React.JSX.Element {
+ * or countdown. Once audio is playable, the ordinary timeline returns. A known
+ * `timeline` stays put through play/seek buffering: the transport spinner covers
+ * that wait, and swapping the panel in would flash on every tap of Play. */
+export function PlaybackPreparation({ children, active = true, timeline = false }: { children: ReactNode; active?: boolean; timeline?: boolean }): React.JSX.Element {
   const { t } = useI18n();
   const preparation = useAudioPreparation();
   const { loading, voiceBusy, error, voiceError, nowPlaying, togglePlay, chooseVoice } = useAudioPlayer();
   const failed = Boolean(error || voiceError);
   const offline = useReadingOffline();
-  if (!preparation && !loading && !voiceBusy && !failed) {
+  if (!preparation && (!loading || timeline) && !voiceBusy && !failed) {
     return <Box sx={{ display: "flex", alignItems: "center", gap: 1, flex: 1, minWidth: 0 }}>{children}</Box>;
   }
   const phase = failed ? "failed" : preparation?.phase ?? "loading";

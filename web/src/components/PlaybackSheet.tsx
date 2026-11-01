@@ -141,7 +141,7 @@ export function PlaybackSheet({
 
         {/* Scrubber */}
         <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
-          <PlaybackPreparation active={open}>
+          <PlaybackPreparation active={open} timeline={duration > 0}>
           <Typography
             variant="caption"
             color="text.secondary"

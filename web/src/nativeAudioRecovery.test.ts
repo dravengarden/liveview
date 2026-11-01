@@ -79,3 +79,14 @@ test("a waiting snapshot stays provable and startup adoption resyncs", async () 
   assert.match(adopt, /resetNativePlaybackProof\(\);[\s\S]*?if \(snapshot\.waiting\) \{[\s\S]*?nativePlaybackUnconfirmedRef\.current = true;/);
   assert.match(player, /adoptNativeSnapshot\(nativeState\);[\s\S]*?nativeAudioRequestState\(\);/);
 });
+
+test("buffering with a known timeline keeps the scrubber in place", async () => {
+  const preparation = await source("components/PlaybackPreparation.tsx");
+  const bar = await source("components/PlaybackBar.tsx");
+  const sheet = await source("components/PlaybackSheet.tsx");
+
+  assert.match(preparation, /\(!loading \|\| timeline\)/);
+  assert.match(bar, /<PlaybackPreparation timeline=\{duration > 0\}>/);
+  assert.match(sheet, /<PlaybackPreparation active=\{open\} timeline=\{duration > 0\}>/);
+  assert.match(bar, /disabled=\{duration === 0\}/);
+});
