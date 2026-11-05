@@ -94,6 +94,8 @@ interface LandingProps {
    *  drops below the shelf (mobile-browser style), matching the in-book bar. */
   navbarAtBottom: boolean;
   isVisible: boolean;
+  /** A row for the shelf's bottom dock (what is playing). */
+  accessory?: ReactNode;
   /** Offline: books with nothing downloaded, dimmed so readable ones stand
    *  out. Absent online. */
   unavailableOffline?: ReadonlySet<string> | undefined;
@@ -109,6 +111,7 @@ export function Landing({
   navbarAtBottom,
   isVisible,
   unavailableOffline,
+  accessory,
 }: LandingProps): React.JSX.Element {
   const { t, lang } = useI18n();
   const theme = useTheme();
@@ -984,7 +987,7 @@ export function Landing({
                 // Top tier: bar at the head; pad the top by its height plus the
                 // base breathing room.
                 pt: "calc(16px + var(--lv-toolbar-h, 0px))",
-                pb: { xs: 4, md: 6 },
+                pb: "calc(48px + var(--lv-dock-h, 0px))",
                 scrollPaddingTop: "var(--lv-toolbar-h, 0px)",
               }),
           }}
@@ -1287,17 +1290,19 @@ export function Landing({
         }
         <ScrollToTopButton
           targetRef={scrollerRef}
-          bottomLift={navbarAtBottom ? "var(--lv-dock-h, 0px)" : "0px"}
+          bottomLift="var(--lv-dock-h, 0px)"
         />
       </Box>
       {isVisible && <SyncIndicator bookSlug={null} />}
+      {accessory}
       </ShelfDock>
     </Box>
   );
 }
 
-/** The bottom tier's dock: the toolbar is its bar, lifted above the
- *  on-screen keyboard; the sync strip joins it from inside the shelf. */
+/** The shelf's dock. On the bottom tier the toolbar is its bar, lifted above
+ *  the on-screen keyboard, and the sync strip joins it; on the top tier it
+ *  holds only rows such as what is playing. */
 function ShelfDock(
   { docked, toolbar, left, children }: {
     docked: boolean;
@@ -1306,9 +1311,12 @@ function ShelfDock(
     children: ReactNode;
   },
 ): React.JSX.Element {
-  if (!docked) return <>{children}</>;
   return (
-    <BottomDock bar={toolbar} lift="var(--lv-kb-inset, 0px)" sx={{ left }}>
+    <BottomDock
+      bar={docked ? toolbar : undefined}
+      lift={docked ? "var(--lv-kb-inset, 0px)" : "0px"}
+      sx={{ left }}
+    >
       {children}
     </BottomDock>
   );

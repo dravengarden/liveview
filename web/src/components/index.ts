@@ -4,7 +4,6 @@ export { SettingsButton } from "./SettingsDialog";
 export { ContentViewer } from "./ContentViewer";
 export { AudiobookPlayer } from "./AudiobookPlayer";
 export { ChapterPager } from "./ChapterPager";
-export { FloatingBubble } from "./FloatingBubble";
 export { PlaybackSheet } from "./PlaybackSheet";
 export { SpatialPlaybackPreview } from "./SpatialPlaybackPreview";
 export { Landing } from "./Landing";

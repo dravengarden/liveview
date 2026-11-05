@@ -56,7 +56,11 @@ export function CoverTile({
       }}
     >
       <AudiobookIcon
-        sx={{ fontSize: rem(48), color: "rgba(255,255,255,0.92)" }}
+        sx={{
+          // Scale the fallback glyph down for small tiles (a now-playing row).
+          fontSize: typeof size === "number" && size < 48 ? Math.round(size * 0.55) : rem(48),
+          color: "rgba(255,255,255,0.92)",
+        }}
       />
       <Box
         component="img"

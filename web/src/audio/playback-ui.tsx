@@ -1,7 +1,6 @@
 // Shared playback-config widgets, so the speed + sleep controls are ONE
 // implementation reused by every surface that configures playback (the audio
-// read-along transport AND the portable PlaybackSheet). Before this they were
-// copy-pasted in AudiobookPlayer + FloatingBubble, which drifted independently.
+// read-along transport AND the portable PlaybackSheet).
 //
 // Each chip is self-contained: it reads/writes the engine via useAudioPlayer, so
 // a caller just drops <SpeedChip/> / <SleepChip/> in — no prop wiring. The chip

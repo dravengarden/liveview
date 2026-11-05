@@ -1103,6 +1103,7 @@ export function MarkdownViewer({
         }
         {follow.active && (
           <PlaybackBar
+            compact
             navbarAtBottom={navbarAtBottom}
             follow={{
               following: follow.following,

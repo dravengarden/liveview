@@ -41,7 +41,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const segmented = await source("components/SegmentedPill.tsx");
   const syncIndicator = await source("components/SyncIndicator.tsx");
   const scrollToTop = await source("components/ScrollToTopButton.tsx");
-  const floatingBubble = await source("components/FloatingBubble.tsx");
+  const nowPlayingRow = await source("components/NowPlayingRow.tsx");
   const navShell = await source("_shell/nav-shell.tsx");
   const spatialDrawer = await source("_shell/spatial-drawer.ts");
   const temporaryNav = await source("_shell/temporary-nav.tsx");
@@ -275,9 +275,9 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "scroll listeners must not enqueue unchanged React state every frame",
   );
   assertPresent(
-    floatingBubble,
-    /if \(!nowPlaying \|\| \(!playing && !buffering\) \|\| onPlayingPage \|\| suppressed\) \{[\s\S]{0,40}return null;/,
-    "the floating playback bubble must hide only while playback is paused and not buffering",
+    nowPlayingRow,
+    /const shown = nowPlaying !== null && \(playing \|\| buffering\) && !hidden;[\s\S]{0,200}if \(!shown \|\| !nowPlaying\) return null;/,
+    "the now-playing row must show only while playback runs away from its transport",
   );
   assertPresent(
     navShell,
@@ -301,7 +301,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     shell,
-    /<SyncIndicator bookSlug=\{activeSlug\} \/>\s*<\/NavShell>/,
+    /<SyncIndicator bookSlug=\{activeSlug\} \/>[\s\S]{0,240}<\/NavShell>/,
     "the reader's sync strip must live inside the translated reader surface so it slides with the drawer gesture",
   );
   assertAbsent(
@@ -798,9 +798,9 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     "a closed playback sheet must not re-render on the playback clock",
   );
   assertPresent(
-    floatingBubble,
-    /useAudioTime\(shown && !sheetOpen\)/,
-    "a hidden floating bubble must not re-render on the playback clock",
+    nowPlayingRow,
+    /useAudioTime\(shown\)/,
+    "a hidden now-playing row must not re-render on the playback clock",
   );
   assertAbsent(
     await source("components/AudiobookPlayer.tsx"),

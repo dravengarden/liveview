@@ -27,7 +27,6 @@ import {
   AudiobookPlayer,
   ChapterPager,
   ContentViewer,
-  FloatingBubble,
   Landing,
   PlaybackSheet,
   ReconnectBanner,
@@ -36,6 +35,7 @@ import {
   SpatialPlaybackPreview,
   SyncIndicator,
 } from "@/components";
+import { NowPlayingRow } from "@/components/NowPlayingRow";
 import {
   useFont,
   useNavbarAtBottom,
@@ -45,7 +45,6 @@ import {
   useWebSocket,
 } from "@/hooks";
 import { useI18n } from "@/i18n";
-import { playbackControls } from "@/signals.ts";
 import { prefetchTrees } from "@/prefetch";
 import { useAudioPlayer } from "@/audio/player";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
@@ -887,6 +886,9 @@ export function App(): React.JSX.Element {
               settingsSlot={settingsButton}
               navbarAtBottom={navbarAtBottom}
               unavailableOffline={booksUnavailableOffline}
+              accessory={
+                <NowPlayingRow hidden={activeSlug !== null} onGoTo={goToNowPlaying} />
+              }
             />
           </Box>
           {activeSlug !== null && (
@@ -1047,22 +1049,16 @@ export function App(): React.JSX.Element {
                     footer={chapterPager}
                   />
                 )}
-              {/* Joins the reader's dock (it travels with the translated surface). */}
+              {/* Join the reader's dock (it travels with the translated surface). */}
               <SyncIndicator bookSlug={activeSlug} />
+              <NowPlayingRow
+                hidden={onPlayingPage || readingThisInPlace}
+                onGoTo={goToNowPlaying}
+              />
             </NavShell>
           )}
         </Box>
       </Box>
-      {
-        /* The floating bubble — the now-playing handle shown when audio is
-            playing but you're browsing AWAY from its inline page. A fixed
-            overlay; tapping its artwork navigates back to that page. */
-      }
-      <FloatingBubble
-        onPlayingPage={onPlayingPage}
-        suppressed={readingThisInPlace}
-        onOpenControls={() => playbackControls.emit()}
-      />
       {
         /* Desktop keyboard-shortcut cheat-sheet (opened with `?`). The Dialog
           renders nothing while closed; on touch it never opens (the `?` handler

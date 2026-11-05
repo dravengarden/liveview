@@ -42,6 +42,10 @@ interface PlaybackBarProps {
   navbarAtBottom?: boolean | undefined;
   /** Follow toggle for the host reader; omit to hide the follow affordance. */
   follow?: PlaybackFollow | undefined;
+  /** Narrow layout as one control row over a progress filament; speed, sleep
+   *  and the scrubber stay in the playback sheet. For in-page read-aloud,
+   *  where the transport covers reading text. */
+  compact?: boolean;
 }
 
 /** Transport band top/bottom padding (MUI spacing → ×8px). SAME on both edges so
@@ -54,7 +58,7 @@ const SLAB_PAD_Y = 0.75;
  *  engine; the only host-specific bit is the follow toggle (the host owns its
  *  own scroller). The dock's `--lv-dock-h` already includes this row. */
 export function PlaybackBar(
-  { navbarAtBottom = false, follow }: PlaybackBarProps,
+  { navbarAtBottom = false, follow, compact = false }: PlaybackBarProps,
 ): React.JSX.Element {
   const { t } = useI18n();
   const {
@@ -268,7 +272,27 @@ export function PlaybackBar(
             }px)`,
         }}
       >
-        {oneRow
+        {!oneRow && compact
+          ? (
+            <>
+              <PlaybackPreparation timeline={duration > 0}>
+                <ProgressFilament position={scrub.value} duration={duration} />
+              </PlaybackPreparation>
+              <Box
+                sx={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  minHeight: tap(48),
+                }}
+              >
+                <Box sx={earSx}>{followBtn}</Box>
+                {mainCluster}
+                <Box sx={earSx}>{controlsBtn}</Box>
+              </Box>
+            </>
+          )
+          : oneRow
           ? (
             <Box
               sx={{
@@ -317,5 +341,27 @@ export function PlaybackBar(
           )}
       </Box>
     </DockPortal>
+  );
+}
+
+/** Listening progress as a thin, non-interactive line. Seeking lives in the
+ *  playback sheet's full scrubber and on the sentences themselves; a slider
+ *  this thin would be below the 40-44 px touch-target floor. */
+function ProgressFilament(
+  { position, duration }: { position: number; duration: number },
+): React.JSX.Element {
+  const pct = duration > 0 ? Math.min(100, (position / duration) * 100) : 0;
+  return (
+    <Box
+      data-lv-progress-filament
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={Math.round(duration)}
+      aria-valuenow={Math.round(position)}
+      aria-valuetext={`${fmtTime(position)} / ${fmtTime(duration)}`}
+      sx={{ flex: 1, height: 3, my: 0.5, borderRadius: 2, bgcolor: "action.hover", overflow: "hidden" }}
+    >
+      <Box sx={{ height: "100%", width: `${pct}%`, bgcolor: "primary.main", transition: "width .25s linear" }} />
+    </Box>
   );
 }
