@@ -48,15 +48,14 @@ import {
   type NativePositionSample,
 } from "./native-playback-truth";
 import { activeMarkIndex } from "./mark-index";
+import { parseServerPos, parseServerSession, posKey, serverResumeDecision, unitKey } from "./resume";
 import { chapterVoices, preferredVoice, prepareVoice, saveVoicePreference, sentencePosition, speechCatalog, voiceMarks, voicePreferenceKey, type SpeechCatalog, type SpeechPreparation, type VoiceChoice } from "./speech";
 import { NATIVE_QUEUE_BATCH, nativeEventMatches, nativeNowPlaying, nativeSessionQueue, nativeTrack, queuedNativeTrack } from "./native-queue";
 import { loadContentsTree } from "./contents";
 import { sleepDefault } from "./sleep-default";
 import { ListeningSleepTimer, SLEEP_MINUTES } from "./sleep-timer";
 import {
-  type AudioPos,
   audioStores,
-  type PersistedSession,
   posStore,
   rateStore,
   sessionStore,
@@ -184,21 +183,10 @@ export interface AudioTime {
 // store resolves, and the rate paints instantly on mount). The session's local
 // mirror moved into `sessionStore` (IDB), so it has no localStorage key anymore.
 const RATE_KEY = "lv-audio-rate";
-/** Per-chapter resume position (audio seconds); local sync-seed only. */
-const posKey = (path: string, lang: string, voice?: string, marksHash?: string): string =>
-  `lv-audio-pos:${path}:${lang}${voice ? `:${voice}` : ""}${marksHash ? `:${marksHash}` : ""}`;
-const unitKey = (np: NowPlaying): string => `lv-audio-unit:${np.chapterPath}:${np.rendition}:${np.lang}`;
 
 /** Warm the next chapter's synthesis this many seconds before the current ends,
  *  so auto-advance doesn't stall on a cold edge-tts cache. */
 const PREFETCH_LEAD_S = 25;
-
-/** A same-chapter resume from another device only "wins" (and toasts) when it's
- *  meaningfully ahead of this device's local position — a few seconds of drift
- *  from rounding / last-tick timing shouldn't masquerade as a cross-device sync.
- *  (The `posStore.reconcile` enforces the same lead server-side; this drives the
- *  toast decision in the calling code.) */
-const SYNC_POS_LEAD_S = 8;
 
 /** mm:ss for the sync toast. */
 function fmtClock(sec: number): string {
@@ -1438,52 +1426,20 @@ export function AudioPlayerProvider(
       // restored, OR when it's the same chapter but the server is meaningfully
       // ahead — i.e. another device kept listening past this one. Either is a
       // genuine cross-device pull, so it also raises the "已同步…" toast.
-      let serverSession: PersistedSession | null = null;
-      if (rawSession) {
-        try {
-          const parsed = JSON.parse(rawSession) as PersistedSession;
-          if (parsed.nowPlaying && Array.isArray(parsed.queue)) {
-            serverSession = parsed;
-          }
-        } catch {
-          // ignore a corrupt server session blob
-        }
-      }
-      let serverPos: AudioPos | null = null;
-      if (rawPos) {
-        try {
-          const parsed = JSON.parse(rawPos) as AudioPos;
-          if (typeof parsed.path === "string" && Number.isFinite(parsed.t)) {
-            serverPos = parsed;
-          }
-        } catch {
-          // ignore a corrupt server pos blob
-        }
-      }
+      const serverSession = parseServerSession(rawSession);
+      const serverPos = parseServerPos(rawPos);
       let audioSynced = false;
       // Skip adoption when the user loaded or stopped a chapter after the local
       // hydrate: the server pointer predates that explicit choice.
       if (allowServerResume && !restoredNative && serverSession && loadSeq.current === hydratedSeq) {
         const cur = nowPlayingRef.current;
-        const chapterDiffers = !cur ||
-          cur.chapterPath !== serverSession.nowPlaying.chapterPath ||
-          cur.bookSlug !== serverSession.nowPlaying.bookSlug;
-        const serverT = serverPos &&
-            serverPos.path === serverSession.nowPlaying.chapterPath && serverPos.voice === serverSession.nowPlaying.voice && serverPos.marksHash===serverSession.nowPlaying.marksHash
-          ? serverPos.t
-          : 0;
         const localPos = cur
           ? Number(
             localStorage.getItem(posKey(cur.chapterPath, cur.lang, cur.voice,cur.marksHash)) ?? "0",
           )
           : 0;
-        // Same chapter on both devices, but the server (another device) is
-        // further along → adopt its position. The lead matches posStore.reconcile.
-        const posAhead = !chapterDiffers &&
-          cur?.voice === serverSession.nowPlaying.voice &&
-          cur?.marksHash === serverSession.nowPlaying.marksHash &&
-          serverT > localPos + SYNC_POS_LEAD_S;
-        if (chapterDiffers || posAhead) {
+        const { adopt, serverT } = serverResumeDecision(cur, localPos, serverSession, serverPos);
+        if (adopt) {
           if (serverT > 0) {
             // Seed the per-chapter localStorage pos so loadTrack's existing
             // restore picks it up.

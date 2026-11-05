@@ -3,6 +3,7 @@ import { idbPersistence } from "@/_sync-idb/mod.ts";
 import type { Codec } from "@/syncBackends";
 import { settingBackend } from "@/syncBackends";
 import type { NowPlaying, Track } from "./player";
+import { SYNC_POS_LEAD_S } from "./resume";
 
 // The audio engine's SERVER-SYNCED state, on the `mirroredStore` (state-based)
 // tier. Each is a passive-KV mirror over `/api/settings`: device edits push to
@@ -90,8 +91,6 @@ export interface AudioPos {
   marksHash?: string | undefined;
   unit?: number | undefined;
 }
-
-const SYNC_POS_LEAD_S = 8;
 
 const posCodec: Codec<AudioPos> = {
   enc: (v) => JSON.stringify(v),

@@ -597,6 +597,41 @@ reader and shelf docks only while audio plays away from its transport.
 The Contents drawer's playback companion was kept as a NavShell accessory
 (§6.6) rather than re-homed, since its geometry already passed Phase 2.
 
+Phases 5–8 record (2026-11-05): `main.rs` is split into `bootstrap`,
+`commands` and `http/*`; the shared primitives (`FileType::as_wire`, one
+`ChapterReady` frame, `store::blobs::put_blob`, `config::resolve_artwork`, one
+tree-update frame) replace their copies; the module cycles through `content/`
+and `store/` are broken; the route table is unchanged (35 routes) and
+`cargo test` passes, with the database tests runnable through `just test-db`.
+On the web side the replica flag, the unused OP-based sync tier and
+`platform/target.ts` are removed, and the in-memory IndexedDB fixture lives
+under `replica/testing/`. Phase 6 extracted the pure resume rules
+(`audio/resume.ts`: storage keys, server blob parsing, the cross-device
+adopt decision with its `SYNC_POS_LEAD_S` margin shared with `posStore`)
+with tests.
+
+Deferred, with reasons:
+
+- The audio engine-adapter split (§4.6). There is no DOM or native-bridge
+  harness to prove the event ordering unchanged, and real playback cannot be
+  exercised against the deployed server without overwriting the owner's
+  resume session. It needs a stubbed native bridge in the simulator first.
+- Unifying `ChapterRef` with `resolve_chapter` (§5.2): the HTTP and sync
+  callers have different not-found and edition-fallback contracts, so a
+  shared resolver would change behaviour.
+- The remaining §5.2 primitives: `RenditionKind::parse` at every boundary
+  (several raw comparisons remain), `content::narration::synthesize_chapter`,
+  one `blob_response` for every blob route, and `StoreError`. Each changes a
+  response contract and needs characterization tests first.
+- `connectivity.ts` and the UI-free `connectionStore` factory (§4.8). The
+  reachability, socket and native network signals are wired correctly today;
+  merging them changes when the replica retries, which needs an offline
+  simulator pass.
+- Converting `nativeAudioRecovery` and `readAlongRecovery` (§4.8) to
+  behavioural tests waits for the engine split above; the scroll-material
+  gate stays regex-based by design. `spike.ts` stays in `replica/` because
+  `tools/lvsim.sh` depends on its globals.
+
 Order rationale: 0–1 remove the largest source of regressions with the least
 visible change and create the tests the later phases rely on; 2 must precede
 3–4 because both redesigns are dock rows; 5 is independent and can interleave
@@ -629,10 +664,6 @@ title-to-end tap (§6.7), keep the server's compatibility fields (§5.3), keep
 `_sync-idb`'s database (§4.8), write the navigation and audio behaviour tests
 before the code they guard moves (§7).
 
-Remaining for the owner:
-
-1. §6.4: now-playing dock row (recommended by both the plan and the review)
-   versus the floating puck.
-2. §6.2/§6.3: approve the one-row toolbar with the location chip and the
-   compact read-aloud row as specified.
-3. Phase 5 before or after phases 3–4 (server work can run in parallel).
+Resolved by the owner: the now-playing dock row replaces the floating puck
+(§6.4); the one-row toolbar and the compact read-aloud row ship as specified
+(§6.2, §6.3); each phase is committed on its own.
