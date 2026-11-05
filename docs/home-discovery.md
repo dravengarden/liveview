@@ -19,7 +19,9 @@ mode. A Continue title tap resumes its latest unfinished mode; explicit read and
 listen controls remain available. Document collections show the last document
 position without treating the collection as a book that must be completed.
 
-The Organize action opens a responsive sheet/dialog for creating subdirectories,
+The location control in the toolbar opens a sheet with the current path and
+an Organize action (the wide sidebar also lists Organize). Organize opens a
+responsive sheet/dialog for creating subdirectories,
 renaming/moving the current directory, and selecting content to move in bulk.
 Deletion returns the directory's content to the root and reparents its children;
 it never deletes content. An undo action restores the previous organization.
@@ -35,11 +37,14 @@ See [the directory CLI](library-cli.md) for AI organization examples.
 
 ## Navigation and search
 
-- iPhone: one column, folder drill-down, visible location, and bottom search,
-  back, filter, and settings controls. Search expands while typing and respects
-  native IME composition.
+- iPhone: one column, folder drill-down, and one bottom toolbar row. At the
+  root: location, search, filter and settings. Inside a folder: back, the
+  folder name (opens the location sheet), a search button, filter and
+  settings; the search button expands the field in place. Back first leaves an
+  active search or filter, then goes up a level. Search takes the whole row
+  while typing and respects native IME composition.
 - iPad windows at least 700 px wide: a persistent folder sidebar and a content
-  pane. Below 1000 px, common controls remain at the bottom. Narrow multitasking
+  pane. Below 1000 px, the same single toolbar row stays at the bottom. Narrow multitasking
   windows return to the single-column layout.
 - Desktop: the same folder sidebar with search above the content pane. Results
   gain columns as space permits; controls retain their touch target sizes.

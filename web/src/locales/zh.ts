@@ -46,7 +46,6 @@ export const zh: Dict = {
   "landing.matchingDirectories": "目录 · {n}",
   "landing.undoOrganization": "撤销上次整理",
   "landing.organize": "整理目录",
-  "landing.organizeAction": "整理目录",
   "landing.sortFilterAction": "筛选排序",
   "landing.done": "完成",
   "landing.directoryName": "目录名称",

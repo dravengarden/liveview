@@ -4,16 +4,8 @@ import {
   Box,
   Button,
   Chip,
-  Collapse,
-  FormControlLabel,
   IconButton,
-  InputAdornment,
-  Radio,
-  RadioGroup,
   Stack,
-  TextField,
-  ToggleButton,
-  ToggleButtonGroup,
   Typography,
   useMediaQuery,
 } from "@mui/material";
@@ -21,14 +13,12 @@ import { type Theme, useTheme } from "@mui/material/styles";
 import {
   ArrowBack as BackIcon,
   ChevronRight as NextIcon,
-  Clear as ClearIcon,
-  ExpandMore as ExpandMoreIcon,
   FolderOutlined as FolderIcon,
-  KeyboardHide as KeyboardHideIcon,
   Search as SearchIcon,
   Tune as TuneIcon,
+  DriveFileMove as OrganizeIcon,
 } from "@mui/icons-material";
-import { BottomSheet } from "@/_shell";
+import { flushSync } from "react-dom";
 import {
   type ReactNode,
   useDeferredValue,
@@ -39,17 +29,14 @@ import {
   useState,
 } from "react";
 import type { Book, BookProgress } from "@/types";
-import { setShelfSort, type ShelfSort, useShelfSort } from "@/hooks";
+import { useShelfSort } from "@/hooks";
 import { useI18n } from "@/i18n";
 import { localeDescriptor } from "@/locales/registry";
 import { useSyncStatus } from "@/syncStore";
 import {
   buildLibraryTaxonomy,
   countTagFacetMatches,
-  facetStartsFolded,
-  matchesTagFacets,
   type ReadingFilter,
-  readingState,
   tagLabel,
 } from "@/libraryDiscovery";
 import {
@@ -70,9 +57,21 @@ import {
   useUserLibrary,
 } from "@/userLibrary";
 import { LibraryOrganizer } from "./LibraryOrganizer";
-import { DirectoryLocation } from "./DirectoryLocation";
+import {
+  activeFilterCount as countFilters,
+  type Discovery,
+  discoveryActive as isDiscovering,
+  type FilterKind,
+  matchesKind,
+  narrowShelf,
+  openedAt,
+  sortShelf,
+  toolbarBack,
+} from "@/library/discovery";
+import { LocationButton, LocationSheet } from "@/library/LocationSheet";
+import { SearchField } from "@/library/SearchField";
+import { FILTER_KIND_LABEL, SortFilterSheet } from "@/library/SortFilterSheet";
 import { BrandMark } from "./BrandMark";
-import { AudioPreparation } from "./AudioPreparation";
 import { ScrollToTopButton } from "./ScrollToTopButton";
 import { SyncIndicator } from "./SyncIndicator";
 import { BottomDock } from "@/_shell/bottom-dock.tsx";
@@ -100,19 +99,6 @@ interface LandingProps {
   unavailableOffline?: ReadonlySet<string> | undefined;
 }
 
-/** The shelf kind filter — a SINGLE choice. "book" covers everything readable or
- *  listenable: a text book, a text+audio book, AND an audio-only "audiobook" all
- *  share ONE card, so audio is never split into its own filter (that just doubled
- *  a card's identity); only a raw docs tree is separate. "all" = no narrowing. */
-type FilterKind = "all" | "book" | "docs";
-const FILTER_KIND_LABEL: Record<Exclude<FilterKind, "all">, string> = {
-  book: "landing.filterBooks",
-  docs: "landing.filterDocs",
-};
-
-/** Bookshelf sort options, in display order (same set the old Settings row had,
- *  now surfaced in the toolbar's Sort & Filter sheet). */
-const SHELF_SORTS: ShelfSort[] = ["updated", "read", "added", "name"];
 
 /** A directory browser with global search and a retained reading position. */
 export function Landing({
@@ -166,18 +152,14 @@ export function Landing({
   // back through React's `value` prop replaces that marked range and leaves the
   // keyboard showing candidates while the field itself appears frozen.
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const searchComposingRef = useRef(false);
-  const clearSearch = (): void => {
-    searchComposingRef.current = false;
-    if (searchInputRef.current) {
-      searchInputRef.current.value = "";
-      searchInputRef.current.focus();
-    }
-    setQuery("");
-  };
   const dismissSearchKeyboard = (): void => {
     searchInputRef.current?.blur();
   };
+  // Inside a folder on a phone the search field collapses to an icon so the
+  // location stays in the row; tapping it opens the field.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [locationOpen, setLocationOpen] = useState(false);
+  const [organizeOpen, setOrganizeOpen] = useState(false);
   // Single-choice kind filter ("all" = no narrowing). Audio-only books fall under
   // "book" — they share the card, so they're never a separate filter.
   const [kind, setKind] = useState<FilterKind>("all");
@@ -188,31 +170,14 @@ export function Landing({
   // The combined Sort & Filter sheet (one toolbar control for both the shelf order
   // and the kind narrowing — the two list-organizing concerns in one place).
   const [sfOpen, setSfOpen] = useState(false);
-  // Explicit fold choices per facet; absent facets use `facetStartsFolded`.
-  const [facetOpen, setFacetOpen] = useState<Record<string, boolean>>({});
   // One card per book (audio rides along as a badge on text+audio books),
   // ordered by the Settings → Library → Sort preference. Default "updated":
   // most-recent content change first (the last sync that added/removed/edited
   // it, falling back to first appearance) — a content-recency shelf.
-  const entries = useMemo(() => {
-    const changedAt = (b: Book): number => b.updated_at || b.created_at || 0;
-    const readAt = (slug: string): number => {
-      const bp = progress[slug];
-      return Math.max(bp?.text?.updatedAt ?? 0, bp?.audio?.updatedAt ?? 0);
-    };
-    const cmp: Record<ShelfSort, (a: ShelfEntry, z: ShelfEntry) => number> = {
-      updated: (a, z) => changedAt(z.book) - changedAt(a.book),
-      added: (a, z) => (z.book.created_at || 0) - (a.book.created_at || 0),
-      name: (a, z) => a.book.label.localeCompare(z.book.label, locale),
-      // Most-recently opened first; never-opened books fall to the bottom,
-      // tie-broken by content recency.
-      read: (a, z) => {
-        const d = readAt(z.book.slug) - readAt(a.book.slug);
-        return d !== 0 ? d : changedAt(z.book) - changedAt(a.book);
-      },
-    };
-    return shelfEntries(books).sort(cmp[sort]);
-  }, [books, sort, progress, locale]);
+  const entries = useMemo(
+    () => sortShelf(shelfEntries(books), sort, progress, locale),
+    [books, sort, progress, locale],
+  );
   const libraryTaxonomy = useMemo(
     () => buildLibraryTaxonomy(books),
     [books],
@@ -281,11 +246,6 @@ export function Landing({
     });
   }, [tagById]);
 
-  // "book" = anything readable/listenable (text book, text+audio book, OR an
-  // audio-only book — one shared card); "docs" = a raw docs tree. So the only real
-  // split is book-like vs docs.
-  const matchesKind = (e: ShelfEntry, k: Exclude<FilterKind, "all">): boolean =>
-    k === "docs" ? e.category === "docs" : e.category !== "docs";
 
   // Per-kind totals over the WHOLE shelf (not the search result) — used to decide
   // whether the kind segments are even worth showing (a shelf that's all books
@@ -297,69 +257,38 @@ export function Landing({
       else c.book += 1;
     }
     return c;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entries]);
 
-  // The shelf after both narrowing controls: kind filter AND name search.
+  const discovery = useMemo<Discovery>(
+    () => ({ query, kind, reading: readingFilter, tags: selectedTags }),
+    [query, kind, readingFilter, selectedTags],
+  );
+  const narrowContext = useMemo(
+    () => ({ directory: selectedDirectory, directoryOf, progress, matches: searchMatches }),
+    // directoryOf reads `library`, which `directories` already tracks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedDirectory, library, progress, searchMatches],
+  );
+  // The shelf after every narrowing control. Relevance leads while searching,
+  // then what was opened most recently; remaining ties keep the shelf's own
+  // (stable) sort order.
   const visible = useMemo(() => {
-    const q = query.trim();
-    const ranked: Array<{
-      entry: ShelfEntry;
-      match: BookSearchMatch;
-      openedAt: number;
-    }> = [];
-    for (const entry of entries) {
-      const e = entry;
-      if (
-        !query.trim() && selectedDirectory !== null &&
-        directoryOf(e.book) !== selectedDirectory
-      ) continue;
-      if (kind !== "all" && !matchesKind(e, kind)) continue;
-      if (
-        readingFilter !== "all" &&
-        readingState(progress[e.book.slug]) !== readingFilter
-      ) {
-        continue;
-      }
-      if (!matchesTagFacets(e.book, selectedTags)) continue;
-      const match = searchMatches.get(e.book.slug);
-      if (!match) continue;
-      const bp = progress[e.book.slug];
-      ranked.push({
-        entry: e,
-        match,
-        openedAt: Math.max(bp?.text?.updatedAt ?? 0, bp?.audio?.updatedAt ?? 0),
-      });
-    }
-    // Relevance leads while searching, then what was opened most recently;
-    // remaining ties keep the shelf's own sort order (the sort is stable).
-    if (q) {
+    const ranked = narrowShelf(entries, discovery, narrowContext);
+    if (query.trim()) {
       ranked.sort((a, b) =>
-        compareSearchMatches(a.match, b.match) || b.openedAt - a.openedAt
+        compareSearchMatches(a.match, b.match) ||
+        openedAt(progress[b.entry.book.slug]) - openedAt(progress[a.entry.book.slug])
       );
     }
     return ranked.map(({ entry }) => entry);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    entries,
-    kind,
-    query,
-    readingFilter,
-    selectedTags,
-    progress,
-    searchMatches,
-    selectedDirectory,
-    library,
-  ]);
+  }, [entries, discovery, narrowContext, query, progress]);
 
   // Tell the reader when a typo-tolerant match is among the results.
   const hasCloseMatches = visible.some((entry) =>
     searchMatches.get(entry.book.slug)?.approximate
   );
-  const discoveryActive = query.trim().length > 0 || selectedTags.size > 0 ||
-    kind !== "all" || readingFilter !== "all";
-  const activeFilterCount = selectedTags.size + (kind === "all" ? 0 : 1) +
-    (readingFilter === "all" ? 0 : 1);
+  const discoveryActive = isDiscovering(discovery);
+  const activeFilterCount = countFilters(discovery);
   const discoverySignature = `${query}\0${kind}\0${readingFilter}\0${
     [...selectedTags].sort().join(",")
   }`;
@@ -382,33 +311,10 @@ export function Landing({
   // Disjunctive facet counts preview adding each candidate. Existing choices
   // in the same facet remain because facet values are ORed; other facets stay
   // as AND constraints.
-  const tagCountBooks = useMemo(() => {
-    const result: Book[] = [];
-    for (const entry of entries) {
-      if (
-        !query.trim() && selectedDirectory !== null &&
-        directoryOf(entry.book) !== selectedDirectory
-      ) continue;
-      if (kind !== "all" && !matchesKind(entry, kind)) continue;
-      if (
-        readingFilter !== "all" &&
-        readingState(progress[entry.book.slug]) !== readingFilter
-      ) continue;
-      if (!searchMatches.get(entry.book.slug)) continue;
-      result.push(entry.book);
-    }
-    return result;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    entries,
-    kind,
-    readingFilter,
-    progress,
-    searchMatches,
-    selectedDirectory,
-    library,
-    query,
-  ]);
+  const tagCountBooks = useMemo(
+    () => narrowShelf(entries, discovery, narrowContext, false).map(({ entry }) => entry.book),
+    [entries, discovery, narrowContext],
+  );
   const tagCounts = useMemo(
     () =>
       countTagFacetMatches(
@@ -533,7 +439,16 @@ export function Landing({
       setSelectedDirectory(null);
     }
   }, [books.length, directories, selectedDirectory, library]);
+  const searchShown = !isPhone || selectedDirectory === null || searchOpen ||
+    typedQuery.trim().length > 0;
+  const openSearch = (): void => {
+    // Focus inside the tap: iOS opens the keyboard only for a focus that
+    // happens during the user gesture, so commit the field synchronously.
+    flushSync(() => setSearchOpen(true));
+    searchInputRef.current?.focus();
+  };
   const navigate = (directory: string | null): void => {
+    setSearchOpen(false);
     dismissSearchKeyboard();
     if (searchInputRef.current) searchInputRef.current.value = "";
     setQuery("");
@@ -541,8 +456,8 @@ export function Landing({
     setSelectedDirectory(directory);
   };
   const goBack = (): void => {
-    if (discoveryActive) navigate(selectedDirectory);
-    else navigate(currentDirectory?.parent ?? null);
+    const back = toolbarBack(discovery, selectedDirectory, currentDirectory?.parent ?? null);
+    if (back) navigate(back.to);
   };
   const directoryNavigation = (
     <Box
@@ -605,6 +520,14 @@ export function Landing({
           {t("landing.loadMore", { n: directories.length - directoryLimit })}
         </Button>
       )}
+      <Button
+        data-lv-organize
+        startIcon={<OrganizeIcon />}
+        onClick={() => setOrganizeOpen(true)}
+        sx={{ justifyContent: "flex-start", minHeight: 44, mt: 1, color: "text.secondary" }}
+      >
+        {t("landing.organize")}
+      </Button>
     </Box>
   );
 
@@ -793,18 +716,6 @@ export function Landing({
         },
       }}
     >
-      {!atRoot && !searchEditing && (
-        <DirectoryLocation
-          ancestors={selectedDirectory !== null && !query.trim()
-            ? library
-              ? directoryAncestors(library, selectedDirectory)
-              : currentDirectory
-              ? [{ id: selectedDirectory, name: currentDirectory.name }]
-              : []
-            : []}
-          navigate={navigate}
-        />
-      )}
       <Box
         data-lv-search-editing={searchEditing ? "true" : "false"}
         sx={{
@@ -814,135 +725,41 @@ export function Landing({
           alignItems: "center",
           gap: { xs: 0.75, sm: 1 },
           minHeight: 44,
-          flexWrap: { xs: "wrap", sm: "nowrap" },
+          // Always one row: search, location and actions share it, and phone
+          // search editing takes the whole row instead of wrapping.
+          flexWrap: "nowrap",
         }}
       >
-        {!searchEditing && (selectedDirectory !== null || discoveryActive) &&
-          (
-            <IconButton
-              data-lv-directory-back
-              aria-label={t("landing.backToDirectory")}
-              onClick={goBack}
-              sx={{ width: 44, height: 44 }}
-            >
-              <BackIcon />
-            </IconButton>
-          )}
+        {!searchEditing && (selectedDirectory !== null || discoveryActive) && (
+          <IconButton
+            data-lv-directory-back
+            aria-label={t("landing.backToDirectory")}
+            onClick={goBack}
+            sx={{ width: 44, height: 44, flexShrink: 0 }}
+          >
+            <BackIcon />
+          </IconButton>
+        )}
+        {!searchEditing && (selectedDirectory === null || !(isPhone && searchShown)) && (
+          <LocationButton
+            name={selectedDirectory === null ? null : currentDirectory?.name ?? ""}
+            onOpen={() => setLocationOpen(true)}
+          />
+        )}
         {books.length === 0 && <Box sx={{ flexGrow: 1 }} />}
-        {books.length > 0 && (
-          <>
-            <TextField
-              size="small"
-              inputRef={searchInputRef}
-              data-lv-search-field="true"
-              defaultValue=""
-              onFocus={() => setSearchFocused(true)}
-              onBlur={() => setSearchFocused(false)}
-              onKeyDown={(e) => {
-                const nativeEvent = e.nativeEvent as KeyboardEvent;
-                if (e.key === "Escape" && !nativeEvent.isComposing) {
-                  e.preventDefault();
-                  navigate(selectedDirectory);
-                }
-                if (
-                  e.key === "Enter" && !searchComposingRef.current &&
-                  !nativeEvent.isComposing
-                ) {
-                  e.preventDefault();
-                  dismissSearchKeyboard();
-                }
-              }}
-              onCompositionStart={() => {
-                searchComposingRef.current = true;
-              }}
-              onCompositionEnd={(e) => {
-                searchComposingRef.current = false;
-                setQuery(
-                  searchInputRef.current?.value ??
-                    (e.target as HTMLInputElement).value,
-                );
-              }}
-              onChange={(e) => {
-                const nativeEvent = e.nativeEvent as InputEvent;
-                if (
-                  !searchComposingRef.current && !nativeEvent.isComposing
-                ) {
-                  setQuery(e.currentTarget.value);
-                }
-              }}
-              placeholder={t("landing.searchLibrary")}
-              aria-label={t("landing.searchLibrary")}
-              inputProps={{
-                "data-lv-search-input": "true",
-                "aria-label": t("landing.searchLibrary"),
-                enterKeyHint: "search",
-              }}
-              InputProps={{
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon fontSize="medium" />
-                  </InputAdornment>
-                ),
-                endAdornment: query || searchEditing
-                  ? (
-                    // ui.md §7: no edge="end" (negative margin pins the target to the
-                    // iOS back-swipe edge); floor to a ≥40px touch target on phones and
-                    // keep the adornment off the safe-area edge.
-                    <InputAdornment
-                      position="end"
-                      sx={{
-                        gap: 0.25,
-                        pr: "max(env(safe-area-inset-right), 8px)",
-                      }}
-                    >
-                      <IconButton
-                        size="small"
-                        data-lv-search-clear="true"
-                        disabled={!query}
-                        onPointerDown={(e) => e.preventDefault()}
-                        onClick={clearSearch}
-                        aria-label={t("landing.searchClear")}
-                        sx={{
-                          width: { xs: 40, lg: 32 },
-                          height: { xs: 40, lg: 32 },
-                        }}
-                      >
-                        <ClearIcon fontSize="medium" />
-                      </IconButton>
-                      {searchEditing && (
-                        <IconButton
-                          size="small"
-                          data-lv-search-dismiss="true"
-                          onPointerDown={(e) => {
-                            // Perform the blur before this focused-only
-                            // control unmounts. onClick remains for keyboard
-                            // activation and non-pointer assistive input.
-                            e.preventDefault();
-                            dismissSearchKeyboard();
-                          }}
-                          onClick={dismissSearchKeyboard}
-                          aria-label={t("landing.searchHideKeyboard")}
-                          sx={{ width: 40, height: 40 }}
-                        >
-                          <KeyboardHideIcon fontSize="medium" />
-                        </IconButton>
-                      )}
-                    </InputAdornment>
-                  )
-                  : null,
-              }}
-              sx={{
-                flexGrow: 1,
-                minWidth: 0,
-                flexBasis: { xs: "calc(100% - 56px)", sm: 0 },
-                "& input::placeholder": {
-                  fontSize: "0.875rem",
-                  opacity: 0.65,
-                  color: "text.secondary",
-                },
-              }}
-            />
-          </>
+        {books.length > 0 && searchShown && (
+          <SearchField
+            inputRef={searchInputRef}
+            query={query}
+            editing={searchEditing}
+            onQuery={setQuery}
+            onFocusChange={(focused) => {
+              setSearchFocused(focused);
+              if (!focused && !searchInputRef.current?.value.trim()) setSearchOpen(false);
+            }}
+            onEscape={() => navigate(selectedDirectory)}
+            onDismiss={dismissSearchKeyboard}
+          />
         )}
         {/* Search finds content; these explicit actions change the view or library. */}
         {!searchEditing && (
@@ -952,50 +769,59 @@ export function Landing({
               flexShrink: 0,
               display: "flex",
               alignItems: "center",
-              gap: { xs: 0.75, sm: 1 },
-              flexBasis: { xs: "100%", sm: "auto" },
-              justifyContent: "flex-end",
+              gap: { xs: 0.25, sm: 1 },
             }}
           >
+            {books.length > 0 && !searchShown && (
+              <IconButton
+                data-lv-search-open
+                aria-label={t("landing.searchLibrary")}
+                onClick={openSearch}
+                sx={{ width: 44, height: 44 }}
+              >
+                <SearchIcon />
+              </IconButton>
+            )}
             {books.length > 0 && (
               <Badge
                 color="primary"
                 badgeContent={activeFilterCount}
                 invisible={activeFilterCount === 0}
-                sx={{ flex: { xs: 1, sm: "0 0 auto" } }}
+                overlap={isPhone ? "circular" : "rectangular"}
               >
-                <Button
-                  size="small"
-                  startIcon={<TuneIcon fontSize="small" />}
-                  onClick={() => setSfOpen(true)}
-                  aria-label={t("landing.sortFilter")}
-                  sx={{
-                    flexShrink: 0,
-                    minHeight: 44,
-                    width: "100%",
-                    px: 1.25,
-                    textTransform: "none",
-                    color: activeFilterCount > 0
-                      ? "primary.main"
-                      : "text.secondary",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {t("landing.sortFilterAction")}
-                </Button>
+                {isPhone
+                  ? (
+                    <IconButton
+                      onClick={() => setSfOpen(true)}
+                      aria-label={t("landing.sortFilter")}
+                      sx={{
+                        width: 44,
+                        height: 44,
+                        color: activeFilterCount > 0 ? "primary.main" : "text.secondary",
+                      }}
+                    >
+                      <TuneIcon />
+                    </IconButton>
+                  )
+                  : (
+                    <Button
+                      size="small"
+                      startIcon={<TuneIcon fontSize="small" />}
+                      onClick={() => setSfOpen(true)}
+                      aria-label={t("landing.sortFilter")}
+                      sx={{
+                        minHeight: 44,
+                        px: 1.25,
+                        textTransform: "none",
+                        color: activeFilterCount > 0 ? "primary.main" : "text.secondary",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {t("landing.sortFilterAction")}
+                    </Button>
+                  )}
               </Badge>
             )}
-            <LibraryOrganizer
-              library={library}
-              libraryError={libraryError}
-              libraryBusy={libraryBusy}
-              changeLibrary={changeLibrary}
-              undoLibrary={undoLibrary}
-              selectedDirectory={selectedDirectory}
-              currentDirectory={currentDirectory}
-              directories={directories}
-              listEntries={listEntries}
-            />
             {settingsSlot}
           </Box>
         )}
@@ -1054,202 +880,50 @@ export function Landing({
       )}
       {!navbarAtBottom && toolbar}
 
-      {/* Sort & Filter sheet — both shelf-organizing controls in one surface. */}
-      <BottomSheet
+      <LocationSheet
+        open={locationOpen}
+        onClose={() => setLocationOpen(false)}
+        ancestors={selectedDirectory === null
+          ? []
+          : library
+          ? directoryAncestors(library, selectedDirectory)
+          : currentDirectory
+          ? [{ id: selectedDirectory, name: currentDirectory.name }]
+          : []}
+        navigate={navigate}
+        onOrganize={() => setOrganizeOpen(true)}
+      />
+      <LibraryOrganizer
+        open={organizeOpen}
+        onClose={() => setOrganizeOpen(false)}
+        library={library}
+        libraryError={libraryError}
+        libraryBusy={libraryBusy}
+        changeLibrary={changeLibrary}
+        undoLibrary={undoLibrary}
+        selectedDirectory={selectedDirectory}
+        currentDirectory={currentDirectory}
+        directories={directories}
+        listEntries={listEntries}
+      />
+      <SortFilterSheet
         open={sfOpen}
         onClose={() => setSfOpen(false)}
-        title={t("landing.sortFilter")}
-        wide
-        // This catalog can contain thousands of facet chips. Keep its actions
-        // in a real footer so they never obscure the choices being reviewed.
-        floatingActions={false}
-        actions={
-          <>
-            <Button
-              onClick={clearDiscoveryFilters}
-              disabled={activeFilterCount === 0}
-            >
-              {t("landing.clearFilters")}
-            </Button>
-            <Button
-              variant="contained"
-              onClick={() => {
-                setSfOpen(false);
-              }}
-            >
-              {t("landing.showResults", { n: visible.length })}
-            </Button>
-          </>
-        }
-      >
-        <Stack spacing={3} sx={{ pb: 1 }}>
-          {selectedTags.size > 0 && (
-            <Stack spacing={1}>
-              <Typography variant="overline" color="text.secondary">
-                {t("landing.selectedFilters")}
-              </Typography>
-              <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
-                {[...selectedTags].map((id) => {
-                  const tag = tagById.get(id);
-                  return (
-                    <Chip
-                      key={id}
-                      label={tag?.label ?? tagLabel(id)}
-                      color="primary"
-                      onDelete={() => toggleTag(id)}
-                    />
-                  );
-                })}
-              </Stack>
-            </Stack>
-          )}
-          {libraryTaxonomy.facets.map((facet) => {
-            const facetTags = libraryTaxonomy.tags.filter((tag) =>
-              tag.facet === facet.id
-            );
-            const selectedInFacet = facetTags.filter((tag) =>
-              selectedTags.has(tag.id)
-            ).length;
-            const open = facetOpen[facet.id] ??
-              !facetStartsFolded(facetTags.length);
-            return (
-              <Stack key={facet.id} spacing={1}>
-                <Box
-                  component="button"
-                  type="button"
-                  aria-expanded={open}
-                  onClick={() =>
-                    setFacetOpen((current) => ({
-                      ...current,
-                      [facet.id]: !open,
-                    }))}
-                  sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 1,
-                    width: "100%",
-                    minHeight: 40,
-                    p: 0,
-                    border: 0,
-                    bgcolor: "transparent",
-                    color: "text.secondary",
-                    font: "inherit",
-                    textAlign: "left",
-                    cursor: "pointer",
-                  }}
-                >
-                  <Typography variant="overline" sx={{ flex: 1, minWidth: 0 }}>
-                    {facet.id === "tags" ? t("landing.tags") : facet.label}
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    sx={{ fontVariantNumeric: "tabular-nums" }}
-                  >
-                    {selectedInFacet > 0
-                      ? t("landing.facetSelected", {
-                        n: selectedInFacet,
-                        total: facetTags.length,
-                      })
-                      : facetTags.length}
-                  </Typography>
-                  <ExpandMoreIcon
-                    fontSize="small"
-                    sx={{
-                      transition: "transform .2s",
-                      transform: open ? "rotate(180deg)" : "none",
-                    }}
-                  />
-                </Box>
-                {
-                  /* Folded facets don't mount their chips: a catalog-wide
-                    facet can hold hundreds of them. */
-                }
-                <Collapse in={open} timeout={180} unmountOnExit>
-                  <Stack direction="row" useFlexGap flexWrap="wrap" gap={0.75}>
-                    {facetTags.map((tag) => {
-                      const selected = selectedTags.has(tag.id);
-                      const count = tagCounts.get(tag.id) ?? 0;
-                      return (
-                        <Chip
-                          key={tag.id}
-                          label={`${tag.label} · ${count}`}
-                          color={selected ? "primary" : "default"}
-                          variant={selected ? "filled" : "outlined"}
-                          disabled={!selected && count === 0}
-                          onClick={() => toggleTag(tag.id)}
-                          sx={{ minHeight: 40 }}
-                        />
-                      );
-                    })}
-                  </Stack>
-                </Collapse>
-              </Stack>
-            );
-          })}
-          <Stack spacing={1}>
-            <Typography variant="overline" color="text.secondary">
-              {t("landing.readingState")}
-            </Typography>
-            <ToggleButtonGroup
-              exclusive
-              fullWidth
-              size="small"
-              value={readingFilter}
-              onChange={(_e, value: ReadingFilter | null) =>
-                value && setReadingFilter(value)}
-            >
-              {(["all", "unread", "progress", "finished"] as const).map((
-                value,
-              ) => (
-                <ToggleButton key={value} value={value}>
-                  {t(`reading.${value}`)}
-                </ToggleButton>
-              ))}
-            </ToggleButtonGroup>
-          </Stack>
-          <Stack spacing={0.5}>
-            <Typography variant="overline" color="text.secondary">
-              {t("landing.sortBy")}
-            </Typography>
-            <RadioGroup
-              value={sort}
-              onChange={(e) => setShelfSort(e.target.value as ShelfSort)}
-            >
-              {SHELF_SORTS.map((s) => (
-                <FormControlLabel
-                  key={s}
-                  value={s}
-                  control={<Radio />}
-                  label={t(`sort.${s}`)}
-                />
-              ))}
-            </RadioGroup>
-          </Stack>
-          {showKindFilter && (
-            <Stack spacing={1}>
-              <Typography variant="overline" color="text.secondary">
-                {t("landing.kind")}
-              </Typography>
-              <ToggleButtonGroup
-                exclusive
-                fullWidth
-                size="small"
-                value={kind}
-                onChange={(_e, v: FilterKind | null) => v && setKind(v)}
-                aria-label={t("landing.filter")}
-              >
-                <ToggleButton value="all">{t("landing.kindAll")}</ToggleButton>
-                <ToggleButton value="book">
-                  {t(FILTER_KIND_LABEL.book)}
-                </ToggleButton>
-                <ToggleButton value="docs">
-                  {t(FILTER_KIND_LABEL.docs)}
-                </ToggleButton>
-              </ToggleButtonGroup>
-            </Stack>
-          )}
-        </Stack>
-      </BottomSheet>
+        taxonomy={libraryTaxonomy}
+        selectedTags={selectedTags}
+        tagById={tagById}
+        tagCounts={tagCounts}
+        onToggleTag={toggleTag}
+        reading={readingFilter}
+        onReading={setReadingFilter}
+        sort={sort}
+        kind={kind}
+        onKind={setKind}
+        showKindFilter={showKindFilter}
+        activeFilterCount={activeFilterCount}
+        onClear={clearDiscoveryFilters}
+        resultCount={visible.length}
+      />
 
       {
         /* ── Shelf (the scroll area) ──────────────────────────────────────────
@@ -1392,7 +1066,6 @@ export function Landing({
               </Stack>
             )}
 
-            {atRoot && isVisible && <AudioPreparation />}
             {atRoot && continueBooks.length > 0 && (
               <Box
                 component="section"

@@ -46,7 +46,6 @@ export const en: Dict = {
   "landing.matchingDirectories": "Folders · {n}",
   "landing.undoOrganization": "Undo last organization change",
   "landing.organize": "Organize library",
-  "landing.organizeAction": "Organize",
   "landing.sortFilterAction": "Filter & sort",
   "landing.done": "Done",
   "landing.directoryName": "Directory name",

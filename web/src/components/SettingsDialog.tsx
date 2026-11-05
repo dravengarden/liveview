@@ -21,6 +21,7 @@ import { THEME_VARIANTS, VARIANT_OPTIONS } from "@/types";
 import { FONT_PRESETS } from "@/fonts";
 import { UI_LANGUAGES, useI18n } from "@/i18n";
 import { OfflineSection } from "./OfflineSection";
+import { AudioPreparation } from "./AudioPreparation";
 import { SegmentedPill } from "./SegmentedPill";
 import { offlineDownloadsAvailable } from "@/native-sync";
 import { useStore } from "@/_store/mod.ts";
@@ -564,6 +565,7 @@ export function SettingsButton({
               <Typography variant="overline" color="text.secondary">
                 {t("settings.playback")}
               </Typography>
+              <AudioPreparation />
               <Row
                 label={t("settings.sleepDefault")}
                 desc={t("settings.sleepDefaultDesc")}

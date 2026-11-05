@@ -2,18 +2,22 @@ import { useEffect, useState } from "react";
 import { Box, Button, Collapse, Typography } from "@mui/material";
 import { BUNDLED, REMOTE } from "@/apiBase";
 import { useI18n } from "@/i18n";
+import { useSettingsSurfaceOpen } from "@/_shell/settings-sheet.tsx";
 
 interface Status { paused: boolean; total: number; ready: number; running: number; waiting: number; failed: number }
 const base = (): string => BUNDLED ? REMOTE : "";
 
-/** Constant-size server summary; no chapter enumeration in the reader. */
+/** Constant-size server summary; no chapter enumeration in the reader.
+ *  Polls only while its retained Settings surface is open. */
 export function AudioPreparation(): React.JSX.Element | null {
+  const active = useSettingsSurfaceOpen();
   const { t } = useI18n();
   const [status, setStatus] = useState<Status | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   useEffect(() => {
+    if (!active) return undefined;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
     let controller: AbortController | undefined;
@@ -36,7 +40,7 @@ export function AudioPreparation(): React.JSX.Element | null {
     timer = setTimeout(() => void refresh(), 1000);
     document.addEventListener("visibilitychange", visibility);
     return () => { disposed = true; clearTimeout(timer); controller?.abort(); document.removeEventListener("visibilitychange", visibility); };
-  }, []);
+  }, [active]);
   async function pause(): Promise<void> {
     if (!status || busy) return;
     setBusy(true); setError("");
@@ -48,7 +52,7 @@ export function AudioPreparation(): React.JSX.Element | null {
     finally { setBusy(false); }
   }
   if (!status || status.total === 0) return null;
-  return <Box sx={{ mb: 2 }} data-testid="audio-preparation">
+  return <Box data-testid="audio-preparation">
     <Button size="small" onClick={() => setOpen(value => !value)} aria-expanded={open}>{t("speech.preparationSummary", { ready: status.ready, total: status.total })}{status.paused ? ` · ${t("speech.preparationPaused")}` : status.running > 0 ? ` · ${t("speech.preparationRunning", { n: status.running })}` : ""}</Button>
     <Collapse in={open}><Box sx={{ px: 1, pb: 1 }}>
       <Typography variant="body2" color="text.secondary">{t("speech.preparationDetail", { waiting: status.waiting, failed: status.failed })}</Typography>

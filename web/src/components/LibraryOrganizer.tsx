@@ -1,5 +1,4 @@
 import { Box, Button, Stack, Typography } from "@mui/material";
-import { FolderOutlined as FolderIcon } from "@mui/icons-material";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { BottomSheet } from "@/_shell";
@@ -22,6 +21,8 @@ interface Props {
   currentDirectory: UserDirectory | undefined;
   directories: UserDirectory[];
   listEntries: Array<{ book: Book }>;
+  open: boolean;
+  onClose: () => void;
 }
 /** Own editing state so opening or selecting never re-renders the shelf. */
 export function LibraryOrganizer(
@@ -35,6 +36,8 @@ export function LibraryOrganizer(
     currentDirectory,
     directories,
     listEntries,
+    open: organizeOpen,
+    onClose,
   }: Props,
 ): ReactNode {
   const { t } = useI18n();
@@ -44,7 +47,6 @@ export function LibraryOrganizer(
   const organizeInputsRef = useRef<unknown[]>([]);
   const prepareClosedBody = useRef(false);
   const [, advancePreparation] = useState(0);
-  const [organizeOpen, setOrganizeOpen] = useState(false);
   const [directoryName, setDirectoryName] = useState("");
   const [moveTarget, setMoveTarget] = useState("");
   const [selectedBooks, setSelectedBooks] = useState<string[]>([]);
@@ -311,40 +313,33 @@ export function LibraryOrganizer(
     t,
   ]);
 
+  // Each opening starts from this directory: an empty name and its parent as
+  // the move destination.
+  const [wasOpen, setWasOpen] = useState(organizeOpen);
+  if (wasOpen !== organizeOpen) {
+    setWasOpen(organizeOpen);
+    if (organizeOpen) {
+      setDirectoryName("");
+      setMoveTarget(currentDirectory?.parent ?? "");
+    }
+  }
+  // The name input is uncontrolled; clear it once the sheet is open.
+  useEffect(() => {
+    if (organizeOpen && directoryNameInput.current) directoryNameInput.current.value = "";
+  }, [organizeOpen]);
+
   return (
     <>
-      <Button
-        startIcon={<FolderIcon fontSize="small" />}
-        sx={{
-          minHeight: 44,
-          // Neutral like Sort & Filter: the toolbar reserves the accent for
-          // active state, so an always-accented action read as "selected".
-          color: "text.secondary",
-          textTransform: "none",
-          whiteSpace: "nowrap",
-          flex: { xs: 1, sm: "0 0 auto" },
-        }}
-        data-lv-organize
-        aria-label={t("landing.organize")}
-        onClick={() => {
-          setOrganizeOpen(true);
-          setDirectoryName("");
-          if (directoryNameInput.current) directoryNameInput.current.value = "";
-          setMoveTarget(currentDirectory?.parent ?? "");
-        }}
-      >
-        {t("landing.organizeAction")}
-      </Button>
       {createPortal(
         <BottomSheet
           open={organizeOpen}
           keepMounted
-          onClose={() => setOrganizeOpen(false)}
+          onClose={onClose}
           title={t("landing.organize")}
           wide
           floatingActions={false}
           actions={
-            <Button disableRipple onClick={() => setOrganizeOpen(false)}>
+            <Button disableRipple onClick={onClose}>
               {t("landing.done")}
             </Button>
           }

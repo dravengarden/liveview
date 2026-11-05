@@ -33,6 +33,9 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   const landing = [
     await source("components/Landing.tsx"),
     await source("components/ShelfCard.tsx"),
+    await source("library/SearchField.tsx"),
+    await source("library/SortFilterSheet.tsx"),
+    await source("library/LocationSheet.tsx"),
   ].join("\n");
   const artwork = await source("components/CoverTile.tsx");
   const segmented = await source("components/SegmentedPill.tsx");
@@ -213,8 +216,8 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     landing,
-    /flexWrap: \{ xs: "wrap", sm: "nowrap" \}[\s\S]{0,10000}data-lv-shelf-actions[\s\S]{0,500}flexBasis: \{ xs: "100%", sm: "auto" \}/,
-    "the phone toolbar must place labeled actions on a separate row to preserve search width",
+    /flexWrap: "nowrap",[\s\S]{0,6000}data-lv-shelf-actions/,
+    "the library toolbar must stay one row; phone search editing takes the row instead of wrapping",
   );
   assertPresent(
     landing,
@@ -228,7 +231,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     landing,
-    /data-lv-search-field[\s\S]{0,240}onFocus=\{\(\) => setSearchFocused\(true\)\}[\s\S]{0,120}onBlur=\{\(\) => setSearchFocused\(false\)\}/,
+    /data-lv-search-field[\s\S]{0,240}onFocus=\{\(\) => onFocusChange\(true\)\}[\s\S]{0,120}onBlur=\{\(\) => onFocusChange\(false\)\}/,
     "phone search must expand on focus and restore the shelf actions on blur",
   );
   assertPresent(
