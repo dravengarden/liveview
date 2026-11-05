@@ -89,7 +89,7 @@ async fn generate(
         return Err("Chapter changed".into());
     }
     let md = row.markdown.unwrap_or_default();
-    let texts = if job.rendition == "audio" {
+    let texts = if crate::config::RenditionKind::Audio.is(&job.rendition) {
         spoken::spoken_sentences(&md)
     } else {
         let units = spoken::spoken_units(&md);

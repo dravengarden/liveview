@@ -201,7 +201,7 @@ async fn generate(
     }
     let md = row.markdown.unwrap_or_default();
 
-    let (mp3, marks) = if task.rendition == "audio" {
+    let (mp3, marks) = if crate::config::RenditionKind::Audio.is(&task.rendition) {
         // Audiobook: the curated `.spoken.md` script, sentence by sentence.
         let sentences = spoken::spoken_sentences(&md);
         if sentences.is_empty() {

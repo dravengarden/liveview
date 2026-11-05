@@ -365,7 +365,7 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 // each non-prose resource's spoken text by key — no model in the
                 // deploy path. Only the TEXT rendition has read-aloud narration;
                 // idempotent (ON CONFLICT), so re-syncs are cheap no-ops.
-                if r_kind == "text"
+                if RenditionKind::Text.is(r_kind)
                     && let Some(book_root) = ed.source.parent()
                 {
                     match crate::content::narration::Sidecar::load(book_root, &ed.lang) {
@@ -975,7 +975,7 @@ async fn audio_marks_stale(store: &PgStore, obj: &ObjStore, a: &LeafApply) -> Re
         return Ok(false); // not baked yet — the normal enqueue path will bake it
     };
     let md = row.markdown.unwrap_or_default();
-    let expected = if a.rendition == "audio" {
+    let expected = if RenditionKind::Audio.is(&a.rendition) {
         crate::content::spoken::spoken_sentences(&md).len()
     } else {
         crate::content::spoken::spoken_units(&md).len()

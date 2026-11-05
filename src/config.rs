@@ -304,6 +304,11 @@ impl RenditionKind {
         }
     }
 
+    /// Whether a stored or wire rendition token names this kind.
+    pub fn is(self, token: &str) -> bool {
+        token == self.as_str()
+    }
+
     /// Parse the `?rendition=` query token. Unknown ⇒ `None` (caller decides).
     pub fn parse(s: &str) -> Option<Self> {
         match s {

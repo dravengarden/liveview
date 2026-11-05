@@ -619,14 +619,14 @@ Deferred, with reasons:
 - Unifying `ChapterRef` with `resolve_chapter` (§5.2): the HTTP and sync
   callers have different not-found and edition-fallback contracts, so a
   shared resolver would change behaviour.
-- The remaining §5.2 primitives: `RenditionKind::parse` at every boundary
-  (several raw comparisons remain), `content::narration::synthesize_chapter`,
+- The remaining §5.2 primitives: `content::narration::synthesize_chapter`,
   one `blob_response` for every blob route, and `StoreError`. Each changes a
-  response contract and needs characterization tests first.
-- `connectivity.ts` and the UI-free `connectionStore` factory (§4.8). The
-  reachability, socket and native network signals are wired correctly today;
-  merging them changes when the replica retries, which needs an offline
-  simulator pass.
+  response contract and needs characterization tests first. (Raw rendition
+  comparisons now go through `RenditionKind::is`.)
+- `connectivity.ts` (§4.8). The reachability, socket and native network
+  signals are wired correctly today; merging them changes when the replica
+  retries, which needs an offline simulator pass. (The connection store is
+  already UI-free in `_shell/connection-store.ts`.)
 - Converting `nativeAudioRecovery` and `readAlongRecovery` (§4.8) to
   behavioural tests waits for the engine split above; the scroll-material
   gate stays regex-based by design. `spike.ts` stays in `replica/` because

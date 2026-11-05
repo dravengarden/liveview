@@ -52,7 +52,7 @@ impl PgStore {
                 .bind(&row.book_slug).bind(&row.rendition).bind(&row.lang).bind(&row.rel_path).bind(&row.content_hash).bind(recipe.id()).bind(ready).execute(&mut *tx).await.map_err(|e|e.to_string())?;
             if !ready && !options.has_audio_options() {
                 let voice = options.resolve(&row.lang, legacy.as_deref());
-                let kind = if row.rendition == "audio" {
+                let kind = if crate::config::RenditionKind::Audio.is(&row.rendition) {
                     format!(
                         "audio:{}:{voice}:{}",
                         row.render_version,

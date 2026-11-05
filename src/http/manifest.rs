@@ -228,7 +228,7 @@ pub(crate) async fn api_dag(State(state): State<SharedState>, headers: HeaderMap
     // address can fold in the overlay `/api/spoken` actually narrates.
     let overlays: HashMap<(&str, &str, &str), &str> = chapters
         .iter()
-        .filter(|c| c.rendition == "text" && c.rel_path.ends_with(".spoken.md"))
+        .filter(|c| RenditionKind::Text.is(&c.rendition) && c.rel_path.ends_with(".spoken.md"))
         .map(|c| {
             (
                 (c.book_slug.as_str(), c.lang.as_str(), c.rel_path.as_str()),
@@ -248,7 +248,8 @@ pub(crate) async fn api_dag(State(state): State<SharedState>, headers: HeaderMap
             encode_query_value(&c.rendition)
         );
         if c.file_type == "markdown" || c.file_type == "html" {
-            let overlay = (c.rendition == "text")
+            let overlay = RenditionKind::Text
+                .is(&c.rendition)
                 .then(|| c.rel_path.strip_suffix(".md"))
                 .flatten()
                 .and_then(|stem| {
@@ -280,7 +281,7 @@ pub(crate) async fn api_dag(State(state): State<SharedState>, headers: HeaderMap
                 "kind": "spoken", "bytes": 0, "url": format!("/api/spoken?{q}"),
             }));
             // `units` (word-level tap-to-seek) is a text-read-aloud feature only.
-            if c.rendition == "text" {
+            if RenditionKind::Text.is(&c.rendition) {
                 resources.push(serde_json::json!({
                     "path": format!("{doc}#units"), "hash": hashes.units,
                     "kind": "units", "bytes": 0, "url": format!("/api/units?{q}"),

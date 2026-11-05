@@ -20,15 +20,14 @@ export {
 } from "./bottom-sheet.tsx";
 export { SettingsSheet, type SettingsSheetProps, ThemeModeControl } from "./settings-sheet.tsx";
 export { NavShell, type NavShellApi, type NavShellProps } from "./nav-shell.tsx";
+export { ConnectionBanner, type ConnectionBannerProps } from "./connection-banner.tsx";
 export {
   type Banner,
   type BannerKind,
-  ConnectionBanner,
-  type ConnectionBannerProps,
   type ConnectionStore,
   type ConnectionStoreOptions,
   createConnectionStore,
-} from "./connection-banner.tsx";
+} from "./connection-store.ts";
 export { type GalleryImage, ImageLightbox, type ImageLightboxProps } from "./image-lightbox.tsx";
 export { DEFAULT_SHELL_LABELS, type ShellLabels, ShellLabelsProvider, useShellLabels } from "./shell-labels.tsx";
 export { createSharedTheme, type SharedThemeOptions } from "./theme.ts";
