@@ -8,7 +8,7 @@
 //!     Computed here, no model, zero tokens.
 //!   • **Narrated** — a diagram / table / formula / code block is resolved to
 //!     PRE-GENERATED text by a content-addressed key (a skill produces it
-//!     offline; see [`crate::server::narration`]). liveview NEVER calls a model.
+//!     offline; see [`crate::content::narration`]). liveview NEVER calls a model.
 //!
 //! This is the extension point: a new resource type is one arm in [`plan`].
 //! [`plan`] is pure (no IO, no store) so the offline evaluator + `narrate-plan`
@@ -23,8 +23,8 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::server::narration::{self, NarrationStore};
-use crate::server::spoken::{Unit, UnitKind};
+use crate::content::narration::{self, NarrationStore};
+use crate::content::spoken::{Unit, UnitKind};
 
 /// An image's `alt` shorter than this is too thin to stand in for the figure
 /// when listening; the evaluator flags it so the author writes a fuller one
@@ -249,7 +249,7 @@ pub fn normalize_inline(text: &str, lang: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::spoken::spoken_units;
+    use crate::content::spoken::spoken_units;
 
     fn unit(md: &str, kind: UnitKind) -> Unit {
         spoken_units(md)

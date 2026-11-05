@@ -6,6 +6,7 @@ pub mod blobs;
 pub mod content;
 pub mod fs;
 pub mod model;
+pub mod objstore;
 pub mod pg;
 pub mod preparation;
 pub mod range;

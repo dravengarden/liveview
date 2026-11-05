@@ -5,6 +5,7 @@ mod check;
 mod cli;
 mod commands;
 mod config;
+mod content;
 mod http;
 mod interactive_view;
 mod library;
@@ -28,8 +29,8 @@ use server::catalog::Catalog;
 use server::state::{ApmSink, AppState, SharedState};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use store::objstore::ObjStore;
 use store::pg::PgStore;
-use sync::objstore::ObjStore;
 use tokio::sync::{RwLock, broadcast};
 use tracing_subscriber::EnvFilter;
 

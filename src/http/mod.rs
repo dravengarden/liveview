@@ -27,7 +27,7 @@ use crate::server::bytes::{ranged_bytes_response, stored_blob_response};
 use crate::server::state::{AppState, CachedJson, SharedState};
 use crate::shared::{FileContent, FileType, WsMessage};
 use crate::store::model::{AudioBake, ChapterRecord, ProgressEntry};
-use crate::{artwork, library, server, speech};
+use crate::{artwork, content, library, server, speech};
 use audio::{api_audio, api_marks};
 use axum::{
     Extension, Router,

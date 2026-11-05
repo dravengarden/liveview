@@ -15,13 +15,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use crate::config::{BookState, Layout, RenditionKind, Resolved};
-use crate::server::renderer;
+use crate::content::renderer;
 use crate::shared::FileType;
 use crate::store::model::{AudioTask, AudioTaskUpsert, BookUpsert, ChapterRecord, ChapterState};
+use crate::store::objstore::ObjStore;
 use crate::store::pg::PgStore;
 use crate::sync::diff::{Plan, plan};
 use crate::sync::merkle::{Build, Dag, Leaf, Node};
-use crate::sync::objstore::ObjStore;
 
 /// Identity-record separator inside a leaf `path` (round-trips on delete).
 pub(crate) const SEP: char = '\u{1f}';
@@ -368,7 +368,7 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 if r_kind == "text"
                     && let Some(book_root) = ed.source.parent()
                 {
-                    match crate::server::narration::Sidecar::load(book_root, &ed.lang) {
+                    match crate::content::narration::Sidecar::load(book_root, &ed.lang) {
                         Ok(sc) => {
                             for (key, e) in &sc.entries {
                                 store
@@ -503,7 +503,7 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
     // independent of the slow content apply below, so the reader's sidebar works
     // as soon as a sync starts (even while audiobook TTS backfills for minutes).
     for kind in [RenditionKind::Text, RenditionKind::Audio] {
-        let tree = crate::server::tree::build_virtual_tree(&resolved.books, kind);
+        let tree = crate::content::tree::build_virtual_tree(&resolved.books, kind);
         let json = serde_json::to_string(&tree).map_err(|e| format!("encode tree: {e}"))?;
         store
             .set_site_tree(kind.as_str(), &json)
@@ -976,9 +976,9 @@ async fn audio_marks_stale(store: &PgStore, obj: &ObjStore, a: &LeafApply) -> Re
     };
     let md = row.markdown.unwrap_or_default();
     let expected = if a.rendition == "audio" {
-        crate::server::spoken::spoken_sentences(&md).len()
+        crate::content::spoken::spoken_sentences(&md).len()
     } else {
-        crate::server::spoken::spoken_units(&md).len()
+        crate::content::spoken::spoken_units(&md).len()
     };
     let bytes = obj.get(&marks_hash).await.map_err(|e| e.to_string())?;
     // Count-only decode: the marks blob is a JSON array; we don't need the Mark

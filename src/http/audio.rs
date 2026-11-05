@@ -387,7 +387,7 @@ async fn ensure_chapter_audio(
         return Ok((a.clone(), m.clone()));
     }
     let md = row.markdown.clone().unwrap_or_default();
-    let sentences = server::spoken::spoken_sentences(&md);
+    let sentences = content::spoken::spoken_sentences(&md);
     let command = state
         .tts_cmd
         .as_deref()
@@ -459,7 +459,7 @@ async fn ensure_text_audio(
         return Ok((a.clone(), m.clone()));
     }
     let md = row.markdown.clone().unwrap_or_default();
-    let units = server::spoken::spoken_units(&md);
+    let units = content::spoken::spoken_units(&md);
     if units.is_empty() {
         return Err("no speakable content".to_string());
     }
@@ -471,12 +471,12 @@ async fn ensure_text_audio(
     // a skill, ingested into pg by `sync`), and anything unhandled / not-yet-
     // narrated stays a brief silent step-over. No model call. Runs once per
     // chapter (the whole result is cached).
-    let keys = server::speakable::narration_keys(&units, &served);
+    let keys = content::speakable::narration_keys(&units, &served);
     let store =
-        server::narration::NarrationStore::from_pairs(state.store.load_narration(&keys).await?);
+        content::narration::NarrationStore::from_pairs(state.store.load_narration(&keys).await?);
     let texts: Vec<String> = units
         .iter()
-        .map(|u| server::speakable::unit_speech(u, &served, &store))
+        .map(|u| content::speakable::unit_speech(u, &served, &store))
         .collect();
     let command = state
         .tts_cmd

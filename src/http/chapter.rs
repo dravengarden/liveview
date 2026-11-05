@@ -223,7 +223,7 @@ pub(crate) async fn api_spoken(
             let md = row.markdown.unwrap_or_default();
             Json(SpokenContent {
                 lang: served_lang,
-                sentences: server::spoken::spoken_sentences(&md),
+                sentences: content::spoken::spoken_sentences(&md),
             })
             .into_response()
         }
@@ -239,7 +239,7 @@ pub(crate) struct SpokenUnitsContent {
     /// Ordered read-along units: prose sentences + classified non-prose blocks
     /// (code/image/math/table/html), each carrying a `blk` anchor. `idx` matches
     /// the audio-mark index and the `data-sent` anchor.
-    pub(crate) units: Vec<server::spoken::Unit>,
+    pub(crate) units: Vec<content::spoken::Unit>,
 }
 
 /// Read-along units for the in-place highlight (the richer sibling of
@@ -277,7 +277,7 @@ pub(crate) async fn api_units(
             let md = row.markdown.unwrap_or_default();
             Json(SpokenUnitsContent {
                 lang: served_lang,
-                units: server::spoken::spoken_units(&md),
+                units: content::spoken::spoken_units(&md),
             })
             .into_response()
         }

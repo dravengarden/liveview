@@ -15,13 +15,14 @@
 
 use tokio::sync::broadcast;
 
-use crate::server::{audio, narration, speakable, spoken};
+use crate::content::{narration, speakable, spoken};
+use crate::server::audio;
 use crate::shared::WsMessage;
 use crate::store::blobs::put_blob;
 use crate::store::model::{AudioBake, AudioTask, ChapterRecord};
+use crate::store::objstore::ObjStore;
 use crate::store::pg::PgStore;
 use crate::sync::merkle;
-use crate::sync::objstore::ObjStore;
 
 /// Concurrent synth slots. edge-tts is network-bound (Azure), so a few in flight
 /// keeps the backfill moving without hammering; one is implicitly reserved for an

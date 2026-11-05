@@ -32,12 +32,12 @@ use comrak::{Arena, parse_document};
 
 use crate::check::diagnostic::{Diagnostic, Severity};
 use crate::check::{CheckCtx, CheckFile, Validator};
+use crate::content::renderer;
 use crate::interactive_view::expr::{self, ExprEnv};
 use crate::interactive_view::model::{
     Block, ChartField, ChartMark, ColumnType, Document, Overlay, SelectionSource, SignalType,
     Widget,
 };
-use crate::server::renderer;
 
 pub struct InteractiveViewValidator;
 

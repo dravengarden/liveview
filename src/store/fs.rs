@@ -14,7 +14,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 
 use crate::config::{BookState, RenditionKind};
-use crate::server::tree::build_virtual_tree;
+use crate::content::tree::build_virtual_tree;
 use crate::shared::FileType;
 use crate::store::content::{BlobStore, ContentStore};
 use crate::store::model::{
@@ -247,7 +247,7 @@ impl ContentStore for FsStore {
             let src = std::fs::read_to_string(&path)
                 .map_err(|e| format!("read {}: {e}", path.display()))?;
             row.content_hash = blake3_hex(src.as_bytes());
-            row.html = Some(crate::server::renderer::render_file(&src, &ft));
+            row.html = Some(crate::content::renderer::render_file(&src, &ft));
             row.markdown = Some(src);
         }
         Ok(Some(row))

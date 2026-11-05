@@ -3,5 +3,4 @@
 
 pub mod diff;
 pub mod merkle;
-pub mod objstore;
 pub mod run;

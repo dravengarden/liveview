@@ -1,7 +1,7 @@
 //! `liveview narrate-audit` — the read-aloud playability evaluator.
 //!
 //! A dry-run of the speech registry over the corpus: for every read-along unit
-//! it asks [`crate::server::speakable::plan`] — the SAME decision the runtime
+//! it asks [`crate::content::speakable::plan`] — the SAME decision the runtime
 //! synth uses — what that resource will be spoken as, and reports it. So it
 //! answers, per book, "which resources can't just be read aloud, what will each
 //! become, and which are still SILENT (need an author fix)?" — without calling
@@ -18,9 +18,9 @@ use walkdir::WalkDir;
 
 use crate::check::diagnostic::{Diagnostic, Severity, render_human, render_json};
 use crate::cli::OutputFormat;
-use crate::server::narration::{NarrationStore, Sidecar};
-use crate::server::speakable::{MIN_ALT_CHARS, Speech, plan};
-use crate::server::spoken::{Unit, UnitKind, spoken_units};
+use crate::content::narration::{NarrationStore, Sidecar};
+use crate::content::speakable::{MIN_ALT_CHARS, Speech, plan};
+use crate::content::spoken::{Unit, UnitKind, spoken_units};
 use crate::shared::FileType;
 
 pub type MarkdownSource = (String, String);

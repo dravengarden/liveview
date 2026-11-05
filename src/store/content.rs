@@ -131,7 +131,7 @@ pub trait ContentStore: Send + Sync {
     async fn upsert_asset(&self, content_hash: &str, mime: &str, size: i64) -> Result<(), String>;
 
     /// Resolve the pre-generated spoken text for a set of narration `keys`
-    /// (content-addressed; see `server::narration`). Returns `key → text` for the
+    /// (content-addressed; see `content::narration`). Returns `key → text` for the
     /// keys present; missing keys are simply absent (a silent step-over). Used by
     /// the text read-aloud synth so it never calls a model. Backends with no
     /// narration table (the filesystem preview) return an empty map.
@@ -205,8 +205,8 @@ pub trait BlobStore: Send + Sync {
 
 // ── Adapter: postgres `PgStore` → ContentStore ───────────────────────────────
 
+use crate::store::objstore::ObjStore;
 use crate::store::pg::PgStore;
-use crate::sync::objstore::ObjStore;
 
 #[async_trait]
 impl ContentStore for PgStore {

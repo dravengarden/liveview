@@ -1,9 +1,10 @@
 //! Optional voice generation does not block requests or replace default audio.
-use super::{audio, narration, speakable, spoken};
+use super::audio;
+use crate::content::{narration, speakable, spoken};
 use crate::shared::WsMessage;
 use crate::store::blobs::put_blob;
+use crate::store::objstore::ObjStore;
 use crate::store::{pg::PgStore, speech::SpeechAsset};
-use crate::sync::objstore::ObjStore;
 use std::time::Duration;
 use tokio::sync::broadcast;
 

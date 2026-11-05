@@ -17,7 +17,7 @@ use comrak::{Arena, parse_document};
 use regex::Regex;
 use serde::Serialize;
 
-use crate::server::renderer::markdown_options;
+use crate::content::renderer::markdown_options;
 
 // Block-level structure detectors.
 static TABLE_DELIM: LazyLock<Regex> =

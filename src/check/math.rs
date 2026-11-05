@@ -27,7 +27,7 @@ use std::sync::LazyLock;
 
 use crate::check::diagnostic::{Diagnostic, Severity};
 use crate::check::{CheckCtx, CheckFile, Validator};
-use crate::server::renderer;
+use crate::content::renderer;
 
 pub struct MathValidator;
 

@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use crate::check::svg::svg_spans;
 use crate::config::{RenditionKind, Resolved};
-use crate::server::renderer;
+use crate::content::renderer;
 
 /// The kind of chart, which also tells the skill how to locate it in the DOM:
 /// `svg` → the nth content `<svg>` (excluding `.katex` / `.mermaid` subtrees);

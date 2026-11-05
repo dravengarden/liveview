@@ -10,8 +10,8 @@
 use futures_util::{StreamExt, TryStreamExt, stream};
 
 use crate::store::model::LegacyAudioAsset;
+use crate::store::objstore::ObjStore;
 use crate::store::pg::PgStore;
-use crate::sync::objstore::ObjStore;
 
 const CONCURRENCY: usize = 8;
 

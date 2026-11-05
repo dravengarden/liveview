@@ -279,7 +279,7 @@ mod tests {
     ///   LIVEVIEW_TEST_S3=1 S3_ENDPOINT=http://127.0.0.1:9000 \
     ///   S3_ACCESS_KEY=$(sudo cat /var/lib/rustfs/access_key) \
     ///   S3_SECRET_KEY=$(sudo cat /var/lib/rustfs/secret_key) \
-    ///   cargo test sync::objstore -- --ignored --test-threads=1
+    ///   cargo test store::objstore -- --ignored --test-threads=1
     #[tokio::test]
     #[ignore = "needs a live rustfs (LIVEVIEW_TEST_S3=1 + S3_* env)"]
     async fn put_get_delete_roundtrip() {

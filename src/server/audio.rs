@@ -2,7 +2,7 @@
 //!
 //! The audio and speech workers (and on-demand playback in the HTTP layer)
 //! synthesize a chapter's speakable sentences (from
-//! [`crate::server::spoken`]) one at a time via the `edge-tts` CLI, concatenates
+//! [`crate::content::spoken`]) one at a time via the `edge-tts` CLI, concatenates
 //! the per-sentence MP3s, and pairs them with a `marks` list of per-sentence
 //! time ranges. Audio + marks + the read-along `data-sent` spans all derive
 //! from the one sentence list, so they align by construction. The bytes are
