@@ -3,9 +3,10 @@ use std::path::PathBuf;
 
 /// liveview - LiveView
 ///
-/// Live-reloading previewer for Markdown, images, PDFs and more. Driven by a
-/// config file declaring one or more "virtual mounts" — each surfaces as a
-/// top-level folder in the sidebar with its own filters and ordering.
+/// A reader for Markdown books, documentation and audiobooks: a local
+/// filesystem preview, a content checker, the incremental `sync` deploy, and
+/// the PostgreSQL-backed server. Driven by a config file declaring one or more
+/// books, each with its own sources, filters and ordering.
 ///
 /// Config formats supported: `.toml`, `.yaml` / `.yml`, `.json`. Format is
 /// inferred from the file extension.
@@ -59,7 +60,7 @@ pub enum Command {
     Dir(DirArgs),
 
     /// Promote legacy MP3-backed chapter audio to canonical content-addressed
-    /// Opus/CAF blobs. Idempotent and safe to resume after interruption.
+    /// CAF blobs. Idempotent and safe to resume after interruption.
     AudioOptimize(AudioOptimizeArgs),
 
     /// Structurally check book content offline, with the *same* engines the
@@ -301,16 +302,11 @@ pub struct SyncArgs {
     #[arg(long, default_value_t = 2)]
     pub render_version: i32,
 
-    /// Self-heal a chapters↔merkle desync. A normal sync trusts the Merkle
-    /// cache: a leaf whose `merkle_nodes` row exists is assumed applied and
-    /// skipped. If a book's `chapters` rows were lost while its Merkle nodes
-    /// survived (e.g. a partial store wipe), the content can NEVER come back —
-    /// both the subtree-hash prune and the per-leaf skip say "done", so the book
-    /// renders empty forever. `--repair` plans against an empty deployed DAG
-    /// (every leaf becomes a candidate) and re-applies ONLY the leaves whose
-    /// content row is actually missing; unchanged, present content is still
-    /// skipped, so it's cheap and safe to run anytime. Also reconciles STALE
-    /// audio: for each already-baked audio leaf it checks the baked marks count
+    /// Plan against an empty deployed DAG, so every leaf is a candidate, and
+    /// re-apply only the leaves whose content row is missing or drifted;
+    /// unchanged, present content is still skipped, so it is cheap and safe to
+    /// run anytime. (A normal sync already re-applies drifted chapter rows
+    /// under an unchanged root.) Also reconciles STALE audio: for each already-baked audio leaf it checks the baked marks count
     /// against the current text's segment count and, on a mismatch (a chapter
     /// edited after its bake, so the read-along highlight tracks the wrong
     /// paragraph), drops the stale mp3/marks and re-enqueues the chapter for the

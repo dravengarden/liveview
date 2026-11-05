@@ -1,6 +1,6 @@
 //! sqlx-postgres store: schema migration, content CRUD (books / renditions /
 //! editions / chapters / assets), the Merkle deploy state, and the
-//! reading-progress + settings tables ported from the old SQLite store.
+//! reading-progress and settings tables.
 //!
 //! All queries are runtime-checked (`sqlx::query*`, no macros) so the build
 //! needs no `DATABASE_URL`.
@@ -309,32 +309,6 @@ impl PgStore {
         .bind(rendition)
         .fetch_all(&self.pool)
         .await
-    }
-
-    /// Get a chapter with overlay → base fallback: try `lang`, then
-    /// `default_lang`. Returns the row + the lang actually served.
-    pub async fn get_chapter_fallback(
-        &self,
-        book_slug: &str,
-        rendition: &str,
-        lang: &str,
-        default_lang: &str,
-        rel_path: &str,
-    ) -> Result<Option<(ChapterRecord, String)>, sqlx::Error> {
-        if let Some(c) = self
-            .get_chapter(book_slug, rendition, lang, rel_path)
-            .await?
-        {
-            return Ok(Some((c, lang.to_string())));
-        }
-        if lang != default_lang
-            && let Some(c) = self
-                .get_chapter(book_slug, rendition, default_lang, rel_path)
-                .await?
-        {
-            return Ok(Some((c, default_lang.to_string())));
-        }
-        Ok(None)
     }
 
     // ── Site tree (pre-built sidebar forest per rendition) ────────────────────
@@ -708,6 +682,7 @@ impl PgStore {
         .map(|n| u64::try_from(n).unwrap_or(0))
     }
 
+    #[cfg(test)]
     pub async fn delete_asset(&self, content_hash: &str) -> Result<(), sqlx::Error> {
         sqlx::query("DELETE FROM assets WHERE content_hash = $1")
             .bind(content_hash)
@@ -718,6 +693,7 @@ impl PgStore {
 
     // ── Merkle deploy state ───────────────────────────────────────────────────
 
+    #[cfg(test)]
     pub async fn get_merkle_node(
         &self,
         node_hash: &str,
@@ -946,6 +922,7 @@ impl PgStore {
     /// flipping it to `running`. `FOR UPDATE SKIP LOCKED` lets multiple worker
     /// slots claim distinct rows without racing. Returns `None` when the queue is
     /// drained.
+    #[cfg(test)]
     pub async fn claim_audio_task(&self) -> Result<Option<AudioTask>, sqlx::Error> {
         self.claim_audio_task_slot(false).await
     }
@@ -1137,6 +1114,7 @@ impl PgStore {
     /// The audio task status for one chapter, if any (drives the per-chapter
     /// readiness UX). Returns the `status` string or `None` (no task = no audio
     /// or never queued).
+    #[cfg(test)]
     pub async fn audio_task_status(
         &self,
         book_slug: &str,
@@ -1469,11 +1447,9 @@ mod tests {
     use super::*;
 
     /// Open + migrate against `$DATABASE_URL`, or `None` to skip when unset so
-    /// the default `cargo test` (and `harness hook verify`) stay hermetic. Run
-    /// with: `createdb liveview_test &&
-    /// DATABASE_URL=postgres:///liveview_test cargo test store::`.
+    /// the default `cargo test` stays hermetic. Run them with `just test-db`.
     async fn store() -> Option<PgStore> {
-        let url = std::env::var("DATABASE_URL").ok()?;
+        let url = crate::store::test_database_url("store::pg")?;
         let s = PgStore::open(&url).await.expect("open");
         s.migrate().await.expect("migrate");
         Some(s)

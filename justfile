@@ -85,6 +85,12 @@ test:
   CARGO_TARGET_DIR={{native-target-dir}} cargo test --locked --manifest-path app/src-tauri/Cargo.toml --all-targets
   cd web && bun install --frozen-lockfile && bun run test
 
+# Run the PostgreSQL-backed store tests. Unlike `just test`, a missing
+# DATABASE_URL fails instead of skipping.
+test-db:
+  test -n "${DATABASE_URL:-}" || { echo "test-db needs DATABASE_URL (e.g. postgres:///liveview_test)" >&2; exit 1; }
+  LIVEVIEW_REQUIRE_DB=1 cargo test --locked --bin liveview -- store:: --test-threads=1
+
 # Check the native dependency graph without requiring an Apple toolchain.
 native-metadata:
   cargo tree --locked --manifest-path app/src-tauri/Cargo.toml --depth 0 >/dev/null

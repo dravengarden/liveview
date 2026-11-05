@@ -47,14 +47,6 @@ pub trait ContentStore: Send + Sync {
     ) -> Result<(), String> {
         Err("Speech policy changes are unavailable in preview".into())
     }
-    async fn set_speech_config(
-        &self,
-        _book: &str,
-        _rendition: &str,
-        _config: &crate::speech::SpeechConfig,
-    ) -> Result<(), String> {
-        Err("Speech policy changes are unavailable in preview".into())
-    }
     async fn speech_config(
         &self,
         _book: &str,
@@ -236,14 +228,6 @@ impl ContentStore for PgStore {
         config: &crate::speech::SpeechConfig,
     ) -> Result<(), String> {
         PgStore::set_speech_scope(self, book, rendition, chapter, config).await
-    }
-    async fn set_speech_config(
-        &self,
-        book: &str,
-        rendition: &str,
-        config: &crate::speech::SpeechConfig,
-    ) -> Result<(), String> {
-        PgStore::set_speech_config(self, book, rendition, config).await
     }
     async fn speech_config(
         &self,

@@ -53,7 +53,10 @@ pub struct ServerCfg {
     #[serde(default = "default_host")]
     pub host: String,
     pub port: Option<u16>,
+    /// Accepted for configs written for the former file watcher; it has no
+    /// effect. Kept because `[server]` rejects unknown keys.
     #[serde(default = "default_debounce")]
+    #[allow(dead_code)]
     pub debounce_ms: u64,
     #[serde(default)]
     pub open: bool,
@@ -386,28 +389,12 @@ impl BookState {
     pub fn rendition(&self, kind: RenditionKind) -> Option<&RenditionState> {
         self.renditions.iter().find(|r| r.kind == kind)
     }
-
-    /// The default rendition (by `default_rendition`, falling back to the first).
-    // Kept as part of the config model; the thin server resolves via the pg
-    // catalog now, so this accessor has no in-tree caller.
-    #[allow(dead_code)]
-    pub fn default_rendition(&self) -> &RenditionState {
-        self.rendition(self.default_rendition)
-            .or_else(|| self.renditions.first())
-            .expect("book always has at least one rendition")
-    }
 }
 
-/// The resolved corpus for `liveview sync` (globsets compiled, source paths
-/// canonicalized). Only `books` is consumed; the `[server]` fields ride along
-/// from `Config` but the server reads them via `ServerCfg` directly (sync has
-/// no use for host/port/open/debounce).
-#[allow(dead_code)]
+/// The resolved corpus (globsets compiled, source paths canonicalized) plus
+/// the `[server]` host the filesystem preview binds by default.
 pub struct Resolved {
     pub host: String,
-    pub port: Option<u16>,
-    pub debounce_ms: u64,
-    pub open: bool,
     pub books: Vec<BookState>,
 }
 
@@ -708,9 +695,6 @@ impl Config {
 
         Ok(Resolved {
             host: self.server.host,
-            port: self.server.port,
-            debounce_ms: self.server.debounce_ms,
-            open: self.server.open,
             books,
         })
     }
@@ -1241,9 +1225,6 @@ pub fn implicit_resolved(dir: &Path) -> Result<Resolved, String> {
         .map_err(|e| format!("implicit config: bad built-in exclude glob: {e}"))?;
     Ok(Resolved {
         host: default_host(),
-        port: None,
-        debounce_ms: default_debounce(),
-        open: false,
         books: vec![BookState {
             speech: Default::default(),
             label,

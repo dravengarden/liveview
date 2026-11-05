@@ -5,9 +5,9 @@
 //! reports structural problems comrak silently swallows — dangling/unused
 //! footnotes, broken reference links, and missing local assets.
 //!
-//! Design: a tiny [`Validator`] trait + a registry keyed by [`FileType`]. P0
-//! ships one validator (Markdown); future sources (math, mermaid, typst, dead
-//! external links) register here without touching the orchestrator. Every
+//! Design: a tiny [`Validator`] trait + a registry keyed by [`FileType`]; each
+//! source (Markdown, math, Mermaid, SVG, Typst, JSON, Excalidraw, Interactive
+//! View, read-aloud) registers here without touching the orchestrator. Every
 //! validator emits the unified [`Diagnostic`], so `--format json` is one stable
 //! schema across all of them.
 

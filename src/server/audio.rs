@@ -1,6 +1,7 @@
-//! edge-tts narration synthesis (deploy-time).
+//! edge-tts narration synthesis.
 //!
-//! `liveview sync` synthesizes a chapter's speakable sentences (from
+//! The audio and speech workers (and on-demand playback in the HTTP layer)
+//! synthesize a chapter's speakable sentences (from
 //! [`crate::server::spoken`]) one at a time via the `edge-tts` CLI, concatenates
 //! the per-sentence MP3s, and pairs them with a `marks` list of per-sentence
 //! time ranges. Audio + marks + the read-along `data-sent` spans all derive
@@ -246,8 +247,7 @@ async fn synth_sentence_at_speed(
 }
 
 /// Synthesize `sentences` into a concatenated MP3 + sentence marks, in memory —
-/// no file IO. The deploy-time (`liveview sync`) path: the bytes go straight to
-/// rustfs as content-addressed assets.
+/// no file IO. Callers store the encoded bytes as content-addressed assets.
 pub(crate) async fn synthesize(
     cmd: &str,
     voice: &str,

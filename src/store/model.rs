@@ -25,8 +25,12 @@ pub struct ChapterRecord {
 
 #[derive(Clone, Debug, sqlx::FromRow)]
 pub struct AssetRecord {
+    // Selected with the row; read by tests and Debug output only.
+    #[allow(dead_code)]
     pub content_hash: String,
     pub mime: String,
+    // Selected with the row; read by tests and Debug output only.
+    #[allow(dead_code)]
     pub size: i64,
 }
 
@@ -72,6 +76,8 @@ pub struct RenditionRecord {
     pub default_lang: String,
     pub voice: Option<String>,
     pub manifest: bool,
+    // Selected with the row; read by tests and Debug output only.
+    #[allow(dead_code)]
     pub ord: i32,
 }
 
@@ -79,6 +85,8 @@ pub struct RenditionRecord {
 pub struct EditionRecord {
     pub lang: String,
     pub label: String,
+    // Selected with the row; read by tests and Debug output only.
+    #[allow(dead_code)]
     pub ord: i32,
 }
 
@@ -98,12 +106,24 @@ pub struct AudioTask {
     pub content_hash: String,
     pub leaf_kind: String,
     pub voice: String,
+    // Selected with the row; read by tests and Debug output only.
+    #[allow(dead_code)]
     pub status: String,
     pub priority: i32,
+    // Selected with the row; read by tests and Debug output only.
+    #[allow(dead_code)]
     pub attempts: i32,
+    // Selected with the row; read by tests and Debug output only.
+    #[allow(dead_code)]
     pub error: Option<String>,
+    // Selected with the row; read by tests and Debug output only.
+    #[allow(dead_code)]
     pub enqueued_at: i64,
+    // Selected with the row; read by tests and Debug output only.
+    #[allow(dead_code)]
     pub started_at: Option<i64>,
+    // Selected with the row; read by tests and Debug output only.
+    #[allow(dead_code)]
     pub finished_at: Option<i64>,
 }
 

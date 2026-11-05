@@ -275,6 +275,7 @@ impl PgStore {
         tx.commit().await.map_err(|e| e.to_string())
     }
 
+    #[cfg(test)]
     pub async fn claim_speech(&self) -> Result<Option<SpeechAsset>, String> {
         self.claim_speech_slot(false).await
     }
@@ -373,7 +374,7 @@ mod tests {
 
     #[tokio::test]
     async fn variants_survive_gc_and_reject_stale_workers_and_removed_policy() {
-        let Ok(url) = std::env::var("DATABASE_URL") else {
+        let Some(url) = crate::store::test_database_url("store::speech") else {
             return;
         };
         let pg = PgStore::open(&url).await.unwrap();

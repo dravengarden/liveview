@@ -1,4 +1,5 @@
-//! Resumable promotion of legacy MP3-backed chapter audio to canonical Opus/CAF.
+//! Resumable promotion of legacy MP3-backed chapter audio to the canonical
+//! encoding (`AUDIO_VARIANT`: 24 kbps mono MP3 in a CAF container).
 //!
 //! The legacy layout kept the database pointer on the MP3 and stored the bytes
 //! actually served to clients under `<mp3-hash>.op16c`. That broke the core

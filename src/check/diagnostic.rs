@@ -18,10 +18,6 @@ use serde::Serialize;
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     // Order (lowest → highest) is load-bearing for the `Ord` derive.
-    // `Info` is part of the stable diagnostic contract (consumers match all
-    // three) but no P0 rule emits it yet — future sources (math/mermaid/…)
-    // will, so it stays in the enum rather than being added later.
-    #[allow(dead_code)]
     Info,
     Warning,
     Error,

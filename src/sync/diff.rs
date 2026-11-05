@@ -27,6 +27,7 @@ pub struct Plan {
 }
 
 impl Plan {
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.put.is_empty() && self.delete.is_empty()
     }
