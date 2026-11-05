@@ -636,7 +636,7 @@ Follow-up record (2026-11-05): the items first deferred above are done.
 
 - Chapter lookup (§5.2): the request context (`ReqCtx::chapter` and
   `chapter_at`) is the one place that applies the edition fallback; the
-  nine HTTP call sites no longer repeat the five-argument store call. Each
+  eight HTTP call sites no longer repeat the five-argument store call. Each
   endpoint deliberately keeps its own fallback order (the narration overlay,
   the audio-to-text source mapping, the displayed chapter for text
   read-aloud) and its own missing-versus-error mapping, so no single
