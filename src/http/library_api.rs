@@ -21,14 +21,12 @@ pub(crate) async fn api_library_change(
             }
             Json(library).into_response()
         }
-        Err(error) => (
-            if error.starts_with("Revision conflict") {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::BAD_REQUEST
-            },
-            error,
-        )
-            .into_response(),
+        Err(error @ library::LibraryError::Conflict) => {
+            (StatusCode::CONFLICT, error.to_string()).into_response()
+        }
+        Err(library::LibraryError::Invalid(message)) => {
+            (StatusCode::BAD_REQUEST, message).into_response()
+        }
+        Err(library::LibraryError::Store(error)) => store_unavailable("library_change", error),
     }
 }

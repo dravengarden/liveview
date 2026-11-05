@@ -1332,7 +1332,7 @@ impl PgStore {
     pub async fn user_library(
         &self,
         change: Option<&crate::library::Change>,
-    ) -> Result<crate::library::Library, String> {
+    ) -> Result<crate::library::Library, crate::library::LibraryError> {
         // A plain read of an initialized library needs neither the write lock
         // nor the book list; every client polls and refetches it on push.
         if change.is_none() {
@@ -1342,7 +1342,8 @@ impl PgStore {
                     .await
                     .map_err(|e| e.to_string())?;
             if let Some(value) = value {
-                return serde_json::from_value(value).map_err(|e| e.to_string());
+                return serde_json::from_value(value)
+                    .map_err(|e| crate::library::LibraryError::Store(e.to_string()));
             }
         }
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
@@ -1391,11 +1392,13 @@ impl PgStore {
         let result = if let Some(change) = change {
             let books = rows.into_iter().map(|(slug, _)| slug).collect();
             if change.revision != current.revision {
-                return Err("Revision conflict: refresh before retrying".into());
+                return Err(crate::library::LibraryError::Conflict);
             }
             let next = if let Some(revision) = change.undo_revision {
                 if !change.operations.is_empty() {
-                    return Err("Undo cannot include other operations".into());
+                    return Err(crate::library::LibraryError::Invalid(
+                        "Undo cannot include other operations".into(),
+                    ));
                 }
                 let snapshot: serde_json::Value =
                     sqlx::query_scalar("SELECT snapshot FROM library_history WHERE revision = $1")
@@ -1403,7 +1406,9 @@ impl PgStore {
                         .fetch_optional(&mut *tx)
                         .await
                         .map_err(|e| e.to_string())?
-                        .ok_or("Change not found")?;
+                        .ok_or_else(|| {
+                            crate::library::LibraryError::Invalid("Change not found".into())
+                        })?;
                 let mut previous: crate::library::Library =
                     serde_json::from_value(snapshot).map_err(|e| e.to_string())?;
                 previous.revision = current.revision + 1;
@@ -2011,12 +2016,9 @@ mod tests {
         assert_eq!(restored.directories, initial.directories);
         assert_eq!(restored.placements, initial.placements);
         assert_eq!(restored.revision, persisted.revision + 1);
-        assert!(
-            reopened
-                .user_library(Some(&undo))
-                .await
-                .unwrap_err()
-                .starts_with("Revision conflict")
+        assert_eq!(
+            reopened.user_library(Some(&undo)).await.unwrap_err(),
+            crate::library::LibraryError::Conflict
         );
     }
 

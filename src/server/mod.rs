@@ -2,6 +2,8 @@ pub mod audio;
 pub mod audio_worker;
 pub mod bytes;
 pub mod catalog;
+pub mod encoding;
 pub mod speech_worker;
 pub mod state;
+pub mod synthesis;
 pub mod ws;

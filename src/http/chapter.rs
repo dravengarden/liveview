@@ -290,6 +290,7 @@ pub(crate) async fn api_units(
 pub(crate) async fn api_raw(
     State(state): State<SharedState>,
     Query(query): Query<FileQuery>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     let Some(ctx) = resolve_req(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
@@ -312,7 +313,7 @@ pub(crate) async fn api_raw(
     let Some(hash) = row.asset_hash else {
         return (StatusCode::NOT_FOUND, "not a binary asset").into_response();
     };
-    match blob_response(&state, &hash, "public, max-age=3600").await {
+    match blob_response(&state, &hash, &headers, "public, max-age=3600").await {
         Some(resp) => resp,
         None => (StatusCode::NOT_FOUND, "File not found").into_response(),
     }

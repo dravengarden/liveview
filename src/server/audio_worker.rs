@@ -15,10 +15,9 @@
 
 use tokio::sync::broadcast;
 
-use crate::content::{narration, speakable, spoken};
-use crate::server::audio;
+use crate::config::RenditionKind;
+use crate::server::synthesis;
 use crate::shared::WsMessage;
-use crate::store::blobs::put_blob;
 use crate::store::model::{AudioBake, AudioTask, ChapterRecord};
 use crate::store::objstore::ObjStore;
 use crate::store::pg::PgStore;
@@ -201,42 +200,19 @@ async fn generate(
     }
     let md = row.markdown.unwrap_or_default();
 
-    let (mp3, marks) = if crate::config::RenditionKind::Audio.is(&task.rendition) {
-        // Audiobook: the curated `.spoken.md` script, sentence by sentence.
-        let sentences = spoken::spoken_sentences(&md);
-        if sentences.is_empty() {
-            return Ok(Outcome::Silent);
-        }
-        audio::synthesize(tts_cmd, &task.voice, &sentences).await?
+    let kind = if RenditionKind::Audio.is(&task.rendition) {
+        RenditionKind::Audio
     } else {
-        // Text read-aloud: one clip per UNIT of the displayed markdown, so the
-        // mark index = `/api/units`. Each unit's SPOKEN text is decided by the
-        // speech registry (prose normalized for the ear; tables/diagrams/math/
-        // code resolved from PRE-GENERATED narration; unhandled / not-yet-narrated
-        // → a silent step-over). No model call — the narration was made offline by
-        // a skill and ingested into pg by `sync`; we just resolve it by key.
-        let units = spoken::spoken_units(&md);
-        if units.is_empty() {
-            return Ok(Outcome::Silent);
-        }
-        let keys = speakable::narration_keys(&units, &task.lang);
-        let store = narration::NarrationStore::from_pairs(
-            pg.load_narration(&keys).await.map_err(|e| e.to_string())?,
-        );
-        let texts: Vec<String> = units
-            .iter()
-            .map(|u| speakable::unit_speech(u, &task.lang, &store))
-            .collect();
-        audio::synthesize(tts_cmd, &task.voice, &texts).await?
+        RenditionKind::Text
     };
-
-    let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
+    let texts = synthesis::speech_texts(pg, kind, &md, &task.lang).await?;
+    if texts.is_empty() {
+        return Ok(Outcome::Silent);
+    }
     // CAF is the canonical audio asset: its blake3 is both the database pointer
-    // and the exact byte hash clients mirror through /api/dag. The synthesized
-    // MP3 exists only as an in-memory encoder input and is never persisted.
-    let caf = crate::http::audio::encode_speech_audio(mp3, &task.voice).await?;
-    let audio_hash = put_blob(pg, obj, caf, crate::AUDIO_VARIANT.mime).await?;
-    let marks_hash = put_blob(pg, obj, marks_json, "application/json").await?;
+    // and the exact byte hash clients mirror through /api/dag.
+    let (audio_hash, marks_hash) =
+        synthesis::synthesize_chapter(pg, obj, tts_cmd, &task.voice, &texts).await?;
     let recorded = pg
         .set_chapter_audio(&AudioBake {
             book_slug: &task.book_slug,

@@ -5,9 +5,14 @@ pub(crate) struct CoverQuery {
     pub(crate) book: String,
 }
 
-/// Stream a content-addressed blob from rustfs with its stored MIME.
-pub(crate) async fn blob_response(state: &AppState, hash: &str, cache: &str) -> Option<Response> {
-    let bytes = state.obj.get(hash).await.ok()?;
+/// Serve a content-addressed blob with its stored MIME and Range support;
+/// `None` when the object is not stored.
+pub(crate) async fn blob_response(
+    state: &AppState,
+    hash: &str,
+    headers: &HeaderMap,
+    cache: &str,
+) -> Option<Response> {
     // Degraded metadata (store error or missing asset row) ⇒ generic bytes that
     // the client must revalidate, never the caller's long-lived cache policy.
     let (mime, cache) = match state.store.get_asset(hash).await {
@@ -18,33 +23,47 @@ pub(crate) async fn blob_response(state: &AppState, hash: &str, cache: &str) -> 
             ("application/octet-stream".to_string(), "no-store")
         }
     };
-    Some(
-        Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, mime)
-            .header(header::CACHE_CONTROL, cache)
-            .body(Body::from(bytes))
-            .unwrap()
-            .into_response(),
-    )
+    stored_blob_response(state, hash, headers, &mime, cache)
+        .await
+        .ok()
+}
+
+const ARTWORK_CACHE_CONTROL: &str = "public, max-age=3600";
+
+/// One of a book's artwork blobs, picked from its catalog entry; 404 with
+/// `missing` when the book, that artwork, or its stored object is absent.
+async fn book_artwork(
+    state: &AppState,
+    book: &str,
+    headers: &HeaderMap,
+    pick: fn(&crate::server::catalog::BookMeta) -> Option<&String>,
+    missing: &'static str,
+) -> Response {
+    let hash = {
+        let cat = state.catalog.read().await;
+        cat.book(book).and_then(pick).cloned()
+    };
+    let response = match hash {
+        Some(h) => blob_response(state, &h, headers, ARTWORK_CACHE_CONTROL).await,
+        None => None,
+    };
+    response.unwrap_or_else(|| (StatusCode::NOT_FOUND, missing).into_response())
 }
 
 /// A book's cover image (from rustfs). 404 when the book is unknown or coverless.
 pub(crate) async fn api_cover(
     State(state): State<SharedState>,
     Query(q): Query<CoverQuery>,
-) -> impl IntoResponse {
-    let hash = {
-        let cat = state.catalog.read().await;
-        cat.book(&q.book).and_then(|b| b.cover_hash.clone())
-    };
-    match hash {
-        Some(h) => match blob_response(&state, &h, "public, max-age=3600").await {
-            Some(resp) => resp,
-            None => (StatusCode::NOT_FOUND, "no cover").into_response(),
-        },
-        None => (StatusCode::NOT_FOUND, "no cover").into_response(),
-    }
+    headers: HeaderMap,
+) -> Response {
+    book_artwork(
+        &state,
+        &q.book,
+        &headers,
+        |b| b.cover_hash.as_ref(),
+        "no cover",
+    )
+    .await
 }
 
 /// A book's wide LiveView card/hero artwork. 404 when absent; callers use a
@@ -52,18 +71,16 @@ pub(crate) async fn api_cover(
 pub(crate) async fn api_backdrop(
     State(state): State<SharedState>,
     Query(q): Query<CoverQuery>,
-) -> impl IntoResponse {
-    let hash = {
-        let cat = state.catalog.read().await;
-        cat.book(&q.book).and_then(|b| b.backdrop_hash.clone())
-    };
-    match hash {
-        Some(h) => match blob_response(&state, &h, "public, max-age=3600").await {
-            Some(resp) => resp,
-            None => (StatusCode::NOT_FOUND, "no backdrop").into_response(),
-        },
-        None => (StatusCode::NOT_FOUND, "no backdrop").into_response(),
-    }
+    headers: HeaderMap,
+) -> Response {
+    book_artwork(
+        &state,
+        &q.book,
+        &headers,
+        |b| b.backdrop_hash.as_ref(),
+        "no backdrop",
+    )
+    .await
 }
 
 /// A compact, opaque rendition of the wide artwork for scrolling shelf cards.
@@ -73,18 +90,16 @@ pub(crate) async fn api_backdrop(
 pub(crate) async fn api_card_backdrop(
     State(state): State<SharedState>,
     Query(q): Query<CoverQuery>,
-) -> impl IntoResponse {
-    let hash = {
-        let cat = state.catalog.read().await;
-        cat.book(&q.book).and_then(|b| b.card_backdrop_hash.clone())
-    };
-    match hash {
-        Some(h) => match blob_response(&state, &h, "public, max-age=3600").await {
-            Some(resp) => resp,
-            None => (StatusCode::NOT_FOUND, "no card backdrop").into_response(),
-        },
-        None => (StatusCode::NOT_FOUND, "no card backdrop").into_response(),
-    }
+    headers: HeaderMap,
+) -> Response {
+    book_artwork(
+        &state,
+        &q.book,
+        &headers,
+        |b| b.card_backdrop_hash.as_ref(),
+        "no card backdrop",
+    )
+    .await
 }
 
 /// Media Session artwork — never 404s for a known book: the real cover from
@@ -93,6 +108,7 @@ pub(crate) async fn api_card_backdrop(
 pub(crate) async fn api_artwork(
     State(state): State<SharedState>,
     Query(q): Query<CoverQuery>,
+    headers: HeaderMap,
 ) -> impl IntoResponse {
     let hash = {
         let cat = state.catalog.read().await;
@@ -102,7 +118,7 @@ pub(crate) async fn api_artwork(
         }
     };
     if let Some(h) = hash
-        && let Some(resp) = blob_response(&state, &h, "public, max-age=3600").await
+        && let Some(resp) = blob_response(&state, &h, &headers, ARTWORK_CACHE_CONTROL).await
     {
         return resp;
     }

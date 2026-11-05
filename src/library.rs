@@ -23,6 +23,35 @@ pub struct Change {
     #[serde(default)]
     pub undo_revision: Option<u64>,
 }
+/// Why a library change was refused or could not be applied.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LibraryError {
+    /// The change was planned against an older revision.
+    Conflict,
+    /// The change is malformed or names something that does not exist.
+    Invalid(String),
+    /// The library could not be read or written.
+    Store(String),
+}
+
+impl std::fmt::Display for LibraryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LibraryError::Conflict => f.write_str("Revision conflict: refresh before retrying"),
+            LibraryError::Invalid(message) | LibraryError::Store(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for LibraryError {}
+
+/// Database and encoding failures surface as `?` on stringified errors.
+impl From<String> for LibraryError {
+    fn from(message: String) -> Self {
+        LibraryError::Store(message)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Operation {
@@ -48,10 +77,14 @@ pub enum Operation {
     },
 }
 impl Library {
-    pub fn apply(&self, change: &Change, books: &HashSet<String>) -> Result<Self, String> {
+    pub fn apply(&self, change: &Change, books: &HashSet<String>) -> Result<Self, LibraryError> {
         if change.revision != self.revision {
-            return Err("Revision conflict: refresh before retrying".into());
+            return Err(LibraryError::Conflict);
         }
+        self.apply_operations(change, books)
+            .map_err(LibraryError::Invalid)
+    }
+    fn apply_operations(&self, change: &Change, books: &HashSet<String>) -> Result<Self, String> {
         if change.operations.is_empty() || change.operations.len() > 1000 {
             return Err("Expected 1–1000 operations".into());
         }
@@ -195,7 +228,7 @@ mod tests {
                 &books,
             )
             .unwrap();
-        assert!(
+        assert_eq!(
             tree.apply(
                 &change(
                     1,
@@ -205,15 +238,15 @@ mod tests {
                     }]
                 ),
                 &books
-            )
-            .is_err()
+            ),
+            Err(LibraryError::Invalid("Directory cycle".into()))
         );
-        assert!(
+        assert_eq!(
             tree.apply(
                 &change(0, vec![Operation::Delete { id: "a".into() }]),
                 &books
-            )
-            .is_err()
+            ),
+            Err(LibraryError::Conflict)
         );
         assert_eq!(tree.directories.len(), 2);
     }

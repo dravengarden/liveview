@@ -267,6 +267,14 @@ fn down<T>() -> Result<T, String> {
 
 #[async_trait::async_trait]
 impl ContentStore for FailingStore {
+    async fn library_change(
+        &self,
+        _: &crate::library::Change,
+    ) -> Result<crate::library::Library, crate::library::LibraryError> {
+        Err(crate::library::LibraryError::Store(
+            "database unavailable".into(),
+        ))
+    }
     async fn list_books(&self) -> Result<Vec<BookRecord>, String> {
         down()
     }
@@ -513,4 +521,120 @@ async fn cors_preflight_allows_apm_header_and_is_cacheable() {
         .to_ascii_lowercase();
     assert!(allowed.contains(APM_TOKEN_HEADER), "{allowed}");
     assert_eq!(response.headers()[header::ACCESS_CONTROL_MAX_AGE], "3600");
+}
+
+// ── Artwork blobs ────────────────────────────────────────────────────────────
+
+fn artwork_catalog() -> Catalog {
+    let mut catalog = one_book_catalog();
+    let book = &mut catalog.books[0];
+    book.cover_hash = Some("cover".into());
+    book.backdrop_hash = Some("backdrop".into());
+    book.card_backdrop_hash = Some("missing".into());
+    catalog
+}
+
+#[tokio::test]
+async fn artwork_routes_serve_stored_bytes_and_404_when_absent() {
+    let fs = Arc::new(FsStore::new(Vec::new()));
+    fs.put_if_absent("cover", b"cover-bytes".to_vec(), "image/webp")
+        .await
+        .unwrap();
+    fs.put_if_absent("backdrop", b"backdrop".to_vec(), "image/jpeg")
+        .await
+        .unwrap();
+    let app = app(state_over(fs.clone(), fs, artwork_catalog(), None));
+
+    for (uri, mime, body) in [
+        ("/api/cover?book=book", "image/webp", &b"cover-bytes"[..]),
+        ("/api/backdrop?book=book", "image/jpeg", &b"backdrop"[..]),
+        ("/api/artwork?book=book", "image/webp", &b"cover-bytes"[..]),
+    ] {
+        let response = get(&app, uri, &[]).await;
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        assert_eq!(response.headers()[header::CONTENT_TYPE], mime, "{uri}");
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "public, max-age=3600",
+            "{uri}"
+        );
+        assert_eq!(body_bytes(response).await, body, "{uri}");
+    }
+    // The card backdrop points at an object that is not stored; unknown books
+    // and books without the artwork are 404 too.
+    for uri in [
+        "/api/card-backdrop?book=book",
+        "/api/cover?book=nope",
+        "/api/artwork?book=nope",
+    ] {
+        assert_eq!(
+            get(&app, uri, &[]).await.status(),
+            StatusCode::NOT_FOUND,
+            "{uri}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn artwork_with_unreadable_metadata_is_generic_and_uncached() {
+    let blobs = Arc::new(FsStore::new(Vec::new()));
+    blobs
+        .put_if_absent("cover", b"cover-bytes".to_vec(), "image/webp")
+        .await
+        .unwrap();
+    let app = app(state_over(
+        Arc::new(FailingStore),
+        blobs,
+        artwork_catalog(),
+        None,
+    ));
+    let response = get(&app, "/api/cover?book=book", &[]).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "application/octet-stream"
+    );
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+}
+
+#[tokio::test]
+async fn artwork_and_raw_blobs_honour_byte_ranges() {
+    let fs = Arc::new(FsStore::new(Vec::new()));
+    fs.put_if_absent("cover", b"cover-bytes".to_vec(), "image/webp")
+        .await
+        .unwrap();
+    let app = app(state_over(fs.clone(), fs, artwork_catalog(), None));
+    let response = get(
+        &app,
+        "/api/cover?book=book",
+        &[(header::RANGE, "bytes=0-4")],
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes 0-4/11");
+    assert_eq!(body_bytes(response).await, b"cover");
+}
+
+// ── Library changes ──────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn library_change_maps_refusals_and_store_failures_to_distinct_statuses() {
+    let post = |app: Router| async move {
+        let request = axum::http::Request::post("/api/library")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"revision":0,"operations":[]}"#))
+            .unwrap();
+        app.oneshot(request).await.unwrap().status()
+    };
+    let fs = Arc::new(FsStore::new(Vec::new()));
+    let preview = app(state_over(fs.clone(), fs, Catalog::default(), None));
+    assert_eq!(post(preview).await, StatusCode::BAD_REQUEST);
+    let blobs = Arc::new(FsStore::new(Vec::new()));
+    let failing = app(state_over(
+        Arc::new(FailingStore),
+        blobs,
+        one_book_catalog(),
+        None,
+    ));
+    assert_eq!(post(failing).await, StatusCode::SERVICE_UNAVAILABLE);
 }
