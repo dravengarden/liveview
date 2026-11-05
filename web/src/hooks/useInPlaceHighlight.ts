@@ -13,6 +13,13 @@ import {
   useAudioTime,
 } from "@/audio/player";
 import { resolveReadAlongIndex } from "@/audio/mark-index";
+import {
+  type DomGeneration,
+  domGeneration,
+  locatedMapStale,
+  readAlongKey as readAlongKeyOf,
+  resourceFor,
+} from "./readAlongCache.ts";
 import type { Mark, SpokenUnits, Unit } from "@/types";
 
 /** Follow-mode controls the hook hands back, so the reader can show a
@@ -457,9 +464,7 @@ export function useInPlaceHighlight(
   const { currentIdx: engineCurrentIdx } = useAudioReadAlong();
   const active = nowPlaying?.rendition === "text" &&
     nowPlaying.chapterPath === currentPath;
-  const readAlongKey = active && nowPlaying
-    ? `${nowPlaying.chapterPath}\u0000${nowPlaying.lang}\u0000${nowPlaying.voice ?? ""}\u0000${nowPlaying.marksHash ?? ""}`
-    : "";
+  const readAlongKey = readAlongKeyOf(nowPlaying, active);
   // A background audiobook still ticks ~4 times per second. Do not make an
   // unrelated text chapter re-render its entire markdown tree for that clock.
   const { currentTime } = useAudioTime(active);
@@ -472,12 +477,8 @@ export function useInPlaceHighlight(
   // and viewer switch to another chapter. The old separate arrays stayed live
   // until the new fetch resolved, letting a CSS Highlight bind to detached text
   // from the previous page after rapid next/previous navigation.
-  const units = resources.key === readAlongKey
-    ? resources.units
-    : EMPTY_UNITS;
-  const marks = resources.key === readAlongKey
-    ? resources.marks
-    : EMPTY_MARKS;
+  const units = resourceFor({ key: resources.key, value: resources.units }, readAlongKey, EMPTY_UNITS);
+  const marks = resourceFor({ key: resources.key, value: resources.marks }, readAlongKey, EMPTY_MARKS);
   // The engine loads marks best-effort so timing can never block sound. Derive
   // from this viewer's independently recovered marks when available; otherwise
   // retain the engine index until they arrive.
@@ -529,11 +530,7 @@ export function useInPlaceHighlight(
   // by the trail + wipe effects. Keyed by the `units` identity it was built for.
   const locatedRef = useRef<Map<number, Located>>(new Map());
   const locatedForRef = useRef<Unit[] | null>(null);
-  const locatedDomRef = useRef<{
-    body: HTMLElement;
-    first: ChildNode | null;
-    last: ChildNode | null;
-  } | null>(null);
+  const locatedDomRef = useRef<DomGeneration<ChildNode> | null>(null);
   const ensureLocated = useCallback((body: HTMLElement): Map<number, Located> => {
     // Rebuild when `units` changed OR the cached map is STALE — its located ranges
     // point at a DETACHED DOM. The latter is the auto-advance bug: the new chapter's
@@ -545,15 +542,12 @@ export function useInPlaceHighlight(
     // regardless of render timing.
     const sample: Located | undefined = locatedRef.current.values().next().value;
     const stale = !!sample && sample.map[0]?.node.isConnected === false;
-    const dom = locatedDomRef.current;
     // A chapter's innerHTML can commit AFTER its units. In that race the first
     // locate runs against the previous (or empty) DOM and may produce an empty
     // map, so there is no sample node for the stale check above. Fingerprint the
     // rendered child generation as well: when React replaces the chapter HTML,
     // the child identities change and the next playback tick relocates it.
-    const domChanged = !dom || dom.body !== body ||
-      dom.first !== body.firstChild || dom.last !== body.lastChild;
-    if (locatedForRef.current !== units || stale || domChanged) {
+    if (locatedMapStale(locatedForRef.current, units, stale, locatedDomRef.current, body)) {
       // Number top-level blocks in document order — the same order spoken_units
       // assigns `blk`. Idempotent.
       const blocks = body.children;
@@ -562,11 +556,7 @@ export function useInPlaceHighlight(
       }
       locatedRef.current = locateChapter(body, units);
       locatedForRef.current = units;
-      locatedDomRef.current = {
-        body,
-        first: body.firstChild,
-        last: body.lastChild,
-      };
+      locatedDomRef.current = domGeneration(body);
     }
     return locatedRef.current;
   }, [units]);

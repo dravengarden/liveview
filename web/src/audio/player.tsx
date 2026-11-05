@@ -48,9 +48,11 @@ import {
   type NativePositionSample,
 } from "./native-playback-truth";
 import { activeMarkIndex } from "./mark-index";
+import { type NativeEngineHost, routeNativeEvent } from "./engine/native";
+import { attachWebAudio, playAudio, updatePositionState } from "./engine/web";
 import { parseServerPos, parseServerSession, posKey, serverResumeDecision, unitKey } from "./resume";
 import { chapterVoices, preferredVoice, prepareVoice, saveVoicePreference, sentencePosition, speechCatalog, voiceMarks, voicePreferenceKey, type SpeechCatalog, type SpeechPreparation, type VoiceChoice } from "./speech";
-import { NATIVE_QUEUE_BATCH, nativeEventMatches, nativeNowPlaying, nativeSessionQueue, nativeTrack, queuedNativeTrack } from "./native-queue";
+import { NATIVE_QUEUE_BATCH, nativeNowPlaying, nativeSessionQueue, nativeTrack, queuedNativeTrack } from "./native-queue";
 import { loadContentsTree } from "./contents";
 import { sleepDefault } from "./sleep-default";
 import { ListeningSleepTimer, SLEEP_MINUTES } from "./sleep-timer";
@@ -198,86 +200,6 @@ function query(path: string, lang: string, rendition: string): string {
   return `path=${encodeURIComponent(path)}&lang=${
     encodeURIComponent(lang)
   }&rendition=${encodeURIComponent(rendition)}`;
-}
-
-/** Push the element's timeline to the OS so the lock-screen scrubber tracks
- *  playback. iOS in particular NEEDS this once seek handlers are registered:
- *  without a valid position state its remote controls — the play/pause button
- *  included — go unresponsive (desktop browsers are forgiving, so the bug only
- *  shows on iOS). iOS also throws and drops the whole state unless every field
- *  is finite with `0 ≤ position ≤ duration` and `playbackRate > 0`, so clamp. */
-function updatePositionState(audio: HTMLAudioElement): void {
-  if (
-    !("mediaSession" in navigator) || !navigator.mediaSession.setPositionState
-  ) return;
-  const { duration, currentTime } = audio;
-  if (!Number.isFinite(duration) || duration <= 0) return;
-  const position = Math.min(Math.max(0, currentTime), duration);
-  const playbackRate = audio.playbackRate > 0 ? audio.playbackRate : 1;
-  try {
-    navigator.mediaSession.setPositionState({
-      duration,
-      playbackRate,
-      position,
-    });
-  } catch {
-    // Older/edge WebKit can still reject a valid-looking state — non-fatal.
-  }
-}
-
-/** Play with iOS interruption recovery.
- *
- * Why: when the screen locks (or the PWA is backgrounded), iOS deactivates the
- * page's audio session AND drops the element's decoded media buffer. The next
- * `play()` then rejects (AbortError / a media error) and — if the rejection is
- * swallowed — the play button silently does nothing. That's the "息屏后点击播放
- * 无法播放" bug. The first `play()` here runs synchronously so it stays inside
- * the tap's user-activation window; on rejection we re-establish the (evicted)
- * resource with `load()`, restore the position once metadata is back, and retry.
- * iOS keeps media-playback activation alive briefly after a gesture-initiated
- * play(), so the retry is permitted. `onError` fires ONLY if the retry also
- * fails, so a normal interruption recovers without flashing an error. */
-function playAudio(
-  audio: HTMLAudioElement,
-  onError?: (e: unknown) => void,
-): void {
-  const p = audio.play() as Promise<void> | undefined;
-  if (!p || typeof p.catch !== "function") return;
-  p.catch((err: unknown) => {
-    // NotAllowedError = playback isn't permitted in this context: no user
-    // gesture (auto-advance to the next chapter), or the iOS standalone-PWA
-    // background/lock restriction. This is benign and EXPECTED — stay paused
-    // silently so the user can tap play. Do NOT reload (that would pointlessly
-    // re-fetch and reset the position) and do NOT surface an error banner.
-    if (err instanceof DOMException && err.name === "NotAllowedError") return;
-    // Any other rejection: assume the media resource was dropped (an iOS
-    // screen-lock interruption evicts the decoded buffer) and re-establish it at
-    // the same position. A retry that's still NotAllowed stays silent too.
-    const at = audio.currentTime;
-    audio.addEventListener(
-      "loadedmetadata",
-      () => {
-        if (Number.isFinite(at) && at > 0) {
-          try {
-            audio.currentTime = at;
-          } catch {
-            // currentTime not settable yet — resume from 0 rather than fail.
-          }
-        }
-        void audio.play().catch((e: unknown) => {
-          if (!(e instanceof DOMException && e.name === "NotAllowedError")) {
-            onError?.(e);
-          }
-        });
-      },
-      { once: true },
-    );
-    try {
-      audio.load();
-    } catch (e) {
-      onError?.(e);
-    }
-  });
 }
 
 const Ctx = createContext<AudioPlayer | null>(null);
@@ -1042,230 +964,141 @@ export function AudioPlayerProvider(
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return undefined;
-
-    const onTime = (): void => {
-      handlePosition(audio.currentTime, audio.duration);
-      // <audio> path only: native owns MPNowPlayingInfoCenter itself.
-      updatePositionState(audio);
-    };
-    const onMeta = (): void => {
-      setDuration(audio.duration);
-      audio.playbackRate = rateRef.current;
-      // Seed the lock-screen timeline as soon as duration is known, so the OS
-      // controls are live from the first frame rather than the first tick.
-      updatePositionState(audio);
-    };
-    const onPlay = (): void => {
-      startSleepSession();
-      playingRef.current = true;
-      setPlaying(true);
-    };
-    const onPause = (): void => {
-      playingRef.current = false;
-      setPlaying(false);
-      // Flush the current position server-side so a pause is immediately
-      // resumable on another device (force the write past the store's throttle).
-      // Skip while a new chapter is resolving: `nowPlayingRef` already names it,
-      // but `audio.currentTime` still belongs to the chapter being replaced.
-      const np = nowPlayingRef.current;
-      if (np && !sourcePendingRef.current && audio.currentTime > 0) {
-        persistPos(np.chapterPath, audio.currentTime);
-        void posStore.flush();
-      }
-      // Freeze the sleep countdown: reseed so the paused gap isn't charged on
-      // resume, and flush the remaining seconds so another device picks up the
-      // frozen value.
-      lastSleepTickRef.current = 0;
-      if (sleepRemainingRef.current > 0) {
-        sleepRemainingStore.set(Math.round(sleepRemainingRef.current));
-        void sleepRemainingStore.flush();
-      }
-    };
-    const onEnded = (): void => {
-      handleEnded();
-    };
-    // A source that cannot load (offline and not downloaded, or a failed
-    // synthesis) only reports here; without it the transport sat at 0:00 with
-    // a live-looking Play button and no explanation.
-    const onMediaError = (): void => {
-      if (sourcePendingRef.current || !audio.error) return;
-      playingRef.current = false;
-      setPlaying(false);
-      setLoading(false);
-      setError(audio.error.message || `media error ${audio.error.code}`);
-    };
-
-    // The play/pause button must ALWAYS match the element. The `play`/`pause`
-    // events alone aren't enough: loading a new chapter (a src change) pauses the
-    // element WITHOUT firing `pause`, leaving the button stuck on "playing" (the
-    // observed bug — a freshly-opened chapter showed the pause icon at 0:00). So
-    // re-derive `playing` from `audio.paused` (the single source of truth) on every
-    // transition that can change it, not just play/pause.
-    const syncPlaying = (): void => {
-      const real = !audio.paused;
-      playingRef.current = real;
-      setPlaying((prev) => (prev === real ? prev : real));
-    };
-    const SYNC_EVENTS = [
-      "playing",
-      "waiting",
-      "stalled",
-      "emptied",
-      "loadstart",
-      "canplay",
-      "seeked",
-      "ratechange",
-    ];
-
-    audio.addEventListener("timeupdate", onTime);
-    audio.addEventListener("loadedmetadata", onMeta);
-    audio.addEventListener("durationchange", onMeta);
-    audio.addEventListener("play", onPlay);
-    audio.addEventListener("pause", onPause);
-    audio.addEventListener("ended", onEnded);
-    audio.addEventListener("error", onMediaError);
-    for (const ev of SYNC_EVENTS) audio.addEventListener(ev, syncPlaying);
-    return () => {
-      audio.removeEventListener("timeupdate", onTime);
-      audio.removeEventListener("loadedmetadata", onMeta);
-      audio.removeEventListener("durationchange", onMeta);
-      audio.removeEventListener("play", onPlay);
-      audio.removeEventListener("pause", onPause);
-      audio.removeEventListener("ended", onEnded);
-      audio.removeEventListener("error", onMediaError);
-      for (const ev of SYNC_EVENTS) audio.removeEventListener(ev, syncPlaying);
-    };
+    return attachWebAudio(audio, {
+      get sourcePending() {
+        return sourcePendingRef.current;
+      },
+      get rate() {
+        return rateRef.current;
+      },
+      position: handlePosition,
+      duration: setDuration,
+      startSleepSession,
+      setPlaying: (playing) => {
+        playingRef.current = playing;
+        setPlaying((prev) => (prev === playing ? prev : playing));
+      },
+      paused: (position) => {
+        // Flush the current position server-side so a pause is immediately
+        // resumable on another device (force the write past the store's throttle).
+        const np = nowPlayingRef.current;
+        if (np && position !== null) {
+          persistPos(np.chapterPath, position);
+          void posStore.flush();
+        }
+        // Freeze the sleep countdown: reseed so the paused gap isn't charged on
+        // resume, and flush the remaining seconds so another device picks up the
+        // frozen value.
+        lastSleepTickRef.current = 0;
+        if (sleepRemainingRef.current > 0) {
+          sleepRemainingStore.set(Math.round(sleepRemainingRef.current));
+          void sleepRemainingStore.flush();
+        }
+      },
+      ended: handleEnded,
+      failed: (message) => {
+        playingRef.current = false;
+        setPlaying(false);
+        setLoading(false);
+        setError(message);
+      },
+    });
   }, [handlePosition, handleEnded, startSleepSession]);
 
   // Native engine events → the SAME state the <audio> listeners drive, so the
-  // read-along + UI track native playback identically. Only wired on the iOS
-  // shell (off-shell onNativeAudioEvent never fires). next/prev are lock-screen
+  // read-along + UI track native playback identically (engine/native.ts owns
+  // the event contract). Only wired on the iOS shell. next/prev are lock-screen
   // track buttons the native side can't service (the queue lives here).
   useEffect(() => {
     if (!nativeAudioAvailable()) return undefined;
-    return onNativeAudioEvent((ev) => {
-      if (ev.type === "snapshot") {
-        // Startup adopts the native pointer after the local queue is hydrated.
-        // During an explicit load only that load may replace the current source.
-        if (!sourcePendingRef.current && ev.queueId && ev.queueId === nativeQueueIdRef.current) {
-          adoptNativeSnapshot(ev);
-          if (ev.needsAdvance) goTo(ev.index + 1, true);
+    const host: NativeEngineHost = {
+      get sourcePending() {
+        return sourcePendingRef.current;
+      },
+      get queueId() {
+        return nativeQueueIdRef.current;
+      },
+      get queueIndex() {
+        return queueIndexRef.current;
+      },
+      get playing() {
+        return playingRef.current;
+      },
+      get buffering() {
+        return bufferingRef.current;
+      },
+      get queueAuthoritative() {
+        return nativeAudioQueueAvailable();
+      },
+      adoptSnapshot: adoptNativeSnapshot,
+      goTo: (index) => goTo(index, true),
+      clearEnded: () => {
+        nativeEndedRef.current = false;
+      },
+      observeSleep: (remaining) => {
+        sleepSessionRef.current.observe(remaining);
+        sleepRemainingRef.current = remaining;
+        setSleepRemainingMin(Math.ceil(remaining / 60));
+        if (remaining <= 0) setSleepMinutes(0);
+      },
+      position: handleNativePosition,
+      duration: setDuration,
+      startSleepSession,
+      resetPlaybackProof: resetNativePlaybackProof,
+      expectPlayback: () => expectNativePlayback(true),
+      // Mirror a patch into the refs the handlers read and the rendered state.
+      transport: (patch) => {
+        if (!patch) return;
+        if (patch.playing !== undefined) {
+          playingRef.current = patch.playing;
+          setPlaying(patch.playing);
         }
-        return;
-      }
-      if (!nativeEventMatches(ev, nativeQueueIdRef.current, queueIndexRef.current)) return;
-      switch (ev.type) {
-        case "time":
-          if (ev.position < ev.duration) nativeEndedRef.current = false;
-          if (nativeAudioQueueAvailable() && ev.sleepRemaining !== undefined) {
-            sleepSessionRef.current.observe(ev.sleepRemaining);
-            sleepRemainingRef.current = ev.sleepRemaining;
-            setSleepRemainingMin(Math.ceil(ev.sleepRemaining / 60));
-            if (ev.sleepRemaining <= 0) setSleepMinutes(0);
-          }
-          handleNativePosition(ev.position, ev.duration);
-          break;
-        case "durationchange":
-          setDuration(ev.duration);
-          break;
-        case "playing":
-          startSleepSession();
-          if (nativeAudioQueueAvailable()) {
-            nativeEndedRef.current = false;
-            resetNativePlaybackProof();
-            playingRef.current = true;
-            bufferingRef.current = false;
-            setPlaying(true);
-            setBuffering(false);
-            setLoading(false);
-            break;
-          }
-          // Installed protocol-v1 shells report the requested rate, not
-          // AVPlayer's actual state. Keep the control pending until periodic
-          // media time proves that audio is genuinely advancing.
-          if (!playingRef.current) expectNativePlayback(true);
-          break;
-        case "paused": {
-          // The replaced item's pause must not clear the new chapter's play
-          // intent or persist its position under the new chapter.
-          if (sourcePendingRef.current) break;
-          resetNativePlaybackProof();
-          playingRef.current = false;
-          bufferingRef.current = false;
-          setBuffering(false);
-          setPlaying(false);
-          setLoading(false);
+        if (patch.buffering !== undefined) {
+          bufferingRef.current = patch.buffering;
+          setBuffering(patch.buffering);
+        }
+        if (patch.loading !== undefined) setLoading(patch.loading);
+      },
+      paused: () => {
+        const np = nowPlayingRef.current;
+        if (np && currentTimeRef.current > 0 && !nativeEndedRef.current) {
+          persistPos(np.chapterPath, currentTimeRef.current);
+          void posStore.flush();
+        }
+        lastSleepTickRef.current = 0;
+        if (sleepRemainingRef.current > 0) {
+          sleepRemainingStore.set(Math.round(sleepRemainingRef.current));
+          void sleepRemainingStore.flush();
+        }
+      },
+      ended: () => {
+        playingRef.current = false;
+        handleEnded();
+      },
+      stalled: () => {
+        // Keep actual playback (`playing`) truthful, but remember play intent
+        // separately so every spinner remains tappable as a Pause action.
+        if (!bufferingRef.current) {
           const np = nowPlayingRef.current;
-          if (np && currentTimeRef.current > 0 && !nativeEndedRef.current) {
-            persistPos(np.chapterPath, currentTimeRef.current);
-            void posStore.flush();
-          }
-          lastSleepTickRef.current = 0;
-          if (sleepRemainingRef.current > 0) {
-            sleepRemainingStore.set(Math.round(sleepRemainingRef.current));
-            void sleepRemainingStore.flush();
-          }
-          break;
-        }
-        case "ended":
-          if (sourcePendingRef.current) break;
-          resetNativePlaybackProof();
-          playingRef.current = false;
-          bufferingRef.current = false;
-          setBuffering(false);
-          setLoading(false);
-          handleEnded();
-          break;
-        case "canplay":
-          if (!bufferingRef.current) setLoading(false);
-          break;
-        case "waiting":
-          // Keep actual playback (`playing`) truthful, but remember play intent
-          // separately so every spinner remains tappable as a Pause action.
-          if (!bufferingRef.current) {
-            const np = nowPlayingRef.current;
-            logEvent("audio_waiting", {
-              book: np?.bookSlug,
-              chapter: np?.chapterPath,
-              position: currentTimeRef.current,
-            });
-          }
-          clearNativeOptimisticTimer();
-          nativePlaybackUnconfirmedRef.current = true;
-          nativePositionSampleRef.current = {
+          logEvent("audio_waiting", {
+            book: np?.bookSlug,
+            chapter: np?.chapterPath,
             position: currentTimeRef.current,
-            at: performance.now(),
-          };
-          playingRef.current = false;
-          bufferingRef.current = true;
-          setBuffering(true);
-          setPlaying(false);
-          setLoading(true);
-          lastSleepTickRef.current = 0;
-          break;
-        case "next":
-          nextChapter();
-          break;
-        case "prev":
-          prevChapter();
-          break;
-        case "network":
-          // Consumed centrally by native-sync; playback has no work to do.
-          break;
-        case "error":
-          // Clear the spinner + the playing state so the UI never sits on an
-          // endless loading icon (offline + not-downloaded streams used to stall
-          // forever). `error` (cleared on the next load) drives the disabled state.
-          setError(ev.message);
-          resetNativePlaybackProof();
-          playingRef.current = false;
-          bufferingRef.current = false;
-          setBuffering(false);
-          setLoading(false);
-          setPlaying(false);
-          break;
-      }
-    });
+          });
+        }
+        clearNativeOptimisticTimer();
+        nativePlaybackUnconfirmedRef.current = true;
+        nativePositionSampleRef.current = {
+          position: currentTimeRef.current,
+          at: performance.now(),
+        };
+        lastSleepTickRef.current = 0;
+      },
+      next: nextChapter,
+      prev: prevChapter,
+      error: setError,
+    };
+    return onNativeAudioEvent((ev) => routeNativeEvent(ev, host));
   }, [
     adoptNativeSnapshot,
     clearNativeOptimisticTimer,

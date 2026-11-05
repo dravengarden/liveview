@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import { nativeTransportPatch } from "./audio/engine/transport.ts";
 
 const ROOT = new URL("./", import.meta.url);
 
@@ -41,11 +42,16 @@ test("native waiting is observable, cancellable, and bounded", async () => {
   assert.ok(play, "native play function exists");
   assert.doesNotMatch(play, /emit\("\{type:'playing'\}"\)/);
 
-  const waiting = player.match(/case "waiting":[\s\S]*?\n\s*break;/)?.[0];
-  assert.ok(waiting, "native waiting event handler exists");
-  assert.match(waiting, /setBuffering\(true\)/);
-  assert.match(waiting, /setLoading\(true\)/);
-  assert.match(waiting, /setPlaying\(false\)/);
+  // A stall keeps `playing` truthful while the spinner remembers play intent.
+  const state = { buffering: false, queueAuthoritative: true };
+  assert.deepEqual(nativeTransportPatch("waiting", state), { playing: false, buffering: true, loading: true });
+  // Only real playback or a stop ends a stall; `canplay` does not.
+  assert.equal(nativeTransportPatch("canplay", { ...state, buffering: true }), null);
+  assert.deepEqual(nativeTransportPatch("canplay", state), { loading: false });
+  for (const stop of ["paused", "error"] as const) {
+    assert.deepEqual(nativeTransportPatch(stop, { ...state, buffering: true }), { playing: false, buffering: false, loading: false });
+  }
+  assert.deepEqual(nativeTransportPatch("ended", { ...state, buffering: true }), { buffering: false, loading: false });
   assert.match(
     player,
     /const active = playingRef\.current \|\| bufferingRef\.current/,
@@ -56,14 +62,14 @@ test("native waiting is observable, cancellable, and bounded", async () => {
 test("protocol-v1 playing events require advancing media time", async () => {
   const player = await source("audio/player.tsx");
 
-  const playing = player.match(
-    /case "playing":[\s\S]*?case "paused"/,
-  )?.[0];
-  assert.ok(playing, "native playing event handler exists");
-  assert.match(playing, /expectNativePlayback\(true\)/);
-  const legacy = playing.slice(playing.indexOf("// Installed protocol-v1"));
-  assert.doesNotMatch(legacy, /setPlaying\(true\)/);
-  assert.match(playing, /if \(nativeAudioQueueAvailable\(\)\)/, "only the advertised native capability makes playing authoritative");
+  // Only the advertised native capability makes `playing` authoritative.
+  assert.deepEqual(
+    nativeTransportPatch("playing", { buffering: true, queueAuthoritative: true }),
+    { playing: true, buffering: false, loading: false },
+  );
+  assert.equal(nativeTransportPatch("playing", { buffering: false, queueAuthoritative: false }), null);
+  // The routing itself (protocol-v1 `playing` → expectPlayback) is covered by
+  // audio/engine/native.test.ts; the proof that ends the wait lives here.
   assert.match(
     player,
     /nativePositionConfirmsPlayback\([\s\S]*?setPlaying\(true\)/,

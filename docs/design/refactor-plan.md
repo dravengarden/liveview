@@ -610,27 +610,34 @@ under `replica/testing/`. Phase 6 extracted the pure resume rules
 adopt decision with its `SYNC_POS_LEAD_S` margin shared with `posStore`)
 with tests.
 
-Deferred, with reasons:
+Follow-up record (2026-11-05): the items first deferred above are done.
 
-- The audio engine-adapter split (§4.6). There is no DOM or native-bridge
-  harness to prove the event ordering unchanged, and real playback cannot be
-  exercised against the deployed server without overwriting the owner's
-  resume session. It needs a stubbed native bridge in the simulator first.
-- Unifying `ChapterRef` with `resolve_chapter` (§5.2): the HTTP and sync
-  callers have different not-found and edition-fallback contracts, so a
-  shared resolver would change behaviour.
-- The remaining §5.2 primitives: `content::narration::synthesize_chapter`,
-  one `blob_response` for every blob route, and `StoreError`. Each changes a
-  response contract and needs characterization tests first. (Raw rendition
-  comparisons now go through `RenditionKind::is`.)
-- `connectivity.ts` (§4.8). The reachability, socket and native network
-  signals are wired correctly today; merging them changes when the replica
-  retries, which needs an offline simulator pass. (The connection store is
-  already UI-free in `_shell/connection-store.ts`.)
-- Converting `nativeAudioRecovery` and `readAlongRecovery` (§4.8) to
-  behavioural tests waits for the engine split above; the scroll-material
-  gate stays regex-based by design. `spike.ts` stays in `replica/` because
-  `tools/lvsim.sh` depends on its globals.
+- Audio engine split (§4.6): `audio/engine/native.ts` owns the native event
+  contract (snapshot adoption, stale queue and index events, protocol-v1
+  playback proof, stalls, the pending-load guard) behind a host interface the
+  provider implements over its refs; `audio/engine/web.ts` owns the
+  `<audio>` element listeners, media-session position and interruption
+  recovery; `audio/engine/transport.ts` is the pure transport-flag
+  transition. Contract tests cover each without React. The provider's
+  observable behaviour was compared before and after in Chrome against the
+  local preview, once with a stubbed media element and once with a fake
+  queue-capable AVPlayer bridge: identical outputs for play, pause, stalls,
+  stale events, position persistence and media errors.
+- Server primitives (§5.2): `server::synthesis` (one synthesize, encode and
+  store pipeline for both workers and the on-demand fallbacks),
+  `server::encoding`, one ranged `blob_response` for artwork and raw assets,
+  and `LibraryError` (a store failure during a library change is now a 503).
+- `connectivity.ts` (§4.8): one module for the device network state, the
+  replica's offline probe and `readingOffline`. A network-class change now
+  updates the offline flag before notifying listeners.
+- The `nativeAudioRecovery` and `readAlongRecovery` checks on moved code are
+  behavioural tests (`hooks/readAlongCache.ts` holds the read-along cache
+  rules). Checks that read Swift and component markup stay source checks.
+
+Still open: `ChapterRef`/`resolve_chapter` (§5.2), because the HTTP and
+sync callers have different not-found and edition-fallback contracts and a
+shared resolver would change behaviour. `spike.ts` stays in `replica/`
+because `tools/lvsim.sh` depends on its globals.
 
 Order rationale: 0–1 remove the largest source of regressions with the least
 visible change and create the tests the later phases rely on; 2 must precede
