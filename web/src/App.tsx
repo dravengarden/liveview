@@ -6,12 +6,9 @@ import { nativeWidgetPublish } from "@/native-audio";
 import {
   contentFetch,
   ensureAutoSync,
-  isLikelyOffline,
   nativeRefreshManifest,
 } from "@/native-sync";
-import { fetchChapterResponse } from "@/contentLoad";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { flushSync } from "react-dom";
 import {
   Alert,
   Box,
@@ -63,7 +60,6 @@ import { useForegroundRepaint } from "@/hooks/useForegroundRepaint";
 import { useShelfRootRefresh } from "@/hooks/useShelfRootRefresh";
 import { useStatusBarScroll } from "@/hooks/useStatusBarScroll";
 import {
-  readingOffline,
   useReadingOffline,
   useStoredTextPaths,
 } from "@/hooks/useOfflineReading";
@@ -73,7 +69,6 @@ import {
   findNode,
   flattenTracks,
   hasFilePath,
-  resolveFirstChapter,
 } from "./readerTree";
 import {
   bookSlugOf,
@@ -92,9 +87,9 @@ import {
   resumeTextPath,
 } from "@/reader/entry";
 import { shelfProgress, widgetItems } from "@/reader/progress";
+import { useChapterContent } from "@/reader/useChapterContent";
 import type {
   Book,
-  FileContent,
   FileType,
   ProgressEntry,
   TreeNode,
@@ -106,12 +101,6 @@ const NATIVE_RELEASE_APP_ID = (
 const NATIVE_RELEASE_MANIFEST_URL = (
   import.meta.env["VITE_NATIVE_RELEASE_MANIFEST_URL"] as string | undefined
 )?.trim();
-
-/** A page missing in the selected edition; we render `shown` content instead. */
-interface UntranslatedNotice {
-  requested: string;
-  shown: string;
-}
 
 /**
  * A state updater that keeps the previous value when a revalidated response is
@@ -144,19 +133,9 @@ export function App(): React.JSX.Element {
   // the save-effect can clear it on the mount-time `currentPath === null` — so the
   // cold-relaunch resume (tryResumeLastLocation) sees it. Pure init, no re-read.
   const [initialResume] = useState<ResumeLocation | null>(() => readResume());
-  // `lang` is the *selected* edition; `untranslated` records when a page is
-  // missing there and we fell back to another edition's content.
+  // `lang` is the *selected* edition; the chapter may be shown in another one
+  // when the page is untranslated (see useChapterContent).
   const [lang, setLang] = useState<string>("");
-  const [untranslated, setUntranslated] = useState<UntranslatedNotice | null>(
-    null,
-  );
-  const [currentFileType, setCurrentFileType] = useState<FileType>("markdown");
-  const [currentContent, setCurrentContent] = useState<string | null>(null);
-  // A chapter fetch that failed instead of silently leaving the old page up:
-  // "offline" (no cache for an unvisited page while disconnected) vs "failed"
-  // (a server/transport error online). Drives a calm placeholder so offline
-  // never reads as a blank/stale reader. Cleared on a successful load.
-  const [fileError, setFileError] = useState<"offline" | "failed" | null>(null);
   // The browse plane's reading mode. Audio is no longer a browse view (it's the
   // floating popup), so in practice this stays "text" — it still drives which
   // rendition's spine + language list the reading chrome shows, and is threaded
@@ -168,19 +147,30 @@ export function App(): React.JSX.Element {
   // after the book list loaded) — never a silent dead tap.
   const [notice, setNotice] = useState<string | null>(null);
   const initializedRef = useRef(false);
-  // Refs for matching live WebSocket updates against what's currently shown
-  // (the shown edition may differ from `lang` when falling back).
+  // Mirror of `currentPath` for callbacks that must not re-subscribe.
   const currentPathRef = useRef<string | null>(null);
-  const contentLangRef = useRef<string>("");
-  // Only the newest chapter request may change the reader. Playback-led chapter
-  // changes, rapid pager taps, and foreground refreshes can otherwise let an old
-  // failure replace a newer successful page with the full-screen retry state.
+  // The navigation epoch: every open, restore and return to the shelf claims
+  // it, and each async continuation checks it, so only the newest navigation
+  // may change the reader.
   const fileLoadSeq = useRef(0);
-  // Latest `openFile`, held in a ref so `loadFile` (deps []) can re-enter it for
-  // the 404 self-heal without a useCallback dependency cycle.
+  // Latest `openFile`, held in a ref so the chapter loader can re-enter it for
+  // the missing-path redirect without a dependency cycle.
   const openFileRef = useRef<
     ((p: string, l: string, r: string, replace?: boolean) => void) | null
   >(null);
+  const redirectChapter = useCallback(
+    (req: { path: string; lang: string; rendition: string }) => {
+      void openFileRef.current?.(req.path, req.lang, req.rendition, true);
+    },
+    [],
+  );
+  const chapter = useChapterContent(fileLoadSeq, redirectChapter);
+  const {
+    load: loadChapterBody,
+    reset: resetChapter,
+    applyLive: applyLiveChapter,
+    clearUntranslated,
+  } = chapter;
   // The rendition whose spine `tree` currently holds. Live tree updates (which
   // arrive as the default text spine) must not clobber a non-text spine.
   const renditionRef = useRef<string>("text");
@@ -522,14 +512,11 @@ export function App(): React.JSX.Element {
 
   const handleContentUpdate = useCallback(
     (path: string, msgLang: string, fileType: FileType, content: string) => {
-      if (
-        path === currentPathRef.current && msgLang === contentLangRef.current
-      ) {
-        setCurrentFileType(fileType);
-        setCurrentContent(content);
+      if (path === currentPathRef.current) {
+        applyLiveChapter(msgLang, fileType, content);
       }
     },
-    [],
+    [applyLiveChapter],
   );
 
   const handleTreeUpdate = useCallback((newTree: TreeNode[]) => {
@@ -556,105 +543,24 @@ export function App(): React.JSX.Element {
     onTreeUpdate: handleTreeUpdate,
   });
 
-  // Fetch + render a file in `reqLang`. If the page is missing in that edition
-  // (404) we transparently fall back to the book's default edition and surface
-  // an "untranslated" notice. `reqLang` stays the selected edition regardless.
+  // Show a chapter in `reqLang`. A page missing in that edition falls back to
+  // the book's default edition with an "untranslated" notice; `reqLang` stays
+  // the selected edition regardless.
   const loadFile = useCallback(
     async (path: string, reqLang: string, reqRendition: string) => {
-      const seq = ++fileLoadSeq.current;
       setCurrentPath(path);
       currentPathRef.current = path;
-      setFileError(null);
-      try {
-        const url = `/api/file?path=${encodeURIComponent(path)}&lang=${
-          encodeURIComponent(reqLang)
-        }&rendition=${encodeURIComponent(reqRendition)}`;
-        const res = await fetchChapterResponse(
-          url,
-          contentFetch,
-          isLikelyOffline,
-        );
-        if (seq !== fileLoadSeq.current) return;
-        if (!res.ok) {
-          console.error("Failed to fetch file:", path, res.status);
-          // A failed path is most often the `<slug>/README.md` entry guess for a
-          // book with no README (authored books open at `00-introduction.md`), or
-          // a stale cross-book resume path. Self-heal to the book's real first
-          // spine chapter instead of dead-ending on "Couldn't load this page".
-          // The TypeScript replica now preserves a real 404. A 504 means a
-          // transient/offline miss and has already received one bounded retry;
-          // never redirect a valid chapter to the first page on that signal.
-          const offline = readingOffline();
-          if (!offline && res.status === 404) {
-            const slug = bookSlugOf(path);
-            const first = await resolveFirstChapter(slug, reqRendition);
-            if (seq !== fileLoadSeq.current) return;
-            if (first && first !== path) {
-              void openFileRef.current?.(first, reqLang, reqRendition, true);
-              return;
-            }
-          }
-          // Don't leave the previous chapter silently up — surface it. Offline +
-          // uncached (a book not yet downloaded) shows the calm offline notice;
-          // otherwise a genuine load failure with a retry.
-          setFileError(offline ? "offline" : "failed");
-          return;
-        }
-        const data = (await res.json()) as FileContent;
-        if (seq !== fileLoadSeq.current) return;
-        // The server resolves overlay → base and reports the edition it served.
-        // If that differs from what we asked for, the page isn't translated yet.
-        contentLangRef.current = data.lang;
-        const apply = (): void => {
-          if (seq !== fileLoadSeq.current) return;
-          setCurrentFileType(data.file_type);
-          setCurrentContent(data.content);
-          setUntranslated(
-            data.lang !== reqLang
-              ? { requested: reqLang, shown: data.lang }
-              : null,
-          );
-        };
-        // Cross-fade the reader between chapters where supported (the content
-        // element carries `view-transition-name: lv-content`, so only it
-        // animates — not the sidebar/chrome). flushSync applies the swap
-        // synchronously inside the transition so it captures the new DOM.
-        // Feature-detected + skipped under prefers-reduced-motion; instant swap
-        // otherwise.
-        const doc = document as Document & {
-          startViewTransition?: (cb: () => void) => {
-            finished: Promise<void>;
-          };
-        };
-        const reduceMotion = window.matchMedia?.(
-          "(prefers-reduced-motion: reduce)",
-        ).matches;
-        if (!reduceMotion && typeof doc.startViewTransition === "function") {
-          const transition = doc.startViewTransition(() => {
-            flushSync(apply);
-          });
-          // A second navigation legitimately supersedes the first transition.
-          // Browsers reject `finished` in that case; consume the expected
-          // cancellation so the global APM hook does not report a false error.
-          void transition.finished.catch(() => undefined);
-        } else {
-          apply();
-        }
-      } catch (e) {
-        if (seq !== fileLoadSeq.current) return;
-        console.error("Failed to fetch file:", e);
-        setFileError(readingOffline() ? "offline" : "failed");
-      }
+      await loadChapterBody({ path, lang: reqLang, rendition: reqRendition });
     },
-    [],
+    [loadChapterBody],
   );
 
   // A chapter that was not downloaded opens by itself once the server answers
   // again (landing, or paying for in-flight Wi-Fi), without a Retry tap.
   useEffect(() => {
-    if (fileError !== "offline" || offline || !currentPath) return;
+    if (chapter.error !== "offline" || offline || !currentPath) return;
     void loadFile(currentPath, lang, rendition);
-  }, [fileError, offline, currentPath, lang, rendition, loadFile]);
+  }, [chapter.error, offline, currentPath, lang, rendition, loadFile]);
 
   // Open a file in a given edition + rendition: sync state, URL hash, and (for
   // the text rendition) content. The audio rendition renders in the player off
@@ -874,8 +780,7 @@ export function App(): React.JSX.Element {
     fileLoadSeq.current += 1;
     setCurrentPath(null);
     currentPathRef.current = null;
-    setCurrentContent(null);
-    setUntranslated(null);
+    resetChapter();
     // Restore the bookshelf's text spine. `tree` may still hold the book we just
     // left — for an AUDIO book that's the audio spine, against which EVERY text
     // progress row misses (`.md` ∉ `.spoken.md` spine) → all reading meters
@@ -1028,8 +933,7 @@ export function App(): React.JSX.Element {
         // empty hash → the landing bookshelf
         setCurrentPath(null);
         currentPathRef.current = null;
-        setCurrentContent(null);
-        setUntranslated(null);
+        resetChapter();
         return;
       }
       const kind = renditionForHashEntry(path, hashRendition);
@@ -1230,7 +1134,7 @@ export function App(): React.JSX.Element {
       // Audio renders off the engine — just move the page (no body fetch).
       setCurrentPath(np.chapterPath);
       currentPathRef.current = np.chapterPath;
-      setUntranslated(null);
+      clearUntranslated();
       const tokens = hashTokens(lang, rendition, activeBook ?? undefined);
       writeHash(np.chapterPath, tokens.lang, tokens.rendition, true);
     } else {
@@ -1644,11 +1548,11 @@ export function App(): React.JSX.Element {
               actions={bookActions}
               navigationActions={settingsButton}
             >
-              {untranslated && (
+              {chapter.untranslated && (
                 <Alert severity="info" square sx={{ py: 0.25 }}>
                   {t("content.untranslated", {
-                    lang: langLabel(untranslated.requested),
-                    fallback: langLabel(untranslated.shown),
+                    lang: langLabel(chapter.untranslated.requested),
+                    fallback: langLabel(chapter.untranslated.shown),
                   })}
                 </Alert>
               )}
@@ -1664,7 +1568,7 @@ export function App(): React.JSX.Element {
                     footer={chapterPager}
                   />
                 )
-                : fileError
+                : chapter.error
                 ? (
                   // Don't show a blank/stale reader when a chapter couldn't load.
                   // Offline + uncached (lazy/web) is calm guidance; a genuine
@@ -1684,7 +1588,7 @@ export function App(): React.JSX.Element {
                     }}
                   >
                     <Typography variant="body1">
-                      {fileError === "offline"
+                      {chapter.error === "offline"
                         ? t("content.offline")
                         : t("content.loadFailed")}
                     </Typography>
@@ -1700,8 +1604,8 @@ export function App(): React.JSX.Element {
                 )
                 : (
                   <ContentViewer
-                    content={currentContent}
-                    fileType={currentFileType}
+                    content={chapter.content}
+                    fileType={chapter.fileType}
                     currentPath={currentPath}
                     theme={theme}
                     onNavigate={handleNavigateLink}
