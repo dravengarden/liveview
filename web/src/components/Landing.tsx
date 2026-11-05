@@ -74,6 +74,8 @@ import { DirectoryLocation } from "./DirectoryLocation";
 import { BrandMark } from "./BrandMark";
 import { AudioPreparation } from "./AudioPreparation";
 import { ScrollToTopButton } from "./ScrollToTopButton";
+import { SyncIndicator } from "./SyncIndicator";
+import { BottomDock } from "@/_shell/bottom-dock.tsx";
 import { Highlighted } from "./SearchHighlight";
 import { ShelfCard, shelfEntries, type ShelfEntry } from "./ShelfCard";
 
@@ -606,7 +608,9 @@ export function Landing({
     </Box>
   );
 
-  // Share the measured toolbar height with shelf padding and the sync strip.
+  // Top tier only: the toolbar overlays the shelf's head, so publish its
+  // height for the scroller's top padding. The bottom tier's toolbar is the
+  // dock's bar and is covered by `--lv-dock-h`.
   const shelfRegionRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -616,20 +620,13 @@ export function Landing({
     const publish = (): void => {
       const h = `${toolbarEl.offsetHeight}px`;
       regionEl.style.setProperty("--lv-toolbar-h", h);
-      // ALSO publish on documentElement: the ambient sync strip is a root-level
-      // fixed element (outside this region), and on the shelf it sits just ABOVE
-      // this toolbar — sharing the one frosted bottom backplate, like the reader.
-      // It can only offset by the toolbar height if the var is visible at the
-      // root. (The region copy stays for the scroller + ScrollToTop, which live
-      // inside the region.)
-      document.documentElement.style.setProperty("--lv-toolbar-h", h);
     };
     publish();
     const ro = new ResizeObserver(publish);
     ro.observe(toolbarEl);
     return () => {
       ro.disconnect();
-      document.documentElement.style.removeProperty("--lv-toolbar-h");
+      regionEl.style.removeProperty("--lv-toolbar-h");
     };
   }, []);
 
@@ -735,6 +732,277 @@ export function Landing({
     </Box>
   );
 
+  const toolbar = (
+    <Box
+      ref={toolbarRef}
+      sx={{
+        // Bottom tier: the shelf dock's bar (the dock places and lifts it).
+        // Top tier: an overlay across the shelf's head.
+        ...(navbarAtBottom
+          ? { position: "relative" }
+          : { position: "absolute", left: splitView ? 220 : 0, right: 0, top: 0, zIndex: 6 }),
+        borderColor: "divider",
+        // Near-opaque, unified with every other chrome bar: cards scrolling
+        // under this toolbar must NOT bleed through and clash with the search
+        // field + controls. NO backdrop-filter: a blur here re-rasterizes the
+        // cards scrolling under it every frame for a result that's invisible at
+        // this opacity = scroll jank for nothing. The opaque tint alone hides
+        // them.
+        bgcolor: "background.default",
+        ...(navbarAtBottom
+          ? {
+            // A hard, edge-to-edge 1px rule looks like a stray line when the
+            // shelf has scrolled and there's empty page-bg above the bar.
+            // Use a hairline that fades to transparent at both ends so the
+            // seam reads as intentional, not a harsh divider.
+            "&::before": {
+              content: '""',
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              height: "1px",
+              background: (t: Theme) =>
+                `linear-gradient(to right, transparent, ${t.palette.divider} 18%, ${t.palette.divider} 82%, transparent)`,
+            },
+            // The home-indicator inset is generous; trim it down (floor 10px)
+            // to lift the bar off the very bottom without leaving a dead gap.
+            pt: 0.75,
+            pb: "max(env(safe-area-inset-bottom, 0px), 10px)",
+          }
+          : {
+            borderBottom: 1,
+            pt: "calc(env(safe-area-inset-top, 0px) + 8px)",
+          }),
+        // Focused phone search is the sole toolbar control, so let it use the
+        // whole safe horizontal span. The compact row keeps a little more air
+        // around its three separate controls.
+        pl: {
+          xs: searchEditing
+            ? "max(env(safe-area-inset-left, 0px), 8px)"
+            : 1.5,
+          sm: 2.5,
+          md: 3,
+        },
+        pr: {
+          xs: searchEditing
+            ? "max(env(safe-area-inset-right, 0px), 8px)"
+            : 1.5,
+          sm: 2.5,
+          md: 3,
+        },
+      }}
+    >
+      {!atRoot && !searchEditing && (
+        <DirectoryLocation
+          ancestors={selectedDirectory !== null && !query.trim()
+            ? library
+              ? directoryAncestors(library, selectedDirectory)
+              : currentDirectory
+              ? [{ id: selectedDirectory, name: currentDirectory.name }]
+              : []
+            : []}
+          navigate={navigate}
+        />
+      )}
+      <Box
+        data-lv-search-editing={searchEditing ? "true" : "false"}
+        sx={{
+          width: "100%",
+          mx: "auto",
+          display: "flex",
+          alignItems: "center",
+          gap: { xs: 0.75, sm: 1 },
+          minHeight: 44,
+          flexWrap: { xs: "wrap", sm: "nowrap" },
+        }}
+      >
+        {!searchEditing && (selectedDirectory !== null || discoveryActive) &&
+          (
+            <IconButton
+              data-lv-directory-back
+              aria-label={t("landing.backToDirectory")}
+              onClick={goBack}
+              sx={{ width: 44, height: 44 }}
+            >
+              <BackIcon />
+            </IconButton>
+          )}
+        {books.length === 0 && <Box sx={{ flexGrow: 1 }} />}
+        {books.length > 0 && (
+          <>
+            <TextField
+              size="small"
+              inputRef={searchInputRef}
+              data-lv-search-field="true"
+              defaultValue=""
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setSearchFocused(false)}
+              onKeyDown={(e) => {
+                const nativeEvent = e.nativeEvent as KeyboardEvent;
+                if (e.key === "Escape" && !nativeEvent.isComposing) {
+                  e.preventDefault();
+                  navigate(selectedDirectory);
+                }
+                if (
+                  e.key === "Enter" && !searchComposingRef.current &&
+                  !nativeEvent.isComposing
+                ) {
+                  e.preventDefault();
+                  dismissSearchKeyboard();
+                }
+              }}
+              onCompositionStart={() => {
+                searchComposingRef.current = true;
+              }}
+              onCompositionEnd={(e) => {
+                searchComposingRef.current = false;
+                setQuery(
+                  searchInputRef.current?.value ??
+                    (e.target as HTMLInputElement).value,
+                );
+              }}
+              onChange={(e) => {
+                const nativeEvent = e.nativeEvent as InputEvent;
+                if (
+                  !searchComposingRef.current && !nativeEvent.isComposing
+                ) {
+                  setQuery(e.currentTarget.value);
+                }
+              }}
+              placeholder={t("landing.searchLibrary")}
+              aria-label={t("landing.searchLibrary")}
+              inputProps={{
+                "data-lv-search-input": "true",
+                "aria-label": t("landing.searchLibrary"),
+                enterKeyHint: "search",
+              }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon fontSize="medium" />
+                  </InputAdornment>
+                ),
+                endAdornment: query || searchEditing
+                  ? (
+                    // ui.md §7: no edge="end" (negative margin pins the target to the
+                    // iOS back-swipe edge); floor to a ≥40px touch target on phones and
+                    // keep the adornment off the safe-area edge.
+                    <InputAdornment
+                      position="end"
+                      sx={{
+                        gap: 0.25,
+                        pr: "max(env(safe-area-inset-right), 8px)",
+                      }}
+                    >
+                      <IconButton
+                        size="small"
+                        data-lv-search-clear="true"
+                        disabled={!query}
+                        onPointerDown={(e) => e.preventDefault()}
+                        onClick={clearSearch}
+                        aria-label={t("landing.searchClear")}
+                        sx={{
+                          width: { xs: 40, lg: 32 },
+                          height: { xs: 40, lg: 32 },
+                        }}
+                      >
+                        <ClearIcon fontSize="medium" />
+                      </IconButton>
+                      {searchEditing && (
+                        <IconButton
+                          size="small"
+                          data-lv-search-dismiss="true"
+                          onPointerDown={(e) => {
+                            // Perform the blur before this focused-only
+                            // control unmounts. onClick remains for keyboard
+                            // activation and non-pointer assistive input.
+                            e.preventDefault();
+                            dismissSearchKeyboard();
+                          }}
+                          onClick={dismissSearchKeyboard}
+                          aria-label={t("landing.searchHideKeyboard")}
+                          sx={{ width: 40, height: 40 }}
+                        >
+                          <KeyboardHideIcon fontSize="medium" />
+                        </IconButton>
+                      )}
+                    </InputAdornment>
+                  )
+                  : null,
+              }}
+              sx={{
+                flexGrow: 1,
+                minWidth: 0,
+                flexBasis: { xs: "calc(100% - 56px)", sm: 0 },
+                "& input::placeholder": {
+                  fontSize: "0.875rem",
+                  opacity: 0.65,
+                  color: "text.secondary",
+                },
+              }}
+            />
+          </>
+        )}
+        {/* Search finds content; these explicit actions change the view or library. */}
+        {!searchEditing && (
+          <Box
+            data-lv-shelf-actions
+            sx={{
+              flexShrink: 0,
+              display: "flex",
+              alignItems: "center",
+              gap: { xs: 0.75, sm: 1 },
+              flexBasis: { xs: "100%", sm: "auto" },
+              justifyContent: "flex-end",
+            }}
+          >
+            {books.length > 0 && (
+              <Badge
+                color="primary"
+                badgeContent={activeFilterCount}
+                invisible={activeFilterCount === 0}
+                sx={{ flex: { xs: 1, sm: "0 0 auto" } }}
+              >
+                <Button
+                  size="small"
+                  startIcon={<TuneIcon fontSize="small" />}
+                  onClick={() => setSfOpen(true)}
+                  aria-label={t("landing.sortFilter")}
+                  sx={{
+                    flexShrink: 0,
+                    minHeight: 44,
+                    width: "100%",
+                    px: 1.25,
+                    textTransform: "none",
+                    color: activeFilterCount > 0
+                      ? "primary.main"
+                      : "text.secondary",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {t("landing.sortFilterAction")}
+                </Button>
+              </Badge>
+            )}
+            <LibraryOrganizer
+              library={library}
+              libraryError={libraryError}
+              libraryBusy={libraryBusy}
+              changeLibrary={changeLibrary}
+              undoLibrary={undoLibrary}
+              selectedDirectory={selectedDirectory}
+              currentDirectory={currentDirectory}
+              directories={directories}
+              listEntries={listEntries}
+            />
+            {settingsSlot}
+          </Box>
+        )}
+      </Box>
+    </Box>
+  );
+
   return (
     <Box
       data-lv-library="true"
@@ -745,11 +1013,16 @@ export function Landing({
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
-        // Positioning context for the frosted toolbar overlay (absolute within
-        // this root) and the carrier of the published --lv-toolbar-h.
+        // Positioning context for the toolbar / dock and the host of their
+        // published heights.
         position: "relative",
       }}
     >
+      <ShelfDock
+        docked={navbarAtBottom}
+        toolbar={toolbar}
+        left={splitView ? 220 : 0}
+      >
       {splitView && (
         <Box
           component="aside"
@@ -779,277 +1052,7 @@ export function Landing({
           {directoryNavigation}
         </Box>
       )}
-      <Box
-        ref={toolbarRef}
-        sx={{
-          position: "absolute",
-          left: splitView ? 220 : 0,
-          right: 0,
-          // Bottom: lift above the keyboard (var set above; 0 when closed).
-          ...(navbarAtBottom
-            ? { bottom: "var(--lv-kb-inset, 0px)" }
-            : { top: 0 }),
-          zIndex: 6,
-          borderColor: "divider",
-          // Near-opaque, unified with every other chrome bar: cards scrolling
-          // under this toolbar must NOT bleed through and clash with the search
-          // field + controls. NO backdrop-filter: a blur here re-rasterizes the
-          // cards scrolling under it every frame for a result that's invisible at
-          // this opacity = scroll jank for nothing. The opaque tint alone hides
-          // them.
-          bgcolor: "background.default",
-          ...(navbarAtBottom
-            ? {
-              // A hard, edge-to-edge 1px rule looks like a stray line when the
-              // shelf has scrolled and there's empty page-bg above the bar.
-              // Use a hairline that fades to transparent at both ends so the
-              // seam reads as intentional, not a harsh divider.
-              "&::before": {
-                content: '""',
-                position: "absolute",
-                top: 0,
-                left: 0,
-                right: 0,
-                height: "1px",
-                background: (t: Theme) =>
-                  `linear-gradient(to right, transparent, ${t.palette.divider} 18%, ${t.palette.divider} 82%, transparent)`,
-              },
-              // The home-indicator inset is generous; trim it down (floor 10px)
-              // to lift the bar off the very bottom without leaving a dead gap.
-              pt: 0.75,
-              pb: "max(env(safe-area-inset-bottom, 0px), 10px)",
-            }
-            : {
-              borderBottom: 1,
-              pt: "calc(env(safe-area-inset-top, 0px) + 8px)",
-            }),
-          // Focused phone search is the sole toolbar control, so let it use the
-          // whole safe horizontal span. The compact row keeps a little more air
-          // around its three separate controls.
-          pl: {
-            xs: searchEditing
-              ? "max(env(safe-area-inset-left, 0px), 8px)"
-              : 1.5,
-            sm: 2.5,
-            md: 3,
-          },
-          pr: {
-            xs: searchEditing
-              ? "max(env(safe-area-inset-right, 0px), 8px)"
-              : 1.5,
-            sm: 2.5,
-            md: 3,
-          },
-        }}
-      >
-        {!atRoot && !searchEditing && (
-          <DirectoryLocation
-            ancestors={selectedDirectory !== null && !query.trim()
-              ? library
-                ? directoryAncestors(library, selectedDirectory)
-                : currentDirectory
-                ? [{ id: selectedDirectory, name: currentDirectory.name }]
-                : []
-              : []}
-            navigate={navigate}
-          />
-        )}
-        <Box
-          data-lv-search-editing={searchEditing ? "true" : "false"}
-          sx={{
-            width: "100%",
-            mx: "auto",
-            display: "flex",
-            alignItems: "center",
-            gap: { xs: 0.75, sm: 1 },
-            minHeight: 44,
-            flexWrap: { xs: "wrap", sm: "nowrap" },
-          }}
-        >
-          {!searchEditing && (selectedDirectory !== null || discoveryActive) &&
-            (
-              <IconButton
-                data-lv-directory-back
-                aria-label={t("landing.backToDirectory")}
-                onClick={goBack}
-                sx={{ width: 44, height: 44 }}
-              >
-                <BackIcon />
-              </IconButton>
-            )}
-          {books.length === 0 && <Box sx={{ flexGrow: 1 }} />}
-          {books.length > 0 && (
-            <>
-              <TextField
-                size="small"
-                inputRef={searchInputRef}
-                data-lv-search-field="true"
-                defaultValue=""
-                onFocus={() => setSearchFocused(true)}
-                onBlur={() => setSearchFocused(false)}
-                onKeyDown={(e) => {
-                  const nativeEvent = e.nativeEvent as KeyboardEvent;
-                  if (e.key === "Escape" && !nativeEvent.isComposing) {
-                    e.preventDefault();
-                    navigate(selectedDirectory);
-                  }
-                  if (
-                    e.key === "Enter" && !searchComposingRef.current &&
-                    !nativeEvent.isComposing
-                  ) {
-                    e.preventDefault();
-                    dismissSearchKeyboard();
-                  }
-                }}
-                onCompositionStart={() => {
-                  searchComposingRef.current = true;
-                }}
-                onCompositionEnd={(e) => {
-                  searchComposingRef.current = false;
-                  setQuery(
-                    searchInputRef.current?.value ??
-                      (e.target as HTMLInputElement).value,
-                  );
-                }}
-                onChange={(e) => {
-                  const nativeEvent = e.nativeEvent as InputEvent;
-                  if (
-                    !searchComposingRef.current && !nativeEvent.isComposing
-                  ) {
-                    setQuery(e.currentTarget.value);
-                  }
-                }}
-                placeholder={t("landing.searchLibrary")}
-                aria-label={t("landing.searchLibrary")}
-                inputProps={{
-                  "data-lv-search-input": "true",
-                  "aria-label": t("landing.searchLibrary"),
-                  enterKeyHint: "search",
-                }}
-                InputProps={{
-                  startAdornment: (
-                    <InputAdornment position="start">
-                      <SearchIcon fontSize="medium" />
-                    </InputAdornment>
-                  ),
-                  endAdornment: query || searchEditing
-                    ? (
-                      // ui.md §7: no edge="end" (negative margin pins the target to the
-                      // iOS back-swipe edge); floor to a ≥40px touch target on phones and
-                      // keep the adornment off the safe-area edge.
-                      <InputAdornment
-                        position="end"
-                        sx={{
-                          gap: 0.25,
-                          pr: "max(env(safe-area-inset-right), 8px)",
-                        }}
-                      >
-                        <IconButton
-                          size="small"
-                          data-lv-search-clear="true"
-                          disabled={!query}
-                          onPointerDown={(e) => e.preventDefault()}
-                          onClick={clearSearch}
-                          aria-label={t("landing.searchClear")}
-                          sx={{
-                            width: { xs: 40, lg: 32 },
-                            height: { xs: 40, lg: 32 },
-                          }}
-                        >
-                          <ClearIcon fontSize="medium" />
-                        </IconButton>
-                        {searchEditing && (
-                          <IconButton
-                            size="small"
-                            data-lv-search-dismiss="true"
-                            onPointerDown={(e) => {
-                              // Perform the blur before this focused-only
-                              // control unmounts. onClick remains for keyboard
-                              // activation and non-pointer assistive input.
-                              e.preventDefault();
-                              dismissSearchKeyboard();
-                            }}
-                            onClick={dismissSearchKeyboard}
-                            aria-label={t("landing.searchHideKeyboard")}
-                            sx={{ width: 40, height: 40 }}
-                          >
-                            <KeyboardHideIcon fontSize="medium" />
-                          </IconButton>
-                        )}
-                      </InputAdornment>
-                    )
-                    : null,
-                }}
-                sx={{
-                  flexGrow: 1,
-                  minWidth: 0,
-                  flexBasis: { xs: "calc(100% - 56px)", sm: 0 },
-                  "& input::placeholder": {
-                    fontSize: "0.875rem",
-                    opacity: 0.65,
-                    color: "text.secondary",
-                  },
-                }}
-              />
-            </>
-          )}
-          {/* Search finds content; these explicit actions change the view or library. */}
-          {!searchEditing && (
-            <Box
-              data-lv-shelf-actions
-              sx={{
-                flexShrink: 0,
-                display: "flex",
-                alignItems: "center",
-                gap: { xs: 0.75, sm: 1 },
-                flexBasis: { xs: "100%", sm: "auto" },
-                justifyContent: "flex-end",
-              }}
-            >
-              {books.length > 0 && (
-                <Badge
-                  color="primary"
-                  badgeContent={activeFilterCount}
-                  invisible={activeFilterCount === 0}
-                  sx={{ flex: { xs: 1, sm: "0 0 auto" } }}
-                >
-                  <Button
-                    size="small"
-                    startIcon={<TuneIcon fontSize="small" />}
-                    onClick={() => setSfOpen(true)}
-                    aria-label={t("landing.sortFilter")}
-                    sx={{
-                      flexShrink: 0,
-                      minHeight: 44,
-                      width: "100%",
-                      px: 1.25,
-                      textTransform: "none",
-                      color: activeFilterCount > 0
-                        ? "primary.main"
-                        : "text.secondary",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {t("landing.sortFilterAction")}
-                  </Button>
-                </Badge>
-              )}
-              <LibraryOrganizer
-                library={library}
-                libraryError={libraryError}
-                libraryBusy={libraryBusy}
-                changeLibrary={changeLibrary}
-                undoLibrary={undoLibrary}
-                selectedDirectory={selectedDirectory}
-                currentDirectory={currentDirectory}
-                directories={directories}
-                listEntries={listEntries}
-              />
-              {settingsSlot}
-            </Box>
-          )}
-        </Box>
-      </Box>
+      {!navbarAtBottom && toolbar}
 
       {/* Sort & Filter sheet — both shelf-organizing controls in one surface. */}
       <BottomSheet
@@ -1285,13 +1288,9 @@ export function Landing({
               );
             }
           }}
-          // The frosted toolbar overlays one edge of this scroller (top on the
-          // desktop/top tier, bottom on the mobile-browser tier), so reserve
-          // --lv-toolbar-h of foot/head space at THAT edge — the cards then fully
-          // clear the bar yet still scroll under it. The var is 0 before measured
-          // (a brief first paint), so the base breathing values hold meanwhile.
-          // scroll-padding at the same edge keeps scroll-to-top / a scrolled-into-
-          // view card from landing under the bar.
+          // The toolbar overlays one edge of this scroller (the head on the top
+          // tier, the foot as part of the dock on the bottom tier); reserve that
+          // edge so cards clear it yet still scroll under it.
           sx={{
             flex: 1,
             minHeight: 0,
@@ -1299,17 +1298,13 @@ export function Landing({
             px: { xs: 2, md: 3 },
             ...(navbarAtBottom
               ? {
-                // Bottom tier: bar at the foot; the shelf reaches the top so it
-                // still clears the notch itself. The ambient sync strip now sits
-                // at the BOTTOM too — above the toolbar, one frosted backplate —
-                // so its height (--lv-syncbar-h, 0 unless generating) is reserved
-                // at the FOOT (on top of the toolbar), not the head.
+                // Bottom tier: the dock (strip + toolbar, lifted with the
+                // keyboard) is at the foot; the shelf reaches the top, so it
+                // clears the notch itself.
                 pt: "calc(env(safe-area-inset-top, 0px) + 16px)",
-                pb:
-                  "calc(32px + var(--lv-toolbar-h, 0px) + var(--lv-syncbar-h, 0px))",
+                pb: "calc(32px + var(--lv-dock-h, 0px))",
                 scrollPaddingTop: "calc(env(safe-area-inset-top, 0px) + 16px)",
-                scrollPaddingBottom:
-                  "calc(var(--lv-toolbar-h, 0px) + var(--lv-syncbar-h, 0px))",
+                scrollPaddingBottom: "var(--lv-dock-h, 0px)",
               }
               : {
                 // Top tier: bar at the head; pad the top by its height plus the
@@ -1619,9 +1614,29 @@ export function Landing({
         }
         <ScrollToTopButton
           targetRef={scrollerRef}
-          bottomLift={navbarAtBottom ? "var(--lv-toolbar-h, 0px)" : "0px"}
+          bottomLift={navbarAtBottom ? "var(--lv-dock-h, 0px)" : "0px"}
         />
       </Box>
+      {isVisible && <SyncIndicator bookSlug={null} />}
+      </ShelfDock>
     </Box>
+  );
+}
+
+/** The bottom tier's dock: the toolbar is its bar, lifted above the
+ *  on-screen keyboard; the sync strip joins it from inside the shelf. */
+function ShelfDock(
+  { docked, toolbar, left, children }: {
+    docked: boolean;
+    toolbar: ReactNode;
+    left: number;
+    children: ReactNode;
+  },
+): React.JSX.Element {
+  if (!docked) return <>{children}</>;
+  return (
+    <BottomDock bar={toolbar} lift="var(--lv-kb-inset, 0px)" sx={{ left }}>
+      {children}
+    </BottomDock>
   );
 }

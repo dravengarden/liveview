@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { alpha } from "@mui/material/styles";
 import { CloudDownload, ExpandMore, GraphicEq } from "@mui/icons-material";
 import { DetentSheet, useAnyDetentSheetOpen } from "../_shell";
+import { DockPortal } from "../_shell/bottom-dock.tsx";
 import { useNavbarAtBottom } from "@/hooks";
 import { rem } from "@/px";
 import {
@@ -109,31 +110,12 @@ export function SyncIndicator(
     };
   }, [generating, open]);
 
-  // Reserve the strip's height so content clears it yet still scrolls UNDER it.
-  // Mobile: the strip sits at the BOTTOM in BOTH the reader (foot padding:
-  // MarkdownViewer / AudiobookPlayer pb add --lv-syncbar-h) and the shelf (foot
-  // padding: Landing's pb). Mobile only: there the strip overlays content; on
-  // desktop it rides over the NavShell bar, which owns its own space, so leave
-  // that tier alone. 28px = the 26px row + 2px filament.
-  useEffect(() => {
-    const el = document.documentElement;
-    if (generating && !open && navbarAtBottom) {
-      // rem so the reserved space scales WITH the strip when the global font
-      // size changes (the strip's own text/height are rem too — see below).
-      el.style.setProperty("--lv-syncbar-h", rem(28));
-    } else {
-      el.style.removeProperty("--lv-syncbar-h");
-    }
-    return () => {
-      el.style.removeProperty("--lv-syncbar-h");
-    };
-  }, [generating, open, navbarAtBottom]);
-
   if (!generating && !open) return null;
 
   return (
     <>
       {generating && !open && !anySheetOpen && (
+        <StripPlacement docked={navbarAtBottom}>
         <Box
           role="button"
           tabIndex={0}
@@ -145,36 +127,12 @@ export function SyncIndicator(
           sx={{
             // A flat, full-bleed chrome LINE — no rounding / shadow / ring: it's
             // chrome, not a floating card; content scrolls under it.
-            //   • Reader (mobile): pinned to the BOTTOM, ABOVE the nav bar and
-            //     the transport (when read-aloud/audio is up) — the topmost
-            //     segment of the ONE frosted bottom slab (nav + transport share
-            //     a backplate; this continues it). Offsets by their mirrored
-            //     heights (--shell-bar-h + --lv-transport-h on documentElement).
-            //   • Shelf / desktop: no bottom nav bar to sit above, so it stays a
-            //     top strip (under the status bar on mobile; a hairline above the
-            //     NavShell top bar on desktop).
-            position: "fixed",
-            left: 0,
-            right: 0,
+            //   • Compact tier: the top row of the surface's bottom dock, above
+            //     the transport and bar (reader) or the toolbar (shelf).
+            //   • Desktop: the bar owns the top, so a fixed hairline at top:0.
             ...(navbarAtBottom
-              ? {
-                // Mobile: the topmost segment of the ONE frosted bottom slab.
-                //   • Reader → above the nav bar + transport (their mirrored
-                //     heights on documentElement).
-                //   • Shelf → above the bookshelf toolbar (--lv-toolbar-h, also
-                //     mirrored to documentElement by Landing).
-                // Either way it continues the bottom backplate (border on top).
-                bottom: inReader
-                  ? "calc(var(--shell-bar-h, 0px) + var(--lv-transport-h, 0px))"
-                  : "var(--lv-toolbar-h, 0px)",
-                borderTop: 1,
-              }
-              : {
-                // Desktop: the NavShell bar owns the top, so ride at top:0 as a
-                // hairline above it.
-                top: 0,
-                borderBottom: 1,
-              }),
+              ? { position: "relative", borderTop: 1 }
+              : { position: "fixed", left: 0, right: 0, top: 0, borderBottom: 1 }),
             zIndex: (th) => th.zIndex.appBar,
             // In the reader this strip is mounted inside the spatial drawer's
             // translated surface, so it slides with the bar and transport
@@ -290,6 +248,7 @@ export function SyncIndicator(
               />
             )}
         </Box>
+        </StripPlacement>
       )}
 
       <DetentSheet
@@ -338,6 +297,13 @@ export function SyncIndicator(
       </DetentSheet>
     </>
   );
+}
+
+/** The compact tier places the strip in the surface's bottom dock. */
+function StripPlacement(
+  { docked, children }: { docked: boolean; children: React.ReactNode },
+): React.JSX.Element {
+  return docked ? <DockPortal slot="strip">{children}</DockPortal> : <>{children}</>;
 }
 
 function GeneratingRow(

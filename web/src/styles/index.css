@@ -74,25 +74,14 @@ textarea,
     content: "";
     display: block;
     flex: none;
-    /* Clear the status-bar notch. (The sync strip used to ride the top here and
-       added --lv-syncbar-h; it now sits at the BOTTOM of the reader, above the
-       nav bar, so the foot padding reserves it instead — see MarkdownViewer /
-       AudiobookPlayer pb.) */
+    /* Clear the status-bar notch. */
     height: env(safe-area-inset-top, 0px);
   }
 
-  /* Frosted-overlay bottom bar: the NavShell bar is now an iOS-style frosted
-     OVERLAY (barFrosted) that floats over the reader, not a flex sibling below
-     it, so the scroller fills full-height and its last lines pass UNDER the bar.
-     The components reserve the foot space themselves (`pb` reads --shell-bar-h
-     in MarkdownViewer; AudiobookPlayer pads by its transport + the bar) — this
-     rule only sets scroll-padding so an in-doc anchor (`#heading`) jump, or the
-     read-along follow-mode centring, doesn't land a target UNDER the frosted
-     bar. --shell-bar-h is published by NavShell on the content region (0 before
-     measured / on the solid path); padding-bottom stays in the components to
-     avoid clobbering MUI's emotion `py`. */
+  /* The reader scrolls under the bottom dock: an in-document anchor jump must
+     not land its target under it. The components pad the foot themselves. */
   [data-lv-scroller="reader"] {
-    scroll-padding-bottom: var(--shell-bar-h, 0px);
+    scroll-padding-bottom: var(--lv-dock-h, 0px);
   }
 }
 

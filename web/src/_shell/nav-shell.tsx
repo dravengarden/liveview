@@ -16,14 +16,10 @@
 // app supplies its nav body via `nav` and its content via `children`, so apps
 // stay distinct while the chrome is identical.
 //
-// `barFrosted` (opt-in, default OFF) turns the bar into an iOS-style frosted-
-// glass OVERLAY that content scrolls UNDER, instead of the solid flex sibling.
-// Only apps that want translucency pass it; every other app keeps the solid bar
-// with the same behavior. When on,
-// the bar is `position:absolute` pinned to its edge over a `position:relative`
-// content region, and its measured height is published as the CSS custom
-// property `--shell-bar-h` on that region so the app's scrollers can pad by it
-// (so content clears the floating bar yet still scrolls under it).
+// A bottom bar is the last row of the content column's BottomDock, so it
+// shares one opaque material with any strip or accessory the app portals into
+// the dock, and content scrolls under it (padded by `--lv-dock-h`). A top bar
+// is a solid flex sibling above the content.
 
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import MenuIcon from "@mui/icons-material/Menu";
@@ -47,6 +43,7 @@ import {
   useState,
 } from "react";
 
+import { BottomDock } from "./bottom-dock.tsx";
 import { EDGE_BACK_WIDTH } from "./edge-back-gesture.ts";
 import { prepareSelectionHaptic, selectionHaptic } from "./haptics.ts";
 import { MobileNavigation } from "./mobile-navigation.tsx";
@@ -65,13 +62,6 @@ type Breakpoint = "sm" | "md" | "lg" | "xl" | number;
 const BOTTOM_PAD = "max(calc(env(safe-area-inset-bottom, 0px) - 22px), 6px)";
 const SPATIAL_PHONE_WIDTH = "min(84%, 360px)";
 const SPATIAL_TABLET_WIDTH = "min(64%, 560px)";
-
-function barTopPadding(bottom: boolean, transparent: boolean): string | number {
-  if (!bottom) {
-    return "env(safe-area-inset-top, 0px)";
-  }
-  return transparent ? 0 : BOTTOM_PAD;
-}
 
 /** Handed to the `nav` render-prop so the body can drive the shell. */
 export interface NavShellApi {
@@ -113,21 +103,6 @@ export interface NavShellProps {
    *  and the bar owns the home-indicator inset instead of the notch. Apps gate
    *  this on their own mobile tier — desktop is best left "top". */
   readonly barPosition?: "top" | "bottom";
-  /** Opt-in (default OFF). When true the bar is an iOS-style frosted-glass
-   *  OVERLAY that content scrolls UNDER, not a solid flex sibling: it's pinned
-   *  absolute to its edge over the content region, and its rendered height is
-   *  published as `--shell-bar-h` on that region so the app's scrollers can
-   *  reserve space (`padding-{top,bottom}: var(--shell-bar-h)`). OFF keeps the
-   *  unchanged solid-sibling bar. */
-  readonly barFrosted?: boolean;
-  /** Opt-in (default OFF). Only meaningful together with `barFrosted`. Keeps the
-   *  frosted OVERLAY POSITIONING (absolute, pinned, height still published as
-   *  `--shell-bar-h`) but renders NO background and NO backdrop-filter — the bar
-   *  is fully transparent. Use this when the HOST draws ONE frosted slab behind
-   *  BOTH this bar and an adjacent surface pinned right above it (e.g. a media
-   *  transport), so the two read as a SINGLE pane of glass instead of two
-   *  separately-frosted layers that sample different content and never match. */
-  readonly barTransparent?: boolean;
   /** The main content area. */
   readonly children: ReactNode;
 }
@@ -158,8 +133,6 @@ export function NavShell(props: NavShellProps): ReactNode {
     navigationActions,
     spatialAccessory,
     barPosition = "top",
-    barFrosted = false,
-    barTransparent = false,
     children,
   } = props;
   const bottom = barPosition === "bottom";
@@ -173,50 +146,33 @@ export function NavShell(props: NavShellProps): ReactNode {
   const spatial = isMobile && mobilePresentation === "sidebar";
   const labels = useShellLabels();
 
-  // Frosted overlay: measure the bar's RENDERED height (it varies with the
-  // safe-area inset, dynamic title content, and rotation) and publish it as
-  // `--shell-bar-h` on the content region, so the app's scrollers can pad by an
-  // always-exact value rather than a guessed constant. A ResizeObserver keeps it
-  // live; off (the solid path) neither ref is wired, so this costs nothing.
+  // The bottom bar's height, published on the shell root for the spatial
+  // drawer's stationary companion, which sits just above the bar (the rest of
+  // the dock travels with the translated reader).
   const barRef = useRef<HTMLElement | null>(null);
-  const contentRef = useRef<HTMLDivElement | null>(null);
+  const spatialRootRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (!barFrosted) {
-      return;
-    }
     const barEl = barRef.current;
-    const contentEl = contentRef.current;
-    if (!barEl || !contentEl) {
+    const rootEl = spatialRootRef.current;
+    if (!bottom || !barEl || !rootEl) {
       return;
     }
     const publish = (): void => {
-      const h = `${barEl.offsetHeight}px`;
-      contentEl.style.setProperty("--shell-bar-h", h);
-      // Also mirror onto the document root: a fixed overlay rendered OUTSIDE the
-      // content region (e.g. an app's ambient bottom strip that must sit ABOVE
-      // this bar) can't inherit the region-scoped var, so it reads the mirror.
-      // Cleared on unmount so a later view (no bar) doesn't see a stale height.
-      document.documentElement.style.setProperty("--shell-bar-h", h);
+      rootEl.style.setProperty("--shell-bar-h", `${barEl.offsetHeight}px`);
     };
     publish();
     const ro = new ResizeObserver(publish);
     ro.observe(barEl);
     return () => {
       ro.disconnect();
-      // Clear BOTH copies. The content region survives a switch back to the
-      // solid bar (e.g. rotating out of the bottom-bar tier), and a stale
-      // region-scoped value there kept every scroller padding for an overlay
-      // bar that no longer exists.
-      contentEl.style.removeProperty("--shell-bar-h");
-      document.documentElement.style.removeProperty("--shell-bar-h");
+      rootEl.style.removeProperty("--shell-bar-h");
     };
-  }, [barFrosted]);
+  }, [bottom]);
 
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => loadCollapsed(appKey));
   const mobileOpenRef = useRef(mobileOpen);
   mobileOpenRef.current = mobileOpen;
-  const spatialRootRef = useRef<HTMLDivElement | null>(null);
   const spatialSurfaceRef = useRef<HTMLDivElement | null>(null);
   const spatialDrawerRef = useRef<HTMLDivElement | null>(null);
   const spatialMaskRef = useRef<HTMLDivElement | null>(null);
@@ -393,6 +349,102 @@ export function NavShell(props: NavShellProps): ReactNode {
     );
   }
 
+  const header = (
+    <Box
+      component="header"
+      ref={barRef}
+      data-lv-shell-bar="true"
+      sx={{
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        gap: 0.5,
+        // Keep the end buttons off the rounded display corners and a
+        // landscape notch: the safe-area inset, floored to 12 px on phones and
+        // 20 px on tablets, where the corner controls are hardest to hit.
+        pl: {
+          xs: "max(env(safe-area-inset-left, 0px), 12px)",
+          sm: "max(env(safe-area-inset-left, 0px), 20px)",
+        },
+        pr: {
+          xs: "max(env(safe-area-inset-right, 0px), 12px)",
+          sm: "max(env(safe-area-inset-right, 0px), 20px)",
+        },
+        position: "relative",
+        zIndex: (t) => t.zIndex.appBar,
+        ...(bottom
+          ? {
+            // Pure padding model: no minimum height, so nothing is centred
+            // into leftover space above the controls.
+            pt: BOTTOM_PAD,
+            pb: BOTTOM_PAD,
+            bgcolor: "background.default",
+            borderTop: 1,
+            borderColor: "divider",
+            // Under an accessory (the transport) the bar continues the same
+            // row group: no seam and no top padding between the two.
+            '[data-lv-dock-slot="accessory"]:not(:empty) ~ &': { pt: 0, borderTop: 0 },
+          }
+          : {
+            // The top bar owns the notch and floats over content with an
+            // elevation shadow.
+            minHeight: 48,
+            pt: "env(safe-area-inset-top, 0px)",
+            bgcolor: "background.paper",
+            boxShadow: 3,
+          }),
+      }}
+    >
+    <Tooltip title={toggleLabel}>
+      {
+        /* Primary mobile nav opener — 40px target on iPhone, compact 36 on
+        desktop. On the tablet tier (sm=600+, i.e. iPad) raise it to 48 to
+        MATCH the settings gear (see SettingsSheet): both end controls sit
+        in the display's bottom rounded corners, where a 40px target is
+        hard to hit. The gear got this bump; the symmetric left ≡ must too,
+        or the bottom-left corner stays awkward to tap on iPad. */
+      }
+      <IconButton
+        aria-label={toggleLabel}
+        onClick={onToggle}
+        size="small"
+        sx={{
+          width: { xs: 40, sm: 48, lg: 36 },
+          height: { xs: 40, sm: 48, lg: 36 },
+        }}
+      >
+        {toggleIcon}
+      </IconButton>
+    </Tooltip>
+    {!isMobile && onBack && backLabel && (
+      <Button
+        onClick={onBack}
+        endIcon={<Typography color="text.disabled">/</Typography>}
+        sx={{
+          minWidth: 0,
+          px: 0.5,
+          textTransform: "none",
+          color: "text.secondary",
+        }}
+      >
+        {backLabel}
+      </Button>
+    )}
+    {titleSlot}
+    <Box
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        gap: 0.5,
+        flexShrink: 0,
+      }}
+    >
+      {actions}
+      {!isMobile && navigationActions}
+    </Box>
+    </Box>
+  );
+
   return (
     <Box
       ref={spatialRootRef}
@@ -466,169 +518,14 @@ export function NavShell(props: NavShellProps): ReactNode {
           contain: spatial ? "paint" : undefined,
         }}
       >
-        <Box
-          component="header"
-          ref={barFrosted ? barRef : undefined}
-          data-lv-shell-bar="true"
-          sx={{
-            flexShrink: 0,
-            // Bottom mode flips the bar below the content via flex order (one
-            // bar, not a second element), so reading order in the DOM is stable.
-            // (Frosted overrides position to absolute below; `order` is harmless
-            // on an absolute box and keeps the non-frosted path untouched.)
-            order: bottom ? 2 : 0,
-            display: "flex",
-            alignItems: "center",
-            gap: 0.5,
-            // Keep the end buttons (menu / actions) off the screen edge so they
-            // clear the display's rounded corners and a landscape notch — pull in
-            // the safe-area inset, floored to a comfortable 12px in portrait.
-            // On the tablet tier (sm=600+, i.e. iPad) raise the floor to 20px so
-            // the end controls (the settings gear especially) sit further from the
-            // rounded corner and are easier to hit; iPhone (<sm) and desktop keep
-            // 12px. Safe-area flooring semantics unchanged (ui.md §7).
-            pl: {
-              xs: "max(env(safe-area-inset-left, 0px), 12px)",
-              sm: "max(env(safe-area-inset-left, 0px), 20px)",
-            },
-            pr: {
-              xs: "max(env(safe-area-inset-right, 0px), 12px)",
-              sm: "max(env(safe-area-inset-right, 0px), 20px)",
-            },
-            // Vertical sizing is a PURE PADDING model for the bottom bar: height =
-            // pt + content + pb, no minHeight floor. The controls are their own tap
-            // targets (IconButtons ≥40px, ui.md §7), so a bar minHeight only ever
-            // ADDED problems — with alignItems:center it centred the content in the
-            // leftover 48px and left a gap ABOVE it (toward a transport sharing the
-            // slab) even with pt:0. Dropping it makes the layout predictable and
-            // kills that gap at the root; alignItems:center stays, but now only for
-            // cross-item alignment (a 2-line title vs the icons) — no leftover space
-            // to distribute, so no gap. The TOP bar (desktop) keeps the 48px floor.
-            ...(bottom ? {} : { minHeight: 48 }),
-            // Separator: a top bar floats over the content (Material elevation,
-            // shadow falling down). A BOTTOM bar gets a flat 1px divider instead —
-            // an upward drop-shadow there reads heavy and muddy over the reading
-            // surface; a hairline rule is the cleaner, calmer cut. position+zIndex
-            // so a top bar's shadow paints over the content (flex siblings would
-            // otherwise share a layer).
-            zIndex: (t) => t.zIndex.appBar,
-            // Top bar owns the notch (pt only). Bottom bar is padded symmetrically
-            // (see bottomPad) so its content is vertically centred and clears the
-            // home indicator — EXCEPT when a transport rides directly above it in
-            // ONE shared slab (`barTransparent`): then drop the top pad so the nav
-            // row hugs the transport instead of leaving a seam-like gap between the
-            // two control rows (the transport carries its own bottom breathing room).
-            pt: barTopPadding(bottom, barTransparent),
-            pb: bottom ? BOTTOM_PAD : 0,
-            ...(barFrosted
-              ? {
-                // Frosted overlay: pin the bar absolute to its edge OVER the
-                // (position:relative) content region, so the scroller fills
-                // full-height under it. Milky tint + blur 30 / saturate 200 read as
-                // thick frosted glass (not a clear pane) over a busy text column —
-                // and let a same-recipe frosted surface stacked right above it (an
-                // app's transport) blend into ONE continuous slab. A BOTTOM bar
-                // therefore carries NO border: a hairline would re-introduce the
-                // seam the single glass look removes. background.default (the page
-                // bg the text sits on), not paper.
-                position: "absolute",
-                left: 0,
-                right: 0,
-                ...(bottom ? { bottom: 0 } : { top: 0 }),
-                // `barTransparent`: the HOST owns a single frosted slab behind both
-                // this bar and the surface above it, so the bar itself must add NO
-                // tint/backdrop of its own (two backdrop-filters never match — they
-                // sample different content). Keep the positioning, drop the glass.
-                ...(barTransparent ? {} : {
-                  // Near-opaque so the reading text does NOT bleed through and
-                  // clash with the bar's controls (the old 0.72/0.76 showed through
-                  // on warm / low-contrast pages).
-                  //
-                  // NO backdrop-filter: a blur here is a SCROLL-PERF trap. As the
-                  // reader scrolls UNDER this fixed bar, a backdrop-filter must
-                  // re-blur the moving content every frame — and at this opacity
-                  // the blurred result is invisible anyway (the ~0.95 tint covers
-                  // it), so it was pure wasted per-frame GPU work that dropped
-                  // frames while scrolling. The opaque tint alone hides the page;
-                  // the blur bought nothing. Fully opaque: even a 4% tint left
-                  // scrolling text ghosting under the chapter title, and an
-                  // opaque layer is also the cheapest to composite.
-                  bgcolor: "background.default",
-                  ...(bottom ? { borderTop: 1, borderColor: "divider" } : {}),
-                }),
-                // Top bar keeps its downward elevation shadow to mark the edge; a
-                // bottom bar stays flat with a hairline edge.
-                boxShadow: bottom ? "none" : 3,
-              }
-              : {
-                position: "relative",
-                bgcolor: "background.paper",
-                boxShadow: bottom ? "none" : 3,
-                ...(bottom ? { borderTop: 1, borderColor: "divider" } : {}),
-              }),
-          }}
-        >
-          <Tooltip title={toggleLabel}>
-            {
-              /* Primary mobile nav opener — 40px target on iPhone, compact 36 on
-              desktop. On the tablet tier (sm=600+, i.e. iPad) raise it to 48 to
-              MATCH the settings gear (see SettingsSheet): both end controls sit
-              in the display's bottom rounded corners, where a 40px target is
-              hard to hit. The gear got this bump; the symmetric left ≡ must too,
-              or the bottom-left corner stays awkward to tap on iPad. */
-            }
-            <IconButton
-              aria-label={toggleLabel}
-              onClick={onToggle}
-              size="small"
-              sx={{
-                width: { xs: 40, sm: 48, lg: 36 },
-                height: { xs: 40, sm: 48, lg: 36 },
-              }}
-            >
-              {toggleIcon}
-            </IconButton>
-          </Tooltip>
-          {!isMobile && onBack && backLabel && (
-            <Button
-              onClick={onBack}
-              endIcon={<Typography color="text.disabled">/</Typography>}
-              sx={{
-                minWidth: 0,
-                px: 0.5,
-                textTransform: "none",
-                color: "text.secondary",
-              }}
-            >
-              {backLabel}
-            </Button>
-          )}
-          {titleSlot}
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              gap: 0.5,
-              flexShrink: 0,
-            }}
-          >
-            {actions}
-            {!isMobile && navigationActions}
-          </Box>
-        </Box>
+        {!bottom && header}
 
         <Box
-          ref={barFrosted ? contentRef : undefined}
           sx={{
-            order: bottom ? 1 : 0,
             display: "flex",
             flex: 1,
             minHeight: 0,
             overflow: "hidden",
-            // Frosted: this region is the bar's positioning context (the bar is
-            // absolute within it) AND carries the published --shell-bar-h that the
-            // app's scrollers pad by. The solid path leaves it static (unchanged).
-            ...(barFrosted ? { position: "relative" } : {}),
           }}
         >
           {sidebarShown && (
@@ -672,9 +569,11 @@ export function NavShell(props: NavShellProps): ReactNode {
               display: "flex",
               flexDirection: "column",
               overflow: "hidden",
+              // The dock's positioning context and `--lv-dock-h` host.
+              position: "relative",
             }}
           >
-            {children}
+            <BottomDock bar={bottom ? header : undefined}>{children}</BottomDock>
           </Box>
         </Box>
         {spatial && (

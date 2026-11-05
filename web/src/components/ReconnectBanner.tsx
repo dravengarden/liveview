@@ -13,9 +13,8 @@ export function ReconnectBanner(): ReactNode {
       store={connectionStore}
       updateLabel={t("pwa.update")}
       updateFailedLabel={t("pwa.updateFailed")}
-      // Above whichever bottom chrome is mounted: the reader's nav bar and
-      // transport, or the shelf toolbar, plus the sync strip.
-      updateBottomOffset="calc(var(--shell-bar-h, 0px) + var(--lv-transport-h, 0px) + var(--lv-toolbar-h, 0px) + var(--lv-syncbar-h, 0px))"
+      // Above the visible surface's bottom dock.
+      updateBottomOffset="var(--lv-dock-max-h, 0px)"
     />
   );
 }

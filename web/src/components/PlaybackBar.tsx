@@ -26,6 +26,7 @@ import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
 import { PlaybackPreparation } from "./PlaybackPreparation";
 import { playbackControls } from "@/signals.ts";
+import { DockPortal } from "@/_shell/bottom-dock.tsx";
 
 /** Read-along follow control for the host reader (audiobook page OR the in-place
  *  text read-aloud). The bar renders the toggle; the host owns the scroll. */
@@ -36,8 +37,8 @@ export interface PlaybackFollow {
 }
 
 interface PlaybackBarProps {
-  /** True when a bottom nav bar sits below us and already owns the home-indicator
-   *  safe area, so the bar drops its own bottom inset (no doubled gap). */
+  /** True when the dock's bar sits below us and already owns the
+   *  home-indicator safe area, so the transport drops its own bottom inset. */
   navbarAtBottom?: boolean | undefined;
   /** Follow toggle for the host reader; omit to hide the follow affordance. */
   follow?: PlaybackFollow | undefined;
@@ -47,13 +48,11 @@ interface PlaybackBarProps {
  *  the controls sit vertically centred (symmetric whitespace). */
 const SLAB_PAD_Y = 0.75;
 
-/** The shared playback transport — a frosted bar pinned over the bottom of the
- *  reading surface. ONE bar for BOTH the audiobook read-along and the in-place
- *  text read-aloud, so book + audiobook playback look and behave identically. All
- *  playback state comes from the root audio engine; the only host-specific bit is
- *  the follow toggle (the host owns its own scroller). The bar publishes its
- *  measured height as `--lv-transport-h` on its positioned ancestor, so that
- *  ancestor's scroller can reserve foot space for it. */
+/** The shared playback transport, rendered as the accessory row of the
+ *  surface's bottom dock. ONE transport for BOTH the audiobook read-along and
+ *  the in-place text read-aloud. All playback state comes from the root audio
+ *  engine; the only host-specific bit is the follow toggle (the host owns its
+ *  own scroller). The dock's `--lv-dock-h` already includes this row. */
 export function PlaybackBar(
   { navbarAtBottom = false, follow }: PlaybackBarProps,
 ): React.JSX.Element {
@@ -74,34 +73,20 @@ export function PlaybackBar(
   const scrub = useScrubber(currentTime, seek);
 
   const transportRef = useRef<HTMLDivElement>(null);
-  // ONE row (scrubber + controls together) when wide enough, else TWO rows.
-  // Measured off the bar's OWN width (not the viewport — in the desktop popup it's
-  // only the right pane). The switch changes height not width → no feedback loop.
+  // ONE row (scrubber + controls together) when wide enough, else TWO rows,
+  // measured off the transport's own width (the dock may be only the content
+  // column beside a desktop sidebar). The switch changes height, not width, so
+  // there is no feedback loop.
   const [oneRow, setOneRow] = useState(false);
   useLayoutEffect(() => {
     const el = transportRef.current;
-    const host = el?.offsetParent as HTMLElement | null;
-    if (!el || !host) return;
-    const ONE_ROW_MIN = 680; // px of bar width that comfortably fits one row
-    const publish = (): void => {
-      const h = `${el.offsetHeight}px`;
-      host.style.setProperty("--lv-transport-h", h);
-      // Mirror onto the document root so a fixed overlay outside the reader (the
-      // SyncIndicator strip, which sits ABOVE the transport) can offset by it.
-      document.documentElement.style.setProperty("--lv-transport-h", h);
-      setOneRow(el.clientWidth >= ONE_ROW_MIN);
-    };
-    publish();
-    const ro = new ResizeObserver(publish);
+    if (!el) return;
+    const ONE_ROW_MIN = 680; // px of width that comfortably fits one row
+    const measure = (): void => setOneRow(el.clientWidth >= ONE_ROW_MIN);
+    measure();
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    return () => {
-      ro.disconnect();
-      // Reset, else the reserved foot space lingers after the bar unmounts (the
-      // text reader mounts/unmounts the bar as read-aloud starts/stops — the
-      // audiobook page keeps it mounted, so this only bites the in-place case).
-      host.style.removeProperty("--lv-transport-h");
-      document.documentElement.style.removeProperty("--lv-transport-h");
-    };
+    return () => ro.disconnect();
   }, []);
 
   // Accumulating rotation for the skip glyphs: each tap adds ∓360°, the CSS
@@ -263,61 +248,18 @@ export function PlaybackBar(
   );
 
   return (
-    <>
-      {
-        /* ONE material slab spans this transport AND the bottom nav bar right
-          below it. The bar renders bare (NavShell `barTransparent`) over the
-          slab's bottom `--shell-bar-h`, so both controls remain one continuous
-          surface without a seam. This slab travels with the complete reader
-          surface and remains visible while that surface follows a spatial
-          drawer gesture. Once the drawer settles open, its compact stationary
-          playback entry supplements the translated transport. Height tracks
-          the measured transport (`--lv-transport-h`) + the bar
-          (`--shell-bar-h`; 0 on desktop, where the bar is a top sibling and
-          this is just the transport's own material). */
-      }
-      <Box
-        aria-hidden
-        data-lv-playback-bar="true"
-        sx={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          bottom: 0,
-          height: "calc(var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
-          borderTop: 1,
-          borderColor: "divider",
-          // Near-opaque, matching the top chrome: the controls sit on the page,
-          // so the reading text must NOT bleed through and clash with them.
-          // NO backdrop-filter: a blur on this full-width slab is a scroll-perf
-          // trap — as the reader scrolls under it, the blur re-rasterizes the
-          // moving content every frame, and at ~0.95 opacity the blurred result
-          // is invisible anyway (the tint covers it), so it just dropped frames
-          // for nothing. Fully opaque: a 4% tint still let the read-along text
-          // ghost behind the scrubber and buttons.
-          bgcolor: "background.default",
-          pointerEvents: "none",
-        }}
-      />
+    <DockPortal slot="accessory">
       <Box
         ref={transportRef}
         data-lv-playback-bar="true"
         sx={{
-          position: "absolute",
-          left: 0,
-          right: 0,
-          bottom: "var(--shell-bar-h, 0px)",
-          // No glass of its own — the slab above provides it, so the transport
-          // and the nav bar read as ONE pane with no seam.
+          // The dock is the material; this row only draws its top edge.
+          borderTop: 1,
+          borderColor: "divider",
           pl: "max(env(safe-area-inset-left, 0px), 12px)",
           pr: "max(env(safe-area-inset-right, 0px), 12px)",
-          // pt gives the controls breathing room below the slab's top edge. pb:
-          // when the nav bar sits DIRECTLY below in the same slab (navbarAtBottom)
-          // the two read as one panel, so drop the transport's bottom pad to 0 —
-          // the controls keep their own breathing from the row's minHeight, and
-          // the nav bar (its top pad already 0) hugs right under them instead of
-          // leaving a seam-like gap. With no nav bar below (desktop) keep the
-          // home-indicator-aware bottom pad.
+          // Symmetric breathing room; with the bar directly below in the same
+          // dock, the bar drops its own top padding instead.
           pt: SLAB_PAD_Y,
           pb: navbarAtBottom
             ? 0
@@ -374,6 +316,6 @@ export function PlaybackBar(
             </>
           )}
       </Box>
-    </>
+    </DockPortal>
   );
 }

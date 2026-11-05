@@ -511,10 +511,17 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /backdropFilter|WebkitBackdropFilter|\bfilter:/,
     "the spatial playback companion",
   );
+  const bottomDock = await source("_shell/bottom-dock.tsx");
+  assertPresent(
+    bottomDock,
+    /data-lv-dock[\s\S]{0,700}bgcolor: "background\.default"/,
+    "the bottom dock must be one opaque material behind its strip, transport and bar",
+  );
+  assertAbsent(bottomDock, backdropFilter, "bottom dock");
   assertPresent(
     playbackBar,
-    /aria-hidden[\s\S]{0,80}data-lv-playback-bar="true"[\s\S]{0,300}height: "calc\(var\(--lv-transport-h, 0px\) \+ var\(--shell-bar-h, 0px\)\)"/,
-    "playback must retain a shared material behind the transport and bottom navigation",
+    /<DockPortal slot="accessory">[\s\S]{0,120}data-lv-playback-bar="true"/,
+    "playback must render inside the dock's shared material, above the bottom navigation",
   );
   assertPresent(
     playbackBar,

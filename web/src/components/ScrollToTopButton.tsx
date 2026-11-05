@@ -16,11 +16,9 @@ const SHOW_AFTER_PX = 700;
  * the top. Positioned `absolute`, so it must live inside a `position: relative`
  * content area.
  *
- * `bottomLift` is added to the button's bottom offset so it rides ABOVE a
- * frosted bottom bar that now OVERLAYS the same content area (the bar used to be
- * a flex sibling below this area, which lifted the FAB for free; as an overlay
- * it no longer does). Pass the bar's height var, e.g. `var(--lv-toolbar-h, 0px)`
- * (bookshelf) or `var(--shell-bar-h, 0px)` (reader); 0 keeps the old placement.
+ * `bottomLift` is added to the button's bottom offset so it rides above the
+ * surface's bottom dock, which overlays the same content area: pass
+ * `var(--lv-dock-h, 0px)`; 0 keeps the plain placement.
  */
 export function ScrollToTopButton(
   { targetRef, bottomLift = "0px" }: {

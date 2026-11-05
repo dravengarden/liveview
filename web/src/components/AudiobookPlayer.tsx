@@ -294,9 +294,7 @@ export function AudiobookPlayer(
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
-        // The <PlaybackBar> is a frosted overlay pinned to this box's bottom, so
-        // this is its positioning context (already relative) and carries the
-        // published --lv-transport-h the scroller pads by.
+        // Positioning context for the scroll-to-top button.
         position: "relative",
       }}
     >
@@ -323,16 +321,11 @@ export function AudiobookPlayer(
           overflowY: "auto",
           px: `${contentMaxWidth}px`,
           pt: 4,
-          // Foot space clears BOTH overlays the read-along scrolls under: the
-          // frosted transport pinned to this box's bottom (--lv-transport-h) and
-          // the NavShell frosted bar below it (--shell-bar-h). Both are 0 before
-          // measured / on the solid (desktop) path, leaving the base py:4.
-          pb:
-            "calc(32px + var(--lv-syncbar-h, 0px) + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
-          // Keep follow-mode centring (block:"center") and a sentence tap from
-          // parking the spoken line UNDER the transport when it's near the end.
-          scrollPaddingBottom:
-            "calc(var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
+          // The read-along scrolls under the bottom dock (strip, transport,
+          // bar): clear it at the end, and keep follow-mode centring from
+          // parking the spoken line under it.
+          pb: "calc(32px + var(--lv-dock-h, 0px))",
+          scrollPaddingBottom: "var(--lv-dock-h, 0px)",
         }}
       >
         <Box
@@ -388,12 +381,11 @@ export function AudiobookPlayer(
       {
         /* Reliable "back to chapter top": iOS reserves the status-bar tap (and it
           never reaches an inner scroll container anyway), so the read-along needs
-          the same explicit FAB the text reader has. Lifted above BOTH the
-          transport (--lv-transport-h) and the nav bar (--shell-bar-h). */
+          the same explicit FAB the text reader has, lifted above the dock. */
       }
       <ScrollToTopButton
         targetRef={scrollRef}
-        bottomLift="calc(var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))"
+        bottomLift="var(--lv-dock-h, 0px)"
       />
 
       <ReadAlongWipe

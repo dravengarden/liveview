@@ -501,7 +501,7 @@ export function MarkdownViewer({
   //    so the diagram (text included) grows with the reading font WITHOUT a
   //    mermaid re-layout. Cheap — no re-measure, no re-render.
   //
-  // The root's `style` also carries unrelated CSS vars (--shell-bar-h, … ) that
+  // The root's `style` also carries unrelated CSS vars (--lv-dock-max-h, … ) that
   // churn often, so guard on the resolved scheme/px actually changing.
   useEffect(() => {
     const root = document.documentElement;
@@ -993,23 +993,15 @@ export function MarkdownViewer({
             overflow: "auto",
             // Vertical padding fixed; horizontal padding IS the reading margin.
             pt: { xs: 2, md: 4 },
-            // Foot padding ADDS the two frosted overlays the text scrolls under:
-            // the read-aloud <PlaybackBar> (--lv-transport-h; 0 unless read-aloud
-            // is on this chapter) and the NavShell bar below it (--shell-bar-h;
-            // mobile tier only, 0 on desktop / before measured) — on top of the
-            // base breathing room, so the last paragraph clears both yet the text
-            // still scrolls UNDER them. Restore-by-ratio is unaffected (it reads
-            // scrollHeight after this padding is in).
+            // The text scrolls under the bottom dock (strip, read-aloud
+            // transport, bar): the foot padding clears it, and scroll padding
+            // keeps the read-aloud follow from parking the spoken sentence
+            // under it. Restore-by-ratio reads scrollHeight after this padding.
             pb: {
-              xs:
-                "calc(16px + var(--lv-syncbar-h, 0px) + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
-              md:
-                "calc(32px + var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
+              xs: "calc(16px + var(--lv-dock-h, 0px))",
+              md: "calc(32px + var(--lv-dock-h, 0px))",
             },
-            // Keep the spoken-line auto-centre (read-aloud follow) from parking the
-            // narrated sentence UNDER the bar near the chapter's end.
-            scrollPaddingBottom:
-              "calc(var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))",
+            scrollPaddingBottom: "var(--lv-dock-h, 0px)",
             px: `${contentMaxWidth}px`,
             "& img": {
               cursor: "zoom-in",
@@ -1089,16 +1081,12 @@ export function MarkdownViewer({
           )}
         </Box>
         {
-          /* Back-to-top — absolute within this relative wrapper. Lift it above
-          BOTH frosted overlays this area scrolls under: the read-aloud transport
-          (--lv-transport-h; 0 unless read-aloud is on this chapter) and the nav
-          bar below it (--shell-bar-h; 0 on the solid/desktop path). Same lift the
-          audiobook reader (AudiobookPlayer) uses, so the FAB sits identically in
-          both playback modes. */
+          /* Back-to-top — absolute within this relative wrapper, lifted above
+          the bottom dock, as in the audiobook reader. */
         }
         <ScrollToTopButton
           targetRef={containerRef}
-          bottomLift="calc(var(--lv-transport-h, 0px) + var(--shell-bar-h, 0px))"
+          bottomLift="var(--lv-dock-h, 0px)"
         />
         {
           /* (The floating "Back to narration" pill was removed — the transport's

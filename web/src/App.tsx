@@ -316,17 +316,6 @@ export function App(): React.JSX.Element {
     ? nowPlaying.chapterPath
     : null;
 
-  // Is the shared <PlaybackBar> transport currently mounted over the reader? It
-  // is on the audio rendition page (AudiobookPlayer always shows it) AND while
-  // text read-aloud narrates THIS chapter (MarkdownViewer mounts it then). When
-  // it is, the transport draws ONE frosted slab spanning itself + the bottom nav
-  // bar, so the nav bar must render bare (barTransparent) to avoid a second,
-  // mismatched frosted layer.
-  const transportShown = (activeRendition?.kind === "audio" &&
-    currentPath != null) ||
-    (nowPlaying?.rendition === "text" &&
-      nowPlaying.chapterPath === currentPath);
-
   // Fetch the book list once, for the landing page + language switcher.
   useEffect(() => {
     void (async () => {
@@ -910,18 +899,9 @@ export function App(): React.JSX.Element {
               navTitle={t("sidebar.contents")}
               backLabel={t("sidebar.bookshelf")}
               onBack={backToLanding}
+              // Compact tier: the bar is the last row of the reader's bottom
+              // dock, sharing its material with the strip and transport.
               barPosition={navbarAtBottom ? "bottom" : "top"}
-              // Frosted-overlay bar ONLY on the compact (bottom-bar) tier, where
-              // the reader runs full-height and content scrolls under the bar
-              // (iOS-style). On desktop the bar is a top sibling above a
-              // persistent sidebar, so it stays the solid flex sibling — a
-              // frosted desktop bar would also float over the sidebar. The
-              // reader scroller pads itself by --shell-bar-h (index.css).
-              barFrosted={navbarAtBottom}
-              // While the transport is mounted it owns a single frosted slab
-              // behind both itself and this bar, so the bar renders bare (one pane
-              // of glass, no seam). Otherwise the bar keeps its own frost.
-              barTransparent={navbarAtBottom && transportShown}
               // The translated reader leaves only a narrow trailing rail while
               // Contents is open. Keep one stationary playback entry there even
               // when no player session is loaded yet; the full transport remains
@@ -1067,12 +1047,7 @@ export function App(): React.JSX.Element {
                     footer={chapterPager}
                   />
                 )}
-              {
-                /* Inside the reader surface, not at the root: the spatial
-                  Contents drawer translates this surface, and the strip is the
-                  top segment of the same bottom slab as the bar and transport,
-                  so it must travel with them instead of staying full-width. */
-              }
+              {/* Joins the reader's dock (it travels with the translated surface). */}
               <SyncIndicator bookSlug={activeSlug} />
             </NavShell>
           )}
@@ -1088,12 +1063,6 @@ export function App(): React.JSX.Element {
         suppressed={readingThisInPlace}
         onOpenControls={() => playbackControls.emit()}
       />
-      {
-        /* Ambient background-work indicator (audio generation + offline prefetch)
-          → the Sync sheet. Low-weight; only shows while something is in flight.
-          The shelf mounts it here; the reader mounts it inside NavShell. */
-      }
-      {activeSlug === null && <SyncIndicator bookSlug={null} />}
       {
         /* Desktop keyboard-shortcut cheat-sheet (opened with `?`). The Dialog
           renders nothing while closed; on touch it never opens (the `?` handler
