@@ -371,7 +371,7 @@ async fn ensure_chapter_audio(
     state: &AppState,
     row: &ChapterRecord,
 ) -> Result<(String, String), String> {
-    let voice = crate::speech_http::default_voice(state, row).await?;
+    let voice = crate::http::speech_api::default_voice(state, row).await?;
     if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash)
         && row.audio_voice.as_deref() == Some(&voice)
     {
@@ -429,7 +429,7 @@ async fn ensure_text_audio(
         .ok()
         .flatten()
         .ok_or("chapter not found")?;
-    let voice = crate::speech_http::default_voice(state, &row).await?;
+    let voice = crate::http::speech_api::default_voice(state, &row).await?;
     if let (Some(a), Some(m)) = (&row.audio_hash, &row.marks_hash)
         && row.audio_voice.as_deref() == Some(&voice)
     {

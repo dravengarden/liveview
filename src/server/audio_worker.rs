@@ -232,7 +232,7 @@ async fn generate(
     // CAF is the canonical audio asset: its blake3 is both the database pointer
     // and the exact byte hash clients mirror through /api/dag. The synthesized
     // MP3 exists only as an in-memory encoder input and is never persisted.
-    let caf = crate::audio_http::encode_speech_audio(mp3, &task.voice).await?;
+    let caf = crate::http::audio::encode_speech_audio(mp3, &task.voice).await?;
     let audio_hash = put_blob(pg, obj, caf, crate::AUDIO_VARIANT.mime).await?;
     let marks_hash = put_blob(pg, obj, marks_json, "application/json").await?;
     let recorded = pg

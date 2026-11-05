@@ -29,7 +29,7 @@ async fn contents(
     if tree.is_empty() {
         return Ok(serde_json::json!([]));
     }
-    let catalog = speech_http::speech_book(state, slug).await?;
+    let catalog = speech_api::speech_book(state, slug).await?;
     let mut chapters: Vec<_> = catalog["chapters"]
         .as_array()
         .into_iter()

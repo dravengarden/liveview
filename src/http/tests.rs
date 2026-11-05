@@ -2,7 +2,10 @@
 //! store-error propagation, DAG query encoding, and APM credential routing.
 
 use super::*;
+use crate::config::implicit_resolved;
+use crate::server::catalog::Catalog;
 use crate::server::catalog::{BookMeta, EditionMeta, RenditionMeta};
+use crate::server::state::ApmSink;
 use crate::store::content::{BlobStore, ContentStore};
 use crate::store::fs::FsStore;
 use crate::store::model::{
@@ -10,6 +13,8 @@ use crate::store::model::{
     ManifestChapter, RenditionRecord,
 };
 use crate::store::range::{RangeSpec, RangedBlob};
+use std::sync::Arc;
+use tokio::sync::{RwLock, broadcast};
 use tower::ServiceExt;
 
 fn state_over(

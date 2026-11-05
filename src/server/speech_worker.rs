@@ -92,7 +92,7 @@ async fn generate(
             .collect()
     };
     let (mp3, marks) = audio::synthesize(command, &job.recipe, &texts).await?;
-    let caf = crate::audio_http::encode_speech_audio(mp3, &job.recipe).await?;
+    let caf = crate::http::audio::encode_speech_audio(mp3, &job.recipe).await?;
     let audio = put_blob(pg, obj, caf, crate::AUDIO_VARIANT.mime).await?;
     let marks = put_blob(
         pg,

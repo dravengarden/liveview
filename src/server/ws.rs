@@ -60,7 +60,7 @@ async fn handle_ws(socket: WebSocket, state: SharedState) {
         // = server restart = every client reconnects = a fresh push, so the native
         // shell picks up a new web bundle instantly (it runs the OTA check on
         // receipt). `None` in dev builds (no embedded bundle) → nothing to push.
-        if let Some(version) = crate::app_version()
+        if let Some(version) = crate::http::app_version()
             && let Ok(json) = serde_json::to_string(&WsMessage::AppVersion { version })
             && sender.send(Message::Text(json.into())).await.is_err()
         {
