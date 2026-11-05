@@ -1,8 +1,8 @@
 import { type RefObject, useCallback, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { fetchChapterResponse } from "@/contentLoad";
-import { contentFetch, isLikelyOffline } from "@/native-sync";
-import { readingOffline } from "@/hooks/useOfflineReading";
+import { isLikelyOffline, readingOffline } from "@/connectivity";
+import { contentFetch } from "@/native-sync";
 import { resolveFirstChapter } from "@/readerTree";
 import type { FileType } from "@/types";
 import {

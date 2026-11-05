@@ -1,14 +1,6 @@
 import { useEffect, useState } from "react";
-import { isLikelyOffline, onNativeNetworkClass } from "@/native-sync";
+import { onConnectivityChange, readingOffline } from "@/connectivity";
 import { storedTextPaths } from "@/replica/mod.ts";
-import { onServerReachability, serverReachability } from "@/serverReachability";
-
-/** Whether reads cannot reach the server: no network (airplane mode), or a
- *  network that does not lead to it (in-flight Wi-Fi before purchase, captive
- *  portals, an outage). Either way only downloaded content can open. */
-export function readingOffline(): boolean {
-  return isLikelyOffline() || serverReachability() === "unreachable";
-}
 
 /** {@link readingOffline}, kept current as connectivity changes. */
 export function useReadingOffline(): boolean {
@@ -16,16 +8,7 @@ export function useReadingOffline(): boolean {
   useEffect(() => {
     const update = (): void => setOffline(readingOffline());
     update();
-    globalThis.addEventListener("online", update);
-    globalThis.addEventListener("offline", update);
-    const offNetwork = onNativeNetworkClass(update);
-    const offServer = onServerReachability(update);
-    return () => {
-      globalThis.removeEventListener("online", update);
-      globalThis.removeEventListener("offline", update);
-      offNetwork();
-      offServer();
-    };
+    return onConnectivityChange(update);
   }, []);
   return offline;
 }

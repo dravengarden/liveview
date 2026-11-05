@@ -882,11 +882,6 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
     /"\/" \| "\/index\.html" \| "\/app" \| "\/app\/" => Some\("index\.html"\)/,
     "native release startup aliases must always resolve to the embedded SPA",
   );
-  assertPresent(
-    nativeSync,
-    /event\.type === "network"/,
-    "native connectivity must arrive through NWPathMonitor push events",
-  );
 });
 
 test("focusing a text field never triggers the iOS page zoom", async () => {

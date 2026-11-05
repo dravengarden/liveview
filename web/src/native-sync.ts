@@ -9,10 +9,11 @@
 // TypeScript IDB replica. `lvsync://localhost` remains the document origin and
 // thin host scheme (overlay / origins / host-info).
 
-import { nativeAudioRequestState, onNativeAudioEvent } from "./native-audio.ts";
 import { setAllowsCellular } from "./native-host.ts";
 import { remoteUrl } from "./apiBase.ts";
-import { pwaDownloadsEnabled, pwaNetworkAvailable, pwaOfflineAvailable } from "./pwa.ts";
+import { pwaDownloadsEnabled, pwaOfflineAvailable } from "./pwa.ts";
+import { nativeReportsOffline } from "./connectivity.ts";
+import { nativeSyncAvailable } from "./platform/shell.ts";
 import { downloadPolicy } from "./signals.ts";
 import {
   artworkBlobSrc,
@@ -23,13 +24,9 @@ import {
   replicaAudioIndex,
   replicaCacheStats,
   replicaContentFetch,
-  setReplicaOfflineProbe,
 } from "./replica/mod.ts";
 
-/** True only inside the native shell (thin `lvsync://` host is registered). */
-export function nativeSyncAvailable(): boolean {
-  return "__TAURI_INTERNALS__" in globalThis;
-}
+export { nativeSyncAvailable };
 
 export function offlineDownloadsAvailable(): boolean {
   return nativeSyncAvailable() || pwaOfflineAvailable();
@@ -47,7 +44,7 @@ export async function contentFetch(
     ...(opts?.connectMs !== undefined ? { connectMs: opts.connectMs } : {}),
     // Browser online hints can be false while this origin is reachable.
     // Only native reachability is authoritative enough to suppress reads.
-    offline: nativeSyncAvailable() && (isLikelyOffline() || nativeNetworkClass() === "none"),
+    offline: nativeReportsOffline(),
   });
 }
 
@@ -177,77 +174,6 @@ export interface NativeAudioResource {
 /** Audio/marks subset of the IDB replica path index. */
 export async function nativeAudioIndex(): Promise<NativeAudioResource[]> {
   return replicaAudioIndex();
-}
-
-/** Keep replica fail-fast in sync with connectivity.
- *
- *  Two signals, because `navigator.onLine` is unreliable in WKWebView (it often
- *  stays `true` in airplane mode):
- *   - navigator.onLine + online/offline events: instant WHEN they fire.
- *   - native NWPathMonitor push events: the reliable airplane-mode signal.
- */
-/** Last-known reliable offline state, kept fresh by NWPathMonitor events. Read
- *  this instead of `navigator.onLine`, which is unreliable
- *  in WKWebView (commonly stays `true` in airplane mode). */
-let knownOffline = false;
-export type NativeNetworkClass = "wifi" | "cell" | "none" | "unknown";
-let knownNetworkClass: NativeNetworkClass = "unknown";
-const networkListeners = new Set<(net: NativeNetworkClass) => void>();
-
-export function nativeNetworkClass(): NativeNetworkClass {
-  if (!nativeSyncAvailable() && typeof navigator !== "undefined") {
-    if (!pwaNetworkAvailable()) return "none";
-    const type = (navigator as Navigator & { connection?: { type?: string } }).connection?.type;
-    if (type === "wifi" || type === "ethernet") return "wifi";
-    if (type === "cellular") return "cell";
-    return "unknown";
-  }
-  return knownNetworkClass;
-}
-
-export function onNativeNetworkClass(
-  listener: (net: NativeNetworkClass) => void,
-): () => void {
-  networkListeners.add(listener);
-  listener(knownNetworkClass);
-  return () => {
-    networkListeners.delete(listener);
-  };
-}
-
-/** Whether the device is (reliably) offline. On the shell this is the NWPathMonitor-
- *  derived flag; off-shell it falls back to `navigator.onLine` (reliable there). */
-export function isLikelyOffline(): boolean {
-  if (nativeSyncAvailable()) return knownOffline;
-  return !pwaNetworkAvailable();
-}
-
-export function startOfflineFlagSync(): void {
-  setReplicaOfflineProbe(
-    () => nativeSyncAvailable() && (isLikelyOffline() || nativeNetworkClass() === "none"),
-  );
-  if (!nativeSyncAvailable()) return;
-  let last: boolean | null = null;
-  const apply = (offline: boolean): void => {
-    knownOffline = offline; // reliable signal for the reader path (isLikelyOffline)
-    if (offline === last) return;
-    last = offline;
-  };
-  const applyNetwork = (net: NativeNetworkClass): void => {
-    if (knownNetworkClass === net) return;
-    knownNetworkClass = net;
-    for (const listener of networkListeners) listener(net);
-    apply(net === "none");
-  };
-  apply(!navigator.onLine);
-  globalThis.addEventListener("online", () => apply(false));
-  globalThis.addEventListener("offline", () => apply(true));
-  // Native re-emits `network` on `state` so a listener installed after the
-  // first NWPathMonitor fire still gets a snapshot.
-  nativeAudioRequestState();
-  onNativeAudioEvent((event) => {
-    if (event.type === "network") applyNetwork(event.net);
-  });
 }
 
 /** Re-pull /api/dag → refresh the native content manifest. MUST run on every app

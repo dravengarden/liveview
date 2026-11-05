@@ -19,12 +19,11 @@ import {
   contentFetch,
   ensureAutoSync,
   nativeCacheStats,
-  nativeNetworkClass,
   offlineDownloadsAvailable,
   offlineWifiOnly,
-  onNativeNetworkClass,
   setOfflineWifiOnly,
 } from "@/native-sync";
+import { nativeNetworkClass, onNativeNetworkClass } from "@/connectivity";
 import {
   evictUnpinnedAudioToFit,
   loadPolicy,

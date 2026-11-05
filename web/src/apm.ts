@@ -21,10 +21,8 @@
 //      `error` events are de-duplicated + capped so an error storm can't flood it;
 //      connectivity transitions are logged ONCE per flip, never one-per-retry.
 
-import {
-  nativeSyncAvailable,
-  onNativeNetworkClass,
-} from "./native-sync.ts";
+import { onNativeNetworkClass } from "./connectivity.ts";
+import { nativeSyncAvailable } from "./platform/shell.ts";
 import { REMOTE } from "./apiBase.ts";
 import {
   ackApmEvents,

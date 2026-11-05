@@ -11,7 +11,7 @@ import {
   REMOTE,
   selectRemote,
 } from "./apiBase";
-import { startOfflineFlagSync } from "./native-sync";
+import { startConnectivity } from "./connectivity";
 import { startSyncQueue } from "./syncQueue";
 import { startApm } from "./apm";
 import { startOtaUpdater } from "./otaUpdater";
@@ -38,7 +38,7 @@ installApiShim();
 
 // Mirror connectivity into the replica fail-fast probe (BEFORE any content
 // fetch) so an offline cold launch never hangs a miss. Native only.
-startOfflineFlagSync();
+startConnectivity();
 
 // Drain any cross-device writes (settings / progress) left pending from a prior
 // offline session. AFTER the shim so relative /api/* hits the remote origin.
