@@ -574,6 +574,17 @@ Phase 2 target, since the dock removes mirrored-variable writes from that
 transition. The first seconds after a fresh install, while the replica fills,
 also showed isolated long frames on both builds.
 
+Phase 2 gate record (2026-11-05, iPhone 17 Simulator, production library):
+the shelf dock (strip + toolbar) and reader dock (transport + bar) publish
+`--lv-dock-h` on their surfaces, the retained hidden shelf dock measures 0,
+and `--lv-dock-max-h` follows the visible one. Scrolling the shelf, the reader
+and the reader with the read-aloud transport open had at most one frame over
+50 ms in 3,000 frames (p99 17 ms); shelf ⇄ book transitions are unchanged
+from the baseline. Chrome comparisons against the previous commit show
+identical bars, foot padding and Contents drawer geometry on all three tiers.
+The software-keyboard lift was not exercised (the Simulator used a hardware
+keyboard); the lift logic itself is unchanged.
+
 Order rationale: 0–1 remove the largest source of regressions with the least
 visible change and create the tests the later phases rely on; 2 must precede
 3–4 because both redesigns are dock rows; 5 is independent and can interleave
