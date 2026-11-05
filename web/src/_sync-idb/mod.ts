@@ -1,4 +1,4 @@
-// ⚠️ VENDORED — DO NOT EDIT. From @shared-utils/sync-idb (the @shared-utils/sync
-// import is rewritten to the sibling vendored _sync). Edit there + re-vendor.
+// IndexedDB persistence for `_sync` mirrored stores. Originally vendored from
+// @shared-utils/sync-idb; now owned and trimmed here.
 export { idbPersistence } from "./idb.ts";
 export type { IdbOpts } from "./idb.ts";

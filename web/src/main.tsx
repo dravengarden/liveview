@@ -18,7 +18,6 @@ import { startOtaUpdater } from "./otaUpdater";
 import {
   disableReplica,
   initReplica,
-  replicaFlag,
   requestPersistentStorage,
   setReplicaRemote,
 } from "./replica/mod.ts";
@@ -57,24 +56,22 @@ startOtaUpdater();
 // the hydrated path index instead of a cold miss. An IndexedDB failure (private
 // mode, quota, a corrupt store) must not blank the app: log it and continue
 // with the replica disabled, so reads fall back to the network.
-if (replicaFlag() === "idb") {
-  try {
-    // Browser replicas must use their own origin, not a native compile-time
-    // endpoint (whose default is loopback on the user's device).
-    const replicaOrigin = BUNDLED ? REMOTE : globalThis.location.origin;
-    await initReplica(undefined, {
-      remoteBase: replicaOrigin,
-      origins: [replicaOrigin],
-    });
-    // A background re-probe may pick a different native route after launch.
-    if (BUNDLED) onRemoteChange((origin) => setReplicaRemote(origin, [origin]));
-    // Installed apps hold an offline library worth protecting from eviction. A
-    // plain browser tab does not ask (Firefox would show a permission prompt).
-    if (BUNDLED || installedPwa()) void requestPersistentStorage();
-  } catch (error) {
-    console.error("Replica init failed; continuing network-only:", error);
-    disableReplica();
-  }
+try {
+  // Browser replicas must use their own origin, not a native compile-time
+  // endpoint (whose default is loopback on the user's device).
+  const replicaOrigin = BUNDLED ? REMOTE : globalThis.location.origin;
+  await initReplica(undefined, {
+    remoteBase: replicaOrigin,
+    origins: [replicaOrigin],
+  });
+  // A background re-probe may pick a different native route after launch.
+  if (BUNDLED) onRemoteChange((origin) => setReplicaRemote(origin, [origin]));
+  // Installed apps hold an offline library worth protecting from eviction. A
+  // plain browser tab does not ask (Firefox would show a permission prompt).
+  if (BUNDLED || installedPwa()) void requestPersistentStorage();
+} catch (error) {
+  console.error("Replica init failed; continuing network-only:", error);
+  disableReplica();
 }
 
 // Global haptic delegation: ONE listener set buzzes every MUI control (button /

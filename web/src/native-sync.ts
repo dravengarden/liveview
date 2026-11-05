@@ -23,7 +23,6 @@ import {
   replicaAudioIndex,
   replicaCacheStats,
   replicaContentFetch,
-  replicaFlag,
   setReplicaOfflineProbe,
 } from "./replica/mod.ts";
 
@@ -43,17 +42,13 @@ export async function contentFetch(
   url: string,
   opts?: { fresh?: boolean; cacheFirst?: boolean; connectMs?: number },
 ): Promise<Response> {
-  if (replicaFlag() === "idb") {
-    return replicaContentFetch(url, {
-      cacheFirst: opts?.cacheFirst ?? (pwaOfflineAvailable() && opts?.fresh !== true),
-      ...(opts?.connectMs !== undefined ? { connectMs: opts.connectMs } : {}),
-      // Browser online hints can be false while this origin is reachable.
-      // Only native reachability is authoritative enough to suppress reads.
-      offline: nativeSyncAvailable() && (isLikelyOffline() || nativeNetworkClass() === "none"),
-    });
-  }
-  // Replica is the only store; leftover `native` flags map to idb.
-  return fetch(url);
+  return replicaContentFetch(url, {
+    cacheFirst: opts?.cacheFirst ?? (pwaOfflineAvailable() && opts?.fresh !== true),
+    ...(opts?.connectMs !== undefined ? { connectMs: opts.connectMs } : {}),
+    // Browser online hints can be false while this origin is reachable.
+    // Only native reachability is authoritative enough to suppress reads.
+    offline: nativeSyncAvailable() && (isLikelyOffline() || nativeNetworkClass() === "none"),
+  });
 }
 
 /** Primary `src` for a book-cover `<img>`. Cover bytes are content-addressed DAG

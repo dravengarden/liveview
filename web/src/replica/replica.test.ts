@@ -18,7 +18,7 @@ import {
   seedKnownBodies,
 } from "./blobs.ts";
 import { applyDag, parseManifest, parseRoot } from "./manifest.ts";
-import { installMemoryIndexedDB, type MemoryIdbHandle } from "./memory-idb.ts";
+import { installMemoryIndexedDB, type MemoryIdbHandle } from "./testing/memory-idb.ts";
 import { contentFetch } from "../native-sync.ts";
 import {
   artworkBlobSrc,
@@ -31,7 +31,6 @@ import {
   refreshReplicaManifest,
   replicaContentFetch,
   replicaFetchBudgetMs,
-  replicaFlag,
   resetReplica,
   setReplicaOfflineProbe,
   setReplicaRemote,
@@ -43,7 +42,6 @@ import {
   resetReplicaUsable,
   setPersistFullSizeArtwork,
 } from "./policy.ts";
-import { REPLICA_FLAG_KEY } from "./schema.ts";
 import {
   missingTextArt,
   pullMissingTextArt,
@@ -462,8 +460,6 @@ test("worklist persists and replay evicts queued hashes", async () => {
   const stored = await getWorklist();
   assert.equal(stored.fetch.length, 1);
   assert.deepEqual(stored.evict, ["evict-me"]);
-
-  storage.set(REPLICA_FLAG_KEY, "idb");
   await initReplica("lazy");
   assert.equal(await getBlobRecord("evict-me"), undefined);
   const after = await getWorklist();
@@ -514,12 +510,6 @@ test("QuotaExceededError evicts unpinned image/text LRU in bounded batches", asy
   const oldImg = await getBlobRecord("img-old");
   const oldTxt = await getBlobRecord("txt-old");
   assert.equal(oldImg === undefined || oldTxt === undefined, true);
-});
-
-test("leftover lv.replica=native maps to idb so it cannot strand a device", async () => {
-  await setup();
-  storage.set(REPLICA_FLAG_KEY, "native");
-  assert.equal(replicaFlag(), "idb");
 });
 
 test("replica modules never getAll() blobs", async () => {
@@ -958,9 +948,8 @@ test("replica fetch budget is 0 offline and longer than 1.5s online", async () =
   assert.ok(replicaFetchBudgetMs() > 1500);
 });
 
-test("contentFetch with TAURI + lv.replica=idb never hits lvsync://resolve", async () => {
+test("contentFetch in the native shell never hits lvsync://resolve", async () => {
   await setup();
-  storage.set(REPLICA_FLAG_KEY, "idb");
   Object.defineProperty(globalThis, "__TAURI_INTERNALS__", {
     configurable: true,
     value: { invoke: () => Promise.resolve() },
@@ -1638,7 +1627,6 @@ test("reads degrade to the network when the replica is disabled or IDB breaks", 
     throw new Error("network down");
   });
   try {
-    storage.set(REPLICA_FLAG_KEY, "idb");
     await assert.rejects(initReplica("lazy"));
     const res = await replicaContentFetch("/api/books");
     assert.equal(res.status, 504);

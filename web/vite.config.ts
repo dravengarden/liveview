@@ -277,14 +277,10 @@ function hashedPublicScripts(map: Record<string, string>): Plugin {
   };
 }
 
-// Two build targets share ONE src core (see src/platform):
+// Two build targets share one src core:
 //   • `vite build`            → dist/      — PWA + service worker, served by the server.
 //   • `vite build --mode app` → dist-app/  — native iOS/macOS bundle, NO service worker.
-// The app build bakes `__TARGET__="app"` so IS_APP is a build-time constant and
-// the SW / pwa code tree-shakes out. The pwa build leaves `__TARGET__` undefined
-// → src/platform/target.ts uses a runtime fallback, so the server-served build
-// still behaves correctly in a browser (pwa) AND in the old remote-loading shell
-// (app), until A3 switches the shell to dist-app.
+// Runtime code distinguishes the native shell by probing its bridge.
 export default defineConfig(({ mode }) => {
   const isApp = mode === "app";
   const publicAssets = isApp ? hashedPublicAssetMap() : {};
@@ -310,7 +306,6 @@ export default defineConfig(({ mode }) => {
     define: {
       ...(isApp
         ? {
-          __TARGET__: JSON.stringify("app"),
           __LV_PUBLIC_ASSETS__: JSON.stringify(publicAssets),
         }
         : {}),

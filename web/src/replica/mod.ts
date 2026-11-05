@@ -27,7 +27,7 @@ import {
   enqueueCacheFromUrl,
   installMediaBridge,
 } from "./media-bridge.ts";
-import { loadPolicy, persistPolicy, replicaFlag } from "./policy.ts";
+import { loadPolicy, persistPolicy } from "./policy.ts";
 import { resetArtworkObjectUrls } from "./resolve.ts";
 import {
   APM_MAX_ROWS,
@@ -46,7 +46,7 @@ import {
 import { joinRemoteUrl } from "./worker.ts";
 import { installReplicaSpike } from "./spike.ts";
 
-export { applyDag, getBlob, hasBlob, joinRemoteUrl, putBlob, replicaFlag };
+export { applyDag, getBlob, hasBlob, joinRemoteUrl, putBlob };
 export { parseManifest, parseRoot, rejectNewerProtocol } from "./manifest.ts";
 export { replicaWorkerInitMessage } from "./worker.ts";
 export { runReplicaSpike, SPIKE_EVAL_JS } from "./spike.ts";
@@ -104,7 +104,6 @@ export type {
   BlobRecord,
   DataMode,
   Manifest,
-  ReplicaFlag,
   ReplicaPolicy,
   ReplicaStats,
   Resource,
@@ -188,7 +187,6 @@ export async function initReplica(mode?: DataMode, opts?: {
   remoteBase?: string;
   origins?: readonly string[];
 }): Promise<void> {
-  if (replicaFlag() !== "idb") return;
   // Before any IDB work, so a network-only fallback (open failure) still
   // resolves absolute URLs against the chosen remote.
   if (opts?.remoteBase) setReplicaRemote(opts.remoteBase, opts.origins ?? []);

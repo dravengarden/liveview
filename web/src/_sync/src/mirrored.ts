@@ -1,28 +1,17 @@
-// ⚠️ VENDORED — DO NOT EDIT. From @shared-utils/sync (shared-utils
-// `state-sync-engine` branch); the `@shared-utils/store` import is rewritten to
-// the sibling vendored _store. Edit there + re-vendor. See _sync/mod.ts.
-//
-// Mirrored store — the STATE-BASED (CvRDT) tier of the authority spectrum: a
-// local-first reactive value mirrored to a PASSIVE remote (a dumb key-value the
-// server just stores + returns). No mutation log, no arbiter — conflict is
-// resolved by a `reconcile(local, remote)` MERGE over whole values
-// (last-writer-wins by default).
-//
-// This is the right tier when there is no concurrent multi-writer convergence to
-// guarantee — per-account settings / progress that one device edits at a time
-// (liveview: audio position/rate/sleep, reading progress, book prefs). For
-// concurrent multi-writer state that must converge operationally, use
-// `replicatedStore` (the OP-based tier) — the read side (`get`/`subscribe`) is
-// identical, so the same `useStore` renders either and a state can be promoted
-// from one tier to the other without touching the components.
+// Mirrored store: a local-first reactive value mirrored to a PASSIVE remote (a
+// key-value the server just stores and returns). There is no mutation log;
+// conflict is resolved by a `reconcile(local, remote)` merge over whole values
+// (last-writer-wins by default). Suited to per-account settings and progress
+// that one device edits at a time: audio position, rate, sleep timer, reading
+// progress and book preferences.
 
 import type { Store } from "../../_store/mod.ts";
 import type { LocalPersistence, RemoteBackend } from "./types.ts";
 
 export type SyncStatus = "connecting" | "live" | "offline";
 
-/** A `Store<T>` whose value is mirrored to a passive remote. Write with `set`
- *  (the state-based dual of `replicatedStore.mutate`). `hydrate` then `connect`
+/** A `Store<T>` whose value is mirrored to a passive remote. Write with `set`;
+ *  `hydrate` then `connect`
  *  on startup; `flush` on `pagehide`. */
 export interface MirroredStore<T> extends Store<T> {
   /** Load the local mirror (this device's last value) for an instant first paint.

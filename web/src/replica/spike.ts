@@ -1,7 +1,6 @@
 import { replicaStats } from "./agg.ts";
 import { putBlob } from "./blobs.ts";
 import { openReplicaDb } from "./idb.ts";
-import { replicaFlag } from "./policy.ts";
 import { refreshReplicaManifest } from "./resolve.ts";
 import { pullMissingTextArt } from "./sync.ts";
 
@@ -168,7 +167,7 @@ export async function runReplicaFillGate(): Promise<Record<string, unknown>> {
 
   return {
     origin: globalThis.location?.origin ?? "",
-    flag: replicaFlag(),
+    flag: "idb",
     frames,
     maxGap,
     over50,

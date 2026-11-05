@@ -41,9 +41,6 @@ export const AGG_ARTWORK = "artwork";
 
 export const APM_MAX_ROWS = 5000;
 
-/** Origin-scoped flag; missing, unknown, or leftover `native` values mean idb. */
-export const REPLICA_FLAG_KEY = "lv.replica";
-
 export const WIFI_ONLY_KEY = "lv.offline.wifiOnly";
 export const CAP_GB_KEY = "lv.offline.maxGB";
 export const DEFAULT_CAP_GB = 20;
@@ -52,7 +49,6 @@ export const GC_BATCH = 32;
 export const TEXT_ART_CONCURRENCY = 24;
 export const MAIN_THREAD_BUDGET_MS = 16;
 
-export type ReplicaFlag = "idb" | "native";
 export type DataMode = "eager" | "lazy";
 export type PresentFlag = 0 | 1;
 export type PinnedFlag = 0 | 1;

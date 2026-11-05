@@ -1,13 +1,6 @@
-// ⚠️ VENDORED — DO NOT EDIT. From @shared-utils/sync-idb (shared-utils
-// `state-sync-engine` branch); the `@shared-utils/sync` import is rewritten to
-// the sibling vendored _sync. Edit there + re-vendor. See _sync-idb/mod.ts.
-//
-// IndexedDB-backed LocalPersistence for the @shared-utils state tiers — the
-// browser backend for instant-load + offline caching. Generic over the stored
-// shape `S`, so it backs BOTH tiers with one impl: a `replicatedStore`'s durable
-// outbox (`S = ClientSnapshot<T>`) and a `mirroredStore`'s value mirror
-// (`S = T`). One DB, one object store, one record (structured-clone, no manual
-// JSON) per key. Async by nature; ALL errors degrade gracefully (a
+// IndexedDB-backed LocalPersistence for mirrored stores: instant first paint
+// and an offline copy of the value. One database, one object store, one
+// structured-clone record per key. Async by nature; ALL errors degrade gracefully (a
 // blocked/absent/quota'd store behaves as "nothing stored") so persistence can
 // never break the app.
 //
