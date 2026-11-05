@@ -36,6 +36,7 @@ material, operational guidance, research evidence, and historical notes.
 - [`design/interactive-view.md`](design/interactive-view.md) — Interactive View
 - [`design/read-aloud-narration.md`](design/read-aloud-narration.md) — Read Aloud Narration
 - [`design/library-search.md`](design/library-search.md) — Library Search (typo tolerance, tie-breaking ranking, highlights, iOS field zoom)
+- [`design/refactor-plan.md`](design/refactor-plan.md) — Structural refactor plan (web reader session model, bottom dock, library screen, server layout; phased with gates)
 
 ### Website
 
