@@ -16,6 +16,8 @@
 use tokio::sync::broadcast;
 
 use crate::server::{audio, narration, speakable, spoken};
+use crate::shared::WsMessage;
+use crate::store::blobs::put_blob;
 use crate::store::model::{AudioBake, AudioTask, ChapterRecord};
 use crate::store::pg::PgStore;
 use crate::sync::merkle;
@@ -143,14 +145,13 @@ async fn process(
             // actually recorded audio — a pure-code chapter is done-but-silent).
             if outcome == Outcome::Produced {
                 let _ = tx.send(
-                    serde_json::json!({
-                        "type": "chapter-ready",
-                        "book": task.book_slug,
-                        "rendition": task.rendition,
-                        "lang": task.lang,
-                        "path": task.rel_path,
-                    })
-                    .to_string(),
+                    WsMessage::ChapterReady {
+                        book: task.book_slug.clone(),
+                        rendition: Some(task.rendition.clone()),
+                        lang: Some(task.lang.clone()),
+                        path: Some(task.rel_path.clone()),
+                    }
+                    .to_frame(),
                 );
             }
         }
@@ -286,22 +287,4 @@ async fn commit_leaf_node(pg: &PgStore, task: &AudioTask) {
     if let Err(e) = pg.put_merkle_node(&node_hash, "leaf", &payload).await {
         tracing::warn!(error = %e, "audio worker: commit leaf node failed");
     }
-}
-
-/// Upload bytes content-addressed (skip if present) + record the asset row.
-pub(crate) async fn put_blob(
-    pg: &PgStore,
-    obj: &ObjStore,
-    bytes: Vec<u8>,
-    mime: &str,
-) -> Result<String, String> {
-    let hash = blake3::hash(&bytes).to_hex().to_string();
-    let size = bytes.len() as i64;
-    // Register first: it refreshes the GC grace window, so a concurrent
-    // `liveview sync` cannot collect the blob before the chapter references it.
-    pg.upsert_asset(&hash, mime, size)
-        .await
-        .map_err(|e| format!("upsert asset {hash}: {e}"))?;
-    obj.put_if_absent(&hash, bytes, mime).await?;
-    Ok(hash)
 }

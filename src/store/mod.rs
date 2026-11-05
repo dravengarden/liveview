@@ -7,6 +7,7 @@
 //! crate-local `dead_code` allowance.
 #![allow(dead_code)]
 
+pub mod blobs;
 pub mod content;
 pub mod fs;
 pub mod model;

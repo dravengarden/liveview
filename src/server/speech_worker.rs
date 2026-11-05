@@ -1,5 +1,7 @@
 //! Optional voice generation does not block requests or replace default audio.
-use super::{audio, audio_worker::put_blob, narration, speakable, spoken};
+use super::{audio, narration, speakable, spoken};
+use crate::shared::WsMessage;
+use crate::store::blobs::put_blob;
 use crate::store::{pg::PgStore, speech::SpeechAsset};
 use crate::sync::objstore::ObjStore;
 use std::time::Duration;
@@ -46,7 +48,15 @@ pub fn spawn(pg: PgStore, obj: ObjStore, command: String, tx: broadcast::Sender<
                         }
                         match pg.finish_speech(&job, result).await {
                             Ok(true) => {
-                                let _ = tx.send(serde_json::json!({"type":"chapter-ready","book":job.book_slug,"rendition":job.rendition,"lang":job.lang,"path":job.rel_path}).to_string());
+                                let _ = tx.send(
+                                    WsMessage::ChapterReady {
+                                        book: job.book_slug.clone(),
+                                        rendition: Some(job.rendition.clone()),
+                                        lang: Some(job.lang.clone()),
+                                        path: Some(job.rel_path.clone()),
+                                    }
+                                    .to_frame(),
+                                );
                             }
                             Ok(false) => {}
                             Err(error) => tracing::warn!(%error,"record speech failed"),

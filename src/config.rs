@@ -1127,8 +1127,8 @@ fn load_book_manifest(
         renditions[0].kind
     };
 
-    let cover = resolve_cover(book_dir, manifest.cover.as_deref());
-    let backdrop = resolve_backdrop(book_dir, manifest.backdrop.as_deref());
+    let cover = resolve_artwork(book_dir, manifest.cover.as_deref(), "cover");
+    let backdrop = resolve_artwork(book_dir, manifest.backdrop.as_deref(), "backdrop");
     manifest
         .speech
         .validate()
@@ -1168,9 +1168,10 @@ fn audio_rendition_has_chapters(editions: &[EditionState]) -> bool {
     })
 }
 
-/// Resolve a book's cover image: the manifest `cover` if it exists, else the
-/// first `cover.{jpg,png,webp}` in the book dir, else `None`.
-fn resolve_cover(book_dir: &Path, declared: Option<&Path>) -> Option<PathBuf> {
+/// Resolve a book artwork file: the manifest-declared path if it exists, else
+/// the first `<stem>.{jpg,png,webp}` in the book dir, else `None`. `stem` is
+/// `cover` (portrait) or `backdrop` (wide LiveView artwork).
+fn resolve_artwork(book_dir: &Path, declared: Option<&Path>, stem: &str) -> Option<PathBuf> {
     if let Some(rel) = declared {
         let abs = if rel.is_absolute() {
             rel.to_path_buf()
@@ -1183,34 +1184,8 @@ fn resolve_cover(book_dir: &Path, declared: Option<&Path>) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    for name in ["cover.jpg", "cover.png", "cover.webp"] {
-        let p = book_dir.join(name);
-        if let Ok(c) = p.canonicalize()
-            && c.is_file()
-        {
-            return Some(c);
-        }
-    }
-    None
-}
-
-/// Resolve a book's wide LiveView artwork: the manifest `backdrop` if it exists,
-/// else the first `backdrop.{jpg,png,webp}` in the book dir, else `None`.
-fn resolve_backdrop(book_dir: &Path, declared: Option<&Path>) -> Option<PathBuf> {
-    if let Some(rel) = declared {
-        let abs = if rel.is_absolute() {
-            rel.to_path_buf()
-        } else {
-            book_dir.join(rel)
-        };
-        if let Ok(p) = abs.canonicalize()
-            && p.is_file()
-        {
-            return Some(p);
-        }
-    }
-    for name in ["backdrop.jpg", "backdrop.png", "backdrop.webp"] {
-        let p = book_dir.join(name);
+    for ext in ["jpg", "png", "webp"] {
+        let p = book_dir.join(format!("{stem}.{ext}"));
         if let Ok(c) = p.canonicalize()
             && c.is_file()
         {

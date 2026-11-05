@@ -26,7 +26,6 @@ pub(crate) use http::audio::{AUDIO_ENCODING_VERSION, AUDIO_VARIANT, transcode_au
 use http::*;
 use server::catalog::Catalog;
 use server::state::{ApmSink, AppState, SharedState};
-use shared::{TreeNode, WsMessage};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use store::pg::PgStore;

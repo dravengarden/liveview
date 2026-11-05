@@ -10,6 +10,7 @@
 //! Crash-safety: the deploy root is written last, so an interrupted run leaves
 //! the old root in place and the next run re-reconciles from it (idempotent).
 
+use crate::store::blobs::put_blob;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -267,7 +268,7 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 let bytes =
                     std::fs::read(p).map_err(|e| format!("read cover {}: {e}", p.display()))?;
                 let mime = mime_guess::from_path(p).first_or_octet_stream().to_string();
-                Some(put_blob(&obj, &store, bytes, &mime).await?)
+                Some(put_blob(&store, &obj, bytes, &mime).await?)
             }
             None => None,
         };
@@ -278,8 +279,8 @@ pub async fn run(resolved: &Resolved, cfg: &SyncCfg) -> Result<SyncReport, Strin
                 let card_bytes = crate::artwork::card_backdrop(&bytes)
                     .map_err(|e| format!("derive card backdrop {}: {e}", p.display()))?;
                 let mime = mime_guess::from_path(p).first_or_octet_stream().to_string();
-                let backdrop_hash = put_blob(&obj, &store, bytes, &mime).await?;
-                let card_backdrop_hash = put_blob(&obj, &store, card_bytes, "image/jpeg").await?;
+                let backdrop_hash = put_blob(&store, &obj, bytes, &mime).await?;
+                let card_backdrop_hash = put_blob(&store, &obj, card_bytes, "image/jpeg").await?;
                 (Some(backdrop_hash), Some(card_backdrop_hash))
             }
             None => (None, None),
@@ -998,7 +999,7 @@ async fn apply_leaf(
         rendition: a.rendition.clone(),
         lang: a.lang.clone(),
         rel_path: a.rel_path.clone(),
-        file_type: file_type_tag(&a.file_type).to_string(),
+        file_type: a.file_type.as_wire().to_string(),
         html: None,
         markdown: None,
         asset_hash: None,
@@ -1030,7 +1031,7 @@ async fn apply_leaf(
         let mime = mime_guess::from_path(&a.rel_path)
             .first_or_octet_stream()
             .to_string();
-        let hash = put_blob(obj, store, bytes, &mime).await?;
+        let hash = put_blob(store, obj, bytes, &mime).await?;
         row.asset_hash = Some(hash);
     }
 
@@ -1038,41 +1039,6 @@ async fn apply_leaf(
         .upsert_chapter(&row)
         .await
         .map_err(|e| format!("upsert chapter {}: {e}", a.rel_path))
-}
-
-/// Upload `bytes` to rustfs under their blake3 (content-addressed, skip if
-/// present) and record the asset row. Returns the content hash.
-async fn put_blob(
-    obj: &ObjStore,
-    store: &PgStore,
-    bytes: Vec<u8>,
-    mime: &str,
-) -> Result<String, String> {
-    let hash = blake3::hash(&bytes).to_hex().to_string();
-    let size = bytes.len() as i64;
-    // Register first: it refreshes the GC grace window (see `gc_orphan_asset`).
-    store
-        .upsert_asset(&hash, mime, size)
-        .await
-        .map_err(|e| format!("upsert asset {hash}: {e}"))?;
-    obj.put_if_absent(&hash, bytes, mime).await?;
-    Ok(hash)
-}
-
-fn file_type_tag(ft: &FileType) -> &'static str {
-    match ft {
-        FileType::Markdown => "markdown",
-        FileType::Image => "image",
-        FileType::Pdf => "pdf",
-        FileType::Html => "html",
-        FileType::Csv => "csv",
-        FileType::Json => "json",
-        FileType::Excalidraw => "excalidraw",
-        FileType::Latex => "latex",
-        FileType::Typst => "typst",
-        FileType::InteractiveView => "interactive-view",
-        FileType::Unknown => "unknown",
-    }
 }
 
 /// Reconstruct the last-deployed DAG from `merkle_nodes` + the deploy root.

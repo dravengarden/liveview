@@ -39,6 +39,24 @@ pub enum FileType {
 }
 
 impl FileType {
+    /// The wire tag, identical to this type's serde representation; stored
+    /// with chapter rows and sent to the reader.
+    pub fn as_wire(&self) -> &'static str {
+        match self {
+            FileType::Markdown => "markdown",
+            FileType::Image => "image",
+            FileType::Pdf => "pdf",
+            FileType::Html => "html",
+            FileType::Csv => "csv",
+            FileType::Json => "json",
+            FileType::Excalidraw => "excalidraw",
+            FileType::Latex => "latex",
+            FileType::Typst => "typst",
+            FileType::InteractiveView => "interactive-view",
+            FileType::Unknown => "unknown",
+        }
+    }
+
     pub fn from_extension(ext: &str) -> Self {
         match ext.to_lowercase().as_str() {
             "md" | "markdown" => FileType::Markdown,
@@ -125,11 +143,78 @@ pub enum WsMessage {
     LibraryUpdate {
         revision: u64,
     },
+    /// Audio for a chapter became ready (or a rendition's speech policy
+    /// changed, without `lang`/`path`). The lowercase tag predates the other
+    /// variants and is the wire contract the reader matches.
+    #[serde(rename = "chapter-ready")]
+    ChapterReady {
+        book: String,
+        /// Always present on the wire; `null` for a policy change that is not
+        /// scoped to one rendition.
+        rendition: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lang: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
+}
+
+impl WsMessage {
+    /// The JSON text frame broadcast to WebSocket clients.
+    pub fn to_frame(&self) -> String {
+        serde_json::to_string(self).expect("WsMessage serializes")
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_type_wire_tag_matches_serde() {
+        for ft in [
+            FileType::Markdown,
+            FileType::Image,
+            FileType::Pdf,
+            FileType::Html,
+            FileType::Csv,
+            FileType::Json,
+            FileType::Excalidraw,
+            FileType::Latex,
+            FileType::Typst,
+            FileType::InteractiveView,
+            FileType::Unknown,
+        ] {
+            assert_eq!(serde_json::to_value(&ft).unwrap(), ft.as_wire());
+        }
+    }
+
+    #[test]
+    fn chapter_ready_keeps_its_lowercase_wire_shapes() {
+        let full = WsMessage::ChapterReady {
+            book: "b".into(),
+            rendition: Some("audio".into()),
+            lang: Some("en".into()),
+            path: Some("01.spoken.md".into()),
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&full.to_frame()).unwrap(),
+            serde_json::json!({
+                "type": "chapter-ready", "book": "b", "rendition": "audio",
+                "lang": "en", "path": "01.spoken.md"
+            })
+        );
+        let policy = WsMessage::ChapterReady {
+            book: "b".into(),
+            rendition: None,
+            lang: None,
+            path: None,
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&policy.to_frame()).unwrap(),
+            serde_json::json!({ "type": "chapter-ready", "book": "b", "rendition": null })
+        );
+    }
 
     #[test]
     fn library_update_wire_shape_is_type_tagged() {

@@ -395,8 +395,20 @@ async fn ensure_chapter_audio(
     let (mp3, marks) = server::audio::synthesize(command, &voice, &sentences).await?;
     let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
     let caf = encode_speech_audio(mp3, &voice).await?;
-    let audio_hash = store_blob(state, caf, AUDIO_VARIANT.mime).await?;
-    let marks_hash = store_blob(state, marks_json, "application/json").await?;
+    let audio_hash = crate::store::blobs::put_blob(
+        state.store.as_ref(),
+        state.obj.as_ref(),
+        caf,
+        AUDIO_VARIANT.mime,
+    )
+    .await?;
+    let marks_hash = crate::store::blobs::put_blob(
+        state.store.as_ref(),
+        state.obj.as_ref(),
+        marks_json,
+        "application/json",
+    )
+    .await?;
     record_chapter_audio(state, &row, &voice, audio_hash, marks_hash).await
 }
 
@@ -473,8 +485,20 @@ async fn ensure_text_audio(
     let (mp3, marks) = server::audio::synthesize(command, &voice, &texts).await?;
     let marks_json = serde_json::to_vec(&marks).map_err(|e| format!("encode marks: {e}"))?;
     let caf = encode_speech_audio(mp3, &voice).await?;
-    let audio_hash = store_blob(state, caf, AUDIO_VARIANT.mime).await?;
-    let marks_hash = store_blob(state, marks_json, "application/json").await?;
+    let audio_hash = crate::store::blobs::put_blob(
+        state.store.as_ref(),
+        state.obj.as_ref(),
+        caf,
+        AUDIO_VARIANT.mime,
+    )
+    .await?;
+    let marks_hash = crate::store::blobs::put_blob(
+        state.store.as_ref(),
+        state.obj.as_ref(),
+        marks_json,
+        "application/json",
+    )
+    .await?;
     record_chapter_audio(state, &row, &voice, audio_hash, marks_hash).await
 }
 
@@ -555,22 +579,6 @@ async fn book_end_cue(state: &AppState, row: &ChapterRecord) -> Option<Vec<u8>> 
     let arc = std::sync::Arc::new(mp3);
     state.book_end_cue.lock().await.insert(key, arc.clone());
     Some(arc.as_ref().clone())
-}
-
-/// Hash + `put_if_absent` a blob to rustfs and record the asset row. Returns the
-/// content hash (the rustfs key).
-async fn store_blob(state: &AppState, bytes: Vec<u8>, mime: &str) -> Result<String, String> {
-    let hash = blake3::hash(&bytes).to_hex().to_string();
-    let size = bytes.len() as i64;
-    // Register first: it refreshes the orphan-GC grace window, so a concurrent
-    // `liveview sync` cannot collect the blob before the chapter references it.
-    state
-        .store
-        .upsert_asset(&hash, mime, size)
-        .await
-        .map_err(|e| format!("upsert asset: {e}"))?;
-    state.obj.put_if_absent(&hash, bytes, mime).await?;
-    Ok(hash)
 }
 
 #[cfg(test)]

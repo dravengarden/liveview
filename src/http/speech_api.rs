@@ -196,7 +196,15 @@ pub(crate) async fn api_set_speech(
         .await
     {
         Ok(()) => {
-            let _=state.tx.send(serde_json::json!({"type":"chapter-ready","book":slug,"rendition":request.rendition}).to_string());
+            let _ = state.tx.send(
+                WsMessage::ChapterReady {
+                    book: slug.clone(),
+                    rendition: request.rendition.clone(),
+                    lang: None,
+                    path: None,
+                }
+                .to_frame(),
+            );
             StatusCode::NO_CONTENT.into_response()
         }
         Err(error) => store_unavailable("speech policy", error),

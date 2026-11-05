@@ -47,22 +47,6 @@ fn mime_for(rel_path: &str) -> String {
         .to_string()
 }
 
-fn file_type_str(ft: &FileType) -> &'static str {
-    match ft {
-        FileType::Markdown => "markdown",
-        FileType::Image => "image",
-        FileType::Pdf => "pdf",
-        FileType::Html => "html",
-        FileType::Csv => "csv",
-        FileType::Json => "json",
-        FileType::Excalidraw => "excalidraw",
-        FileType::Latex => "latex",
-        FileType::Typst => "typst",
-        FileType::InteractiveView => "interactive-view",
-        FileType::Unknown => "unknown",
-    }
-}
-
 impl FsStore {
     /// Build the in-memory backend from a resolved corpus: preload covers and
     /// precompute the per-rendition sidebar trees (cheap; books rarely huge).
@@ -235,7 +219,7 @@ impl ContentStore for FsStore {
             rendition: kind.as_str().to_string(),
             lang: lang.to_string(),
             rel_path: rel_path.to_string(),
-            file_type: file_type_str(&ft).to_string(),
+            file_type: ft.as_wire().to_string(),
             html: None,
             markdown: None,
             asset_hash: None,

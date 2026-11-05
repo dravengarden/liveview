@@ -8,7 +8,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::server::state::SharedState;
+use crate::server::state::{AppState, SharedState};
 use crate::shared::{TreeNode, WsMessage};
 
 pub async fn ws_handler(
@@ -39,7 +39,7 @@ fn classify(received: Result<String, RecvError>) -> Forward {
 }
 
 /// The current text sidebar tree as a `TreeUpdate` frame, if available.
-async fn current_tree_message(state: &SharedState) -> Option<String> {
+pub(crate) async fn current_tree_message(state: &AppState) -> Option<String> {
     let json = state.store.get_site_tree("text").await.ok().flatten()?;
     let tree = serde_json::from_str::<Vec<TreeNode>>(&json).ok()?;
     serde_json::to_string(&WsMessage::TreeUpdate { tree }).ok()

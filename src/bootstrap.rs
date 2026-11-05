@@ -143,11 +143,8 @@ pub(crate) async fn reload_catalog(state: &AppState, reason: &'static str) {
 /// Broadcast the current text sidebar tree as a `TreeUpdate` (the same shape
 /// the old file-watcher sent) so connected clients refresh after a sync.
 pub(crate) async fn broadcast_tree(state: &AppState) {
-    if let Ok(Some(json)) = state.store.get_site_tree("text").await
-        && let Ok(tree) = serde_json::from_str::<Vec<TreeNode>>(&json)
-        && let Ok(s) = serde_json::to_string(&WsMessage::TreeUpdate { tree })
-    {
-        let _ = state.tx.send(s);
+    if let Some(frame) = crate::server::ws::current_tree_message(state).await {
+        let _ = state.tx.send(frame);
     }
 }
 
