@@ -47,6 +47,7 @@ import {
   useState,
 } from "react";
 
+import { EDGE_BACK_WIDTH } from "./edge-back-gesture.ts";
 import { prepareSelectionHaptic, selectionHaptic } from "./haptics.ts";
 import { MobileNavigation } from "./mobile-navigation.tsx";
 import { useShellLabels } from "./shell-labels.tsx";
@@ -273,7 +274,7 @@ export function NavShell(props: NavShellProps): ReactNode {
       // the bookshelf. Let that gesture win there; the rest of the reading
       // surface still opens Contents, and an open drawer keeps the full width
       // available for swipe-to-close.
-      reservedLeadingEdge: onBack ? 28 : 0,
+      reservedLeadingEdge: onBack ? EDGE_BACK_WIDTH : 0,
       getOpen: () => mobileOpenRef.current,
       setOpen: setMobileOpen,
       onPrepareThreshold: prepareSelectionHaptic,

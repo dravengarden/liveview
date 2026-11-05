@@ -393,7 +393,7 @@ test("scrolling shelf surfaces avoid live backdrop filters", async () => {
   );
   assertPresent(
     navShell,
-    /reservedLeadingEdge:\s*onBack \? 28 : 0/,
+    /reservedLeadingEdge:\s*onBack \? EDGE_BACK_WIDTH : 0/,
     "the reader must reserve the iOS back-swipe edge instead of letting Contents steal it",
   );
   assertPresent(

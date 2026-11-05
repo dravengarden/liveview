@@ -88,6 +88,10 @@ import {
 } from "@/reader/entry";
 import { shelfProgress, widgetItems } from "@/reader/progress";
 import { useChapterContent } from "@/reader/useChapterContent";
+import { historyMode, type NavSource } from "@/reader/history";
+import { engineShouldLoad, followEngine } from "@/reader/readAlong";
+import { returnToShelf } from "@/reader/shelfTransition";
+import { useEdgeBackGesture } from "@/_shell/edge-back-gesture";
 import type {
   Book,
   FileType,
@@ -162,11 +166,11 @@ export function App(): React.JSX.Element {
   // Latest `openFile`, held in a ref so the chapter loader can re-enter it for
   // the missing-path redirect without a dependency cycle.
   const openFileRef = useRef<
-    ((p: string, l: string, r: string, replace?: boolean) => void) | null
+    ((p: string, l: string, r: string, source: NavSource) => void) | null
   >(null);
   const redirectChapter = useCallback(
     (req: { path: string; lang: string; rendition: string }) => {
-      void openFileRef.current?.(req.path, req.lang, req.rendition, true);
+      void openFileRef.current?.(req.path, req.lang, req.rendition, "redirect");
     },
     [],
   );
@@ -564,8 +568,9 @@ export function App(): React.JSX.Element {
       path: string,
       langArg: string,
       renditionArg: string,
-      replace = false,
+      source: NavSource,
     ) => {
+      const replace = historyMode(source, currentPathRef.current === null) === "replace";
       const slug = bookSlugOf(path);
       const book = books.find((b) => b.slug === slug);
       logEvent("open_chapter", {
@@ -585,8 +590,6 @@ export function App(): React.JSX.Element {
 
       setLang(langArg);
       setRendition(renditionArg);
-      // `replace` for an in-place rendition switch (read ↔ listen) so it doesn't
-      // stack a back-button entry per toggle.
       writeHash(path, langForHash, renditionForHash, replace);
       if (renditionArg === "audio") {
         fileLoadSeq.current += 1;
@@ -605,29 +608,14 @@ export function App(): React.JSX.Element {
   // re-enter it (see openFileRef declaration).
   openFileRef.current = openFile;
 
-  // Sidebar / TOC navigation, within the current edition + mode. Logical-layer
-  // history: the shelf is layer 0 and "reading" is a single layer-1 entry above
-  // it. `enterBook` pushes that one entry on shelf→book; switching chapters from
-  // the TOC is a *lateral* move that REPLACES it, so the browser/native Back from
-  // any chapter returns to the shelf, not to the previously-read chapter. (The
-  // `enteringFromShelf` guard is defensive — the sidebar only renders while
-  // reading, so in practice this always replaces.)
+  // Contents and in-text links reach chapters with different history
+  // behaviour; see reader/history.ts.
   const handleSelect = useCallback(
-    (path: string) => {
-      const enteringFromShelf = currentPathRef.current === null;
-      void openFile(path, lang, rendition, !enteringFromShelf);
-    },
+    (path: string) => void openFile(path, lang, rendition, "contents"),
     [openFile, lang, rendition],
   );
-
-  // In-content cross-reference links (a `.md` link in the prose, e.g. "see ch.4").
-  // Unlike a TOC jump this is a drill-DOWN, not a lateral move: PUSH a history
-  // entry so Back returns to the citing chapter where the link was, not to the
-  // shelf.
   const handleNavigateLink = useCallback(
-    (path: string) => {
-      void openFile(path, lang, rendition, false);
-    },
+    (path: string) => void openFile(path, lang, rendition, "link"),
     [openFile, lang, rendition],
   );
 
@@ -637,7 +625,7 @@ export function App(): React.JSX.Element {
     (newLang: string) => {
       if (currentPath) {
         if (activeSlug) saveBookPref(activeSlug, { lang: newLang });
-        void openFile(currentPath, newLang, rendition);
+        void openFile(currentPath, newLang, rendition, "lang");
       }
     },
     [currentPath, openFile, rendition, activeSlug, saveBookPref],
@@ -654,7 +642,7 @@ export function App(): React.JSX.Element {
   // chapter, else the first. Audio chapter ids differ from text, so we never map
   // a text position across — it lands on the audio rendition's own chapter.
   const openAudiobook = useCallback(
-    (slug: string, chapterPath?: string, replace = false) => {
+    (slug: string, chapterPath: string | undefined, source: NavSource) => {
       const book = books.find((b) => b.slug === slug);
       const r = book?.renditions.find((x) => x.kind === "audio");
       if (!book || !r) {
@@ -681,11 +669,11 @@ export function App(): React.JSX.Element {
           if (!target) {
             // Spine loaded but no playable chapter resolved — still ENTER the book
             // (text README) rather than dead-ending the tap with only a toast.
-            void openFile(`${slug}/README.md`, audioLang, "text", replace);
+            void openFile(`${slug}/README.md`, audioLang, "text", source);
             return;
           }
           putSpine(slug, "audio", spine);
-          void openFile(target, audioLang, "audio", replace);
+          void openFile(target, audioLang, "audio", source);
         } catch (e) {
           // Offline + the audio spine isn't cached (the "card does nothing offline"
           // bug): the audio path used to dead-end with only a toast, UNLIKE the text
@@ -697,7 +685,7 @@ export function App(): React.JSX.Element {
             `${slug}/README.md`,
             entryLang(r, bookPrefs[slug]?.lang, uiLang),
             "text",
-            replace,
+            source,
           );
         }
       })();
@@ -710,7 +698,7 @@ export function App(): React.JSX.Element {
   // back to the book's default rendition. Resumes the last-read chapter if there
   // is one (and it still exists), else its README, else its first doc.
   const enterBook = useCallback(
-    (slug: string, renditionKind?: string, replace = false) => {
+    (slug: string, renditionKind?: string, source: NavSource = "shelf") => {
       const book = books.find((b) => b.slug === slug);
       if (!book) return;
       // Native iOS shell only: snapshot the SHELF (the current view) as the pop
@@ -726,7 +714,7 @@ export function App(): React.JSX.Element {
       const initialLang = entryLang(r, pref?.lang, uiLang);
       // Audio opens its inline read-along page (sidebar = audio spine).
       if (r.kind === "audio") {
-        openAudiobook(slug, undefined, replace);
+        openAudiobook(slug, undefined, source);
         return;
       }
       // OFFLINE-FIRST: NAVIGATE IMMEDIATELY — NEVER await the network before showing
@@ -743,7 +731,7 @@ export function App(): React.JSX.Element {
         resume ?? `${slug}/README.md`,
         initialLang,
         r.kind,
-        replace,
+        source,
       );
       // Load this rendition's contents in the background, cache-first; it
       // never gates navigation.
@@ -757,107 +745,24 @@ export function App(): React.JSX.Element {
   );
 
   // Return to the landing bookshelf.
+  // On the native shell the held shelf snapshot covers the shelf's
+  // re-composite; see reader/shelfTransition.ts for the ordering.
   const backToLanding = useCallback(() => {
-    // Native iOS shell only: snapshot the current book + reveal the held shelf
-    // snapshot, so the shelf appears instantly and the shelf re-composite below
-    // happens behind the snapshot. No-op (false) off-shell → unchanged web return.
-    const native = nativeNavPop();
-    writeHash(null, null, null, false);
-    fileLoadSeq.current += 1;
-    setCurrentPath(null);
-    currentPathRef.current = null;
-    resetChapter();
-    // Tell native the shelf has painted so it swaps the held snapshot for the live
-    // webview. Double-rAF = through the first painted frame.
-    if (native) {
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => nativeNavReady())
-      );
-    }
-  }, []);
+    returnToShelf(
+      { push: nativeNavPush, pop: nativeNavPop, ready: nativeNavReady, frame: requestAnimationFrame },
+      () => {
+        writeHash(null, null, null, false);
+        fileLoadSeq.current += 1;
+        setCurrentPath(null);
+        currentPathRef.current = null;
+        resetChapter();
+      },
+    );
+  }, [resetChapter]);
 
-  // iOS-style left-edge swipe → back to the shelf. A standalone PWA has no
-  // browser back-swipe, so we synthesise it: a touch that STARTS within EDGE px
-  // of the left edge and travels right past THRESH (more horizontal than
-  // vertical) pops back to the bookshelf. Only while reading a book; skipped
-  // when the touch begins inside an overlay (lightbox / sheet / modal — a fixed
-  // element high in the z-stack, which owns its own horizontal gestures).
-  // Passive listeners so normal vertical scrolling is never blocked.
-  useEffect(() => {
-    if (!currentPath) {
-      return;
-    }
-    const EDGE = 28;
-    const THRESH = 70;
-    let sx = 0;
-    let sy = 0;
-    let tracking = false;
-    let horiz = false;
-    let decided = false;
-    const inOverlay = (el: Element | null): boolean => {
-      for (let n = el; n && n !== document.body; n = n.parentElement) {
-        const s = globalThis.getComputedStyle(n);
-        if (s.position === "fixed" && Number(s.zIndex) >= 1250) {
-          return true;
-        }
-      }
-      return false;
-    };
-    const onStart = (e: TouchEvent): void => {
-      const t = e.touches[0];
-      if (!t || t.clientX > EDGE || inOverlay(e.target as Element)) {
-        return;
-      }
-      sx = t.clientX;
-      sy = t.clientY;
-      tracking = true;
-      decided = false;
-      horiz = false;
-    };
-    const onMove = (e: TouchEvent): void => {
-      if (!tracking) {
-        return;
-      }
-      const t = e.touches[0];
-      if (!t) {
-        return;
-      }
-      const dx = t.clientX - sx;
-      const dy = t.clientY - sy;
-      if (!decided && (Math.abs(dx) > 12 || Math.abs(dy) > 12)) {
-        decided = true;
-        horiz = dx > 0 && Math.abs(dx) > Math.abs(dy);
-        if (!horiz) {
-          tracking = false; // a vertical scroll — let it go
-        }
-      }
-    };
-    const onEnd = (e: TouchEvent): void => {
-      if (!tracking) {
-        return;
-      }
-      tracking = false;
-      const t = e.changedTouches[0];
-      if (!t) {
-        return;
-      }
-      const dx = t.clientX - sx;
-      const dy = t.clientY - sy;
-      if (horiz && dx > THRESH && Math.abs(dx) > Math.abs(dy)) {
-        backToLanding();
-      }
-    };
-    globalThis.addEventListener("touchstart", onStart, { passive: true });
-    globalThis.addEventListener("touchmove", onMove, { passive: true });
-    globalThis.addEventListener("touchend", onEnd, { passive: true });
-    globalThis.addEventListener("touchcancel", onEnd, { passive: true });
-    return () => {
-      globalThis.removeEventListener("touchstart", onStart);
-      globalThis.removeEventListener("touchmove", onMove);
-      globalThis.removeEventListener("touchend", onEnd);
-      globalThis.removeEventListener("touchcancel", onEnd);
-    };
-  }, [currentPath, backToLanding]);
+  // Edge swipe back to the shelf while reading (standalone PWA and native
+  // shell have no browser back gesture).
+  useEdgeBackGesture(currentPath !== null, backToLanding);
 
   // Name the window after what is being read: it shows in the browser tab,
   // history, and the iOS app switcher, where a raw `<slug>/<file>.md` path
@@ -1018,11 +923,11 @@ export function App(): React.JSX.Element {
   //    freezes/crashes. So the guard reads `nowPlaying` through a ref, keeping it
   //    out of the dep array; engine-led changes are effect B's job, not this one.
   useEffect(() => {
+    const view = { slug: activeSlug, rendition, path: currentPath };
     if (
-      rendition !== "audio" || !currentPath || !activeBook ||
-      activeTree.length === 0
+      !activeBook || !currentPath ||
+      !engineShouldLoad(view, activeTree.length > 0, nowPlayingRef.current?.chapterPath ?? null)
     ) return;
-    if (nowPlayingRef.current?.chapterPath === currentPath) return;
     audioPlayChapter(
       {
         bookSlug: activeBook.slug,
@@ -1035,6 +940,7 @@ export function App(): React.JSX.Element {
       flattenTracks(activeTree, uiLang),
     );
   }, [
+    activeSlug,
     rendition,
     currentPath,
     activeBook,
@@ -1075,21 +981,14 @@ export function App(): React.JSX.Element {
   //    reader, the bubble tracks it.
   const syncedChapterRef = useRef<string | null>(null);
   useEffect(() => {
-    const np = nowPlaying;
-    // Only while viewing the playing book in the rendition it's playing.
-    if (
-      !np || activeSlug !== np.bookSlug ||
-      activeRendition?.kind !== np.rendition
-    ) {
-      syncedChapterRef.current = null;
-      return;
-    }
-    if (currentPath === np.chapterPath) {
-      syncedChapterRef.current = np.chapterPath;
-      return;
-    }
-    if (syncedChapterRef.current !== currentPath) return; // we weren't in sync — don't hijack
-    syncedChapterRef.current = np.chapterPath;
+    const step = followEngine(
+      { slug: activeSlug, rendition: activeRendition?.kind, path: currentPath },
+      nowPlaying,
+      syncedChapterRef.current,
+    );
+    syncedChapterRef.current = step.synced;
+    const np = step.follow;
+    if (!np) return;
     if (np.rendition === "audio") {
       // Audio renders off the engine — just move the page (no body fetch).
       setCurrentPath(np.chapterPath);
@@ -1100,7 +999,7 @@ export function App(): React.JSX.Element {
     } else {
       // Text read-aloud: load the next chapter's markdown so the in-place
       // highlight carries into it (sticky read-along across chapters).
-      void openFile(np.chapterPath, np.lang, "text", true);
+      void openFile(np.chapterPath, np.lang, "text", "engine");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -1157,7 +1056,7 @@ export function App(): React.JSX.Element {
       <ChapterPager
         prev={prev}
         next={next}
-        onNavigate={(path) => void openFile(path, lang, rendition)}
+        onNavigate={(path) => void openFile(path, lang, rendition, "pager")}
       />
     );
   }, [activeTree, uiLang, currentPath, openFile, lang, rendition]);
@@ -1165,7 +1064,7 @@ export function App(): React.JSX.Element {
   // Tapping the floating bubble's artwork returns to the playing book's inline
   // audio page (re-entering at the chapter it's on).
   const openPlayingAudio = useCallback(() => {
-    if (nowPlaying) openAudiobook(nowPlaying.bookSlug, nowPlaying.chapterPath);
+    if (nowPlaying) openAudiobook(nowPlaying.bookSlug, nowPlaying.chapterPath, "playing");
   }, [nowPlaying, openAudiobook]);
 
   // Navigate to whatever is playing, in its own mode: the audiobook page for an
@@ -1174,11 +1073,9 @@ export function App(): React.JSX.Element {
   const goToNowPlaying = useCallback(() => {
     if (!nowPlaying) return;
     if (nowPlaying.rendition === "audio") openPlayingAudio();
-    else {openFile(
-        nowPlaying.chapterPath,
-        nowPlaying.lang,
-        nowPlaying.rendition,
-      );}
+    else {
+      void openFile(nowPlaying.chapterPath, nowPlaying.lang, nowPlaying.rendition, "playing");
+    }
   }, [nowPlaying, openPlayingAudio, openFile]);
 
   // Switch the active book between its text and audio renditions, in place.
@@ -1187,9 +1084,8 @@ export function App(): React.JSX.Element {
     (kind: string) => {
       if (!activeSlug || kind === rendition) return;
       saveBookPref(activeSlug, { rendition: kind });
-      // replace (not push): switching read ↔ listen is in place, not a new page.
-      if (kind === "audio") openAudiobook(activeSlug, undefined, true);
-      else enterBook(activeSlug, kind, true);
+      if (kind === "audio") openAudiobook(activeSlug, undefined, "rendition");
+      else enterBook(activeSlug, kind, "rendition");
     },
     [activeSlug, rendition, openAudiobook, enterBook, saveBookPref],
   );
