@@ -266,15 +266,8 @@ async fn ensure_text_audio(
     // `.spoken.md` overlay — so the synthesized audio + its marks are derived
     // from the very text the reader sees and the in-place highlight anchors line
     // up. (The overlay is the audiobook rendition's own curated script.)
-    let (row, served) = state
-        .store
-        .get_chapter_fallback(
-            &ctx.slug,
-            ctx.kind.as_str(),
-            &ctx.lang,
-            &ctx.default_lang,
-            &ctx.rest,
-        )
+    let (row, served) = ctx
+        .chapter(state)
         .await
         .ok()
         .flatten()

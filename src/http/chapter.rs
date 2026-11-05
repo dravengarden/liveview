@@ -25,6 +25,38 @@ pub(crate) struct ReqCtx {
     pub(crate) rest: String,
 }
 
+impl ReqCtx {
+    /// Look up `rel_path` in this book's `kind` rendition, falling back from
+    /// the requested edition to the book default. Returns the row and the
+    /// edition actually served; each endpoint keeps its own fallback order
+    /// and its own mapping of a missing row versus a store error.
+    pub(crate) async fn chapter_at(
+        &self,
+        state: &AppState,
+        kind: RenditionKind,
+        rel_path: &str,
+    ) -> Result<Option<(ChapterRecord, String)>, String> {
+        state
+            .store
+            .get_chapter_fallback(
+                &self.slug,
+                kind.as_str(),
+                &self.lang,
+                &self.default_lang,
+                rel_path,
+            )
+            .await
+    }
+
+    /// The chapter the request names, in the requested rendition.
+    pub(crate) async fn chapter(
+        &self,
+        state: &AppState,
+    ) -> Result<Option<(ChapterRecord, String)>, String> {
+        self.chapter_at(state, self.kind, &self.rest).await
+    }
+}
+
 /// Split a wire path `<slug>/<rel_path>` and validate `rel_path` as a strictly
 /// relative, normalized path under the book. `None` for an empty path, an
 /// absolute path, or any empty / `.` / `..` / NUL-bearing segment — the
@@ -101,16 +133,7 @@ pub(crate) async fn api_file(
     let Some(ctx) = resolve_req(&state, &query).await else {
         return not_found();
     };
-    let chapter = state
-        .store
-        .get_chapter_fallback(
-            &ctx.slug,
-            ctx.kind.as_str(),
-            &ctx.lang,
-            &ctx.default_lang,
-            &ctx.rest,
-        )
-        .await;
+    let chapter = ctx.chapter(&state).await;
     let (row, served_lang) = match chapter {
         Ok(Some(x)) => x,
         Ok(None) => return not_found(),
@@ -153,24 +176,11 @@ pub(crate) async fn resolve_narration(
         && let Some(stem) = ctx.rest.strip_suffix(".md")
     {
         let spoken = format!("{stem}.spoken.md");
-        if let Some(hit) = state
-            .store
-            .get_chapter_fallback(&ctx.slug, "text", &ctx.lang, &ctx.default_lang, &spoken)
-            .await?
-        {
+        if let Some(hit) = ctx.chapter_at(state, RenditionKind::Text, &spoken).await? {
             return Ok(Some(hit));
         }
     }
-    let direct = state
-        .store
-        .get_chapter_fallback(
-            &ctx.slug,
-            ctx.kind.as_str(),
-            &ctx.lang,
-            &ctx.default_lang,
-            &ctx.rest,
-        )
-        .await?;
+    let direct = ctx.chapter(state).await?;
     if direct.is_some() || ctx.kind != RenditionKind::Audio {
         return Ok(direct);
     }
@@ -183,10 +193,7 @@ pub(crate) async fn resolve_narration(
     let Some(text_path) = audio_text_fallback_path(&ctx.rest) else {
         return Ok(None);
     };
-    state
-        .store
-        .get_chapter_fallback(&ctx.slug, "text", &ctx.lang, &ctx.default_lang, &text_path)
-        .await
+    ctx.chapter_at(state, RenditionKind::Text, &text_path).await
 }
 
 pub(crate) fn audio_text_fallback_path(path: &str) -> Option<String> {
@@ -262,17 +269,7 @@ pub(crate) async fn api_units(
     let Some(ctx) = resolve_req(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     };
-    match state
-        .store
-        .get_chapter_fallback(
-            &ctx.slug,
-            ctx.kind.as_str(),
-            &ctx.lang,
-            &ctx.default_lang,
-            &ctx.rest,
-        )
-        .await
-    {
+    match ctx.chapter(&state).await {
         Ok(Some((row, served_lang))) => {
             let md = row.markdown.unwrap_or_default();
             Json(SpokenUnitsContent {
@@ -295,17 +292,7 @@ pub(crate) async fn api_raw(
     let Some(ctx) = resolve_req(&state, &query).await else {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     };
-    let row = match state
-        .store
-        .get_chapter_fallback(
-            &ctx.slug,
-            ctx.kind.as_str(),
-            &ctx.lang,
-            &ctx.default_lang,
-            &ctx.rest,
-        )
-        .await
-    {
+    let row = match ctx.chapter(&state).await {
         Ok(Some((row, _))) => row,
         Ok(None) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
         Err(error) => return store_unavailable("get_chapter_fallback", error),

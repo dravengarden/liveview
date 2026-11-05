@@ -225,17 +225,7 @@ pub(crate) async fn api_request_speech(
         return StatusCode::NOT_FOUND.into_response();
     };
     let result = async {
-        let (row, _) = state
-            .store
-            .get_chapter_fallback(
-                &ctx.slug,
-                ctx.kind.as_str(),
-                &ctx.lang,
-                &ctx.default_lang,
-                &ctx.rest,
-            )
-            .await?
-            .ok_or("Chapter not found")?;
+        let (row, _) = ctx.chapter(&state).await?.ok_or("Chapter not found")?;
         let config = state
             .store
             .speech_policy(&row.book_slug, &row.rendition)

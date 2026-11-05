@@ -634,10 +634,17 @@ Follow-up record (2026-11-05): the items first deferred above are done.
   behavioural tests (`hooks/readAlongCache.ts` holds the read-along cache
   rules). Checks that read Swift and component markup stay source checks.
 
-Still open: `ChapterRef`/`resolve_chapter` (§5.2), because the HTTP and
-sync callers have different not-found and edition-fallback contracts and a
-shared resolver would change behaviour. `spike.ts` stays in `replica/`
-because `tools/lvsim.sh` depends on its globals.
+- Chapter lookup (§5.2): the request context (`ReqCtx::chapter` and
+  `chapter_at`) is the one place that applies the edition fallback; the
+  nine HTTP call sites no longer repeat the five-argument store call. Each
+  endpoint deliberately keeps its own fallback order (the narration overlay,
+  the audio-to-text source mapping, the displayed chapter for text
+  read-aloud) and its own missing-versus-error mapping, so no single
+  `resolve_chapter(purpose)` was introduced: it would have merged contracts
+  the characterization showed to be different.
+
+`spike.ts` stays in `replica/` because `tools/lvsim.sh` depends on its
+globals.
 
 Order rationale: 0–1 remove the largest source of regressions with the least
 visible change and create the tests the later phases rely on; 2 must precede
