@@ -119,14 +119,20 @@ function keepIfSame<T>(next: T): (prev: T) => T {
 }
 
 export function App(): React.JSX.Element {
-  const [tree, setTree] = useState<TreeNode[]>([]);
-  // Full AUDIO forest (all books), held ONLY for the shelf's listening meter so it
-  // reflects whole-book audio position. `tree` can't serve this: on the shelf it's
-  // the TEXT spine, and `.spoken.md` chapters are filtered out of the text spine
-  // (tree.rs), so an audio resume row isn't found there — the meter then collapses
-  // to raw in-chapter scroll (the "11% looks wrong" bug: 11% through the CURRENT
-  // chapter, not through the book). Cheap (one whole-forest fetch, cache-first).
-  const [audioTree, setAudioTree] = useState<TreeNode[]>([]);
+  // The shelf's two whole-library forests: text and audio. Shelf progress
+  // meters index text rows against the first and `.spoken.md` rows against the
+  // second (the text spine omits spoken chapters).
+  const [shelfForest, setShelfForest] = useState<TreeNode[]>([]);
+  const [audioForest, setAudioForest] = useState<TreeNode[]>([]);
+  // Per-book contents spines keyed `slug:rendition`. A keyed entry is never
+  // wrong for its key, so late loads cannot clobber another book or rendition.
+  const [spines, setSpines] = useState<Record<string, TreeNode[]>>({});
+  const putSpine = useCallback((slug: string, kind: string, nodes: TreeNode[]) => {
+    setSpines((prev) => {
+      const key = `${slug}:${kind}`;
+      return prev[key] === nodes ? prev : { ...prev, [key]: nodes };
+    });
+  }, []);
   const [books, setBooks] = useState<Book[]>([]);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   // The reading location saved on this device, read ONCE at first render — before
@@ -171,9 +177,6 @@ export function App(): React.JSX.Element {
     applyLive: applyLiveChapter,
     clearUntranslated,
   } = chapter;
-  // The rendition whose spine `tree` currently holds. Live tree updates (which
-  // arrive as the default text spine) must not clobber a non-text spine.
-  const renditionRef = useRef<string>("text");
 
   const {
     loadBook,
@@ -261,15 +264,16 @@ export function App(): React.JSX.Element {
   // renders the raw filesystem tree. The flag also drives whether the root
   // folder node is shown (see below) and the per-row styling in the sidebar.
   const bookMode = activeBook?.manifest ?? false;
+  const activeSpine = activeSlug ? spines[`${activeSlug}:${rendition}`] : undefined;
   const activeTree = useMemo(() => {
-    if (!activeSlug) return [];
-    const root = tree.find((n) => n.path === activeSlug);
+    if (!activeSlug || !activeSpine) return [];
+    const root = activeSpine.find((n) => n.path === activeSlug);
     if (!root) return [];
     // Book mode: the book label already sits in the sidebar header, so the
     // single root folder ("第一层 dir") is redundant — surface its
     // chapters/sections directly. Docs mode keeps the root for context.
     return bookMode ? root.children : [root];
-  }, [tree, activeSlug, bookMode]);
+  }, [activeSpine, activeSlug, bookMode]);
   const contentsTree = useBookAudioPreload(activeTree, activeSlug, rendition, lang, currentPath, nowPlaying, audioPlaying);
   const bookLabel = activeBook?.label ?? activeSlug ?? "";
   // The current chapter's display title (current UI edition, falling back to the
@@ -277,14 +281,12 @@ export function App(): React.JSX.Element {
   // bar so you always see WHERE you are, with the book name as the second line.
   const chapterLabel = useMemo(() => {
     if (!currentPath) return "";
-    const node = findNode(tree, currentPath);
+    const node = findNode(activeSpine ?? shelfForest, currentPath);
     const resolved = node && ((uiLang && node.titles?.[uiLang]) || node.name);
-    // No spine node — e.g. offline with a stale `tree` that predates a freshly-added
-    // book, opened at its `<slug>/README.md` entry guess. The raw filename
-    // ("README.md") is worse than useless; fall back to the book title so the bar
-    // still says WHERE you are. Only if even that's empty do we show the filename.
+    // No spine node (offline before a new book's spine is cached): the book
+    // title says where you are better than a raw "README.md".
     return resolved || bookLabel || currentPath.split("/").pop() || "";
-  }, [currentPath, tree, uiLang, bookLabel]);
+  }, [currentPath, activeSpine, shelfForest, uiLang, bookLabel]);
   // The renditions the active book offers, and the one currently active. The
   // language switcher shows the *active rendition's* languages (each rendition
   // carries its own lang list).
@@ -384,18 +386,20 @@ export function App(): React.JSX.Element {
         // offline — entering a book fetches its spine first; uncached, the tap
         // would do nothing. Cheap (2 fetches), runs on every load (lazy + eager).
         void prefetchTrees();
-        // Load the full audio forest for the shelf's listening meter (see audioTree).
-        // Cache-first so it's instant offline; refreshShelf re-seeds it on deploy.
-        void (async () => {
-          try {
-            const at = (await (
-              await contentFetch("/api/tree?rendition=audio")
-            ).json()) as TreeNode[];
-            setAudioTree(keepIfSame(at));
-          } catch {
-            /* offline / transient — the cached meter stands */
-          }
-        })();
+        // Seed the shelf forests for the progress meters, cache-first so it is
+        // instant offline; refreshShelf re-seeds them on deploy.
+        for (const [url, set] of [
+          ["/api/tree", setShelfForest],
+          ["/api/tree?rendition=audio", setAudioForest],
+        ] as const) {
+          void (async () => {
+            try {
+              set(keepIfSame((await (await contentFetch(url)).json()) as TreeNode[]));
+            } catch {
+              /* offline / transient — the cached meter stands */
+            }
+          })();
+        }
         // Native shell: bulk-download the whole corpus into the offline content
         // cache (auto-download, default on, WiFi-only by default). Runs with
         // bounded concurrency native-side; no-op on web/PWA and when the user
@@ -424,10 +428,10 @@ export function App(): React.JSX.Element {
     } catch {
       /* offline / transient — the cached shelf stands */
     }
-    const [bareTree, , audioForest] = await Promise.all([
-      // The bare key is what the bookshelf seeds `tree` from; the rendition keys
-      // are what the open-book entry paths read. ALL three must be revalidated, or
-      // one stays stale across a deploy.
+    const [bareTree, , audioTree] = await Promise.all([
+      // The bare key seeds the shelf forest; the rendition keys are what the
+      // open-book entry paths read. All three are revalidated, or one stays
+      // stale across a deploy.
       contentFetch("/api/tree", { fresh: true }).catch(() => undefined),
       contentFetch("/api/tree?rendition=text", { fresh: true }).catch(() =>
         undefined
@@ -436,24 +440,13 @@ export function App(): React.JSX.Element {
         undefined
       ),
     ]);
-    // Re-seed the live `tree` so the shelf's reading-progress meters index against
-    // the NEW spine. ONLY on the shelf (`currentPath === null`) — inside a book
-    // `tree` holds that book's (possibly audio) spine and must not be clobbered;
-    // returning to the shelf re-seeds from the now-fresh cache.
-    if (currentPathRef.current === null && bareTree) {
+    // Re-seed both shelf forests so the meters index against the new spines.
+    for (const [res, set] of [[bareTree, setShelfForest], [audioTree, setAudioForest]] as const) {
+      if (!res) continue;
       try {
-        setTree(keepIfSame((await bareTree.json()) as TreeNode[]));
+        set(keepIfSame((await res.json()) as TreeNode[]));
       } catch {
-        /* malformed — keep the prior tree, next deploy retries */
-      }
-    }
-    // Re-seed the audio forest too, so the shelf's listening meter indexes the NEW
-    // audio spine (reuses the fresh fetch above — no extra round-trip).
-    if (currentPathRef.current === null && audioForest) {
-      try {
-        setAudioTree(keepIfSame((await audioForest.json()) as TreeNode[]));
-      } catch {
-        /* malformed — keep the prior audio forest, next deploy retries */
+        /* malformed — keep the prior forest, next deploy retries */
       }
     }
   }, []);
@@ -491,8 +484,8 @@ export function App(): React.JSX.Element {
   // progress side by side; within a rendition the most-recent chapter wins.
   // Keyed by book slug for the landing.
   const progressBySlug = useMemo(
-    () => shelfProgress(recentProgress, tree, audioTree, uiLang),
-    [recentProgress, tree, audioTree, uiLang],
+    () => shelfProgress(recentProgress, shelfForest, audioForest, uiLang),
+    [recentProgress, shelfForest, audioForest, uiLang],
   );
 
   // Keep WidgetKit's offline snapshot aligned with the shelf. The native bridge
@@ -520,14 +513,15 @@ export function App(): React.JSX.Element {
   );
 
   const handleTreeUpdate = useCallback((newTree: TreeNode[]) => {
-    // Live tree updates carry the default (text) spine. Don't let one clobber a
-    // non-text spine the user is currently browsing.
-    if (renditionRef.current === "text") {
-      const path = currentPathRef.current;
-      if (!path) setTree(newTree);
-      else void loadContentsTree(bookSlugOf(path), "text", true).then(next => {
-        if (currentPathRef.current === path && renditionRef.current === "text") setTree(next);
-      }).catch(() => undefined);
+    // Live tree updates carry the text forest; the open book's text contents
+    // (titles + audio metadata) are refreshed from their own endpoint.
+    setShelfForest(keepIfSame(newTree));
+    const path = currentPathRef.current;
+    if (path) {
+      const slug = bookSlugOf(path);
+      void loadContentsTree(slug, "text", true)
+        .then((next) => putSpine(slug, "text", next))
+        .catch(() => undefined);
     }
     // A TreeUpdate is the server's post-`sync` broadcast — the corpus just changed
     // (new or edited book). This is the PRIMARY live-refresh path: refresh the
@@ -536,7 +530,7 @@ export function App(): React.JSX.Element {
     // re-pulls the offline manifest first, so the FRESH /api/books resolves to the
     // new deploy instead of the stale store. Fire-and-forget.
     void refreshShelf();
-  }, [refreshShelf]);
+  }, [refreshShelf, putSpine]);
 
   useWebSocket({
     onContentUpdate: handleContentUpdate,
@@ -591,7 +585,6 @@ export function App(): React.JSX.Element {
 
       setLang(langArg);
       setRendition(renditionArg);
-      renditionRef.current = renditionArg;
       // `replace` for an in-place rendition switch (read ↔ listen) so it doesn't
       // stack a back-button entry per toggle.
       writeHash(path, langForHash, renditionForHash, replace);
@@ -691,8 +684,7 @@ export function App(): React.JSX.Element {
             void openFile(`${slug}/README.md`, audioLang, "text", replace);
             return;
           }
-          setTree(spine);
-          renditionRef.current = "audio";
+          putSpine(slug, "audio", spine);
           void openFile(target, audioLang, "audio", replace);
         } catch (e) {
           // Offline + the audio spine isn't cached (the "card does nothing offline"
@@ -710,7 +702,7 @@ export function App(): React.JSX.Element {
         }
       })();
     },
-    [books, bookPrefs, loadBookRows, uiLang, openFile, t],
+    [books, bookPrefs, loadBookRows, uiLang, openFile, putSpine, t],
   );
 
   // Enter a book from the landing page in a specific rendition (the bookshelf
@@ -747,27 +739,21 @@ export function App(): React.JSX.Element {
       // currentPath first, then loadFile renders it cache-first (or a calm offline
       // placeholder) — zero network on the critical path.
       const resume = resumeTextPath(recentProgress, slug);
-      renditionRef.current = r.kind;
-      setTree([]);
       void openFile(
         resume ?? `${slug}/README.md`,
         initialLang,
         r.kind,
         replace,
       );
-      // Warm THIS rendition's spine (sidebar/TOC) in the BACKGROUND — cache-first and
-      // strictly non-blocking; it must never gate navigation. prefetchTrees already
-      // warms both spines on load; this just refreshes the in-state tree on entry.
-      void (async () => {
-        try {
-          const spine = await loadContentsTree(slug, r.kind);
-          if (currentPathRef.current?.startsWith(`${slug}/`) && renditionRef.current === r.kind && spine.some((n) => n.path === slug)) setTree(spine);
-        } catch {
-          // offline + uncached spine — the reader still works from the entry above.
-        }
-      })();
+      // Load this rendition's contents in the background, cache-first; it
+      // never gates navigation.
+      void loadContentsTree(slug, r.kind)
+        .then((spine) => putSpine(slug, r.kind, spine))
+        .catch(() => {
+          // Offline and uncached: the reader still works from the entry above.
+        });
     },
-    [books, bookPrefs, openFile, uiLang, openAudiobook, recentProgress],
+    [books, bookPrefs, openFile, uiLang, openAudiobook, recentProgress, putSpine],
   );
 
   // Return to the landing bookshelf.
@@ -781,20 +767,6 @@ export function App(): React.JSX.Element {
     setCurrentPath(null);
     currentPathRef.current = null;
     resetChapter();
-    // Restore the bookshelf's text spine. `tree` may still hold the book we just
-    // left — for an AUDIO book that's the audio spine, against which EVERY text
-    // progress row misses (`.md` ∉ `.spoken.md` spine) → all reading meters
-    // collapse to raw in-chapter scroll. The seed effect doesn't re-run on return
-    // (its deps don't change), so re-seed here, cache-first (warm via prefetchTrees
-    // / the root-watcher; offline-safe). No-op when `tree` is already the text spine.
-    void (async () => {
-      try {
-        const res = await contentFetch("/api/tree");
-        setTree((await res.json()) as TreeNode[]);
-      } catch {
-        /* offline / transient — keep the prior tree */
-      }
-    })();
     // Tell native the shelf has painted so it swaps the held snapshot for the live
     // webview. Double-rAF = through the first painted frame.
     if (native) {
@@ -940,7 +912,6 @@ export function App(): React.JSX.Element {
       const restoredLang = langForHashEntry(path, kind, hashLang);
       setLang(restoredLang);
       setRendition(kind);
-      renditionRef.current = kind;
       if (replaceHash) {
         // Normalise the hash without a history entry (see hashTokens).
         const tokens = hashTokens(restoredLang, kind, bookOf(path));
@@ -949,9 +920,7 @@ export function App(): React.JSX.Element {
       try {
         // Cache-first (offline-safe), same as enterBook — never a raw network
         // fetch that fails offline / skips the cache.
-        const nextTree = await loadContentsTree(bookSlugOf(path), kind);
-        if (seq !== fileLoadSeq.current) return;
-        setTree(nextTree);
+        putSpine(bookSlugOf(path), kind, await loadContentsTree(bookSlugOf(path), kind));
       } catch (e) {
         console.error("Failed to fetch rendition tree:", e);
       }
@@ -968,7 +937,7 @@ export function App(): React.JSX.Element {
         void loadFile(path, restoredLang, kind);
       }
     },
-    [bookOf, loadFile, langForHashEntry, renditionForHashEntry, loadBook],
+    [bookOf, loadFile, langForHashEntry, renditionForHashEntry, loadBook, putSpine],
   );
 
   // Persist the last reading location on THIS device (see RESUME_KEY) whenever
@@ -1006,7 +975,7 @@ export function App(): React.JSX.Element {
     }
   }, [books, restoreFromHash, initialResume]);
 
-  // Fetch the tree once, then restore any deep link from the hash. Waits for
+  // Restore any deep link from the hash once the catalog is known. Waits for
   // `books` so deep-link rendition/language/fallback resolution works.
   useEffect(() => {
     if (initializedRef.current || books.length === 0) return;
@@ -1019,16 +988,7 @@ export function App(): React.JSX.Element {
       }
       // No deep link in the URL. A native-shell cold relaunch loads the base URL
       // (no hash), so try to RESUME the last book read on this device first.
-      if (await tryResumeLastLocation()) return;
-      // Nothing to resume (or the saved book is gone): seed the default (text)
-      // sidebar spine for the bookshelf.
-      try {
-        // Cache-first (offline-safe); the root-watcher revalidates on deploy.
-        const res = await contentFetch("/api/tree");
-        setTree((await res.json()) as TreeNode[]);
-      } catch (e) {
-        console.error("Failed to fetch tree:", e);
-      }
+      await tryResumeLastLocation();
     })();
   }, [books, restoreFromHash, tryResumeLastLocation]);
 
