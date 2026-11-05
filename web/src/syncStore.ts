@@ -102,13 +102,6 @@ export async function refreshSyncStatus(): Promise<void> {
   }
 }
 
-/** Set the SW prefetch-in-flight count (Phase 4). */
-export function setPrefetching(n: number): void {
-  if (n === state.prefetching) return;
-  state = { ...state, prefetching: n };
-  emit();
-}
-
 /** True when anything background is happening — gates the ambient filament. */
 export function isSyncActive(s: SyncStatus): boolean {
   return s.global.pending > 0 || s.prefetching > 0;

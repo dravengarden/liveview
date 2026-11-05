@@ -5,6 +5,7 @@ import { emitServerSettingPush, loadServerSetting } from "@/syncBackends";
 import type { NowPlaying } from "./player";
 import { sentencePosition, voicePreferenceKey } from "./voice-model";
 import { parseMediaResource } from "@/audioMediaIndex";
+import { voicePreference } from "@/signals.ts";
 
 test("voice switching follows a sentence rather than elapsed seconds", () => {
   const slower = [{ idx: 0, start_ms: 0, end_ms: 4000 }, { idx: 1, start_ms: 4000, end_ms: 9000 }];
@@ -22,16 +23,15 @@ test("voice preferences distinguish rendition and language", () => {
 
 test("server voice hydration notifies the book preloader when the local choice changes", async () => {
   const storage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
-  const dispatch = Object.getOwnPropertyDescriptor(globalThis, "dispatchEvent");
   const fetch = globalThis.fetch;
   const np = { bookSlug: "voice-hydration", rendition: "text", lang: "en" } as NowPlaying;
   const key = voicePreferenceKey(np);
   let local = "heart";
-  const events: string[] = [];
+  let events = 0;
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
     getItem: () => local, setItem: (_key: string, value: string) => { local = value; },
   } });
-  Object.defineProperty(globalThis, "dispatchEvent", { configurable: true, value: (event: Event) => { events.push(event.type); return true; } });
+  const unsubscribe = voicePreference.subscribe(() => { events += 1; });
   globalThis.fetch = async () => Response.json({});
   try {
     await loadServerSetting(key);
@@ -42,15 +42,14 @@ test("server voice hydration notifies the book preloader when the local choice c
     const chapter = { id: "chapter", default_voice: "heart", voices };
     assert.equal((await preferredVoice(np, chapter))?.id, "bella");
     assert.equal(local, "bella");
-    assert.deepEqual(events, ["lv-voice-preference"]);
+    assert.equal(events, 1);
     await preferredVoice(np, chapter);
-    assert.equal(events.length, 1, "an unchanged choice does not restart the planner");
+    assert.equal(events, 1, "an unchanged choice does not restart the planner");
   } finally {
     globalThis.fetch = fetch;
+    unsubscribe();
     if (storage) Object.defineProperty(globalThis, "localStorage", storage);
     else Reflect.deleteProperty(globalThis, "localStorage");
-    if (dispatch) Object.defineProperty(globalThis, "dispatchEvent", dispatch);
-    else Reflect.deleteProperty(globalThis, "dispatchEvent");
   }
 });
 test("variant DAG entries cannot overwrite default chapter audio", () => {

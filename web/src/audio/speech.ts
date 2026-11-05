@@ -4,6 +4,7 @@ import { loadServerSetting, putServerSetting } from "@/syncBackends";
 import type { Mark } from "@/types";
 import type { NowPlaying } from "./player";
 import { voicePreferenceKey } from "./voice-model";
+import { voicePreference } from "@/signals.ts";
 export { sentencePosition, voicePreferenceKey } from "./voice-model";
 
 export interface VoiceChoice {
@@ -79,7 +80,7 @@ export function saveVoicePreference(np: NowPlaying, voice: string): void {
 function storeVoicePreference(key: string, voice: string): void {
   if (localStorage.getItem(key) === voice) return;
   localStorage.setItem(key, voice);
-  globalThis.dispatchEvent(new Event("lv-voice-preference"));
+  voicePreference.emit();
 }
 
 export async function chapterVoices(np: NowPlaying, fresh = false): Promise<ChapterVoices | null> {

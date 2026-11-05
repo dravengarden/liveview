@@ -50,12 +50,8 @@ import {
 } from "@/hooks";
 import { useI18n } from "@/i18n";
 import { logEvent } from "@/apm";
-import {
-  prefetchAllBooks,
-  prefetchBookAudio,
-  prefetchBookText,
-  prefetchTrees,
-} from "@/prefetch";
+import { playbackControls } from "@/signals.ts";
+import { prefetchTrees } from "@/prefetch";
 import { useAudioPlayer } from "@/audio/player";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { ShortcutsDialog } from "@/components/ShortcutsDialog";
@@ -80,19 +76,27 @@ import {
   resolveFirstChapter,
 } from "./readerTree";
 import {
+  bookSlugOf,
   getHashState,
+  hashTokens,
   readResume,
   type ResumeLocation,
   writeHash,
   writeResume,
-} from "./readerLocation";
+} from "@/reader/location";
+import {
+  entryLang,
+  hashEntryLang,
+  hashEntryRendition,
+  resolveRendition,
+  resumeTextPath,
+} from "@/reader/entry";
+import { shelfProgress, widgetItems } from "@/reader/progress";
 import type {
   Book,
-  BookProgress,
   FileContent,
   FileType,
   ProgressEntry,
-  RenditionInfo,
   TreeNode,
 } from "@/types";
 
@@ -250,18 +254,8 @@ export function App(): React.JSX.Element {
   }, [syncNotice]);
 
   // The active book is the first path segment; null ⇒ the landing bookshelf.
-  const activeSlug = currentPath ? (currentPath.split("/")[0] ?? null) : null;
+  const activeSlug = currentPath ? bookSlugOf(currentPath) : null;
   const activeBook = books.find((b) => b.slug === activeSlug) ?? null;
-  // Opening a book quietly warms the rest of its chapters into the SW cache —
-  // text (read-offline) AND any baked audio (listen-offline) — idle-scheduled +
-  // once per book/session. Audio is opt-OUT-free now: just opening a book makes
-  // its already-generated audio offline-available (a text-only book's audio
-  // sweep is a no-op). Cheap on repeat opens: the SW short-circuits cache hits.
-  useEffect(() => {
-    if (!activeSlug) return;
-    void prefetchBookText(activeSlug);
-    void prefetchBookAudio(activeSlug);
-  }, [activeSlug]);
   // Are we ON the playing book's inline audio page (where the read-along reader
   // already shows full controls)? If so the floating bubble hides; everywhere
   // else (text page, another book, the shelf) it shows as the now-playing handle.
@@ -371,23 +365,6 @@ export function App(): React.JSX.Element {
     (nowPlaying?.rendition === "text" &&
       nowPlaying.chapterPath === currentPath);
 
-  // The rendition a book opens in: its declared default, resolved to the
-  // matching RenditionInfo (falling back to the first).
-  const defaultRendition = useCallback(
-    (book: Book): RenditionInfo | null =>
-      book.renditions.find((r) => r.kind === book.default_rendition) ??
-        book.renditions[0] ?? null,
-    [],
-  );
-
-  // Initial edition for a rendition: prefer the UI locale if that rendition
-  // offers it (axis A ↔ B default link), else the rendition's declared default.
-  const pickInitialLang = useCallback(
-    (r: RenditionInfo): string =>
-      r.langs.some((l) => l.lang === uiLang) ? uiLang : r.default_lang,
-    [uiLang],
-  );
-
   // Fetch the book list once, for the landing page + language switcher.
   useEffect(() => {
     void (async () => {
@@ -429,12 +406,6 @@ export function App(): React.JSX.Element {
             /* offline / transient — the cached meter stands */
           }
         })();
-        // EAGER (native shell): pre-load the WHOLE library into the offline
-        // caches so every book reads + plays with no network — the native app's
-        // "almost no loading" promise. No-op on web/PWA (lazy = warm-on-open).
-        // Idle-scheduled + session-deduped inside prefetch, so it's a background
-        // trickle that never blocks the shelf.
-        void prefetchAllBooks(list.map((b) => b.slug));
         // Native shell: bulk-download the whole corpus into the offline content
         // cache (auto-download, default on, WiFi-only by default). Runs with
         // bounded concurrency native-side; no-op on web/PWA and when the user
@@ -529,109 +500,18 @@ export function App(): React.JSX.Element {
   // (`.spoken.md`) position, so the shelf card shows reading and listening
   // progress side by side; within a rendition the most-recent chapter wins.
   // Keyed by book slug for the landing.
-  const progressBySlug = useMemo(() => {
-    // PERF: O(tree + rows), not O(rows × tree). The old code called findNode(tree,…)
-    // AND flattenTracks(book) for EVERY recent-progress row — walking the whole
-    // forest and re-flattening a book's spine per row. That's the return-from-book
-    // freeze on a slow device (iPad: ~hundreds of ms; fast desktop hid it at a few
-    // ms), and it's INDEPENDENT of how many books the shelf shows (why filtering
-    // didn't help). Here we index only the books that actually have progress, each
-    // flattened ONCE, then do O(1) lookups per row.
-    const slugs = new Set(
-      recentProgress.map((r) => r.path.split("/")[0] ?? ""),
-    );
-    const nodeByPath = new Map<string, TreeNode>();
-    const leavesBySlug = new Map<string, ReturnType<typeof flattenTracks>>();
-    const audioLeavesBySlug = new Map<
-      string,
-      ReturnType<typeof flattenTracks>
-    >();
-    const indexNode = (n: TreeNode): void => {
-      nodeByPath.set(n.path, n);
-      n.children?.forEach(indexNode);
-    };
-    for (const top of tree) {
-      if (!slugs.has(top.path)) continue; // only books with recent progress
-      indexNode(top);
-      leavesBySlug.set(top.path, flattenTracks(top.children, uiLang));
-    }
-    // Audio leaves come from the SEPARATE audio forest — `.spoken.md` chapters are
-    // filtered out of the text spine, so the listening meter must index against the
-    // audio spine (or it collapses to raw in-chapter scroll). Indexing these nodes
-    // also gives an audio resume row a real chapter title (not the raw filename).
-    for (const top of audioTree) {
-      if (!slugs.has(top.path)) continue;
-      indexNode(top);
-      audioLeavesBySlug.set(top.path, flattenTracks(top.children, uiLang));
-    }
-    const out: Record<string, BookProgress> = {};
-    const at: Record<string, { text: number; audio: number }> = {};
-    for (const r of recentProgress) {
-      const slug = r.path.split("/")[0] ?? "";
-      const kind: "text" | "audio" = r.path.endsWith(".spoken.md")
-        ? "audio"
-        : "text";
-      const seen = (at[slug] ??= { text: 0, audio: 0 });
-      // Backend already returns one row per (book, rendition), but guard anyway
-      // so the newest chapter wins if that ever changes.
-      if (seen[kind] && r.updated_at <= seen[kind]) continue;
-      seen[kind] = r.updated_at;
-      const node = nodeByPath.get(r.path);
-      const chapterLabel =
-        (node && ((uiLang && node.titles?.[uiLang]) || node.name)) ||
-        r.path.split("/").pop() ||
-        r.path;
-      // Book-level progress: where this chapter sits in the book's ordered spine,
-      // plus its in-chapter scroll, over the chapter count. Text rows index the
-      // text spine; audio (.spoken.md) rows index the audio spine — each collapses
-      // to raw scroll only if its spine is missing (offline before it loads).
-      const scroll = Math.min(1, Math.max(0, r.scroll));
-      const leaves =
-        (kind === "audio" ? audioLeavesBySlug : leavesBySlug).get(slug) ?? [];
-      const idx = leaves.findIndex((l) => l.path === r.path);
-      const fraction = leaves.length > 0 && idx >= 0
-        ? (idx + scroll) / leaves.length
-        : scroll;
-      (out[slug] ??= {})[kind] = {
-        path: r.path,
-        chapterLabel,
-        scroll: r.scroll,
-        fraction,
-        updatedAt: r.updated_at,
-      };
-    }
-    return out;
-  }, [recentProgress, tree, audioTree, uiLang]);
+  const progressBySlug = useMemo(
+    () => shelfProgress(recentProgress, tree, audioTree, uiLang),
+    [recentProgress, tree, audioTree, uiLang],
+  );
 
   // Keep WidgetKit's offline snapshot aligned with the shelf. The native bridge
   // is absent in browsers and becomes a no-op on Personal Team builds without
   // App Group access; the extension retains its direct server fallback there.
   useEffect(() => {
-    const recent = books
-      .flatMap((book) => {
-        const progress = progressBySlug[book.slug];
-        const latest = progress?.text && progress?.audio
-          ? (progress.text.updatedAt >= progress.audio.updatedAt
-            ? progress.text
-            : progress.audio)
-          : (progress?.text ?? progress?.audio);
-        return latest ? [{ book, latest }] : [];
-      })
-      .sort((a, b) => b.latest.updatedAt - a.latest.updatedAt)
-      .slice(0, 4);
-    const recentSlugs = new Set(recent.map(({ book }) => book.slug));
-    const items = [
-      ...recent.map(({ book, latest }) => ({
-        book,
-        progress: latest.fraction,
-      })),
-      ...books
-        .filter((book) => !recentSlugs.has(book.slug))
-        .map((book) => ({ book, progress: 0 })),
-    ].slice(0, 4);
     nativeWidgetPublish({
       serverURL: remoteUrl(""),
-      items: items.map(({ book, progress }) => ({
+      items: widgetItems(books, progressBySlug).map(({ book, progress }) => ({
         label: book.label,
         slug: book.slug,
         progress,
@@ -658,7 +538,7 @@ export function App(): React.JSX.Element {
     if (renditionRef.current === "text") {
       const path = currentPathRef.current;
       if (!path) setTree(newTree);
-      else void loadContentsTree(path.split("/")[0] ?? "", "text", true).then(next => {
+      else void loadContentsTree(bookSlugOf(path), "text", true).then(next => {
         if (currentPathRef.current === path && renditionRef.current === "text") setTree(next);
       }).catch(() => undefined);
     }
@@ -706,7 +586,7 @@ export function App(): React.JSX.Element {
           // never redirect a valid chapter to the first page on that signal.
           const offline = readingOffline();
           if (!offline && res.status === 404) {
-            const slug = path.split("/")[0] ?? "";
+            const slug = bookSlugOf(path);
             const first = await resolveFirstChapter(slug, reqRendition);
             if (seq !== fileLoadSeq.current) return;
             if (first && first !== path) {
@@ -786,7 +666,7 @@ export function App(): React.JSX.Element {
       renditionArg: string,
       replace = false,
     ) => {
-      const slug = path.split("/")[0] ?? "";
+      const slug = bookSlugOf(path);
       const book = books.find((b) => b.slug === slug);
       logEvent("open_chapter", {
         book: slug,
@@ -794,17 +674,14 @@ export function App(): React.JSX.Element {
         lang: langArg,
         rendition: renditionArg,
       });
-      // ALWAYS pin the lang in the URL (never omit it when it equals the book
-      // default). The restore path re-derives a missing lang from the UI language
-      // (pickInitialLang), which differs from `default_lang` — so omitting the
-      // token made a book whose default ≠ UI language flip languages on reload
-      // (reading zh, the SW-update reload dropped you into en). The hash is the
-      // source of truth across a reload; keep it explicit. (rendition still omits
-      // its default — its restore default matches the omission, so it's safe.)
-      const langForHash = langArg || null;
-      const renditionForHash = book && renditionArg !== book.default_rendition
-        ? renditionArg
-        : null;
+      // The hash is the source of truth across a reload; see hashTokens for
+      // why the language is always pinned and only a default rendition is
+      // omitted.
+      const { lang: langForHash, rendition: renditionForHash } = hashTokens(
+        langArg,
+        renditionArg,
+        book,
+      );
 
       setLang(langArg);
       setRendition(renditionArg);
@@ -901,10 +778,7 @@ export function App(): React.JSX.Element {
             target = rows.find((r) => hasFilePath(scope, r.path))?.path ??
               findFirstFile(scope);
           }
-          const prefLang = bookPrefs[slug]?.lang;
-          const audioLang = prefLang && r.langs.some((l) => l.lang === prefLang)
-            ? prefLang
-            : pickInitialLang(r);
+          const audioLang = entryLang(r, bookPrefs[slug]?.lang, uiLang);
           if (!target) {
             // Spine loaded but no playable chapter resolved — still ENTER the book
             // (text README) rather than dead-ending the tap with only a toast.
@@ -921,15 +795,16 @@ export function App(): React.JSX.Element {
           // tap is never dead — the user gets into the book and can read offline;
           // reconnecting (prefetchTrees warms both spines) restores audio.
           console.error("Failed to open audiobook:", e);
-          const prefLang = bookPrefs[slug]?.lang;
-          const lang = prefLang && r.langs.some((l) => l.lang === prefLang)
-            ? prefLang
-            : pickInitialLang(r);
-          void openFile(`${slug}/README.md`, lang, "text", replace);
+          void openFile(
+            `${slug}/README.md`,
+            entryLang(r, bookPrefs[slug]?.lang, uiLang),
+            "text",
+            replace,
+          );
         }
       })();
     },
-    [books, bookPrefs, loadBookRows, pickInitialLang, openFile, t],
+    [books, bookPrefs, loadBookRows, uiLang, openFile, t],
   );
 
   // Enter a book from the landing page in a specific rendition (the bookshelf
@@ -948,21 +823,9 @@ export function App(): React.JSX.Element {
       // this book (server-side pref), else its default. An explicit kind (the
       // navbar switch) wins.
       const pref = bookPrefs[slug];
-      const r =
-        (renditionKind
-          ? book.renditions.find((x) => x.kind === renditionKind)
-          : undefined) ??
-          (pref?.rendition
-            ? book.renditions.find((x) => x.kind === pref.rendition)
-            : undefined) ??
-          defaultRendition(book);
+      const r = resolveRendition(book, renditionKind, pref?.rendition);
       if (!r) return;
-      // Restore the last-used edition for this book if it still exists in the
-      // rendition, else this rendition's preferred initial edition.
-      const initialLang =
-        pref?.lang && r.langs.some((l) => l.lang === pref.lang)
-          ? pref.lang
-          : pickInitialLang(r);
+      const initialLang = entryLang(r, pref?.lang, uiLang);
       // Audio opens its inline read-along page (sidebar = audio spine).
       if (r.kind === "audio") {
         openAudiobook(slug, undefined, replace);
@@ -977,9 +840,7 @@ export function App(): React.JSX.Element {
       // recent progress (the resume), else the book's README. openFile sets
       // currentPath first, then loadFile renders it cache-first (or a calm offline
       // placeholder) — zero network on the critical path.
-      const resume = recentProgress.find(
-        (e) => e.path.startsWith(`${slug}/`) && !e.path.includes(".spoken"),
-      )?.path;
+      const resume = resumeTextPath(recentProgress, slug);
       renditionRef.current = r.kind;
       setTree([]);
       void openFile(
@@ -1000,15 +861,7 @@ export function App(): React.JSX.Element {
         }
       })();
     },
-    [
-      books,
-      bookPrefs,
-      defaultRendition,
-      openFile,
-      pickInitialLang,
-      openAudiobook,
-      recentProgress,
-    ],
+    [books, bookPrefs, openFile, uiLang, openAudiobook, recentProgress],
   );
 
   // Return to the landing bookshelf.
@@ -1143,29 +996,20 @@ export function App(): React.JSX.Element {
   // Resolve which (rendition, lang) a hash deep-link should open: explicit
   // `&rendition=`/`&lang=` win; else the book's default rendition and that
   // rendition's preferred initial edition.
-  const renditionForHashEntry = useCallback(
-    (path: string, hashRendition: string | null): string => {
-      const slug = path.split("/")[0] ?? "";
-      const book = books.find((b) => b.slug === slug);
-      if (
-        hashRendition && book?.renditions.some((r) => r.kind === hashRendition)
-      ) {
-        return hashRendition;
-      }
-      return book?.default_rendition ?? "text";
-    },
+  const bookOf = useCallback(
+    (path: string): Book | undefined =>
+      books.find((b) => b.slug === bookSlugOf(path)),
     [books],
   );
-
+  const renditionForHashEntry = useCallback(
+    (path: string, hashRendition: string | null): string =>
+      hashEntryRendition(bookOf(path), hashRendition),
+    [bookOf],
+  );
   const langForHashEntry = useCallback(
-    (path: string, kind: string, hashLang: string | null): string => {
-      if (hashLang) return hashLang;
-      const slug = path.split("/")[0] ?? "";
-      const book = books.find((b) => b.slug === slug);
-      const rInfo = book?.renditions.find((r) => r.kind === kind);
-      return rInfo ? pickInitialLang(rInfo) : "";
-    },
-    [books, pickInitialLang],
+    (path: string, kind: string, hashLang: string | null): string =>
+      hashEntryLang(bookOf(path), kind, hashLang, uiLang),
+    [bookOf, uiLang],
   );
 
   // Restore the view (path, lang, rendition) encoded in the hash. Fetches the
@@ -1189,27 +1033,19 @@ export function App(): React.JSX.Element {
         return;
       }
       const kind = renditionForHashEntry(path, hashRendition);
-      const entryLang = langForHashEntry(path, kind, hashLang);
-      setLang(entryLang);
+      const restoredLang = langForHashEntry(path, kind, hashLang);
+      setLang(restoredLang);
       setRendition(kind);
       renditionRef.current = kind;
       if (replaceHash) {
-        // Normalise the hash without a history entry: pin the resolved lang
-        // explicitly (see the openFile note — a missing lang re-derives to the UI
-        // language, not default_lang, so it must never be dropped) and drop a
-        // redundant default-rendition token.
-        const slug = path.split("/")[0] ?? "";
-        const book = books.find((b) => b.slug === slug);
-        const langForHash = entryLang || null;
-        const renditionForHash = book && kind !== book.default_rendition
-          ? kind
-          : null;
-        writeHash(path, langForHash, renditionForHash, true);
+        // Normalise the hash without a history entry (see hashTokens).
+        const tokens = hashTokens(restoredLang, kind, bookOf(path));
+        writeHash(path, tokens.lang, tokens.rendition, true);
       }
       try {
         // Cache-first (offline-safe), same as enterBook — never a raw network
         // fetch that fails offline / skips the cache.
-        const nextTree = await loadContentsTree(path.split("/")[0] ?? "", kind);
+        const nextTree = await loadContentsTree(bookSlugOf(path), kind);
         if (seq !== fileLoadSeq.current) return;
         setTree(nextTree);
       } catch (e) {
@@ -1217,7 +1053,7 @@ export function App(): React.JSX.Element {
       }
       if (seq !== fileLoadSeq.current) return;
       // Load the book's progress first so the doc restores its scroll.
-      const slug = path.split("/")[0];
+      const slug = bookSlugOf(path);
       if (slug) await loadBook(slug);
       if (seq !== fileLoadSeq.current) return;
       if (kind === "audio") {
@@ -1225,10 +1061,10 @@ export function App(): React.JSX.Element {
         setCurrentPath(path);
         currentPathRef.current = path;
       } else {
-        void loadFile(path, entryLang, kind);
+        void loadFile(path, restoredLang, kind);
       }
     },
-    [books, loadFile, langForHashEntry, renditionForHashEntry, loadBook],
+    [bookOf, loadFile, langForHashEntry, renditionForHashEntry, loadBook],
   );
 
   // Persist the last reading location on THIS device (see RESUME_KEY) whenever
@@ -1247,7 +1083,7 @@ export function App(): React.JSX.Element {
     // can clear the key on the mount-time `currentPath === null`.
     const saved = initialResume;
     if (!saved) return false;
-    const slug = saved.path.split("/")[0] ?? "";
+    const slug = bookSlugOf(saved.path);
     if (!books.some((b) => b.slug === slug)) {
       console.warn(
         `liveview: saved book "${slug}" no longer exists; returning to the shelf`,
@@ -1395,12 +1231,8 @@ export function App(): React.JSX.Element {
       setCurrentPath(np.chapterPath);
       currentPathRef.current = np.chapterPath;
       setUntranslated(null);
-      const langForHash = lang || null; // always pin lang (see openFile note)
-      const renditionForHash =
-        activeBook && rendition !== activeBook.default_rendition
-          ? rendition
-          : null;
-      writeHash(np.chapterPath, langForHash, renditionForHash, true);
+      const tokens = hashTokens(lang, rendition, activeBook ?? undefined);
+      writeHash(np.chapterPath, tokens.lang, tokens.rendition, true);
     } else {
       // Text read-aloud: load the next chapter's markdown so the in-place
       // highlight carries into it (sticky read-along across chapters).
@@ -1900,7 +1732,7 @@ export function App(): React.JSX.Element {
       <FloatingBubble
         onPlayingPage={onPlayingPage}
         suppressed={readingThisInPlace}
-        onOpenControls={() => window.dispatchEvent(new Event("lv-open-playback-controls"))}
+        onOpenControls={() => playbackControls.emit()}
       />
       {
         /* Ambient background-work indicator (audio generation + offline prefetch)

@@ -8,6 +8,7 @@ import {
   setPwaDownloadsEnabled,
 } from "@/pwa";
 import { loadPolicy, persistPolicy } from "@/replica/mod.ts";
+import { downloadPolicy } from "@/signals.ts";
 
 /** Browser storage is best-effort unless the UA grants persistent storage. */
 export function PwaOfflineControls(): React.JSX.Element {
@@ -19,8 +20,7 @@ export function PwaOfflineControls(): React.JSX.Element {
   const [status, setStatus] = useState<string | null>(null);
   useEffect(() => {
     const refresh = (): void => setEnabled(pwaDownloadsEnabled());
-    globalThis.addEventListener("lv-download-policy", refresh);
-    return () => globalThis.removeEventListener("lv-download-policy", refresh);
+    return downloadPolicy.subscribe(refresh);
   }, []);
   useEffect(() => {
     let disposed = false;

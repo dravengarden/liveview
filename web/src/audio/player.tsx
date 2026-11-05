@@ -41,6 +41,7 @@ import {
 } from "@/native-audio";
 import { useI18n } from "@/i18n";
 import { logEvent } from "@/apm";
+import { voicePreference } from "@/signals.ts";
 import { loadServerSetting } from "@/syncBackends";
 import {
   nativePositionConfirmsPlayback,
@@ -578,11 +579,11 @@ export function AudioPlayerProvider(
       }
     };
     const unsubscribe = onPathIndexAdopted(refresh);
-    globalThis.addEventListener("lv-voice-preference", refresh);
+    const unsubscribeVoice = voicePreference.subscribe(refresh);
     document.addEventListener("visibilitychange", refresh);
     return () => {
       unsubscribe();
-      globalThis.removeEventListener("lv-voice-preference", refresh);
+      unsubscribeVoice();
       document.removeEventListener("visibilitychange", refresh);
     };
   }, [stageNativeQueue]);

@@ -36,6 +36,7 @@ import { pwaAudioSupported, pwaDownloadsEnabled, pwaOfflineAvailable } from "@/p
 import { PwaOfflineControls } from "./PwaOfflineControls";
 import { useSettingsSurfaceOpen } from "../_shell/settings-sheet.tsx";
 import { audioPreloadStrategy, setAudioPreloadStrategy, type AudioPreloadStrategy } from "@/audio/preload";
+import { downloadPolicy } from "@/signals.ts";
 
 function gb(bytes: number): string {
   const g = bytes / 1_073_741_824;
@@ -247,7 +248,7 @@ export function OfflineSection({ visible = true }: { visible?: boolean }): React
     const policy = loadPolicy();
     policy.capBytes = newGB * 1_073_741_824;
     void persistPolicy(policy).then(() => evictUnpinnedAudioToFit(policy.capBytes)).then(() => {
-      globalThis.dispatchEvent(new Event("lv-download-policy"));
+      downloadPolicy.emit();
     });
   };
 
@@ -396,7 +397,7 @@ export function OfflineSection({ visible = true }: { visible?: boolean }): React
               policy.capBytes = g * 1_073_741_824;
               void persistPolicy(policy).then(() =>
                 evictUnpinnedAudioToFit(policy.capBytes)
-              ).then(() => globalThis.dispatchEvent(new Event("lv-download-policy")));
+              ).then(() => downloadPolicy.emit());
             }}
           >
             {t("offline.confirmDelete")}

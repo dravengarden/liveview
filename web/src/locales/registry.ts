@@ -3,6 +3,9 @@ export const UI_LOCALES = [
   { id: "zh", label: "中文", htmlLang: "zh-CN" },
 ] as const;
 
+/** A locale's string table: key → UI text with `{placeholder}` slots. */
+export type Dict = Record<string, string>;
+
 export type Language = (typeof UI_LOCALES)[number]["id"];
 
 export function resolveLocale(value: string | null): Language | undefined {

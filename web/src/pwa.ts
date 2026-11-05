@@ -1,3 +1,5 @@
+import { downloadPolicy } from "@/signals.ts";
+
 /** Browser capabilities, deliberately separate from native host availability. */
 export function pwaOfflineAvailable(): boolean {
   return !("__TAURI_INTERNALS__" in globalThis) &&
@@ -15,7 +17,7 @@ export function pwaNetworkAvailable(): boolean {
 export function setPwaBackendConnected(connected: boolean): void {
   if (!pwaOfflineAvailable() || backendConnected === connected) return;
   backendConnected = connected;
-  globalThis.dispatchEvent?.(new Event("lv-download-policy"));
+  downloadPolicy.emit();
 }
 
 export function pwaDownloadsEnabled(): boolean {
@@ -33,7 +35,7 @@ export function pwaAudioSupported(): boolean {
 
 export function setPwaDownloadsEnabled(on: boolean): void {
   globalThis.localStorage?.setItem("lv.offline.pwaEnabled", on ? "1" : "0");
-  globalThis.dispatchEvent(new Event("lv-download-policy"));
+  downloadPolicy.emit();
 }
 
 export function installedPwa(): boolean {

@@ -8,6 +8,7 @@ import { pwaAudioSupported, pwaDownloadsEnabled, pwaOfflineAvailable } from "@/p
 import { capBytesPref } from "@/replica/policy";
 import { onPathIndexAdopted, pathRecordForHash } from "@/replica/manifest";
 import type { TreeNode } from "@/types";
+import { audioCacheWake, downloadPolicy, voicePreference } from "@/signals.ts";
 
 export function useBookAudioPreload(
   initial: TreeNode[], book: string | null, rendition: string, lang: string,
@@ -17,9 +18,7 @@ export function useBookAudioPreload(
   const tree = useContentsSnapshot(initial, book ?? undefined, rendition, true);
   const [preferenceRevision, setPreferenceRevision] = useState(0);
   useEffect(() => {
-    const update = (): void => setPreferenceRevision(n => n + 1);
-    globalThis.addEventListener("lv-voice-preference", update);
-    return () => globalThis.removeEventListener("lv-voice-preference", update);
+    return voicePreference.subscribe(() => setPreferenceRevision(n => n + 1));
   }, []);
   const preference = useMemo(() => contentsPreference(book ?? undefined, rendition, lang),
     [book, rendition, lang, preferenceRevision]);
@@ -76,8 +75,9 @@ export function useBookAudioPreload(
     const connection = (navigator as Navigator & { connection?: EventTarget }).connection;
     connection?.addEventListener("change", policy);
     document.addEventListener("visibilitychange", foreground);
-    globalThis.addEventListener("lv-audio-cache-wake", wake);
-    for (const event of ["lv-download-policy", "online", "offline"]) globalThis.addEventListener(event, policy);
+    const unsubscribeWake = audioCacheWake.subscribe(wake);
+    const unsubscribePolicy = downloadPolicy.subscribe(policy);
+    for (const event of ["online", "offline"]) globalThis.addEventListener(event, policy);
     return () => {
       disposed = true;
       clearTimeout(timer);
@@ -85,8 +85,9 @@ export function useBookAudioPreload(
       unsubscribeIndex();
       connection?.removeEventListener("change", policy);
       document.removeEventListener("visibilitychange", foreground);
-      globalThis.removeEventListener("lv-audio-cache-wake", wake);
-      for (const event of ["lv-download-policy", "online", "offline"]) globalThis.removeEventListener(event, policy);
+      unsubscribeWake();
+      unsubscribePolicy();
+      for (const event of ["online", "offline"]) globalThis.removeEventListener(event, policy);
       audioPreloader.pause();
     };
   }, [plan, focus]);

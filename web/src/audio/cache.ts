@@ -9,6 +9,7 @@ import { remoteUrl } from "@/apiBase";
 import { AudioPreloader, type AudioCacheState, type AudioDownload } from "./preload";
 import { readAgg } from "@/replica/agg";
 import { pathRecordForHash } from "@/replica/manifest";
+import { audioCacheWake, downloadPolicy } from "@/signals.ts";
 
 let snapshot: ReadonlyMap<string, AudioCacheState> = new Map();
 const listeners = new Set<() => void>();
@@ -75,7 +76,7 @@ async function download(job: AudioDownload): Promise<void> {
       if (settled) return;
       settled = true;
       stop();
-      globalThis.removeEventListener("lv-download-policy", policyChanged);
+      unsubscribePolicy();
       forgetCacheQueued(job.hash);
       if (ok) resolve(); else reject(new Error("Audio download interrupted"));
     };
@@ -85,7 +86,7 @@ async function download(job: AudioDownload): Promise<void> {
     });
     // Keep the slot until the host reports completion. Its request idle timeout
     // tolerates slow large chapters without starting extra native transfers.
-    globalThis.addEventListener("lv-download-policy", policyChanged);
+    const unsubscribePolicy = downloadPolicy.subscribe(policyChanged);
     forgetCacheQueued(job.hash);
     if (!enqueueCacheFromUrl(job.hash, absolute, job.bytes)) {
       finish(false);
@@ -97,6 +98,6 @@ async function download(job: AudioDownload): Promise<void> {
 export const audioPreloader = new AudioPreloader({
   inspect, download, usedBytes: async () => (await readAgg("audio")).cachedBytes,
   changed: publish, now: Date.now, yield: () => new Promise(resolve => setTimeout(resolve, 0)),
-  wake: () => globalThis.dispatchEvent(new Event("lv-audio-cache-wake")),
+  wake: () => audioCacheWake.emit(),
 });
 onCacheSettled(hash => audioPreloader.invalidateHash(hash));

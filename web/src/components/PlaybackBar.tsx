@@ -25,6 +25,7 @@ import {
 import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
 import { PlaybackPreparation } from "./PlaybackPreparation";
+import { playbackControls } from "@/signals.ts";
 
 /** Read-along follow control for the host reader (audiobook page OR the in-place
  *  text read-aloud). The bar renders the toggle; the host owns the scroll. */
@@ -141,7 +142,7 @@ export function PlaybackBar(
     : <Box sx={{ width: tap(44), height: tap(44) }} />; // keep the ear slot
 
   const controlsBtn = (
-    <IconButton aria-label={t("audiobook.playback")} onClick={() => window.dispatchEvent(new Event("lv-open-playback-controls"))}
+    <IconButton aria-label={t("audiobook.playback")} onClick={() => playbackControls.emit()}
       sx={{ width: tap(44), height: tap(44) }} data-testid="playback-controls">
       <Tune />
     </IconButton>

@@ -13,6 +13,7 @@ import { nativeAudioRequestState, onNativeAudioEvent } from "./native-audio.ts";
 import { setAllowsCellular } from "./native-host.ts";
 import { remoteUrl } from "./apiBase.ts";
 import { pwaDownloadsEnabled, pwaNetworkAvailable, pwaOfflineAvailable } from "./pwa.ts";
+import { downloadPolicy } from "./signals.ts";
 import {
   artworkBlobSrc,
   currentReplicaPolicy,
@@ -287,7 +288,7 @@ export function setOfflineWifiOnly(on: boolean): void {
   // allowsCellularAccess. Those sessions suspend when the app backgrounds —
   // that is the accepted ceiling; JS cannot continue transfers while suspended.
   setAllowsCellular({ on: !on });
-  globalThis.dispatchEvent(new Event("lv-download-policy"));
+  downloadPolicy.emit();
   // Relaxing the constraint may unblock a previously-refused run.
   if (!on) void ensureAutoSync();
 }

@@ -26,6 +26,7 @@ import { useAudioPlayer, useAudioTime } from "@/audio/player";
 import { useI18n } from "@/i18n";
 import { SpeechSettings } from "./SpeechSettings";
 import { PlaybackPreparation } from "./PlaybackPreparation";
+import { playbackControls } from "@/signals.ts";
 
 // The ONE portable playback panel. Whatever is playing — read-aloud of a text
 // chapter or a pre-generated audiobook — this is the single surface that holds
@@ -47,11 +48,7 @@ export function PlaybackSheet({
   // entire library and rich-text reader through App's state.
   const [open, setOpen] = useState(false);
   const onClose = useCallback(() => setOpen(false), []);
-  useEffect(() => {
-    const show = (): void => setOpen(true);
-    window.addEventListener("lv-open-playback-controls", show);
-    return () => window.removeEventListener("lv-open-playback-controls", show);
-  }, []);
+  useEffect(() => playbackControls.subscribe(() => setOpen(true)), []);
   const { t } = useI18n();
   const {
     nowPlaying,

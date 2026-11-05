@@ -1,3 +1,5 @@
+import { downloadPolicy } from "@/signals.ts";
+
 export type AudioPreloadStrategy = "book" | "ahead" | "off";
 export type AudioCacheState =
   | "checking" | "cached" | "queued" | "downloading" | "not-cached"
@@ -17,7 +19,7 @@ export function audioPreloadStrategy(): AudioPreloadStrategy {
 
 export function setAudioPreloadStrategy(value: AudioPreloadStrategy): void {
   globalThis.localStorage?.setItem(AUDIO_PRELOAD_KEY, value);
-  globalThis.dispatchEvent(new Event("lv-download-policy"));
+  downloadPolicy.emit();
 }
 
 /** Keep unavailable chapters in the spine: lookahead means chapters, not files. */

@@ -9,6 +9,7 @@ import {
 } from "../native-host.ts";
 import { setPresent } from "./blobs.ts";
 import { pwaAudioSupported, pwaDownloadsEnabled, pwaNetworkAvailable, pwaOfflineAvailable } from "../pwa.ts";
+import { downloadPolicy } from "../signals.ts";
 
 let nativeCacheProbe = hostAudioAvailable;
 
@@ -175,16 +176,19 @@ export function installMediaBridge(onCached?: () => void): () => void {
     );
   };
   globalThis.addEventListener("lv-native-audio", listener);
-  const policyEvents = ["online", "offline", "lv-download-policy"];
+  const policyEvents = ["online", "offline"];
+  let unsubscribePolicy = (): void => undefined;
   const connection = typeof navigator === "undefined" ? undefined
     : (navigator as Navigator & { connection?: EventTarget }).connection;
   if (pwaOfflineAvailable()) {
     for (const name of policyEvents) globalThis.addEventListener(name, updateBrowserPolicy);
+    unsubscribePolicy = downloadPolicy.subscribe(updateBrowserPolicy);
     connection?.addEventListener("change", updateBrowserPolicy);
   }
   return () => {
     globalThis.removeEventListener("lv-native-audio", listener);
     for (const name of policyEvents) globalThis.removeEventListener(name, updateBrowserPolicy);
+    unsubscribePolicy();
     connection?.removeEventListener("change", updateBrowserPolicy);
   };
 }

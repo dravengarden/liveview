@@ -11,6 +11,7 @@ import { setAllowsCellular } from "@/native-audio";
 import { contentFetch } from "@/native-sync";
 import { pwaAudioSupported, pwaDownloadsEnabled, pwaNetworkAvailable, pwaOfflineAvailable } from "@/pwa";
 import { ingestDag } from "@/audioMediaIndex";
+import { downloadPolicy } from "@/signals.ts";
 import {
   evictUnpinnedAudioToFit,
   loadPolicy,
@@ -118,12 +119,12 @@ export function useAudioPreloadDriver(): void {
       if (pwaOfflineAvailable() && (!pwaDownloadsEnabled() || !pwaNetworkAvailable())) pauseReplicaFill();
       void refreshWorkingSet().then(() => { if (!cancelled) void ensureTextSync(); });
     };
-    globalThis.addEventListener("lv-download-policy", onPolicy);
+    const unsubscribePolicy = downloadPolicy.subscribe(onPolicy);
     globalThis.addEventListener("online", onPolicy);
     return () => {
       cancelled = true;
       globalThis.document?.removeEventListener("visibilitychange", onVisible);
-      globalThis.removeEventListener("lv-download-policy", onPolicy);
+      unsubscribePolicy();
       globalThis.removeEventListener("online", onPolicy);
     };
   }, []);
