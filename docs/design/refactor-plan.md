@@ -585,6 +585,18 @@ identical bars, foot padding and Contents drawer geometry on all three tiers.
 The software-keyboard lift was not exercised (the Simulator used a hardware
 keyboard); the lift logic itself is unchanged.
 
+Phases 3–4 gate record (2026-11-05, iPhone 17 and iPad Air Simulators,
+production library): the library toolbar is one 44–48 px row at the root and
+inside folders on both devices; shelf and reader scrolling had at most one
+frame over 50 ms per 600 (p99 17–22 ms); transitions stayed at the baseline.
+Playback states were verified in Chrome against the local preview with the
+media element stubbed, because real playback on the deployed server would
+overwrite the owner's cross-device resume session: the compact read-aloud
+transport is 66 px (was 127 px) and the now-playing row appears in the
+reader and shelf docks only while audio plays away from its transport.
+The Contents drawer's playback companion was kept as a NavShell accessory
+(§6.6) rather than re-homed, since its geometry already passed Phase 2.
+
 Order rationale: 0–1 remove the largest source of regressions with the least
 visible change and create the tests the later phases rely on; 2 must precede
 3–4 because both redesigns are dock rows; 5 is independent and can interleave
