@@ -564,6 +564,16 @@ the frame-gap/p99 thresholds — before it ships.
 | 7 | Server cleanup (§5.3), cycles broken (`content/`, `corpus/`, `model/`, `store/objstore.rs`), sync stages | none | `cargo deny`, `cargo machete`, full `just verify` |
 | 8 | Data layer hygiene (§4.8): dead replica/prefetch paths, `_sync` trimmed, `_sync-idb` folded, `connectivity.ts`, `platform/target.ts`, test fixtures moved, regex tests converted | none | replica + sync tests; offline cold start, resume and settings sync checked in the simulator |
 
+Phase 1 gate record (2026-11-05, iOS Simulator WKWebView, production
+library over the deployed server, bundle hash verified in the web view):
+continuous 620-frame scroll on the shelf and in the reader had no frame over
+50 ms on iPhone 17 or iPad Air 11-inch (p99 17–25 ms). Repeated shelf ⇄ book
+transitions produce one 66–82 ms frame per transition on both the branch and
+the pre-refactor baseline (`b1c7a30`), so it predates this work; it is a
+Phase 2 target, since the dock removes mirrored-variable writes from that
+transition. The first seconds after a fresh install, while the replica fills,
+also showed isolated long frames on both builds.
+
 Order rationale: 0–1 remove the largest source of regressions with the least
 visible change and create the tests the later phases rely on; 2 must precede
 3–4 because both redesigns are dock rows; 5 is independent and can interleave
