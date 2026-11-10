@@ -3,15 +3,9 @@ targets = ["aarch64-apple-darwin", "aarch64-apple-ios"]
 all-features = true
 
 [advisories]
-# Current Tauri 2.11.5 pulls urlpattern 0.3, whose rust-unic parser stack is
-# unmaintained but has no known vulnerability or safe upstream replacement.
-ignore = [
-  { id = "RUSTSEC-2025-0075", reason = "Latest Tauri urlpattern transitive dependency; no safe upgrade" },
-  { id = "RUSTSEC-2025-0080", reason = "Latest Tauri urlpattern transitive dependency; no safe upgrade" },
-  { id = "RUSTSEC-2025-0081", reason = "Latest Tauri urlpattern transitive dependency; no safe upgrade" },
-  { id = "RUSTSEC-2025-0098", reason = "Latest Tauri urlpattern transitive dependency; no safe upgrade" },
-  { id = "RUSTSEC-2025-0100", reason = "Latest Tauri urlpattern transitive dependency; no safe upgrade" },
-]
+# Tauri 2.12 replaced urlpattern 0.3 and its unmaintained rust-unic parser
+# stack, so no advisory needs an exception.
+ignore = []
 
 [licenses]
 allow = [

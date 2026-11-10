@@ -15,6 +15,20 @@
 	     macOS app name comes from tauri.conf.json productName instead. -->
 	<key>CFBundleDisplayName</key>
 	<string>LiveView</string>
+	<!-- Adopt the UIScene lifecycle. Starting with iOS 27, UIKit terminates an
+	     app at launch (SIGTRAP in
+	     _UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption) when its
+	     Info.plist declares no scene manifest. Declaring the manifest switches
+	     tao (>= 0.37) to the scene lifecycle: its application delegate answers
+	     configurationForConnectingSceneSession with TaoSceneDelegate and attaches
+	     the Tauri window to the connected scene, so no UISceneConfigurations
+	     entry is needed here. A single scene keeps one webview and one audio
+	     owner. -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
 	<!-- THE reason this native shell exists: keep the audiobook playing when the
 	     screen locks / the app is backgrounded, and let the lock-screen / Control
 	     Center media controls drive it. A pure-web PWA cannot do this on iOS — web
