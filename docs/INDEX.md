@@ -26,6 +26,7 @@ material, operational guidance, research evidence, and historical notes.
 - [`offline-first.md`](offline-first.md) — Offline First
 - [`offline-rearchitecture.md`](offline-rearchitecture.md) — Offline Rearchitecture (historical for storage ownership; SW-on-iOS rejection and O(1) stats still stand)
 - [`ota-optimization.md`](ota-optimization.md) — Ota Optimization
+- [`reading-voices.md`](reading-voices.md) — Reading voices: speech inheritance, manifest and API policy, background preparation, and local Kokoro synthesis
 - [`pwa.md`](pwa.md) — PWA installation, book audio preloading, cache status, network policy, and native differences
 
 ### Design

@@ -1,4 +1,5 @@
 import { readFile, stat } from "node:fs/promises";
+import { renderAll } from "./website-art.ts";
 
 const root = new URL("../website/", import.meta.url);
 const repositoryRoot = new URL("../", import.meta.url);
@@ -50,20 +51,6 @@ for (
   const [siteAsset, canonicalAsset] of [
     ["assets/brand-mark.svg", "web/public/brand-mark.svg"],
     ["assets/apple-touch-icon.png", "web/public/apple-touch-icon.png"],
-    [
-      "assets/desktop-library.webp",
-      "docs/assets/screenshots/desktop-library.webp",
-    ],
-    [
-      "assets/iphone-library.webp",
-      "docs/assets/screenshots/iphone-library.webp",
-    ],
-    [
-      "assets/iphone-interactive.webp",
-      "docs/assets/screenshots/iphone-interactive.webp",
-    ],
-    ["assets/iphone-audio.webp", "docs/assets/screenshots/iphone-audio.webp"],
-    ["assets/liveview-hero.png", "docs/assets/liveview-hero.png"],
   ]
 ) {
   const websiteBytes = await readFile(new URL(siteAsset, root));
@@ -76,6 +63,38 @@ for (
   ) {
     fail(`${siteAsset} has drifted from ${canonicalAsset}`);
   }
+}
+
+// The website and README use privacy-safe generated artwork, never product
+// screenshots of a real library.
+for (const match of page.matchAll(/(?:src|srcset)="([^"]+\.(?:png|jpe?g|webp|avif))"/g)) {
+  if (match[1] !== "assets/apple-touch-icon.png") {
+    fail(`raster image ${match[1]}: use generated artwork from tools/website-art.ts`);
+  }
+}
+const art = renderAll();
+for (const [name, content] of art) {
+  const committed = await readFile(new URL(`assets/art/${name}`, root), "utf8").catch(() => "");
+  if (committed !== content) fail(`assets/art/${name} drifted; run bun tools/website-art.ts`);
+}
+for (const theme of ["light", "dark"]) {
+  for (const scene of ["hero", "mobile", "pipeline"]) {
+    const name = `liveview-${scene}-${theme}.svg`;
+    if (!page.includes(`assets/art/${name}`)) fail(`website does not show ${name}`);
+  }
+}
+const readme = await readFile(new URL("README.md", repositoryRoot), "utf8");
+const readmeZh = await readFile(new URL("README.zh-CN.md", repositoryRoot), "utf8");
+for (const [label, text] of [["README.md", readme], ["README.zh-CN.md", readmeZh]] as const) {
+  if (/docs\/assets\/screenshots\/|liveview-hero\.png/.test(text)) {
+    fail(`${label} must use generated artwork instead of screenshots`);
+  }
+  for (const name of art.keys()) {
+    if (!text.includes(`website/assets/art/${name}`)) fail(`${label} is missing ${name}`);
+  }
+}
+if (!readme.includes('href="README.zh-CN.md"') || !readmeZh.includes('href="README.md"')) {
+  fail("README language switch must link both editions");
 }
 
 for (const discoveryFile of ["robots.txt"]) {

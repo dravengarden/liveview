@@ -1,197 +1,529 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light" data-theme-mode="system" data-language="en">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#111a3d">
-    <meta name="description" content="LiveView turns Markdown books and technical documents into a self-hosted library made to read, listen to, and keep offline.">
-    <meta property="og:title" content="LiveView — technical books, alive">
-    <meta property="og:description" content="Publish technical books that are as good to listen to and use offline as they are to read.">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="description" content="LiveView turns Markdown books and technical documents into a self-hosted library you can read, listen to with sentence-synced audio, explore interactively, and keep verifiably offline." data-i18n-content="meta.description">
+    <meta name="theme-color" content="#f8f1e5">
+    <meta property="og:title" content="LiveView — technical books, alive" data-i18n-content="meta.title">
+    <meta property="og:description" content="Publish technical books that are as good to listen to and use offline as they are to read." data-i18n-content="meta.social">
     <meta property="og:type" content="website">
-    <meta property="og:image" content="assets/liveview-hero.png">
-    <meta name="twitter:card" content="summary_large_image">
+    <meta property="og:url" content="https://dravengarden.github.io/liveview/">
+    <meta property="og:image" content="https://dravengarden.github.io/liveview/assets/apple-touch-icon.png">
+    <meta name="twitter:card" content="summary">
+    <link rel="canonical" href="https://dravengarden.github.io/liveview/">
     <link rel="icon" href="assets/brand-mark.svg" type="image/svg+xml">
     <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+    <link rel="preload" href="assets/art/liveview-hero-light.svg" as="image" type="image/svg+xml">
+    <script>
+      document.documentElement.classList.add("js");
+      let initialThemeMode = "system";
+      let initialLanguage = "en";
+      try {
+        const savedTheme = localStorage.getItem("liveview-site-theme");
+        if (["system", "dark", "light"].includes(savedTheme)) initialThemeMode = savedTheme;
+        const savedLanguage = localStorage.getItem("liveview-site-language");
+        if (savedLanguage === "zh" || savedLanguage === "en") initialLanguage = savedLanguage;
+      } catch (_) {
+        // Storage can be unavailable in private contexts; system theme and
+        // English remain the first-visit defaults.
+      }
+      const initialTheme = initialThemeMode === "system"
+        ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+        : initialThemeMode;
+      const initialCanvas = initialTheme === "dark" ? "#0c1430" : "#f8f1e5";
+      document.documentElement.dataset.theme = initialTheme;
+      document.documentElement.dataset.themeMode = initialThemeMode;
+      document.documentElement.dataset.language = initialLanguage;
+      document.documentElement.lang = initialLanguage === "zh" ? "zh-CN" : "en";
+      document.documentElement.style.backgroundColor = initialCanvas;
+      document.querySelector('meta[name="theme-color"]')?.setAttribute("content", initialCanvas);
+    </script>
     <link rel="stylesheet" href="styles.css">
-    <title>LiveView — technical books, alive</title>
+    <title data-i18n="meta.title">LiveView — technical books, alive</title>
   </head>
   <body>
-    <a class="skip-link" href="#main-content">Skip to content</a>
+    <a class="skip-link" href="#main-content" data-i18n="skip">Skip to content</a>
 
-    <header class="site-header" data-site-header>
+    <header class="site-header">
       <div class="shell nav-shell">
-        <a class="brand" href="#top" aria-label="LiveView home">
-          <img src="assets/brand-mark.svg" alt="">
+        <a class="wordmark" href="#top" aria-label="LiveView home" data-i18n-aria-label="brand.home">
+          <img src="assets/brand-mark.svg" alt="" width="30" height="30">
           <span>LiveView</span>
         </a>
 
-        <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav" data-menu-toggle>
-          <span class="sr-only" data-menu-label>Open navigation</span>
-          <span aria-hidden="true"></span>
-          <span aria-hidden="true"></span>
-        </button>
-
-        <nav class="site-nav" id="site-nav" data-site-nav aria-label="Primary navigation">
-          <a href="#experience">Experience</a>
-          <a href="#formats">Formats</a>
-          <a href="#offline">Offline</a>
-          <a href="https://github.com/dravengarden/liveview#quick-start">Docs</a>
-          <a class="nav-cta" href="https://github.com/dravengarden/liveview">GitHub <span aria-hidden="true">↗</span></a>
+        <nav id="site-navigation" class="site-navigation" aria-label="Primary navigation" data-i18n-aria-label="nav.aria">
+          <a href="#experience" data-i18n="nav.experience">Experience</a>
+          <a href="#formats" data-i18n="nav.formats">Formats</a>
+          <a href="#offline" data-i18n="nav.offline">Offline</a>
+          <a href="#architecture" data-i18n="nav.architecture">Architecture</a>
+          <a href="#start" data-i18n="nav.start">Get started</a>
+          <a href="https://github.com/dravengarden/liveview/blob/main/docs/INDEX.md" data-i18n="nav.docs">Docs</a>
+          <a class="site-navigation-github" href="https://github.com/dravengarden/liveview">GitHub <span aria-hidden="true">↗</span></a>
         </nav>
+
+        <div class="nav-actions" role="group" aria-label="Site controls" data-i18n-aria-label="controls">
+          <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-navigation" aria-label="Open navigation">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <g class="menu-bars"><path d="M6 8.25h12"></path><path d="M6 15.75h12"></path></g>
+              <g class="menu-close"><path d="M6.5 6.5l11 11"></path><path d="M17.5 6.5l-11 11"></path></g>
+            </svg>
+          </button>
+          <div class="preferences-control">
+            <button class="preferences-toggle" type="button" aria-expanded="false" aria-controls="site-preferences" aria-label="Open preferences">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 7h14M5 17h14"></path>
+                <circle cx="9" cy="7" r="2"></circle>
+                <circle cx="15" cy="17" r="2"></circle>
+              </svg>
+            </button>
+            <div id="site-preferences" class="preferences-popover" role="dialog" aria-labelledby="preferences-title" hidden>
+              <div class="preferences-heading">
+                <strong id="preferences-title" data-i18n="prefs.title">Preferences</strong>
+                <small data-i18n="prefs.subtitle">Theme and language</small>
+              </div>
+              <div class="preference-group">
+                <span id="appearance-label" data-i18n="prefs.appearance">Appearance</span>
+                <div class="preference-options" role="group" aria-labelledby="appearance-label">
+                  <button type="button" data-theme-choice="system" aria-pressed="true">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="12" rx="2.25"></rect><path d="M12 4.5v12M8.5 20h7M12 16.5V20"></path></svg>
+                    <span data-i18n="prefs.system">System</span>
+                  </button>
+                  <button type="button" data-theme-choice="light" aria-pressed="false">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.25"></circle><path d="M12 2.75v2M12 19.25v2M2.75 12h2M19.25 12h2M5.45 5.45l1.4 1.4M17.15 17.15l1.4 1.4M18.55 5.45l-1.4 1.4M6.85 17.15l-1.4 1.4"></path></svg>
+                    <span data-i18n="prefs.light">Light</span>
+                  </button>
+                  <button type="button" data-theme-choice="dark" aria-pressed="false">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 15.25A7.75 7.75 0 0 1 8.75 4.5a7.75 7.75 0 1 0 10.75 10.75Z"></path></svg>
+                    <span data-i18n="prefs.dark">Dark</span>
+                  </button>
+                </div>
+              </div>
+              <div class="preference-group">
+                <span id="language-label" data-i18n="prefs.language">Language</span>
+                <div class="preference-options preference-languages" role="group" aria-labelledby="language-label">
+                  <button type="button" data-language-choice="en" aria-pressed="true">English</button>
+                  <button type="button" data-language-choice="zh" aria-pressed="false">中文</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <a class="github-link" href="https://github.com/dravengarden/liveview" aria-label="LiveView on GitHub" data-i18n-aria-label="brand.github">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .7a11.5 11.5 0 0 0-3.64 22.4c.58.1.79-.25.79-.56v-2.23c-3.22.7-3.9-1.37-3.9-1.37-.53-1.34-1.29-1.7-1.29-1.7-1.05-.72.08-.71.08-.71 1.16.08 1.78 1.2 1.78 1.2 1.04 1.77 2.72 1.26 3.38.96.1-.75.4-1.26.74-1.55-2.57-.29-5.27-1.28-5.27-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.16 1.18A11 11 0 0 1 12 6.1c.98 0 1.95.13 2.86.38 2.2-1.49 3.16-1.18 3.16-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.71 5.39-5.29 5.68.42.36.79 1.07.79 2.16v3.25c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .7Z"></path></svg>
+          </a>
+        </div>
       </div>
     </header>
 
     <main id="main-content">
-      <section class="hero" id="top">
-        <div class="shell hero-grid">
-          <div class="hero-copy">
-            <div class="hero-signature" aria-hidden="true"><img src="assets/brand-mark.svg" alt=""><span>THE LIVING BOOK</span></div>
-            <p class="eyebrow"><span>READ / LISTEN / EXPLORE</span></p>
-            <h1>Technical books,<br><em>alive.</em></h1>
-            <p class="hero-lead">LiveView turns Markdown, technical assets, translations, and audio into one self-hosted library—made to read deeply, listen naturally, and keep offline.</p>
-            <div class="hero-actions">
-              <a class="button button-primary" href="https://github.com/dravengarden/liveview#quick-start">Start with LiveView <span aria-hidden="true">→</span></a>
-              <a class="button button-quiet" href="#experience">See the experience <span aria-hidden="true">↓</span></a>
+      <section class="hero shell" id="top">
+        <div class="hero-copy">
+          <p class="eyebrow"><span></span> <b data-i18n="hero.eyebrow">Self-hosted technical library</b></p>
+          <h1>
+            <span data-i18n="hero.read">Read deeply.</span><br>
+            <span data-i18n="hero.listen">Listen naturally.</span><br>
+            <em data-i18n="hero.offline">Keep it offline.</em>
+          </h1>
+          <p class="hero-lede" data-i18n="hero.lede">
+            LiveView turns Markdown, technical assets, translations, and audio
+            into one publication—read on any screen, heard with sentence-synced
+            narration, and kept on your devices as verified, content-addressed
+            copies.
+          </p>
+          <p class="hero-ownership"><span aria-hidden="true"></span> <strong data-i18n="hero.ownership">Your books. Your storage. Your offline copy.</strong></p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#start">
+              <span data-i18n="hero.run">Run LiveView</span>
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6"></path></svg>
+            </a>
+            <a class="button button-secondary" href="#experience" data-i18n="hero.explore">See the experience</a>
+          </div>
+          <ul class="hero-signals" aria-label="LiveView highlights" data-i18n-aria-label="hero.signals">
+            <li><span></span> <b data-i18n="hero.signal.markdown">Markdown native</b></li>
+            <li><span></span> <b data-i18n="hero.signal.audio">Sentence-synced audio</b></li>
+            <li><span></span> <b data-i18n="hero.signal.merkle">Merkle offline</b></li>
+            <li><span></span> <b data-i18n="hero.signal.platforms">Web · PWA · iOS · macOS</b></li>
+          </ul>
+        </div>
+
+        <div class="hero-art">
+          <picture class="theme-art">
+            <source data-theme-art-dark media="(prefers-color-scheme: dark)" srcset="assets/art/liveview-hero-dark.svg">
+            <img
+              src="assets/art/liveview-hero-light.svg"
+              alt="Abstract LiveView desktop bookshelf and a phone reader with a highlighted spoken sentence, a diagram, and an audio player"
+              data-i18n-alt="hero.imageAlt"
+              width="1200"
+              height="760"
+              fetchpriority="high"
+            >
+          </picture>
+          <div class="live-chip" aria-hidden="true">
+            <span class="live-wave"><i></i><i></i><i></i><i></i><i></i></span>
+            <span><b data-i18n="hero.chip">Sentence sync</b><small>14 / 32 · 1.25×</small></span>
+            <strong>LIVE</strong>
+          </div>
+        </div>
+
+        <dl class="hero-facts">
+          <div><dt>1</dt><dd data-i18n="facts.contract">content contract, preview to offline</dd></div>
+          <div><dt>12</dt><dd data-i18n="facts.formats">native technical formats</dd></div>
+          <div><dt>0</dt><dd data-i18n="facts.services">services needed to preview a folder</dd></div>
+          <div><dt>2</dt><dd data-i18n="facts.renditions">renditions per book: read + listen</dd></div>
+        </dl>
+      </section>
+
+      <section class="section shell" id="experience">
+        <div class="section-heading reveal">
+          <p class="eyebrow"><span></span> <b data-i18n="experience.eyebrow">One publication, three ways in</b></p>
+          <h2><span data-i18n="experience.title1">Read it. Hear it.</span><br><span data-i18n="experience.title2">Work with it.</span></h2>
+          <p data-i18n="experience.intro">A technical book should not become a different product when you switch device, language, or mode. LiveView keeps the publication whole.</p>
+        </div>
+
+        <div class="experience-grid">
+          <article class="experience-card reveal">
+            <div class="card-label"><span>01</span><b data-i18n="experience.read">Read</b></div>
+            <h3 data-i18n="experience.readTitle">Editorial calm for dense ideas.</h3>
+            <p data-i18n="experience.readBody">Responsive typography, real chapters, search, and a bookshelf that treats books as books—not folders.</p>
+            <div class="reading-demo" aria-hidden="true">
+              <span>CHAPTER 04</span>
+              <strong>Consensus is a conversation over time.</strong>
+              <p>Nodes do not agree because they see the same instant. <mark>They agree by carrying evidence forward.</mark></p>
+              <div class="demo-progress"><i></i></div>
             </div>
-            <p class="hero-status"><span aria-hidden="true"></span> Open source · Self-hosted · Web and native</p>
-          </div>
+          </article>
 
-          <div class="hero-stage" aria-label="LiveView desktop library and mobile reader">
-            <img class="hero-mark" src="assets/brand-mark.svg" alt="" aria-hidden="true">
-            <figure class="desktop-frame">
-              <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span><small>liveview / library</small></div>
-              <img src="assets/desktop-library.webp" alt="LiveView desktop library with searchable books and reading progress">
-            </figure>
-            <figure class="phone-frame">
-              <div class="phone-speaker" aria-hidden="true"></div>
-              <img src="assets/iphone-audio.webp" alt="LiveView mobile reader playing an audiobook with synchronized highlighting">
-            </figure>
-            <div class="live-chip"><i aria-hidden="true"></i><span>Sentence sync</span><strong>LIVE</strong></div>
-          </div>
-        </div>
-      </section>
-
-      <div class="signal-strip" aria-label="LiveView product capabilities">
-        <div class="shell signal-inner">
-          <span>BOOKS</span><i aria-hidden="true"></i><span>DOCUMENTS</span><i aria-hidden="true"></i><span>AUDIO</span><i aria-hidden="true"></i><span>INTERACTIVE VIEWS</span><i aria-hidden="true"></i><span>OFFLINE</span>
-        </div>
-      </div>
-
-      <section class="section experience" id="experience">
-        <div class="shell">
-          <header class="section-heading">
-            <div><p class="section-index">01 / ONE PUBLICATION</p><h2>Read it. Hear it.<br>Work with it.</h2></div>
-            <p>A technical book should not become a different product when you switch device, language, or mode. LiveView keeps the publication whole.</p>
-          </header>
-
-          <div class="experience-grid">
-            <article class="experience-card card-reading">
-              <div class="card-copy"><span class="card-number" aria-hidden="true">01</span><p class="card-kicker">READ</p><h3>Editorial calm for dense ideas.</h3><p>Responsive typography, real chapters, progress, search, and a bookshelf that treats books as books—not folders.</p></div>
-              <div class="reading-demo" aria-hidden="true">
-                <span class="reading-label">CHAPTER 04</span>
-                <strong>Consensus is a conversation over time.</strong>
-                <p>Nodes do not agree because they see the same instant. They agree by carrying evidence forward...</p>
-                <div class="reading-progress"><i></i></div>
-              </div>
-            </article>
-
-            <article class="experience-card card-listening">
-              <div class="card-copy"><span class="card-number" aria-hidden="true">02</span><p class="card-kicker">LISTEN</p><h3>Audio that knows the page.</h3><p>Text and audiobook renditions share identity. Sentence-level timing keeps narration and reading position in step.</p></div>
-              <div class="audio-demo" aria-hidden="true">
-                <div class="waveform"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-                <div class="audio-meta"><span>14:08</span><strong>Chapter 04</strong><span>21:34</span></div>
-                <div class="audio-controls"><span>−15</span><span class="play">▶</span><span>+15</span></div>
-              </div>
-            </article>
-
-            <article class="experience-card card-interactive">
-              <div class="card-copy"><span class="card-number" aria-hidden="true">03</span><p class="card-kicker">EXPLORE</p><h3>Technical content stays technical.</h3><p>Charts, Mermaid, math, Typst, data, PDFs, and interactive views keep their meaning instead of flattening into screenshots.</p></div>
-              <div class="chart-demo" aria-hidden="true">
-                <div class="chart-y"><span>100</span><span>50</span><span>0</span></div>
-                <svg viewBox="0 0 560 170" preserveAspectRatio="none"><path class="chart-area" d="M0 144 C70 130 82 73 143 89 S247 121 298 74 S385 27 428 51 S493 74 560 18 L560 170 L0 170Z"></path><path class="chart-line" d="M0 144 C70 130 82 73 143 89 S247 121 298 74 S385 27 428 51 S493 74 560 18"></path><circle cx="428" cy="51" r="7"></circle></svg>
-                <div class="chart-x"><span>JAN</span><span>MAR</span><span>MAY</span><span>JUL</span></div>
-              </div>
-            </article>
-          </div>
-        </div>
-      </section>
-
-      <section class="section showcase" id="formats">
-        <div class="shell">
-          <header class="section-heading section-heading-light">
-            <div><p class="section-index">02 / EVERY SCREEN</p><h2>Full depth.<br>Any device.</h2></div>
-            <p>Desktop exposes the library's structure. Mobile is touch-first without simplifying the content. Both share the same publication contract.</p>
-          </header>
-
-          <div class="showcase-stage">
-            <figure class="showcase-desktop">
-              <div class="window-bar" aria-hidden="true"><span></span><span></span><span></span><small>LiveView — Library</small></div>
-              <img src="assets/desktop-library.webp" alt="LiveView desktop bookshelf">
-            </figure>
-            <div class="showcase-phones">
-              <figure class="showcase-phone"><img src="assets/iphone-library.webp" alt="LiveView mobile bookshelf"><figcaption><span>01</span>Discover</figcaption></figure>
-              <figure class="showcase-phone phone-raised"><img src="assets/iphone-interactive.webp" alt="LiveView interactive technical content on mobile"><figcaption><span>02</span>Explore</figcaption></figure>
-              <figure class="showcase-phone"><img src="assets/iphone-audio.webp" alt="LiveView synchronized audiobook on mobile"><figcaption><span>03</span>Listen</figcaption></figure>
+          <article class="experience-card experience-card-ink reveal" style="--reveal-delay: 80ms">
+            <div class="card-label"><span>02</span><b data-i18n="experience.listen">Listen</b></div>
+            <h3 data-i18n="experience.listenTitle">Audio that knows the page.</h3>
+            <p data-i18n="experience.listenBody">Text and audiobook renditions share identity. Sentence-level timing keeps narration and reading position in step—offline, on the lock screen.</p>
+            <div class="audio-demo" aria-hidden="true">
+              <div class="waveform"><i style="--h: 25%" class="played"></i><i style="--h: 92%" class="played"></i><i style="--h: 37%" class="played"></i><i style="--h: 40%" class="played"></i><i style="--h: 33%" class="played"></i><i style="--h: 63%" class="played"></i><i style="--h: 72%" class="played"></i><i style="--h: 71%" class="played"></i><i style="--h: 83%" class="played"></i><i style="--h: 43%" class="played"></i><i style="--h: 40%" class="played"></i><i style="--h: 28%" class="played"></i><i style="--h: 73%" class="played"></i><i style="--h: 32%" class="played"></i><i style="--h: 98%"></i><i style="--h: 49%"></i><i style="--h: 65%"></i><i style="--h: 34%"></i><i style="--h: 38%"></i><i style="--h: 62%"></i><i style="--h: 61%"></i><i style="--h: 93%"></i><i style="--h: 45%"></i><i style="--h: 69%"></i><i style="--h: 26%"></i><i style="--h: 44%"></i><i style="--h: 35%"></i><i style="--h: 90%"></i><i style="--h: 59%"></i><i style="--h: 80%"></i><i style="--h: 55%"></i><i style="--h: 34%"></i></div>
+              <div class="audio-meta"><span>14:08</span><strong>Chapter 04</strong><span>21:34</span></div>
+              <div class="audio-controls"><span>−15</span><b>❚❚</b><span>+15</span></div>
             </div>
+          </article>
+
+          <article class="experience-card reveal" style="--reveal-delay: 160ms">
+            <div class="card-label"><span>03</span><b data-i18n="experience.explore">Explore</b></div>
+            <h3 data-i18n="experience.exploreTitle">Technical content stays technical.</h3>
+            <p data-i18n="experience.exploreBody">Charts, Mermaid, math, Typst, data, PDFs, and interactive views keep their meaning instead of flattening into images.</p>
+            <div class="chart-demo" aria-hidden="true">
+              <div class="chart-controls"><span>replicas <b>5</b></span><span>latency <b>42 ms</b></span></div>
+              <svg viewBox="0 0 320 120" preserveAspectRatio="none"><path class="chart-area" d="M0 104 C40 94 48 52 82 64 S141 86 170 53 S220 19 245 36 S282 53 320 13 L320 120 L0 120Z"></path><path class="chart-line" d="M0 104 C40 94 48 52 82 64 S141 86 170 53 S220 19 245 36 S282 53 320 13"></path><circle cx="245" cy="36" r="6"></circle></svg>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="band shell" id="offline" aria-labelledby="offline-title">
+        <div class="band-copy">
+          <p class="eyebrow eyebrow-inverse"><span></span> <b data-i18n="offline.eyebrow">Offline by construction</b></p>
+          <h2 id="offline-title"><span data-i18n="offline.title1">Offline you can verify.</span><br><span data-i18n="offline.title2">Infrastructure you own.</span></h2>
+        </div>
+        <div class="band-points">
+          <article>
+            <strong data-i18n="offline.addressed">Content-addressed</strong>
+            <p data-i18n="offline.addressedBody">Text, covers, backdrops, documents, and audio are Merkle DAG resources. A device keeps exactly what it verified.</p>
+          </article>
+          <article>
+            <strong data-i18n="offline.incremental">Incremental</strong>
+            <p data-i18n="offline.incrementalBody">Only the changed path moves through publication and sync—never a full rebuild of the corpus.</p>
+          </article>
+          <article>
+            <strong data-i18n="offline.owned">Self-hosted</strong>
+            <p data-i18n="offline.ownedBody">Source, PostgreSQL, S3-compatible storage, and delivery stay on infrastructure you control.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section shell" id="surfaces">
+        <div class="section-heading reveal">
+          <p class="eyebrow"><span></span> <b data-i18n="surfaces.eyebrow">Every screen, full depth</b></p>
+          <h2><span data-i18n="surfaces.title1">Dense on desktop.</span><br><span data-i18n="surfaces.title2">Touch-first on the go.</span></h2>
+          <p data-i18n="surfaces.intro">Desktop exposes the library's structure. Phones are one-column and reachable without simplifying the content. Both read the same publication.</p>
+        </div>
+        <figure class="surface-card reveal">
+          <picture class="theme-art">
+            <source data-theme-art-dark media="(prefers-color-scheme: dark)" srcset="assets/art/liveview-mobile-dark.svg">
+            <img
+              src="assets/art/liveview-mobile-light.svg"
+              alt="Three abstract LiveView phone screens: a bookshelf with progress, an interactive chart with sliders and metrics, and an audiobook player with a highlighted sentence"
+              data-i18n-alt="surfaces.imageAlt"
+              width="1200"
+              height="720"
+              loading="lazy"
+            >
+          </picture>
+          <figcaption class="surface-captions">
+            <span><b>01</b> <strong data-i18n="surfaces.discover">Discover</strong> <small data-i18n="surfaces.discoverBody">Collections, editions, progress</small></span>
+            <span><b>02</b> <strong data-i18n="surfaces.explore">Explore</strong> <small data-i18n="surfaces.exploreBody">Signals, controls, live charts</small></span>
+            <span><b>03</b> <strong data-i18n="surfaces.listen">Listen</strong> <small data-i18n="surfaces.listenBody">Native playback, highlighted sentences</small></span>
+          </figcaption>
+        </figure>
+        <div class="capability-strip reveal">
+          <div><span data-i18n="cap.library">Library</span><strong data-i18n="cap.libraryBody">Collections, tags, editions, search</strong></div>
+          <div><span data-i18n="cap.languages">Languages</span><strong data-i18n="cap.languagesBody">Shared identity across translations</strong></div>
+          <div><span data-i18n="cap.voices">Voices</span><strong data-i18n="cap.voicesBody">Local Kokoro or Edge TTS, per scope</strong></div>
+          <div><span data-i18n="cap.progress">Progress</span><strong data-i18n="cap.progressBody">Per device, resumable everywhere</strong></div>
+        </div>
+      </section>
+
+      <section class="section formats-section" id="formats">
+        <div class="shell">
+          <div class="formats-heading">
+            <div class="section-heading reveal">
+              <p class="eyebrow"><span></span> <b data-i18n="formats.eyebrow">Format-native</b></p>
+              <h2><span data-i18n="formats.title1">Not everything</span><br><em data-i18n="formats.title2">is prose.</em></h2>
+            </div>
+            <p class="formats-intro reveal" data-i18n="formats.intro">The checker and the renderer accept the same formats, and every non-prose resource has a deliberate narration path when the reader switches to audio.</p>
+          </div>
+          <div class="format-controls reveal">
+            <div class="filter-group" role="group" aria-label="Filter formats" data-i18n-aria-label="formats.filterAria">
+              <button type="button" data-filter="all" aria-pressed="true"><span data-i18n="formats.all">All</span> <small>12</small></button>
+              <button type="button" data-filter="text" aria-pressed="false"><span data-i18n="formats.group.text">Text &amp; math</span> <small>3</small></button>
+              <button type="button" data-filter="diagrams" aria-pressed="false"><span data-i18n="formats.group.diagrams">Diagrams</span> <small>3</small></button>
+              <button type="button" data-filter="data" aria-pressed="false"><span data-i18n="formats.group.data">Data</span> <small>2</small></button>
+              <button type="button" data-filter="media" aria-pressed="false"><span data-i18n="formats.group.media">Documents &amp; media</span> <small>2</small></button>
+              <button type="button" data-filter="interactive" aria-pressed="false"><span data-i18n="formats.group.interactive">Interactive &amp; audio</span> <small>2</small></button>
+            </div>
+            <a class="text-link" href="https://github.com/dravengarden/liveview#supported-formats"><span data-i18n="formats.reference">Format reference</span> <span aria-hidden="true">→</span></a>
+          </div>
+          <p class="sr-only" id="format-filter-status" aria-live="polite"></p>
+          <div class="format-grid">
+            <article class="format-card reveal" data-group="text" style="--reveal-delay: 0ms">
+              <span class="format-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 6h16v12H4zM7 15V9l2.5 3L12 9v6M16 9v6m-2-2 2 2 2-2"></path></svg></span>
+              <div>
+                <strong>Markdown</strong>
+                <code>.md · GFM · footnotes</code>
+              </div>
+              <p data-i18n="format.markdown">Chapters, footnotes, and GitHub-flavored syntax.</p>
+            </article>
+            <article class="format-card reveal" data-group="text" style="--reveal-delay: 50ms">
+              <span class="format-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 6h8l-5 6 5 6H5M15 9l4 6m0-6-4 6"></path></svg></span>
+              <div>
+                <strong>Math</strong>
+                <code>KaTeX · LaTeX</code>
+              </div>
+              <p data-i18n="format.math">Formulas rendered for the page and spoken deliberately.</p>
+            </article>
+            <article class="format-card reveal" data-group="text" style="--reveal-delay: 100ms">
+              <span class="format-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 6h12M12 6v12M9 18h6"></path></svg></span>
+              <div>
+                <strong>Typst</strong>
+                <code>.typ</code>
+              </div>
+              <p data-i18n="format.typst">Typeset blocks compiled into the chapter.</p>
+            </article>
+            <article class="format-card reveal" data-group="diagrams" style="--reveal-delay: 150ms">
+              <span class="format-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h6v5H4zM14 14h6v5h-6zM7 10v4h10"></path></svg></span>
+              <div>
+                <strong>Mermaid</strong>
+                <code>fenced blocks</code>
+              </div>
+              <p data-i18n="format.mermaid">Theme-native diagrams for light and dark.</p>
+            </article>
+            <article class="format-card reveal" data-group="diagrams" style="--reveal-delay: 0ms">
+              <span class="format-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 4l8 8-8 8-8-8z"></path></svg></span>
+              <div>
+                <strong>SVG</strong>
+                <code>inline · file</code>
+              </div>
+              <p data-i18n="format.svg">Vector figures checked before publishing.</p>
+            </article>
+            <article class="format-card reveal" data-group="diagrams" style="--reveal-delay: 50ms">
+              <span class="format-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 18c3-1 5-7 8-7s3 5 8-5"></path></svg></span>
+              <div>
+                <strong>Excalidraw</strong>
+                <code>.excalidraw</code>
+              </div>
+              <p data-i18n="format.excalidraw">Hand-drawn sketches that stay crisp.</p>
+            </article>
+            <article class="format-card reveal" data-group="data" style="--reveal-delay: 100ms">
+              <span class="format-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 10h16M4 15h16M10 5v14"></path></svg></span>
+              <div>
+                <strong>CSV · TSV</strong>
+                <code>.csv · .tsv</code>
+              </div>
+              <p data-i18n="format.csv-tsv">Tables that remain data, not pictures.</p>
+            </article>
+            <article class="format-card reveal" data-group="data" style="--reveal-delay: 150ms">
+              <span class="format-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 4c-3 0-2 4-2 5s-1 3-3 3c2 0 3 1 3 3s-1 5 2 5M15 4c3 0 2 4 2 5s1 3 3 3c-2 0-3 1-3 3s1 5-2 5"></path></svg></span>
+              <div>
+                <strong>JSON</strong>
+                <code>JSON · JSONC · JSON5</code>
+              </div>
+              <p data-i18n="format.json">Structured data, validated by the checker.</p>
+            </article>
+            <article class="format-card reveal" data-group="media" style="--reveal-delay: 0ms">
+              <span class="format-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15.5 9.5h.01"></path></svg></span>
+              <div>
+                <strong>Images</strong>
+                <code>PNG · WebP · AVIF · SVG</code>
+              </div>
+              <p data-i18n="format.images">Content-addressed artwork and figures.</p>
+            </article>
+            <article class="format-card reveal" data-group="media" style="--reveal-delay: 50ms">
+              <span class="format-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3h7l4 4v14H7zM14 3v4h4M9.5 13h5M9.5 16h5"></path></svg></span>
+              <div>
+                <strong>PDF · HTML</strong>
+                <code>.pdf · .html</code>
+              </div>
+              <p data-i18n="format.pdf-html">Embedded documents and standalone pages, kept for offline reading.</p>
+            </article>
+            <article class="format-card reveal" data-group="interactive" style="--reveal-delay: 100ms">
+              <span class="format-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19V9M10 19V5M16 19v-7M4 19h16M14 9l2 3 4-6"></path></svg></span>
+              <div>
+                <strong>Interactive views</strong>
+                <code>*.interactive-view.json</code>
+              </div>
+              <p data-i18n="format.interactive-views">Signals, controls, computed metrics, and charts.</p>
+            </article>
+            <article class="format-card reveal" data-group="interactive" style="--reveal-delay: 150ms">
+              <span class="format-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 12h2M8 8v8M12 5v14M16 8v8M20 11v2"></path></svg></span>
+              <div>
+                <strong>Spoken scripts</strong>
+                <code>*.spoken.md</code>
+              </div>
+              <p data-i18n="format.spoken-scripts">Audiobook scripts with sentence timing marks.</p>
+            </article>
           </div>
         </div>
       </section>
 
-      <section class="section contract" id="offline">
-        <div class="shell contract-grid">
-          <div class="contract-copy">
-            <p class="section-index">03 / ONE CONTENT CONTRACT</p>
-            <h2>From source<br>to shelf, intact.</h2>
-            <p>Preview, validation, publication, web reading, and native sync use the same rules. The content you checked is the content your reader receives.</p>
-            <a class="text-link" href="https://github.com/dravengarden/liveview#validate-content">Explore the content model <span aria-hidden="true">↗</span></a>
-          </div>
+      <section class="section shell" id="architecture">
+        <div class="section-heading reveal">
+          <p class="eyebrow"><span></span> <b data-i18n="arch.eyebrow">One content contract</b></p>
+          <h2><span data-i18n="arch.title1">From source to shelf,</span><br><span data-i18n="arch.title2">intact.</span></h2>
+          <p data-i18n="arch.intro">Preview, checking, publication, web reading, and native sync share one set of parsing rules. The content you checked is the content your reader receives.</p>
+        </div>
+        <figure class="pipeline-card reveal">
+          <picture class="theme-art">
+            <source data-theme-art-dark media="(prefers-color-scheme: dark)" srcset="assets/art/liveview-pipeline-dark.svg">
+            <img
+              src="assets/art/liveview-pipeline-light.svg"
+              alt="LiveView publication pipeline: an authored library folder, renderer-compatible checks, an incremental content-addressed DAG where only the changed path is updated, and web and native readers with verified offline copies"
+              data-i18n-alt="arch.imageAlt"
+              width="1200"
+              height="380"
+              loading="lazy"
+            >
+          </picture>
+        </figure>
+        <div class="contract-grid">
+          <article class="manifest-panel reveal">
+            <div class="code-titlebar"><span><i></i> library/distributed-systems/book.toml</span><span>TOML</span></div>
+            <pre aria-label="Example LiveView book manifest" data-i18n-aria-label="arch.manifestAria"><code><b>slug</b> = <em>"distributed-systems"</em>
+<b>title</b> = <em>"Distributed Systems"</em>
+<b>default_lang</b> = <em>"en"</em>
+<b>cover</b> = <em>"cover.webp"</em>
+<b>tags</b> = [<em>"format.guide"</em>, <em>"replication"</em>]
 
-          <div class="pipeline" aria-label="LiveView publication pipeline">
-            <article><span>01 / AUTHOR</span><strong>Markdown + assets</strong><code>book.toml</code></article>
-            <i aria-hidden="true">→</i>
-            <article class="pipeline-active"><span>02 / LIVEVIEW</span><strong>Check + publish</strong><code>content DAG</code></article>
-            <i aria-hidden="true">→</i>
-            <article><span>03 / READER</span><strong>Web + native</strong><code>verified offline</code></article>
-          </div>
+<span>[langs.zh]</span>
+<b>label</b> = <em>"简体中文"</em>
 
+<span>[renditions.audio]</span>
+<b>label</b> = <em>"Listen"</em>
+<b>langs</b> = [<em>"en"</em>]</code></pre>
+          </article>
           <div class="contract-points">
-            <article><span class="point-icon" aria-hidden="true">⌁</span><div><strong>Incremental by design</strong><p>Only changed content moves through the publication graph.</p></div></article>
-            <article><span class="point-icon" aria-hidden="true">◇</span><div><strong>Offline you can verify</strong><p>Text, artwork, documents, and audio are content-addressed resources.</p></div></article>
-            <article><span class="point-icon" aria-hidden="true">◎</span><div><strong>Infrastructure stays yours</strong><p>Source, database, object storage, and delivery remain self-hosted.</p></div></article>
+            <article class="reveal">
+              <span data-i18n="arch.authored">Author-owned</span>
+              <h3 data-i18n="arch.authoredTitle">Books are folders you already have.</h3>
+              <p data-i18n="arch.authoredBody">Chapters, translations, artwork, and spoken scripts live beside one small manifest. Tags stay yours—LiveView never imposes a taxonomy.</p>
+            </article>
+            <article class="reveal">
+              <span data-i18n="arch.checked">Checked before readers</span>
+              <h3 data-i18n="arch.checkedTitle">Catch failures at the gate.</h3>
+              <p data-i18n="arch.checkedBody"><code>liveview check</code> and <code>gate</code> use renderer-compatible parsers and a warning baseline, so regressions never reach a shelf.</p>
+            </article>
+            <article class="reveal">
+              <span data-i18n="arch.delivered">Delivered intact</span>
+              <h3 data-i18n="arch.deliveredTitle">Web, PWA, and native read the same DAG.</h3>
+              <p data-i18n="arch.deliveredBody">Reader updates ship over the air; the native shell adds background audio and lock-screen controls.</p>
+            </article>
           </div>
         </div>
       </section>
 
-      <section class="section formats">
-        <div class="shell formats-grid">
-          <div class="formats-copy">
-            <p class="section-index">04 / FORMAT-NATIVE</p>
-            <h2>Not everything<br>is prose.</h2>
-            <p>LiveView gives technical resources a first-class place in the book—and a deliberate narration path when the reader switches to audio.</p>
+      <section class="section shell" id="start">
+        <div class="start-card reveal">
+          <div class="start-copy">
+            <p class="eyebrow"><span></span> <b data-i18n="start.eyebrow">Open source, ready to build</b></p>
+            <h2 data-i18n="start.title">Your library, alive.</h2>
+            <p data-i18n="start.intro">Start with a folder and no services. Add PostgreSQL, S3-compatible storage, and the native shell when the library needs durable publishing and verified offline access.</p>
+            <ol class="start-steps">
+              <li><span>01</span><div><strong data-i18n="start.step1">Build once</strong><small data-i18n="start.step1Body">Reproducible Nix package, pinned toolchain.</small></div></li>
+              <li><span>02</span><div><strong data-i18n="start.step2">Preview any folder</strong><small><a href="https://github.com/dravengarden/liveview#create-a-library" data-i18n="start.step2Body">Add a book.toml when you want a shelf →</a></small></div></li>
+              <li><span>03</span><div><strong data-i18n="start.step3">Publish durably</strong><small><a href="https://github.com/dravengarden/liveview#persistent-deployment" data-i18n="start.step3Body">PostgreSQL + S3, incremental sync →</a></small></div></li>
+            </ol>
+            <div class="start-actions">
+              <a class="button button-primary" href="https://github.com/dravengarden/liveview#quick-start">
+                <span data-i18n="start.github">Read the quick start</span>
+                <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6"></path></svg>
+              </a>
+              <a class="button button-secondary" href="https://github.com/dravengarden/liveview/blob/main/docs/design/interactive-view-authoring.md" data-i18n="start.author">Author interactive views</a>
+            </div>
           </div>
-          <div class="format-cloud" aria-label="Supported content formats">
-            <span class="format-large">Markdown</span><span>Mermaid</span><span class="format-accent">Math</span><span>SVG</span><span>Typst</span><span class="format-wide">Interactive views</span><span>Excalidraw</span><span>JSON</span><span>CSV</span><span>HTML</span><span>Images</span><span>PDF</span>
-          </div>
-        </div>
-      </section>
+          <div class="terminal-card">
+            <div class="terminal-titlebar">
+              <span><i></i><i></i><i></i></span>
+              <small data-i18n="start.terminal">liveview — quick start</small>
+              <button type="button" class="copy-command" data-copy-target="quick-start-code" data-i18n="start.copy">Copy</button>
+            </div>
+            <pre id="quick-start-code"><code><span class="comment" data-copy-exclude># 1 · Build</span>
+<span class="prompt" data-copy-exclude>$ </span>git clone https://github.com/dravengarden/liveview.git
+<span class="prompt" data-copy-exclude>$ </span>cd liveview &amp;&amp; nix build
 
-      <section class="cta-section">
-        <div class="shell cta-panel">
-          <div class="cta-mark" aria-hidden="true"><img src="assets/brand-mark.svg" alt=""></div>
-          <div class="cta-copy"><p class="section-index">YOUR LIBRARY, ALIVE</p><h2>Publish once.<br>Keep every way in.</h2><p>Start with a folder. Add durable publishing and native offline access when the library is ready.</p></div>
-          <div class="cta-actions"><a class="button button-amber" href="https://github.com/dravengarden/liveview#quick-start">Build LiveView <span aria-hidden="true">→</span></a><a class="text-link text-link-inverse" href="https://github.com/dravengarden/liveview">View on GitHub <span aria-hidden="true">↗</span></a></div>
+<span class="comment" data-copy-exclude># 2 · Preview any folder, no services</span>
+<span class="prompt" data-copy-exclude>$ </span>cd /path/to/your/library
+<span class="prompt" data-copy-exclude>$ </span>/path/to/liveview/result/bin/liveview preview --open
+<span class="success" data-copy-exclude>✓ Serving library at <span class="url">http://127.0.0.1:4160</span></span>
+
+<span class="comment" data-copy-exclude># 3 · Check before you publish</span>
+<span class="prompt" data-copy-exclude>$ </span>/path/to/liveview/result/bin/liveview check . --deny-warnings</code></pre>
+          </div>
         </div>
       </section>
     </main>
 
+    <a class="back-to-top" href="#top">
+      <span class="sr-only" data-i18n="footer.top">Back to top</span>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6.5 11 5.5-5.5 5.5 5.5M12 5.5v13"></path></svg>
+    </a>
+
     <footer class="site-footer">
       <div class="shell footer-grid">
-        <a class="brand footer-brand" href="#top"><img src="assets/brand-mark.svg" alt=""><span>LiveView</span></a>
-        <p>Technical books that are as good to listen to and use offline as they are to read.</p>
-        <nav aria-label="Footer navigation"><a href="https://github.com/dravengarden/liveview#quick-start">Docs</a><a href="https://github.com/dravengarden/liveview">GitHub</a><a href="https://github.com/dravengarden/liveview/blob/main/SECURITY.md">Security</a></nav>
-        <small>MIT · <span data-year>2026</span></small>
+        <div>
+          <a class="wordmark" href="#top" aria-label="LiveView home" data-i18n-aria-label="brand.home">
+            <img src="assets/brand-mark.svg" alt="" width="30" height="30">
+            <span>LiveView</span>
+          </a>
+          <p data-i18n="footer.tagline">Technical books that are as good to listen to and use offline as they are to read.</p>
+        </div>
+        <div class="footer-links">
+          <div>
+            <strong data-i18n="footer.product">Product</strong>
+            <a href="#experience" data-i18n="footer.experience">Read · Listen · Explore</a>
+            <a href="#formats" data-i18n="footer.formats">Formats</a>
+            <a href="#architecture" data-i18n="footer.architecture">Architecture</a>
+          </div>
+          <div>
+            <strong data-i18n="footer.developers">Developers</strong>
+            <a href="https://github.com/dravengarden/liveview" data-i18n="footer.source">Source</a>
+            <a href="https://github.com/dravengarden/liveview/blob/main/docs/INDEX.md" data-i18n="footer.docs">Documentation</a>
+            <a href="https://github.com/dravengarden/liveview/blob/main/docs/core-requirements.md" data-i18n="footer.requirements">Core requirements</a>
+            <a href="https://github.com/dravengarden/liveview/blob/main/CONTRIBUTING.md" data-i18n="footer.contributing">Contributing</a>
+            <a href="https://github.com/dravengarden/liveview/blob/main/SECURITY.md" data-i18n="footer.security">Security</a>
+          </div>
+        </div>
+      </div>
+      <div class="shell footer-bottom">
+        <span>© <span data-current-year>2026</span> LiveView</span>
+        <span data-i18n="footer.license">MIT licensed · self-hosted by design</span>
       </div>
     </footer>
+
     <script src="app.js" defer></script>
   </body>
 </html>

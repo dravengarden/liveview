@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 380" width="1200" height="380" role="img" aria-label="LiveView publication pipeline: an authored library folder, renderer-compatible checks, an incremental content-addressed DAG where only the changed path is updated, and web and native readers with verified offline copies">
+<defs><linearGradient id="pdc0" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#19376d"/><stop offset="1" stop-color="#4d72c4"/></linearGradient><linearGradient id="pdc1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#754b86"/><stop offset="1" stop-color="#ae8dde"/></linearGradient><linearGradient id="pdc2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#b86e12"/><stop offset="1" stop-color="#f5bd48"/></linearGradient><linearGradient id="pdc3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1f6b63"/><stop offset="1" stop-color="#4fb3a1"/></linearGradient><linearGradient id="pdc4" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8a3b4a"/><stop offset="1" stop-color="#d9878c"/></linearGradient><linearGradient id="pdc5" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2b2f45"/><stop offset="1" stop-color="#62709a"/></linearGradient><linearGradient id="pdc6" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#3c294d"/><stop offset="1" stop-color="#936dce"/></linearGradient><linearGradient id="pdc7" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0f4c75"/><stop offset="1" stop-color="#5aa6dc"/></linearGradient><linearGradient id="pdc8" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5b4a1f"/><stop offset="1" stop-color="#c9a24a"/></linearGradient><linearGradient id="pdc9" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4a2f5e"/><stop offset="1" stop-color="#c08ad8"/></linearGradient></defs>
+<rect x="0" y="0" width="1200" height="380" rx="32" fill="#111a3d"/>
+<rect x="40" y="60" width="250" height="260" rx="22" fill="#1b2650" stroke="#28345f" stroke-width="1.5"/>
+<text x="62" y="94" fill="#6f7799" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" letter-spacing="0.06em">01</text>
+<text x="92" y="94" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" letter-spacing="0.06em" font-weight="600">library/</text>
+<path d="M298 190H324" stroke="#6f7799" stroke-width="2" stroke-dasharray="4 5"/>
+<path d="M320 184L328 190L320 196" stroke="#6f7799" stroke-width="2" fill="none"/>
+<rect x="330" y="60" width="250" height="260" rx="22" fill="#1b2650" stroke="#28345f" stroke-width="1.5"/>
+<text x="352" y="94" fill="#6f7799" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" letter-spacing="0.06em">02</text>
+<text x="382" y="94" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" letter-spacing="0.06em" font-weight="600">liveview check</text>
+<path d="M588 190H614" stroke="#6f7799" stroke-width="2" stroke-dasharray="4 5"/>
+<path d="M610 184L618 190L610 196" stroke="#6f7799" stroke-width="2" fill="none"/>
+<rect x="620" y="60" width="250" height="260" rx="22" fill="#141e42" stroke="#ae8dde" stroke-width="2"/>
+<text x="642" y="94" fill="#6f7799" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" letter-spacing="0.06em">03</text>
+<text x="672" y="94" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" letter-spacing="0.06em" font-weight="600">content DAG</text>
+<path d="M878 190H904" stroke="#6f7799" stroke-width="2" stroke-dasharray="4 5"/>
+<path d="M900 184L908 190L900 196" stroke="#6f7799" stroke-width="2" fill="none"/>
+<rect x="910" y="60" width="250" height="260" rx="22" fill="#1b2650" stroke="#28345f" stroke-width="1.5"/>
+<text x="932" y="94" fill="#6f7799" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" letter-spacing="0.06em">04</text>
+<text x="962" y="94" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" letter-spacing="0.06em" font-weight="600">web · native</text>
+<rect x="62" y="122" width="18" height="22" rx="4" fill="#f5bd48" opacity="0.9"/>
+<text x="92" y="138" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="0.06em">book.toml</text>
+<rect x="62" y="158" width="18" height="22" rx="4" fill="#ae8dde" opacity="0.9"/>
+<text x="92" y="174" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="0.06em">en/01-intro.md</text>
+<rect x="62" y="194" width="18" height="22" rx="4" fill="#ae8dde" opacity="0.9"/>
+<text x="92" y="210" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="0.06em">zh/01-intro.md</text>
+<rect x="62" y="230" width="18" height="22" rx="4" fill="#6f8fd6" opacity="0.9"/>
+<text x="92" y="246" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="0.06em">figures/flow.svg</text>
+<rect x="62" y="266" width="18" height="22" rx="4" fill="#f5bd48" opacity="0.9"/>
+<text x="92" y="282" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="0.06em">audio/en/…spoken.md</text>
+<circle cx="362" cy="134" r="10" fill="#2a2452"/>
+<path d="M357 134l3.5 3.5 6.5-7" stroke="#ae8dde" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="382" y="138" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="0.06em">Markdown + assets</text>
+<circle cx="362" cy="170" r="10" fill="#2a2452"/>
+<path d="M357 170l3.5 3.5 6.5-7" stroke="#ae8dde" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="382" y="174" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="0.06em">Mermaid · SVG · Typst</text>
+<circle cx="362" cy="206" r="10" fill="#2a2452"/>
+<path d="M357 206l3.5 3.5 6.5-7" stroke="#ae8dde" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="382" y="210" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="0.06em">KaTeX math</text>
+<circle cx="362" cy="242" r="10" fill="#2a2452"/>
+<path d="M357 242l3.5 3.5 6.5-7" stroke="#ae8dde" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="382" y="246" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="0.06em">narration coverage</text>
+<circle cx="362" cy="278" r="10" fill="#2a2452"/>
+<path d="M357 278l3.5 3.5 6.5-7" stroke="#ae8dde" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="382" y="282" fill="#f3ecdf" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="0.06em">warning baseline</text>
+<path d="M745 142L690 210" stroke="#2f3b66" stroke-width="2"/>
+<path d="M745 142L800 210" stroke="#f5bd48" stroke-width="3"/>
+<path d="M690 210L660 280" stroke="#2f3b66" stroke-width="2"/>
+<path d="M690 210L720 280" stroke="#2f3b66" stroke-width="2"/>
+<path d="M800 210L770 280" stroke="#f5bd48" stroke-width="3"/>
+<path d="M800 210L830 280" stroke="#2f3b66" stroke-width="2"/>
+<rect x="729" y="126" width="32" height="32" rx="7" fill="#f5bd48"/>
+<rect x="677" y="197" width="26" height="26" rx="7" fill="#1b2650" stroke="#c9b2ec" stroke-width="2"/>
+<rect x="787" y="197" width="26" height="26" rx="7" fill="#f5bd48"/>
+<rect x="649" y="269" width="22" height="22" rx="7" fill="#1b2650" stroke="#c9b2ec" stroke-width="2"/>
+<rect x="709" y="269" width="22" height="22" rx="7" fill="#1b2650" stroke="#c9b2ec" stroke-width="2"/>
+<rect x="759" y="269" width="22" height="22" rx="7" fill="#f5bd48"/>
+<rect x="819" y="269" width="22" height="22" rx="7" fill="#1b2650" stroke="#c9b2ec" stroke-width="2"/>
+<path d="M779 115C779.7 120.3 782.0 122.9 787.3 124C782.0 125.1 779.7 127.7 779 133C778.3 127.7 776.0 125.1 770.7 124C776.0 122.9 778.3 120.3 779 115Z" fill="#f5bd48"/>
+<rect x="926" y="126" width="150" height="104" rx="10" fill="#141e42" stroke="#28345f" stroke-width="1.5"/>
+<rect x="926" y="144" width="150" height="1.5" rx="0.8" fill="#28345f"/>
+<rect x="940" y="156" width="34" height="46" rx="4" fill="url(#pdc0)"/><rect x="940" y="156" width="2.4" height="46" rx="0" fill="#ffffff" opacity="0.12"/><rect x="946.1" y="184.5" width="21.1" height="3" rx="1.5" fill="#fffaf0"/><rect x="946.1" y="189.1" width="13.6" height="2" rx="1" fill="#fffaf0"/><path d="M965.2 162.4C965.5 164.6 966.4 165.7 968.6 166.1C966.4 166.6 965.5 167.7 965.2 169.9C964.9 167.7 963.9 166.6 961.7 166.1C963.9 165.7 964.9 164.6 965.2 162.4Z" fill="#fff7e9"/>
+<rect x="984" y="156" width="34" height="46" rx="4" fill="url(#pdc1)"/><rect x="984" y="156" width="2.4" height="46" rx="0" fill="#ffffff" opacity="0.12"/><rect x="990.1" y="184.5" width="21.1" height="3" rx="1.5" fill="#fffaf0"/><rect x="990.1" y="189.1" width="13.6" height="2" rx="1" fill="#fffaf0"/><path d="M1009.2 162.4C1009.5 164.6 1010.4 165.7 1012.6 166.1C1010.4 166.6 1009.5 167.7 1009.2 169.9C1008.9 167.7 1007.9 166.6 1005.7 166.1C1007.9 165.7 1008.9 164.6 1009.2 162.4Z" fill="#fff7e9"/>
+<rect x="1028" y="156" width="34" height="46" rx="4" fill="url(#pdc2)"/><rect x="1028" y="156" width="2.4" height="46" rx="0" fill="#ffffff" opacity="0.12"/><rect x="1034.1" y="184.5" width="21.1" height="3" rx="1.5" fill="#fffaf0"/><rect x="1034.1" y="189.1" width="13.6" height="2" rx="1" fill="#fffaf0"/><path d="M1053.2 162.4C1053.5 164.6 1054.4 165.7 1056.6 166.1C1054.4 166.6 1053.5 167.7 1053.2 169.9C1052.9 167.7 1051.9 166.6 1049.7 166.1C1051.9 165.7 1052.9 164.6 1053.2 162.4Z" fill="#fff7e9"/>
+<rect x="940" y="214" width="122" height="4" rx="2" fill="#2f3b66"/><rect x="940" y="214" width="61" height="4" rx="2" fill="#ae8dde"/>
+<rect x="1084" y="118" width="64" height="124" rx="14" fill="#05070f"/>
+<rect x="1089" y="123" width="54" height="114" rx="10" fill="#151f44"/>
+<rect x="1093" y="158" width="46" height="16" rx="3" fill="#4a3a2a"/>
+<rect x="1096" y="140" width="40" height="4" rx="2" fill="#2f3b66"/>
+<rect x="1096" y="180" width="40" height="4" rx="2" fill="#2f3b66"/>
+<rect x="1096" y="200" width="40" height="4" rx="2" fill="#2f3b66"/>
+<rect x="1096" y="214" width="2" height="4" rx="2" fill="#f5bd48"/><rect x="1100" y="210.5" width="2" height="11.0" rx="5.5" fill="#f5bd48"/><rect x="1104" y="213.8" width="2" height="4.4" rx="2.2" fill="#f5bd48"/><rect x="1108" y="213.6" width="2" height="4.8" rx="2.4" fill="#f5bd48"/><rect x="1112" y="214.0" width="2" height="4.0" rx="2.0" fill="#f5bd48"/><rect x="1116" y="212.2" width="2" height="7.5" rx="3.8" fill="#2f3b66"/><rect x="1120" y="211.7" width="2" height="8.7" rx="4.3" fill="#2f3b66"/><rect x="1124" y="211.7" width="2" height="8.6" rx="4.3" fill="#2f3b66"/><rect x="1128" y="211.0" width="2" height="9.9" rx="5.0" fill="#2f3b66"/><rect x="1132" y="213.4" width="2" height="5.2" rx="2.6" fill="#2f3b66"/>
+<rect x="940" y="260" width="196" height="34" rx="17" fill="#2a2452"/>
+<path d="M960 277l5 5 9-10" stroke="#ae8dde" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="984" y="282" fill="#ae8dde" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" letter-spacing="0.06em" font-weight="600">verified offline</text>
+</svg>

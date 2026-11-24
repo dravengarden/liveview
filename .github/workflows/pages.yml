@@ -5,8 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/pages.yml"
-      - "docs/assets/liveview-hero.png"
-      - "docs/assets/screenshots/**"
+      - "tools/website-art.ts"
       - "web/public/apple-touch-icon.png"
       - "web/public/brand-mark.svg"
       - "website/**"
