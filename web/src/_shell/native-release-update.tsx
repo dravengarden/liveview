@@ -12,7 +12,7 @@ import {
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import { useEffect, useMemo, useState } from "react";
 
-export type NativeReleaseChannelKind = "sidestore" | "app_store";
+export type NativeReleaseChannelKind = "testflight" | "app_store";
 
 export interface NativeReleaseChannel {
   readonly kind: NativeReleaseChannelKind;
@@ -43,7 +43,7 @@ type TauriGlobal = {
   core?: { invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
 };
 
-const UPDATE_PROTOCOLS = new Set(["https:", "sidestore:", "itms-apps:"]);
+const UPDATE_PROTOCOLS = new Set(["https:", "itms-beta:", "itms-apps:"]);
 
 function tauri(): TauriGlobal | undefined {
   return (globalThis as { __TAURI__?: TauriGlobal }).__TAURI__;
@@ -140,13 +140,13 @@ function validManifest(value: unknown, appId: string): value is NativeReleaseMan
     typeof manifest.latest_version === "string" && Array.isArray(manifest.channels) &&
     manifest.channels.every((channel) =>
       !!channel && typeof channel === "object" &&
-      (channel.kind === "sidestore" || channel.kind === "app_store") &&
+      (channel.kind === "testflight" || channel.kind === "app_store") &&
       typeof channel.url === "string"
     );
 }
 
 function channelLabel(channel: NativeReleaseChannel): string {
-  return channel.label ?? (channel.kind === "sidestore" ? "Open SideStore" : "View in App Store");
+  return channel.label ?? (channel.kind === "testflight" ? "Open TestFlight" : "View in App Store");
 }
 
 export function NativeReleaseUpdatePrompt({

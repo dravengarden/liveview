@@ -9,7 +9,7 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "https://*" },
-        { "url": "sidestore:*" },
+        { "url": "itms-beta:*" },
         { "url": "itms-apps:*" },
         { "url": "app-settings:*" }
       ]

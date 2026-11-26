@@ -71,20 +71,11 @@ targets:
         # target was ObjC-only before; without an explicit version Xcode errors on
         # the first .swift. swift-5.0 libs are already on LIBRARY_SEARCH_PATHS above.
         SWIFT_VERSION: "5.0"
-        # Signing: xcodegen regenerates the .xcodeproj from THIS file, so the team
-        # MUST be pinned here (a team set only in Xcode is dropped on regen).
-        # CRITICAL: this must be 9Z95WKM9DT — the team the already-downloaded
-        # Xcode-managed profile ("iOS Team Provisioning Profile: top.thundersparrow.
-        # liveview") actually belongs to. The earlier value 3ND84C46TG was WRONG:
-        # automatic signing then found no profile for that team and tried to CREATE
-        # one, which needs an Apple-ID session a headless SSH `xcodebuild` lacks
-        # ("No Accounts" / "No profiles ... were found"). With the correct team the
-        # managed profile already on disk matches and codesign uses it — no account.
-        # (Manual signing can't be used: the profile is Xcode-managed, which manual
-        # mode rejects.) NOTE: free-tier dev profiles expire ~weekly; when this one
-        # lapses, a single GUI build re-downloads a fresh same-name profile, after
-        # which headless automatic builds resume working.
-        DEVELOPMENT_TEAM: 9Z95WKM9DT
+        # Signing credentials and team IDs are deployment-owned outside Git.
+        # Release builds archive unsigned (CODE_SIGNING_ALLOWED=NO), and
+        # tools/publish-ios-appstore.sh injects APPLE_TEAM_ID and API-key
+        # credentials during xcodebuild -exportArchive with automatic
+        # cloud-managed distribution signing.
         CODE_SIGN_STYLE: Automatic
         # Forward the deployment endpoints into Xcode's Run Script environment.
         # A plain parent-process export is not preserved reliably by xcodebuild,
@@ -141,7 +132,6 @@ targets:
       base:
         PRODUCT_NAME: LiveViewWidgets
         PRODUCT_BUNDLE_IDENTIFIER: top.thundersparrow.liveview.widgets
-        DEVELOPMENT_TEAM: 9Z95WKM9DT
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "5.0"
         SKIP_INSTALL: true

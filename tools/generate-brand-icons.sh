@@ -27,12 +27,32 @@ render_png() {
   }
 }
 
+render_ios_opaque_png() {
+  local target="$1" size
+  size="$(magick identify -format '%wx%h' "$target")"
+  magick -background '#081831' "$SOURCE" -resize "$size" -alpha remove -alpha off \
+    -type TrueColor -define png:color-type=2 "PNG24:$target"
+  local channels
+  channels="$(magick identify -format '%[channels]' "$target")"
+  [[ "$channels" != *a* ]] || {
+    echo "error: iOS AppIcon $target must be opaque RGB without alpha ($channels)" >&2
+    exit 1
+  }
+}
+
+while IFS= read -r target; do
+  render_ios_opaque_png "$target"
+done < <(
+  find \
+    "$ROOT/app/src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset" \
+    -maxdepth 1 -type f -name '*.png' -print
+)
+
 while IFS= read -r target; do
   render_png "$target"
 done < <(
   find \
     "$ROOT/app/src-tauri/icons" \
-    "$ROOT/app/src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset" \
     -maxdepth 1 -type f -name '*.png' -print
   printf '%s\n' \
     "$ROOT/web/public/apple-touch-icon.png" \

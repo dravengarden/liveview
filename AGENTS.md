@@ -92,8 +92,8 @@ reader release channel:
 
 - Ship reader UI, TypeScript behavior, themes, and other ordinary web features
   through the server-hosted app-bundle OTA path. These changes must not require
-  a SideStore release or app reinstall.
-- Publish through SideStore only when the native binary, entitlement, extension,
+  an App Store / TestFlight release or app reinstall.
+- Publish a new TestFlight / App Store build only when the native binary, entitlement, extension,
   icon, embedded native asset, baked origin, or other native configuration
   changes.
 - Keep the native host interface backward compatible with installed shells.
